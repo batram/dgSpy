@@ -66,11 +66,30 @@ namespace dgSpy.Protocol {
 		[JsonProperty("timestamp_utc")] public DateTime TimestampUtc { get; set; }=DateTime.UtcNow;
 		[JsonProperty("terminal")] public bool Terminal { get; set; }
 		[JsonProperty("process_id", NullValueHandling=NullValueHandling.Ignore)] public int? ProcessId { get; set; }
+		[JsonProperty("runtime_guid", NullValueHandling=NullValueHandling.Ignore)] public string? RuntimeGuid { get; set; }
+		[JsonProperty("runtime_name", NullValueHandling=NullValueHandling.Ignore)] public string? RuntimeName { get; set; }
+		[JsonProperty("thread_id", NullValueHandling=NullValueHandling.Ignore)] public string? ThreadId { get; set; }
+		[JsonProperty("breakpoint_id", NullValueHandling=NullValueHandling.Ignore)] public int? BreakpointId { get; set; }
+		[JsonProperty("module", NullValueHandling=NullValueHandling.Ignore)] public string? Module { get; set; }
+		[JsonProperty("method_token", NullValueHandling=NullValueHandling.Ignore)] public uint? MethodToken { get; set; }
+		[JsonProperty("il_offset", NullValueHandling=NullValueHandling.Ignore)] public uint? IlOffset { get; set; }
+		[JsonProperty("stop_reason", NullValueHandling=NullValueHandling.Ignore)] public string? StopReason { get; set; }
+		[JsonProperty("exception_id", NullValueHandling=NullValueHandling.Ignore)] public string? ExceptionId { get; set; }
+		[JsonProperty("exception_message", NullValueHandling=NullValueHandling.Ignore)] public string? ExceptionMessage { get; set; }
+		[JsonProperty("exception_first_chance", NullValueHandling=NullValueHandling.Ignore)] public bool? ExceptionFirstChance { get; set; }
+		[JsonProperty("exception_unhandled", NullValueHandling=NullValueHandling.Ignore)] public bool? ExceptionUnhandled { get; set; }
+		[JsonProperty("error", NullValueHandling=NullValueHandling.Ignore)] public string? Error { get; set; }
 		[JsonProperty("exit_code", NullValueHandling=NullValueHandling.Ignore)] public int? ExitCode { get; set; }
 		[JsonProperty("reason", NullValueHandling=NullValueHandling.Ignore)] public string? Reason { get; set; }
 	}
-	public sealed class WaitResult { [JsonProperty("events")] public DebugEvent[] Events { get; set; }=Array.Empty<DebugEvent>(); [JsonProperty("timed_out")] public bool TimedOut { get; set; } [JsonProperty("oldest_event_id")] public long OldestEventId { get; set; } }
-	public sealed class EventResult { [JsonProperty("events")] public DebugEvent[] Events { get; set; }=Array.Empty<DebugEvent>(); [JsonProperty("oldest_event_id")] public long OldestEventId { get; set; } [JsonProperty("last_event_id")] public long LastEventId { get; set; } }
+	public class EventResult {
+		[JsonProperty("events")] public DebugEvent[] Events { get; set; }=Array.Empty<DebugEvent>();
+		[JsonProperty("oldest_event_id")] public long OldestEventId { get; set; }
+		[JsonProperty("oldest_available_cursor")] public long OldestAvailableCursor { get; set; }
+		[JsonProperty("last_event_id")] public long LastEventId { get; set; }
+		[JsonProperty("truncated")] public bool Truncated { get; set; }
+	}
+	public sealed class WaitResult : EventResult { [JsonProperty("timed_out")] public bool TimedOut { get; set; } }
 	public sealed class ThreadInfo {
 		[JsonProperty("thread_id")] public string ThreadId { get; set; }="";
 		[JsonProperty("process_id")] public int ProcessId { get; set; }

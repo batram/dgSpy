@@ -34,7 +34,8 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 
 `get_host_info`, `get_capabilities`, `list_programs`, `attach`, `attach_endpoint`, `detach`,
 `list_sessions`, `get_session_state`, `pause`, `continue`, `set_il_breakpoint`, `list_breakpoints`,
-`remove_breakpoint`, `clear_breakpoints`, `wait_for_stop`, `get_events`, `list_threads`, `get_callstack`,
+`remove_breakpoint`, `clear_breakpoints`, `wait_for_stop`, `wait_for_event`, `get_events`,
+`get_stop_reason`, `list_threads`, `get_callstack`,
 `get_frame`.
 
 ## State and lifetime rules
@@ -101,8 +102,11 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 - **A Mono/Unity endpoint accepts one connection per game launch.** A clean `detach` lets the agent
   listen again; any other connection to the port — including a "is it up?" TCP probe — consumes it for
   good and the target must be relaunched. Let `attach_endpoint` be the only thing that touches it.
-- `wait_for_stop` is cursor-based and non-destructive. The extension retains 256 events and reports
-  the oldest available cursor. The extension caps the wait at 10 s.
+- `get_events`, `wait_for_event`, and `wait_for_stop` read one bounded per-session sequence without
+  consuming it, so concurrent callers see the same event. Optional `kinds` filter general waits and
+  reads. A stale cursor sets `truncated` and returns `oldest_available_cursor`; waits cap at 10 s.
+  `get_stop_reason` returns either an exact retained stop or the latest one. Normalized stops preserve
+  reason, process, thread, breakpoint or exception identity, and stable IL location when dnSpy supplies it.
 - Primitive locals are limited to values with a raw scalar; object expansion is outside milestone 1.
 - The gateway opens a new loopback TCP connection per request, so restarting dnSpy needs no gateway
   restart; calls fail while dnSpy is down and succeed again once the extension is listening.

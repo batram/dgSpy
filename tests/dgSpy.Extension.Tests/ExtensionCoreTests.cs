@@ -1,4 +1,5 @@
 using dgSpy.Extension;
+using dgSpy.Protocol;
 using Xunit;
 
 namespace dgSpy.Extension.Tests;
@@ -49,6 +50,44 @@ public sealed class ExtensionCoreTests {
 		Assert.Equal(4,buffer.LastEventId);
 		Assert.Equal(2,buffer.OldestEventId);
 		Assert.Equal(new long[] { 2,3,4 },buffer.FindAfter(0,"stopped").Select(e=>e.EventId));
+		var snapshot=buffer.Snapshot(0);
+		Assert.True(snapshot.Truncated);
+		Assert.Equal(2,snapshot.OldestEventId);
+		Assert.Equal(1,snapshot.OldestAvailableCursor);
+	}
+
+	[Fact]
+	public async Task ConcurrentWaitersObserveTheSameEventWithoutConsumingIt() {
+		var buffer=new DebugEventBuffer();
+		var first=buffer.WaitForChangeAsync(0,CancellationToken.None);
+		var second=buffer.WaitForChangeAsync(0,CancellationToken.None);
+
+		buffer.Add(new DebugEvent { Kind="stopped",StopReason="breakpoint" },2);
+
+		await Task.WhenAll(first,second);
+		Assert.Equal(1,Assert.Single(buffer.Snapshot(0,new[]{"stopped"}).Events).EventId);
+		Assert.Equal(1,Assert.Single(buffer.Snapshot(0,new[]{"stopped"}).Events).EventId);
+	}
+
+	[Fact]
+	public async Task WaiterCancellationDoesNotPreventLaterWaiters() {
+		var buffer=new DebugEventBuffer();
+		using var cancelled=new CancellationTokenSource();
+		var abandoned=buffer.WaitForChangeAsync(0,cancelled.Token);
+		cancelled.Cancel();
+		await Assert.ThrowsAnyAsync<OperationCanceledException>(()=>abandoned);
+
+		var next=buffer.WaitForChangeAsync(0,CancellationToken.None);
+		buffer.Add("continued",1);
+		await next;
+	}
+
+	[Fact]
+	public async Task WaitReturnsImmediatelyWhenTheCursorIsAlreadyBehind() {
+		var buffer=new DebugEventBuffer();
+		buffer.Add("continued",1);
+
+		await buffer.WaitForChangeAsync(0,CancellationToken.None);
 	}
 
 	[Fact]

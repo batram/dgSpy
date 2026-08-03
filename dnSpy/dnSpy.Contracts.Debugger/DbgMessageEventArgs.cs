@@ -422,6 +422,7 @@ namespace dnSpy.Contracts.Debugger {
 		/// <param name="exitCode">Thread exit code</param>
 		public DbgMessageThreadExitedEventArgs(DbgThread thread, int exitCode)
 			: base(thread) {
+			ExitCode = exitCode;
 		}
 	}
 

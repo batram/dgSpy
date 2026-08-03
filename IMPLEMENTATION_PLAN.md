@@ -278,16 +278,20 @@ smallest way to make Phase 2 terminal events observable; Phase 3 still owns the 
   with exit code 23. Current frame/value handles are snapshots rather than retained dnSpy objects; the
   retained session-scoped breakpoint-offset metadata is cleared on terminal exit and restart.
 
-## Phase 3: Event stream and breakpoint waiting
+## Phase 3: Event stream and breakpoint waiting — **complete**
+
+Completed 2026-08-03. The CorDebug smoke verifies normalized breakpoint details, waits issued both
+before and after a hit, concurrent non-destructive waiters, bounded timeout, and a second stop with new
+event and state versions. Buffer tests verify cancellation recovery and truncation cursor reporting.
 
 ### Work
 
-1. Subscribe to debugger pause, breakpoint, step, exception, process, runtime, module, and thread events.
-2. Normalize events into a per-session bounded sequence with monotonically increasing IDs.
-3. Implement cancellable long polling with `after_event_id` and a bounded timeout.
-4. Return immediately if an unseen event already exists.
-5. Preserve the stop reason, process, thread, breakpoint, exception, and location.
-6. Ensure concurrent waiters do not consume events destructively.
+1. ✅ Subscribe to debugger pause, breakpoint, step, exception, process, runtime, module, and thread events.
+2. ✅ Normalize events into a per-session bounded sequence with monotonically increasing IDs.
+3. ✅ Implement cancellable long polling with `after_event_id` and a bounded timeout.
+4. ✅ Return immediately if an unseen event already exists.
+5. ✅ Preserve the stop reason, process, thread, breakpoint, exception, and location.
+6. ✅ Ensure concurrent waiters do not consume events destructively.
 
 ### MCP tools
 
@@ -298,10 +302,10 @@ smallest way to make Phase 2 terminal events observable; Phase 3 still owns the 
 
 ### Exit criteria
 
-- An agent can set up a wait before or after a breakpoint hit without losing the event.
-- Cancellation and timeout do not leak tasks or event subscriptions.
-- Resume followed by another stop produces a new state version and event ID.
-- Event-buffer truncation is reported with the new oldest available cursor.
+- ✅ An agent can set up a wait before or after a breakpoint hit without losing the event.
+- ✅ Cancellation and timeout do not leak tasks or event subscriptions.
+- ✅ Resume followed by another stop produces a new state version and event ID.
+- ✅ Event-buffer truncation is reported with the new oldest available cursor.
 
 ## Phase 4: Breakpoints and stepping
 

@@ -1,33 +1,136 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using dgSpy.Protocol;
+using dnSpy.Contracts.Debugger;
+using dnSpy.Contracts.Debugger.Breakpoints.Code;
+using dnSpy.Contracts.Debugger.DotNet.Code;
 
 namespace dgSpy.Extension {
 	sealed partial class RpcHost {
-		async Task<WaitResult> WaitAsync(RpcRequest req,CancellationToken cancellationToken) {
+		Task<WaitResult> WaitForStopAsync(RpcRequest req,CancellationToken cancellationToken) => WaitForEventsAsync(req,new[]{"stopped"},cancellationToken);
+		Task<WaitResult> WaitForEventAsync(RpcRequest req,CancellationToken cancellationToken) => WaitForEventsAsync(req,ReadKinds(req),cancellationToken);
+
+		async Task<WaitResult> WaitForEventsAsync(RpcRequest req,IReadOnlyCollection<string>? kinds,CancellationToken cancellationToken) {
 			CheckSession(req);
 			long after=(long?)req.Arguments["after_event_id"] ?? 0;
 			int timeout=Math.Min(10000,Math.Max(1,(int?)req.Arguments["timeout_ms"] ?? 5000));
-			var end=DateTime.UtcNow.AddMilliseconds(timeout);
-			while (DateTime.UtcNow<end) {
-				lock(sync) {
-					var found=events.FindAfter(after,"stopped");
-					if (found.Length!=0) return new WaitResult { Events=found,OldestEventId=events.OldestEventId };
-				}
-				await Task.Delay(50,cancellationToken).ConfigureAwait(false);
+			using var wait=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			wait.CancelAfter(timeout);
+			while(true) {
+				var snapshot=events.Snapshot(after,kinds);
+				if (snapshot.Events.Length!=0 || snapshot.Truncated) return WaitResult(snapshot,false);
+				try { await events.WaitForChangeAsync(snapshot.LastEventId,wait.Token).ConfigureAwait(false); }
+				catch(OperationCanceledException) when(!cancellationToken.IsCancellationRequested) { return WaitResult(events.Snapshot(after,kinds),true); }
 			}
-			lock(sync) return new WaitResult { TimedOut=true,OldestEventId=events.OldestEventId };
 		}
 
 		EventResult GetEvents(RpcRequest req) {
 			CheckSession(req);
 			long after=(long?)req.Arguments["after_event_id"] ?? 0;
-			lock(sync) return new EventResult { Events=events.FindAfter(after),OldestEventId=events.OldestEventId,LastEventId=events.LastEventId };
+			return EventResult(events.Snapshot(after,ReadKinds(req)));
 		}
 
-		void Record(string kind) { lock(sync) events.Add(kind,++stateVersion); }
-		void Record(string kind,bool terminal,int? processId,int? exitCode,string? reason) { lock(sync) events.Add(kind,++stateVersion,terminal,processId,exitCode,reason); }
+		DebugEvent GetStopReason(RpcRequest req) {
+			CheckSession(req);
+			var eventId=(long?)req.Arguments["event_id"];
+			if (!eventId.HasValue) return events.Latest("stopped") ?? throw new RpcException("stop_not_found","The session has no retained stop event.");
+			var snapshot=events.Snapshot(0,new[]{"stopped"});
+			var found=snapshot.Events.FirstOrDefault(e=>e.EventId==eventId.Value);
+			if (found is not null) return found;
+			if (eventId.Value<snapshot.OldestEventId) throw new RpcException("event_truncated",$"Event {eventId.Value} is no longer retained. Resume from cursor {snapshot.OldestAvailableCursor}.");
+			throw new RpcException("stop_not_found",$"Event {eventId.Value} is not a retained stop event.");
+		}
+
+		static string[]? ReadKinds(RpcRequest req) => req.Arguments["kinds"]?.ToObject<string[]>();
+		static EventResult EventResult(EventBufferSnapshot snapshot) => new EventResult { Events=snapshot.Events,OldestEventId=snapshot.OldestEventId,OldestAvailableCursor=snapshot.OldestAvailableCursor,LastEventId=snapshot.LastEventId,Truncated=snapshot.Truncated };
+		static WaitResult WaitResult(EventBufferSnapshot snapshot,bool timedOut) => new WaitResult { Events=snapshot.Events,OldestEventId=snapshot.OldestEventId,OldestAvailableCursor=snapshot.OldestAvailableCursor,LastEventId=snapshot.LastEventId,Truncated=snapshot.Truncated,TimedOut=timedOut };
+
+		void OnDebuggerMessage(DbgMessageEventArgs message) {
+			lock(sync) if (sessionId is null) return;
+			switch(message) {
+			case DbgMessageProcessCreatedEventArgs e: Record(new DebugEvent { Kind="process_created",ProcessId=e.Process.Id }); break;
+			case DbgMessageProcessExitedEventArgs e: OnProcessExited(e); break;
+			case DbgMessageRuntimeCreatedEventArgs e: Record(RuntimeEvent("runtime_created",e.Runtime)); break;
+			case DbgMessageRuntimeExitedEventArgs e: Record(RuntimeEvent("runtime_exited",e.Runtime)); break;
+			case DbgMessageModuleLoadedEventArgs e: Record(ModuleEvent("module_loaded",e.Module)); break;
+			case DbgMessageModuleUnloadedEventArgs e: Record(ModuleEvent("module_unloaded",e.Module)); break;
+			case DbgMessageThreadCreatedEventArgs e: Record(ThreadEvent("thread_created",e.Thread)); break;
+			case DbgMessageThreadExitedEventArgs e: var thread=ThreadEvent("thread_exited",e.Thread); thread.ExitCode=e.ExitCode; Record(thread); break;
+			case DbgMessageExceptionThrownEventArgs e: Record(ExceptionEvent("exception_thrown",e.Exception)); break;
+			case DbgMessageBoundBreakpointEventArgs e: Record(BreakpointEvent("breakpoint_hit",e)); break;
+			case DbgMessageStepCompleteEventArgs e: Record(ThreadEvent("step_completed",e.Thread,error:e.Error)); break;
+			case DbgMessageEntryPointBreakEventArgs e: Record(ThreadEvent("entry_point",e.Thread)); break;
+			case DbgMessageProgramBreakEventArgs e: Record(ThreadEvent("program_break",e.Thread,runtime:e.Runtime)); break;
+			case DbgMessageBreakEventArgs e: Record(ThreadEvent("break",e.Thread,runtime:e.Runtime)); break;
+			}
+		}
+
+		void OnProcessPaused(ProcessPausedEventArgs paused) {
+			lock(sync) if (sessionId is null) return;
+			var messages=paused.Process.Runtimes.SelectMany(runtime=>runtime.BreakInfos)
+				.Where(info=>info.Kind==DbgBreakInfoKind.Message).Select(info=>info.Data as DbgMessageEventArgs).Where(message=>message is not null).ToArray();
+			var cause=messages.FirstOrDefault(message=>MessageThread(message!)==paused.Thread) ?? messages.FirstOrDefault();
+			var value=StopEvent(cause,paused.Process,paused.Thread);
+			Record(value);
+		}
+
+		DebugEvent StopEvent(DbgMessageEventArgs? cause,DbgProcess process,DbgThread? thread) {
+			DebugEvent value;
+			switch(cause) {
+			case DbgMessageBoundBreakpointEventArgs e: value=BreakpointEvent("stopped",e); value.StopReason="breakpoint"; break;
+			case DbgMessageExceptionThrownEventArgs e: value=ExceptionEvent("stopped",e.Exception); value.StopReason="exception"; break;
+			case DbgMessageStepCompleteEventArgs e: value=ThreadEvent("stopped",e.Thread,error:e.Error); value.StopReason="step"; break;
+			case DbgMessageEntryPointBreakEventArgs e: value=ThreadEvent("stopped",e.Thread); value.StopReason="entry_point"; break;
+			case DbgMessageProgramBreakEventArgs e: value=ThreadEvent("stopped",e.Thread,runtime:e.Runtime); value.StopReason="program_break"; break;
+			case DbgMessageBreakEventArgs e: value=ThreadEvent("stopped",e.Thread,runtime:e.Runtime); value.StopReason="pause"; break;
+			default: value=ThreadEvent("stopped",thread,process:process); value.StopReason="unknown"; break;
+			}
+			value.ProcessId=process.Id;
+			if (value.ThreadId is null && thread is not null) value.ThreadId=ThreadId(thread);
+			return value;
+		}
+
+		DebugEvent BreakpointEvent(string kind,DbgMessageBoundBreakpointEventArgs e) {
+			var value=ThreadEvent(kind,e.Thread,runtime:e.BoundBreakpoint.Runtime);
+			value.BreakpointId=e.BoundBreakpoint.Breakpoint.Id;
+			var location=e.BoundBreakpoint.Breakpoint.Location as DbgDotNetCodeLocation;
+			if (location is not null) { value.Module=location.Module.ModuleName; value.MethodToken=location.Token; value.IlOffset=location.Offset; }
+			else if (e.BoundBreakpoint.Module is not null) value.Module=e.BoundBreakpoint.Module.Filename;
+			return value;
+		}
+
+		static DebugEvent ExceptionEvent(string kind,dnSpy.Contracts.Debugger.Exceptions.DbgException exception) {
+			var value=ThreadEvent(kind,exception.Thread,runtime:exception.Runtime);
+			value.ExceptionId=exception.Id.ToString(); value.ExceptionMessage=exception.Message;
+			value.ExceptionFirstChance=exception.IsFirstChance; value.ExceptionUnhandled=exception.IsUnhandled;
+			value.Module=exception.Module?.Filename;
+			return value;
+		}
+
+		static DebugEvent RuntimeEvent(string kind,DbgRuntime runtime) => new DebugEvent { Kind=kind,ProcessId=runtime.Process.Id,RuntimeGuid=runtime.Guid.ToString("D"),RuntimeName=runtime.Name };
+		static DebugEvent ModuleEvent(string kind,DbgModule module) { var value=RuntimeEvent(kind,module.Runtime); value.Module=module.Filename; return value; }
+		static DebugEvent ThreadEvent(string kind,DbgThread? thread,DbgRuntime? runtime=null,DbgProcess? process=null,string? error=null) {
+			runtime=thread?.Runtime ?? runtime;
+			process=thread?.Process ?? runtime?.Process ?? process;
+			return new DebugEvent { Kind=kind,ProcessId=process?.Id,RuntimeGuid=runtime?.Guid.ToString("D"),RuntimeName=runtime?.Name,ThreadId=thread is null ? null : ThreadId(thread),Error=error };
+		}
+
+		static DbgThread? MessageThread(DbgMessageEventArgs message) => message switch {
+			DbgMessageBoundBreakpointEventArgs e=>e.Thread,
+			DbgMessageExceptionThrownEventArgs e=>e.Exception.Thread,
+			DbgMessageEntryPointBreakEventArgs e=>e.Thread,
+			DbgMessageProgramBreakEventArgs e=>e.Thread,
+			DbgMessageStepCompleteEventArgs e=>e.Thread,
+			DbgMessageBreakEventArgs e=>e.Thread,
+			_=>null,
+		};
+
+		void Record(string kind) => Record(new DebugEvent { Kind=kind });
+		void Record(string kind,bool terminal,int? processId,int? exitCode,string? reason) => Record(new DebugEvent { Kind=kind,Terminal=terminal,ProcessId=processId,ExitCode=exitCode,Reason=reason });
+		DebugEvent Record(DebugEvent value) { lock(sync) return events.Add(value,++stateVersion); }
 		void CheckSession(RpcRequest req) { var id=(string?)req.Arguments["session_id"]; if(sessionId is null || id!=sessionId) throw new RpcException("session_not_found","The session_id is not active."); }
 		void CheckVersion(RpcRequest req) { var expected=(long?)req.Arguments["expected_state_version"]; if(expected.HasValue && expected.Value!=stateVersion) throw new RpcException("stale_state",$"Expected state {expected.Value}, current state is {stateVersion}."); }
 	}

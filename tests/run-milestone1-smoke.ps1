@@ -1,4 +1,4 @@
-# End-to-end test for the dgSpy milestone 1 slice and completed Phase 2 lifecycle surface.
+# End-to-end test for the dgSpy milestone 1 slice and completed Phase 3 event surface.
 # Builds and deploys via build-dgspy.ps1, starts a disposable target, dnSpy and the gateway, then
 # drives the whole MCP surface and asserts on the results. Everything it starts, it stops.
 param(
@@ -175,7 +175,7 @@ try {
 
 	Write-Host "== discovery ==" -ForegroundColor Cyan
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
-	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','get_events','list_threads','get_callstack','get_frame') {
+	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame') {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
 	}
 
@@ -279,7 +279,37 @@ try {
 	Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
 	$stop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $cursor; timeout_ms = 8000 }
 	Assert-That 'wait_for_stop observes the breakpoint hit' (-not $stop.timed_out -and @($stop.events).Count -gt 0)
-	Assert-That 'the stop event is after the cursor' (@($stop.events)[0].event_id -gt $cursor)
+	$firstStop = @($stop.events)[0]
+	Assert-That 'the stop event is after the cursor' ($firstStop.event_id -gt $cursor)
+	Assert-That 'the normalized stop preserves its reason and target identity' ($firstStop.stop_reason -eq 'breakpoint' -and $firstStop.process_id -eq $targetId -and -not [string]::IsNullOrWhiteSpace($firstStop.thread_id))
+	Assert-That 'the normalized stop preserves breakpoint identity and IL location' ($firstStop.breakpoint_id -eq $breakpoint.breakpoint_id -and $firstStop.module -like '*Milestone1Target.exe' -and $firstStop.method_token -eq $methodToken -and $firstStop.il_offset -eq 0)
+	$exactReason = Invoke-Tool -Name 'get_stop_reason' -Arguments @{ session_id = $sessionId; event_id = $firstStop.event_id }
+	$latestReason = Invoke-Tool -Name 'get_stop_reason' -Arguments @{ session_id = $sessionId }
+	Assert-That 'get_stop_reason returns an exact retained stop' ($exactReason.event_id -eq $firstStop.event_id -and $exactReason.stop_reason -eq 'breakpoint')
+	Assert-That 'get_stop_reason returns the latest stop when event_id is omitted' ($latestReason.event_id -eq $firstStop.event_id)
+	$filtered = Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $sessionId; after_event_id = $cursor; kinds = @('stopped') }
+	Assert-That 'get_events filters without consuming the stop' (@($filtered.events).Count -eq 1 -and @($filtered.events)[0].event_id -eq $firstStop.event_id)
+	$timedOut = Invoke-Tool -Name 'wait_for_event' -Arguments @{ session_id = $sessionId; after_event_id = $firstStop.event_id; kinds = @('never_emitted'); timeout_ms = 50 }
+	Assert-That 'wait_for_event reports a bounded timeout' ($timedOut.timed_out -and @($timedOut.events).Count -eq 0)
+
+	# Issue two long polls while the target is paused, then resume it. Both callers must receive the
+	# same next stop; neither is allowed to consume the event or steal it from the other.
+	$waitScript = {
+		param($Url,$Token,$Session,$After)
+		$body = @{ jsonrpc='2.0'; id=1; method='tools/call'; params=@{ name='wait_for_stop'; arguments=@{ session_id=$Session; after_event_id=$After; timeout_ms=8000 } } } | ConvertTo-Json -Depth 8
+		(Invoke-RestMethod -Uri ($Url + '/mcp') -Method Post -ContentType 'application/json' -Headers @{ 'X-dgSpy-Token'=$Token } -TimeoutSec 15 -Body $body).result.content[0].text
+	}
+	$waiter1 = Start-Job -ScriptBlock $waitScript -ArgumentList $gatewayUrl,$token,$sessionId,$firstStop.event_id
+	$waiter2 = Start-Job -ScriptBlock $waitScript -ArgumentList $gatewayUrl,$token,$sessionId,$firstStop.event_id
+	Start-Sleep -Milliseconds 300
+	$beforeResume = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
+	Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId; expected_state_version = $beforeResume.state_version } | Out-Null
+	$concurrent1 = (Receive-Job -Job $waiter1 -Wait -AutoRemoveJob) | ConvertFrom-Json
+	$concurrent2 = (Receive-Job -Job $waiter2 -Wait -AutoRemoveJob) | ConvertFrom-Json
+	$secondStop1 = @($concurrent1.events)[0]
+	$secondStop2 = @($concurrent2.events)[0]
+	Assert-That 'two waiters issued before resume observe the same breakpoint stop' (-not $concurrent1.timed_out -and -not $concurrent2.timed_out -and $secondStop1.event_id -eq $secondStop2.event_id)
+	Assert-That 'resume then stop advances both event id and state version' ($secondStop1.event_id -gt $firstStop.event_id -and $secondStop1.state_version -gt $firstStop.state_version)
 
 	$stale = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId; expected_state_version = 1 } -ExpectError
 	Assert-That 'a stale expected_state_version is rejected' ($stale -match 'stale|Expected state')

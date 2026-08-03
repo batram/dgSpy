@@ -92,6 +92,8 @@ namespace dgSpy.Protocol {
 			Op("clear_breakpoints",5000,mutates:true),
 			Op("wait_for_stop",12000),
 			Op("get_events",5000),
+			Op("wait_for_event",12000),
+			Op("get_stop_reason",5000),
 			Op("list_threads",8000),
 			Op("get_callstack",20000),
 			Op("get_frame",20000),

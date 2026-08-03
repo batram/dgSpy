@@ -22,6 +22,7 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | CorDebug smoke target is explicitly x64 and its reported architecture is asserted | ✅ automated |
 | **Phase 1 closed out** — see `IMPLEMENTATION_PLAN.md` for the one amended criterion | ✅ 2026-08-03 |
 | **Phase 2 closed out** — attach, launch, lifecycle control, terminal cleanup | ✅ 2026-08-03 |
+| **Phase 3 closed out** — normalized event stream and non-destructive waiting | ✅ 2026-08-03 |
 | Loopback TCP RPC, versioned, structured errors | ✅ verified |
 | Extension RPC port refuses connections on a non-loopback interface | ✅ verified (this machine's LAN address) |
 | Gateway survives a dnSpy restart without being restarted | ✅ verified (kill, relaunch, next call succeeds) |
@@ -56,20 +57,24 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | `pause` / `continue` — report the state they produced | ✅ verified |
 | `set_il_breakpoint` by module + token + IL offset | ✅ verified |
 | `wait_for_stop` — cursor-based, non-destructive | ✅ verified |
+| `wait_for_event`, event-kind filters, bounded timeout | ✅ automated live |
+| Normalized breakpoint stop — process, thread, breakpoint, module/token/offset | ✅ automated live |
+| Concurrent waits before resume receive the same next stop | ✅ automated live |
+| Event truncation cursor and waiter cancellation recovery | ✅ unit-tested |
 | `get_callstack` — method names, frame identity, primitive locals | ✅ verified |
 | Gateway `Origin` validation + `X-dgSpy-Token`, fails closed | ✅ verified |
 | Evaluation off the dispatcher (`EvaluationQueue`) | ✅ built and regression-tested, benefit not directly observable |
 | Response serialization off the dispatcher | ✅ built, not directly observable |
 | Extension split into entry point, RPC, debugger, events, and identity boundaries | ✅ built |
-| `dgSpy.Extension.Tests` identity, state, and event-cursor coverage | ✅ 11 tests |
+| `dgSpy.Extension.Tests` identity, state, and event-cursor coverage | ✅ 15 tests |
 
 Test suites, all green:
 
 ```powershell
-dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 16 checks, wire + capability contract
-dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 59 checks, access control + deadline bounds
-dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 12 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 108 checks, end to end
+dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 17 checks, wire + capability contract
+dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 63 checks, access control + deadline bounds
+dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 checks, extension core
+.\tests\run-milestone1-smoke.ps1                                       # 118 checks, end to end
 ```
 
 ## Remaining gaps
@@ -181,13 +186,10 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 12 chec
 
 ## Suggested order for the next session
 
-Phases 0, 1, and 2 are closed. The separate dnSpy-window shutdown path remains a host-lifecycle concern:
+Phases 0 through 3 are closed. The separate dnSpy-window shutdown path remains a host-lifecycle concern:
 closing dnSpy with an attachment has been observed to terminate the target, so callers must use `detach`.
 
-1. Phase 3 proper: full event stream and breakpoint waiting. `get_events` exists for Phase 2 terminal
-   events, but detailed stop reasons, all debugger event families, concurrent waits, and truncation
-   reporting remain. Follow `Extensions/dgSpy.Extension/README.md` and add each family in its owning partial.
-2. Phase 4 proper: breakpoint conditions and hit counts, stepping. Follow
+1. Phase 4 proper: breakpoint conditions and hit counts, stepping. Follow
    `Extensions/dgSpy.Extension/README.md` and add each family in its owning partial file.
 
 ## Local PowerShell scratchpads

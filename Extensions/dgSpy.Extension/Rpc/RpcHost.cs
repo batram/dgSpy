@@ -31,8 +31,7 @@ namespace dgSpy.Extension {
 		Task? listener; string? sessionId; string? attachedProgramId; string? sessionKind; string? lifecycleAction; long stateVersion; bool attaching; bool faulted; string? faultMessage; string? lastUserMessage; int? terminalExitCode; string? terminalReason;
 		public RpcHost(AttachableProcessesService programs, DbgManager manager, DbgCodeBreakpointsService breakpoints, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages) {
 			this.programs=programs; this.manager=manager; this.breakpoints=breakpoints; this.locations=locations; this.callStack=callStack; this.languages=languages;
-			manager.ProcessPaused += (_,__) => Record("stopped"); manager.IsRunningChanged += (_,__) => { if (manager.IsRunning==true) Record("continued"); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? "session_started" : "session_ended");
-			manager.MessageProcessExited += (_,e) => OnProcessExited(e);
+			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { if (manager.IsRunning==true) Record("continued"); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? "session_started" : "session_ended");
 			// An engine that fails to connect reports it here rather than through DbgManager.Start, which
 			// only rejects options it cannot build an engine from. Recording it turns "faulted" from a
 			// timeout guess into dnSpy's own reason. dnSpy's UI subscribes to the same event and shows a
@@ -72,8 +71,10 @@ namespace dgSpy.Extension {
 			case "list_breakpoints": return RpcResponse.Success(req.RequestId,await ListBreakpointsAsync(requestCancellation.Token).ConfigureAwait(false));
 			case "remove_breakpoint": return RpcResponse.Success(req.RequestId,await RemoveBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "clear_breakpoints": return RpcResponse.Success(req.RequestId,await ClearBreakpointsAsync(requestCancellation.Token).ConfigureAwait(false));
-			case "wait_for_stop": return RpcResponse.Success(req.RequestId,await WaitAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "wait_for_stop": return RpcResponse.Success(req.RequestId,await WaitForStopAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_events": return RpcResponse.Success(req.RequestId,GetEvents(req));
+			case "wait_for_event": return RpcResponse.Success(req.RequestId,await WaitForEventAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_stop_reason": return RpcResponse.Success(req.RequestId,GetStopReason(req));
 			case "list_threads": return RpcResponse.Success(req.RequestId,await ListThreadsAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_callstack": return RpcResponse.Success(req.RequestId,await GetCallStackAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_frame": return RpcResponse.Success(req.RequestId,await GetFrameAsync(req,requestCancellation.Token).ConfigureAwait(false));
@@ -285,7 +286,7 @@ namespace dgSpy.Extension {
 		// the next attach, so without this a fresh session can stop on a breakpoint nobody set.
 		async Task<ClearBreakpointsResult> ClearBreakpointsAsync(CancellationToken cancellationToken) =>
 			await OnDebuggerAsync(()=>{ var count=breakpoints.Breakpoints.Length; breakpoints.Clear(); lock(sync) requestedOffsets.Clear(); return new ClearBreakpointsResult { Removed=count,StateVersion=stateVersion }; },cancellationToken).ConfigureAwait(false);
-		string ThreadId(DbgThread thread) => $"{thread.Process.Id}:{thread.Id}";
+		static string ThreadId(DbgThread thread) => $"{thread.Process.Id}:{thread.Id}";
 		async Task<ThreadInfo[]> ListThreadsAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
 			return await OnDebuggerAsync(()=>{

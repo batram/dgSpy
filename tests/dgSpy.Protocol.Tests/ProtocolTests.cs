@@ -46,6 +46,25 @@ public class RpcContractTests {
 
 		Assert.Equal(deadline, restored.DeadlineUtc!.Value.ToUniversalTime());
 	}
+
+	[Fact]
+	public void Event_results_preserve_normalized_stop_and_cursor_metadata() {
+		var result=new WaitResult {
+			OldestEventId=9, OldestAvailableCursor=8, LastEventId=11, Truncated=true,
+			Events=new[] { new DebugEvent {
+				EventId=11, Kind="stopped", StateVersion=4, ProcessId=42, ThreadId="42:7",
+				StopReason="breakpoint", BreakpointId=3, Module="Target.exe", MethodToken=0x06000001, IlOffset=12,
+			} },
+		};
+
+		var wire=JObject.Parse(JsonConvert.SerializeObject(result));
+
+		Assert.True((bool?)wire["truncated"]);
+		Assert.Equal(8,(long?)wire["oldest_available_cursor"]);
+		Assert.Equal("breakpoint",(string?)wire["events"]![0]!["stop_reason"]);
+		Assert.Equal(3,(int?)wire["events"]![0]!["breakpoint_id"]);
+		Assert.Equal(12u,(uint?)wire["events"]![0]!["il_offset"]);
+	}
 }
 
 public class IdentityContractTests {
