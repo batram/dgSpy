@@ -39,6 +39,17 @@ If MSBuild is installed but not on PATH, pass its resolved executable explicitly
 .\build.ps1 netframework -MSBuildPath 'C:\path\to\MSBuild.exe'
 ```
 
+Do not assume every installed `MSBuild.exe` can build this solution. On this machine,
+`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe`
+starts successfully but the Build Tools installation lacks the .NET SDK resolver payload. The build then
+fails with `MSB4236` / `MSB4276` for `Microsoft.NET.Sdk` and
+`Microsoft.NET.Sdk.WindowsDesktop` before compiling source. That is a toolchain-installation mismatch,
+not a dgSpy source failure. Use the full Visual Studio installation instead; the verified local path is:
+
+```powershell
+.\build.ps1 netframework -MSBuildPath 'C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
+```
+
 The framework build clears its validated `dnSpy\dnSpy\bin\Release\net48` output before compiling and
 then packages dependencies under `net48\bin`. This makes repeated builds idempotent; a second run must
 not produce `net48\bin\bin`.

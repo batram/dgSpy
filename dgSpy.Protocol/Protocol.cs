@@ -56,9 +56,21 @@ namespace dgSpy.Protocol {
 		/// <summary>Why the session is <c>faulted</c>. dnSpy's own connect-failure text when it produced
 		/// one, otherwise a deadline description. Absent for every other state.</summary>
 		[JsonProperty("fault_message", NullValueHandling=NullValueHandling.Ignore)] public string? FaultMessage { get; set; }
+		[JsonProperty("exit_code", NullValueHandling=NullValueHandling.Ignore)] public int? ExitCode { get; set; }
+		[JsonProperty("terminal_reason", NullValueHandling=NullValueHandling.Ignore)] public string? TerminalReason { get; set; }
 	}
-	public sealed class DebugEvent { [JsonProperty("event_id")] public long EventId { get; set; } [JsonProperty("kind")] public string Kind { get; set; }=""; [JsonProperty("state_version")] public long StateVersion { get; set; } [JsonProperty("timestamp_utc")] public DateTime TimestampUtc { get; set; }=DateTime.UtcNow; }
+	public sealed class DebugEvent {
+		[JsonProperty("event_id")] public long EventId { get; set; }
+		[JsonProperty("kind")] public string Kind { get; set; }="";
+		[JsonProperty("state_version")] public long StateVersion { get; set; }
+		[JsonProperty("timestamp_utc")] public DateTime TimestampUtc { get; set; }=DateTime.UtcNow;
+		[JsonProperty("terminal")] public bool Terminal { get; set; }
+		[JsonProperty("process_id", NullValueHandling=NullValueHandling.Ignore)] public int? ProcessId { get; set; }
+		[JsonProperty("exit_code", NullValueHandling=NullValueHandling.Ignore)] public int? ExitCode { get; set; }
+		[JsonProperty("reason", NullValueHandling=NullValueHandling.Ignore)] public string? Reason { get; set; }
+	}
 	public sealed class WaitResult { [JsonProperty("events")] public DebugEvent[] Events { get; set; }=Array.Empty<DebugEvent>(); [JsonProperty("timed_out")] public bool TimedOut { get; set; } [JsonProperty("oldest_event_id")] public long OldestEventId { get; set; } }
+	public sealed class EventResult { [JsonProperty("events")] public DebugEvent[] Events { get; set; }=Array.Empty<DebugEvent>(); [JsonProperty("oldest_event_id")] public long OldestEventId { get; set; } [JsonProperty("last_event_id")] public long LastEventId { get; set; } }
 	public sealed class ThreadInfo {
 		[JsonProperty("thread_id")] public string ThreadId { get; set; }="";
 		[JsonProperty("process_id")] public int ProcessId { get; set; }

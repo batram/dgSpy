@@ -125,6 +125,16 @@ public class IdentityContractTests {
 	}
 
 	[Fact]
+	public void Terminal_event_preserves_process_exit_details() {
+		var wire=JObject.FromObject(new DebugEvent { EventId=9,Kind="session_exited",StateVersion=12,Terminal=true,ProcessId=4242,ExitCode=23,Reason="target_exited" });
+
+		Assert.True((bool?)wire["terminal"]);
+		Assert.Equal(4242,(int?)wire["process_id"]);
+		Assert.Equal(23,(int?)wire["exit_code"]);
+		Assert.Equal("target_exited",(string?)wire["reason"]);
+	}
+
+	[Fact]
 	public void Program_reports_provider_names_a_caller_can_pass_back() {
 		// attach_provider used to carry the runtime GUID, which is not something list_programs accepts.
 		var wire = JObject.Parse(JsonConvert.SerializeObject(new ProgramInfo { AttachProviders = new[] { "DotNetFramework" } }));

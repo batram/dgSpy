@@ -73,4 +73,20 @@ public sealed class ExtensionCoreTests {
 		Assert.Equal(0,buffer.LastEventId);
 		Assert.Equal(1,buffer.OldestEventId);
 	}
+
+	[Fact]
+	public void EventBufferPreservesTerminalDetailsAndResetsBetweenSessions() {
+		var buffer=new DebugEventBuffer();
+		buffer.Add("session_exited",7,terminal:true,processId:4242,exitCode:23,reason:"target_exited");
+
+		var terminal=Assert.Single(buffer.FindAfter(0));
+		Assert.True(terminal.Terminal);
+		Assert.Equal(4242,terminal.ProcessId);
+		Assert.Equal(23,terminal.ExitCode);
+		Assert.Equal("target_exited",terminal.Reason);
+
+		buffer.Reset();
+		Assert.Equal(0,buffer.LastEventId);
+		Assert.Empty(buffer.FindAfter(0));
+	}
 }

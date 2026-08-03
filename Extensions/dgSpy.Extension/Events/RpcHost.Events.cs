@@ -20,7 +20,14 @@ namespace dgSpy.Extension {
 			lock(sync) return new WaitResult { TimedOut=true,OldestEventId=events.OldestEventId };
 		}
 
+		EventResult GetEvents(RpcRequest req) {
+			CheckSession(req);
+			long after=(long?)req.Arguments["after_event_id"] ?? 0;
+			lock(sync) return new EventResult { Events=events.FindAfter(after),OldestEventId=events.OldestEventId,LastEventId=events.LastEventId };
+		}
+
 		void Record(string kind) { lock(sync) events.Add(kind,++stateVersion); }
+		void Record(string kind,bool terminal,int? processId,int? exitCode,string? reason) { lock(sync) events.Add(kind,++stateVersion,terminal,processId,exitCode,reason); }
 		void CheckSession(RpcRequest req) { var id=(string?)req.Arguments["session_id"]; if(sessionId is null || id!=sessionId) throw new RpcException("session_not_found","The session_id is not active."); }
 		void CheckVersion(RpcRequest req) { var expected=(long?)req.Arguments["expected_state_version"]; if(expected.HasValue && expected.Value!=stateVersion) throw new RpcException("stale_state",$"Expected state {expected.Value}, current state is {stateVersion}."); }
 	}

@@ -203,6 +203,7 @@ namespace dnSpy.Contracts.Debugger {
 		/// <param name="exitCode">Process exit code</param>
 		public DbgMessageProcessExitedEventArgs(DbgProcess process, int exitCode)
 			: base(process) {
+			ExitCode = exitCode;
 		}
 	}
 

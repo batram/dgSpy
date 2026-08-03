@@ -21,6 +21,7 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | Phase 0 engine acquisition: CorDebug via discovery, endpoint-launched UCH via `attach_endpoint` | ✅ verified both engines |
 | CorDebug smoke target is explicitly x64 and its reported architecture is asserted | ✅ automated |
 | **Phase 1 closed out** — see `IMPLEMENTATION_PLAN.md` for the one amended criterion | ✅ 2026-08-03 |
+| **Phase 2 closed out** — attach, launch, lifecycle control, terminal cleanup | ✅ 2026-08-03 |
 | Loopback TCP RPC, versioned, structured errors | ✅ verified |
 | Extension RPC port refuses connections on a non-loopback interface | ✅ verified (this machine's LAN address) |
 | Gateway survives a dnSpy restart without being restarted | ✅ verified (kill, relaunch, next call succeeds) |
@@ -35,6 +36,10 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | `attach` — waits for threads, refuses a second session | ✅ verified |
 | `attach_endpoint` — argument validation and failure path | ✅ verified (faults in ~2 s with dnSpy's own reason) |
 | `attach_endpoint` — connecting to a live Mono/Unity endpoint | ✅ **verified against UCH** (1120 ms; reattach 415 ms) |
+| `launch` — CorDebug target starts through dnSpy options | ✅ automated live |
+| `restart` — same logical session, replacement target PID | ✅ automated live |
+| `terminate` — explicit semantics, target is gone | ✅ automated live |
+| Unexpected target exit — terminal event with PID, reason, nonzero exit code | ✅ automated live (exit 23) |
 | Mono/Unity pause and detach | ✅ reverified against UCH after bounded frame-fetch fix; detach leaves the game running |
 | Mono/Unity call stack and primitive locals | ✅ reverified on the known managed breakpoint stopping thread |
 | `set_il_breakpoint` reports `bound` / `severity` / `message` | ✅ verified both engines |
@@ -61,10 +66,10 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 Test suites, all green:
 
 ```powershell
-dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 15 checks, wire + capability contract
-dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 51 checks, access control + deadline bounds
-dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 11 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 89 checks, end to end
+dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 16 checks, wire + capability contract
+dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 59 checks, access control + deadline bounds
+dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 12 checks, extension core
+.\tests\run-milestone1-smoke.ps1                                       # 108 checks, end to end
 ```
 
 ## Remaining gaps
@@ -176,10 +181,13 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 11 chec
 
 ## Suggested order for the next session
 
-Phases 0 and 1 are closed. Phase 2 is largely covered by the attach/detach work already verified;
-`launch`, `terminate`, and `restart` remain unimplemented, as does dnSpy's own shutdown path.
+Phases 0, 1, and 2 are closed. The separate dnSpy-window shutdown path remains a host-lifecycle concern:
+closing dnSpy with an attachment has been observed to terminate the target, so callers must use `detach`.
 
-1. Phase 3/4 proper: full event stream, breakpoint conditions and hit counts, stepping. Follow
+1. Phase 3 proper: full event stream and breakpoint waiting. `get_events` exists for Phase 2 terminal
+   events, but detailed stop reasons, all debugger event families, concurrent waits, and truncation
+   reporting remain. Follow `Extensions/dgSpy.Extension/README.md` and add each family in its owning partial.
+2. Phase 4 proper: breakpoint conditions and hit counts, stepping. Follow
    `Extensions/dgSpy.Extension/README.md` and add each family in its owning partial file.
 
 ## Local PowerShell scratchpads

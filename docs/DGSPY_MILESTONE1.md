@@ -34,7 +34,7 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 
 `get_host_info`, `get_capabilities`, `list_programs`, `attach`, `attach_endpoint`, `detach`,
 `list_sessions`, `get_session_state`, `pause`, `continue`, `set_il_breakpoint`, `list_breakpoints`,
-`remove_breakpoint`, `clear_breakpoints`, `wait_for_stop`, `list_threads`, `get_callstack`,
+`remove_breakpoint`, `clear_breakpoints`, `wait_for_stop`, `get_events`, `list_threads`, `get_callstack`,
 `get_frame`.
 
 ## State and lifetime rules
@@ -70,6 +70,11 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 - **`detach` is the only safe way to end a session.** Closing dnSpy with a session attached terminates
   the target. `detach` refuses with `detach_would_terminate` when dnSpy cannot detach cleanly, unless
   `allow_terminate=true`.
+- **`launch` uses dnSpy start options, not `Process.Start` plus attach.** `restart` is therefore available
+  only for a dgSpy-launched target. `terminate` is always explicit and separate from safe `detach`.
+- A target exit leaves a terminal session that can still be inspected with `get_session_state` and
+  `get_events`. The event carries PID, exit code, terminal reason, and a terminal flag. Call `detach` to
+  clear the terminal session, or start the next session once the debugger has stopped.
 - `list_sessions` recovers a lost `session_id`.
 - Mutations may include `expected_state_version`; a mismatch returns `stale_state`.
 - `list_threads` requires a paused session and returns stable `thread_id` values as

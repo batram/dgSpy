@@ -2,7 +2,7 @@
 
 - `ExtensionEntryPoint.cs`: MEF composition and dnSpy application lifetime only.
 - `Rpc/`: loopback transport, request dispatch, and structured RPC errors.
-- `Debugger/`: debugger-dispatcher scheduling and debugger-state rules.
+- `Debugger/`: debugger-dispatcher scheduling, lifecycle control, and debugger-state rules.
 - `Events/`: bounded event storage, cursor waiting, and event recording.
 - `Identity/`: stable protocol identities derived from dnSpy values, plus host identity and capability
   advertisement (`RpcHost.Host.cs`).

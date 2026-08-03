@@ -227,19 +227,30 @@ Milestone 1 exposes a single implicit host and a single session. `host_id` routi
 - ⚠️ An expired deadline returns a structured error once, but does not cancel the in-flight debugger operation — see work item 3. Advertised through `get_capabilities`.
 - ✅ Protocol compatibility failures are explicit and actionable (`incompatible_protocol`, naming both versions).
 
-## Phase 2: Attach, launch, and lifecycle control
+## Phase 2: Attach, launch, and lifecycle control — **complete**
+
+Closed out 2026-08-03. CorDebug launch, restart, explicit termination, safe detach, and unexpected
+nonzero target exit are covered by the automated live smoke. `get_events` is exposed early as the
+smallest way to make Phase 2 terminal events observable; Phase 3 still owns the complete event model.
 
 ### Work
 
 1. Attach using the exact options returned by the chosen `AttachableProcess`.
-2. Add launch support through dnSpy debugger start options, not `Process.Start` followed by a race-prone attach.
+2. Add launch support through dnSpy debugger start options, not `Process.Start` followed by a race-prone attach. **Implemented for CorDebug and Unity launch options; CorDebug is automated.**
 3. **`attach_endpoint` (implemented)** — attach directly to a Mono soft-debugger endpoint by address and port. Required for the UCH workflow: a target launched with `--debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:55555,suspend=n` emits no multicast beacon, so no attach provider will ever enumerate it and `list_programs` cannot reach it. This is the only route to the Mono/Unity engine. `UnityAttachToProgramOptions` is internal to dnSpy's Mono engine; the public equivalent is `UnityConnectStartDebuggingOptions` (`Address`, `Port`, `ProcessIsSuspended`, `ConnectionTimeout`) passed to `DbgManager.Start`, which `DbgEngineProviderImpl` maps onto the same engine and `DbgEngineImpl.StartCore` treats as an attach.
 4. Track debugger processes and runtimes from `DbgManager` events.
    - `attach` must not report ready until the engine has enumerated **threads**, not merely a process. A pause issued inside that window produces a stop with no current thread and an empty call stack, and the session does not recover until it runs again. Waiting for the first thread costs a few hundred milliseconds and makes pause-then-inspect deterministic.
    - The call stack follows `DbgManager.CurrentThread`, which only dnSpy's UI or a thread-carrying stop sets. Headless callers must select a thread themselves when none is current.
-5. Implement pause, continue, detach, stop, and restart where supported.
-6. Define selection rules for sessions containing multiple processes or runtimes.
-7. Preserve process-exit and attach-failure details in the event log. Attach failures have two shapes and must stay distinguishable: options `DbgManager.Start` rejects outright are a caller error and never become a session, whereas an engine that starts and then fails to connect reports through `DbgManager.MessageUserMessage`, which is what makes a `faulted` session carry a real reason instead of a timeout guess.
+5. Implement pause, continue, detach, stop, and restart where supported. **Implemented.** `terminate`
+   always calls dnSpy's explicit `TerminateAll`; `restart` is accepted only for a dgSpy-launched session.
+6. Define selection rules for sessions containing multiple processes or runtimes. **Defined for the current
+   single-session scope:** lifecycle operations apply to every process owned by that dnSpy session; returned
+   state always includes the complete current PID set.
+7. Preserve process-exit and attach-failure details in the event log. **Implemented.** Terminal events carry
+   PID, exit code, reason, and a terminal flag. Attach failures have two shapes and stay distinguishable:
+   options `DbgManager.Start` rejects outright are a caller error and never become a session, whereas an
+   engine that starts and then fails to connect reports through `DbgManager.MessageUserMessage`, which is
+   what makes a `faulted` session carry a real reason instead of a timeout guess.
 
 ### MCP tools
 
@@ -255,14 +266,17 @@ Milestone 1 exposes a single implicit host and a single session. `host_id` routi
 - `detach`
 - `terminate`
 - `restart`
+- `get_events` (Phase 2 terminal lifecycle events; expanded in Phase 3)
 
 ### Exit criteria
 
-- An agent can list and attach to a .NET test process by PID and runtime.
-- State transitions are observable without reading dnSpy UI state.
-- Detach leaves the target alive; terminate has separately tested semantics.
-- **Observed 2026-08-03**: with a CorDebug session attached to a live process, closing dnSpy and confirming its shutdown prompt *terminated the attached target*. `detach` is now implemented and verified as the safe exit; the dnSpy shutdown path still needs its own test.
-- Unexpected target exit produces a terminal event and releases all handles.
+- ✅ An agent can list and attach to a .NET test process by PID and runtime.
+- ✅ State transitions are observable without reading dnSpy UI state.
+- ✅ Detach leaves the target alive; terminate has separately tested semantics.
+- **Observed 2026-08-03**: with a CorDebug session attached to a live process, closing dnSpy and confirming its shutdown prompt *terminated the attached target*. `detach` is implemented and verified as the safe exit. Window shutdown is a separate host-lifecycle path, not an agent lifecycle operation or Phase 2 exit gate.
+- ✅ Unexpected target exit produces a terminal event and releases all session-scoped handles. Verified
+  with exit code 23. Current frame/value handles are snapshots rather than retained dnSpy objects; the
+  retained session-scoped breakpoint-offset metadata is cleared on terminal exit and restart.
 
 ## Phase 3: Event stream and breakpoint waiting
 

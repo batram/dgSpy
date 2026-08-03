@@ -1,4 +1,4 @@
-# End-to-end test for the dgSpy milestone 1 slice.
+# End-to-end test for the dgSpy milestone 1 slice and completed Phase 2 lifecycle surface.
 # Builds and deploys via build-dgspy.ps1, starts a disposable target, dnSpy and the gateway, then
 # drives the whole MCP surface and asserts on the results. Everything it starts, it stops.
 param(
@@ -175,7 +175,7 @@ try {
 
 	Write-Host "== discovery ==" -ForegroundColor Cyan
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
-	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','detach','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','list_threads','get_callstack','get_frame') {
+	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','get_events','list_threads','get_callstack','get_frame') {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
 	}
 
@@ -220,6 +220,8 @@ try {
 
 	$hostWithSession = Invoke-Tool -Name 'get_host_info' -Arguments @{}
 	Assert-That 'get_host_info reports the live session' ($hostWithSession.session_id -eq $sessionId)
+	$restartAttached = Invoke-Tool -Name 'restart' -Arguments @{ session_id = $sessionId } -ExpectError
+	Assert-That 'restart refuses a target that dgSpy only attached to' ($restartAttached -match 'launched through dgSpy|restart support')
 
 	Write-Host "== pause, inspect, resume ==" -ForegroundColor Cyan
 	$paused = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId }
@@ -303,6 +305,47 @@ try {
 	Assert-That 'no sessions remain' (-not $remaining.Contains($sessionId)) "(payload $remaining)"
 	$err = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId } -ExpectError
 	Assert-That 'the detached session_id is no longer usable' ($err -match 'not active|No active')
+
+	Write-Host "== launch, restart, terminate, unexpected exit ==" -ForegroundColor Cyan
+	$missingLaunch = Invoke-Tool -Name 'launch' -Arguments @{ filename = (Join-Path $runDirectory 'missing.exe') } -ExpectError
+	Assert-That 'launch rejects a missing target before invoking dnSpy' ($missingLaunch -match 'does not exist')
+	$badEngine = Invoke-Tool -Name 'launch' -Arguments @{ filename = $targetExe; engine = 'coreclr' } -ExpectError
+	Assert-That 'launch rejects an unsupported engine' ($badEngine -match 'cordebug.*unity')
+
+	$launched = Invoke-Tool -Name 'launch' -Arguments @{ filename = $targetExe; engine = 'cordebug' }
+	$launchedSessionId = $launched.session_id
+	$launchedPid = [int]@($launched.process_ids)[0]
+	Assert-That 'launch starts the target through dnSpy' ($launched.state -in @('running','paused') -and $launchedPid -gt 0)
+	Assert-That 'launch creates a different process from the attached fixture' ($launchedPid -ne $targetId)
+
+	$restarted = Invoke-Tool -Name 'restart' -Arguments @{ session_id = $launchedSessionId }
+	$restartedPid = [int]@($restarted.process_ids)[0]
+	Assert-That 'restart preserves the logical session' ($restarted.session_id -eq $launchedSessionId)
+	Assert-That 'restart replaces the target process' ($restartedPid -gt 0 -and $restartedPid -ne $launchedPid) "(old=$launchedPid new=$restartedPid)"
+	Start-Sleep -Milliseconds 500
+	Assert-That 'the pre-restart process is gone' ($null -eq (Get-Process -Id $launchedPid -ErrorAction SilentlyContinue))
+
+	$terminated = Invoke-Tool -Name 'terminate' -Arguments @{ session_id = $launchedSessionId }
+	Assert-That 'terminate reports an exited session with explicit semantics' ($terminated.state -eq 'exited' -and $terminated.terminal_reason -eq 'terminated_by_client') "(state=$($terminated.state) reason=$($terminated.terminal_reason))"
+	Start-Sleep -Milliseconds 500
+	Assert-That 'terminate kills the launched target' ($null -eq (Get-Process -Id $restartedPid -ErrorAction SilentlyContinue))
+	$terminateEvents = @(Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $launchedSessionId; after_event_id = 0 }).events
+	$terminateEvent = $terminateEvents | Where-Object { $_.kind -eq 'terminated' } | Select-Object -Last 1
+	Assert-That 'terminate records a terminal event with the target PID' ($terminateEvent.terminal -and $terminateEvent.process_id -eq $restartedPid)
+	Invoke-Tool -Name 'detach' -Arguments @{ session_id = $launchedSessionId } | Out-Null
+
+	$exiting = Invoke-Tool -Name 'launch' -Arguments @{ filename = $targetExe; engine = 'cordebug'; command_line = '--exit-after-ms 2500 --exit-code 23' }
+	$exitingSessionId = $exiting.session_id
+	$exitingPid = [int]@($exiting.process_ids)[0]
+	Start-Sleep -Milliseconds 3500
+	$exited = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $exitingSessionId }
+	Assert-That 'an unexpected target exit leaves an observable terminal session' ($exited.state -eq 'exited' -and $exited.terminal_reason -eq 'target_exited') "(state=$($exited.state) reason=$($exited.terminal_reason))"
+	Assert-That 'the unexpected nonzero exit code is preserved' ($exited.exit_code -eq 23) "(exit_code=$($exited.exit_code))"
+	$exitEvents = @(Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $exitingSessionId; after_event_id = 0 }).events
+	$exitEvent = $exitEvents | Where-Object { $_.kind -eq 'session_exited' } | Select-Object -Last 1
+	Assert-That 'unexpected exit produces a terminal event' ($exitEvent.terminal -and $exitEvent.process_id -eq $exitingPid -and $exitEvent.exit_code -eq 23 -and $exitEvent.reason -eq 'target_exited')
+	Assert-That 'the terminal event advances the session cursor' ($exitEvent.event_id -gt 0 -and $exited.last_event_id -ge $exitEvent.event_id)
+	Invoke-Tool -Name 'detach' -Arguments @{ session_id = $exitingSessionId } | Out-Null
 
 	# The success path needs a Mono/Unity target, which this harness cannot produce; see the manual
 	# checklist in docs/DGSPY_UNITY_CHECKLIST.md. What is testable here is argument validation and the
