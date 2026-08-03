@@ -76,12 +76,14 @@ Extensions/dgSpy.Extension/
     Handles/
     Identity/
         ProgramIdentity.cs
+        RpcHost.Host.cs
     Rpc/
         RpcException.cs
         RpcHost.cs
 
 dgSpy.Protocol/
     dgSpy.Protocol.csproj
+    Capabilities.cs
     Requests/
     Responses/
     Events/
@@ -103,7 +105,10 @@ tests/
     TestTargets/
 ```
 
-`dgSpy.Protocol` must contain DTOs only and must not reference WPF or dnSpy implementation assemblies. This keeps the gateway independently testable and allows transport replacement without changing debugger behavior.
+`dgSpy.Protocol` must contain DTOs and contract constants only, and must not reference WPF or dnSpy
+implementation assemblies. `Capabilities.cs` is the one non-DTO file: the operation/bound/engine table
+is shared contract, and putting it anywhere else lets the extension's real bounds and the gateway's
+deadlines drift apart, which is exactly the bug it exists to prevent. This keeps the gateway independently testable and allows transport replacement without changing debugger behavior.
 
 Milestone 1 keeps MEF composition/lifetime in `ExtensionEntryPoint.cs`; the loopback host and operation
 dispatch in `Rpc/RpcHost.cs`; dispatcher scheduling in `Debugger/`; event cursor behavior in `Events/`;
@@ -185,37 +190,42 @@ asserted end to end.
 - Both engines in scope are reachable through their supported acquisition path: the .NET Framework test
   target through `list_programs` + `attach`, and endpoint-launched UCH through `attach_endpoint`.
 
-## Phase 1: Local RPC and discovery
+## Phase 1: Local RPC and discovery — **complete**
+
+Closed out 2026-08-03; see [docs/DGSPY_STATUS.md](docs/DGSPY_STATUS.md) for the verification record.
+One exit criterion was amended rather than met: dnSpy exposes no way to abort a queued dispatcher
+callback or a started evaluation, so a deadline reports `deadline_exceeded` without unwinding the
+debugger. That limitation is now advertised through `get_capabilities` instead of being implied away.
 
 ### Work
 
 1. Implement a versioned local RPC protocol between the gateway and extension.
 2. Use TCP bound exclusively to `127.0.0.1` (and optionally `::1` once dual-stack behavior is tested). Never bind the extension RPC listener to wildcard, LAN, or VM-facing interfaces.
-3. Add handshake, version negotiation, request IDs, cancellation, deadlines, and structured errors. Cancellation must reach the debugger operation itself, not only the socket: an expired deadline has to abandon or abort the queued dispatcher work and report `deadline_exceeded` once.
+3. Add handshake, version negotiation, request IDs, cancellation, deadlines, and structured errors. Cancellation must reach the debugger operation itself, not only the socket: an expired deadline has to abandon or abort the queued dispatcher work and report `deadline_exceeded` once. **Partially delivered.** The deadline abandons the wait and reports `deadline_exceeded` exactly once, but dnSpy offers no cancellation for a queued dispatcher callback or a started evaluation, so that work runs to completion. Advertised as `limits.cancels_in_flight_work: false` rather than hidden; revisit if func-eval makes evaluations long enough for it to matter.
 4. Implement process discovery using `AttachableProcessesService` rather than raw `Process.GetProcesses()` as the authoritative list. Allow the caller to select attach providers, because Unity discovery performs a multi-second network scan on every unfiltered enumeration.
 5. Report duplicate entries when a process exposes multiple supported runtimes.
 6. Build `program_id` from typed identity fields, never from `RuntimeId.ToString()`. `RuntimeId` has no string form; the durable identity is PID plus provider plus the engine's own discriminator (CLR version for CorDebug, address and port for Mono/Unity). Surface `RuntimeGuid` as well as `RuntimeKindGuid`, since both supported engines share the same kind GUID and are only distinguishable by runtime GUID.
-7. Add health, version, and capability operations.
+7. Add health, version, and capability operations. Capabilities are the contract for engine differences the caller cannot guess — arbitrary IL offsets versus sequence points, which engines are discoverable — and for the extension's own per-operation time bounds. The gateway derives its deadlines from those bounds rather than guessing them, so the two cannot drift.
 8. Reject cross-origin browser traffic at the gateway before any tool runs: require a loopback or absent `Origin`, and require a locally generated shared secret. Without this, any web page the user visits can drive the debugger through the loopback MCP endpoint, which no amount of loopback-only binding prevents.
 
 ### Initial operations
 
-- `GetHostInfo`
-- `GetCapabilities`
-- `ListPrograms`
-- `Ping`
+- `get_host_info`
+- `get_capabilities`
+- `list_programs`
+- `ping` (RPC handshake; not exposed as an MCP tool)
 
 Milestone 1 exposes a single implicit host and a single session. `host_id` routing, multiple concurrent sessions, and session ownership arrive with Phase 9; until then the protocol carries `session_id` only, and a second `attach` while a session is live is an error rather than a silent replacement.
 
 ### Exit criteria
 
-- Gateway reconnects after dnSpy restarts.
-- Process discovery returns PID, executable, title, architecture, runtime identity, runtime GUID, and attach provider.
-- Two runtimes reachable at the same PID produce two distinct, stable `program_id` values.
-- The extension RPC port is unreachable through non-loopback interfaces.
-- A cross-origin `fetch` from a web page cannot invoke any tool.
-- An expired deadline cancels the in-flight debugger operation and returns a structured error.
-- Protocol compatibility failures are explicit and actionable.
+- ✅ Gateway reconnects after dnSpy restarts. Verified by killing and restarting dnSpy mid-run: calls fail while it is down and succeed again without restarting the gateway.
+- ✅ Process discovery returns PID, executable, title, architecture, runtime identity, runtime GUID, and attach provider. `attach_providers` reports the dnSpy provider names that can produce the entry, which are exactly the values `provider_names` accepts.
+- ✅ Two runtimes reachable at the same PID produce two distinct, stable `program_id` values. Unit-tested against `ProgramIdentity`; the two in-scope engines cannot co-exist in one process, so no live fixture produces it.
+- ✅ The extension RPC port is unreachable through non-loopback interfaces. Verified by connecting to this machine's own LAN address on the RPC port.
+- ✅ A cross-origin `fetch` from a web page cannot invoke any tool.
+- ⚠️ An expired deadline returns a structured error once, but does not cancel the in-flight debugger operation — see work item 3. Advertised through `get_capabilities`.
+- ✅ Protocol compatibility failures are explicit and actionable (`incompatible_protocol`, naming both versions).
 
 ## Phase 2: Attach, launch, and lifecycle control
 

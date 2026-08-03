@@ -39,7 +39,7 @@ namespace dgSpy.Extension {
 			// RPC, but it does leave a dialog nobody headless will dismiss.
 			manager.MessageUserMessage += (_,e) => { lock(sync) lastUserMessage=e.Message; };
 		}
-		public void Start() { if (listener is not null) return; manager.WriteMessage($"dgSpy 0.1.0 listening on 127.0.0.1:{rpcPort}"); listener=Task.Run(ListenAsync); }
+		public void Start() { if (listener is not null) return; manager.WriteMessage($"dgSpy {Version} listening on 127.0.0.1:{rpcPort}"); listener=Task.Run(ListenAsync); }
 		async Task ListenAsync() { try { tcpListener=new TcpListener(IPAddress.Loopback,rpcPort); tcpListener.Start(8); while(!shutdown.IsCancellationRequested) { var client=await tcpListener.AcceptTcpClientAsync().ConfigureAwait(false); _=HandleClientAsync(client); } } catch(ObjectDisposedException) when(shutdown.IsCancellationRequested) { } catch(Exception ex) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.ErrorUser,"dgSpy TCP listener: "+ex.Message); } }
 		async Task HandleClientAsync(TcpClient client) { using(client) try { using var stream=client.GetStream(); using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); using var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true}; string? line; while ((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null) { var req=JsonConvert.DeserializeObject<RpcRequest>(line); var response=req is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(req).ConfigureAwait(false); await writer.WriteLineAsync(JsonConvert.SerializeObject(response)).ConfigureAwait(false); } } 		// A client going away is routine, not an error: the gateway opens a fresh connection per request
 		// and drops it whenever a request is cancelled or hits its deadline. Reporting those through
@@ -53,7 +53,9 @@ namespace dgSpy.Extension {
 			using var requestCancellation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
 			if (req.DeadlineUtc is DateTime requestDeadline) requestCancellation.CancelAfter(requestDeadline-DateTime.UtcNow > TimeSpan.Zero ? requestDeadline-DateTime.UtcNow : TimeSpan.FromMilliseconds(1));
 			switch (req.Operation) {
-			case "ping": return RpcResponse.Success(req.RequestId,new Handshake());
+			case "ping": return RpcResponse.Success(req.RequestId,new Handshake { ExtensionVersion=Version });
+			case "get_host_info": return RpcResponse.Success(req.RequestId,Host());
+			case "get_capabilities": return RpcResponse.Success(req.RequestId,CapabilityCatalog.Describe(Version));
 			case "list_programs": return RpcResponse.Success(req.RequestId,await ListProgramsAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "attach": return RpcResponse.Success(req.RequestId,await AttachAsync((string?)req.Arguments["program_id"] ?? "",requestCancellation.Token).ConfigureAwait(false));
 			case "attach_endpoint": return RpcResponse.Success(req.RequestId,await AttachEndpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
@@ -76,18 +78,30 @@ namespace dgSpy.Extension {
 		// Unfiltered discovery probes every process on the machine. Passing process ids or names lets
 		// dnSpy skip the rest, which is the difference between seconds and milliseconds when the
 		// caller already knows what it is looking for.
+		// provider_names selects attach providers by name. dnSpy skips providers a caller did not ask
+		// for, which is how a caller avoids paying for a scan it does not need — Unity's multicast
+		// discovery in particular only ever runs when it is named explicitly.
 		async Task<ProgramInfo[]> ListProgramsAsync(RpcRequest req,CancellationToken cancellationToken) {
 			var processIds=req.Arguments["process_ids"]?.ToObject<int[]>();
 			var processNames=req.Arguments["process_names"]?.ToObject<string[]>();
-			var values=await programs.GetAttachableProcessesAsync(processNames,processIds,null,cancellationToken).ConfigureAwait(false);
+			var providerNames=req.Arguments["provider_names"]?.ToObject<string[]>();
+			var values=await programs.GetAttachableProcessesAsync(processNames,processIds,providerNames,cancellationToken).ConfigureAwait(false);
 			lock(sync) { programCache.Clear(); return values.Select(p=>{
 				// RuntimeId has no string form, so identity is composed from typed fields: pid, the
 				// runtime GUID (the only thing separating .NET Framework from Unity/Mono), and the
 				// engine's own discriminator, which is the CLR version for CorDebug.
 				var id=ProgramIdentity.Create(p.ProcessId,p.RuntimeGuid,p.RuntimeName);
 				programCache[id]=p;
-				return new ProgramInfo { ProgramId=id,ProcessId=p.ProcessId,Executable=p.Filename,Title=p.Title,Architecture=p.Architecture.ToString(),RuntimeId=p.RuntimeName,RuntimeName=p.RuntimeName,RuntimeGuid=p.RuntimeGuid.ToString("D"),RuntimeKindGuid=p.RuntimeKindGuid.ToString("D"),AttachProvider=p.RuntimeGuid.ToString("D") }; }).ToArray(); }
+				return new ProgramInfo { ProgramId=id,ProcessId=p.ProcessId,Executable=p.Filename,Title=p.Title,Architecture=p.Architecture.ToString(),RuntimeId=p.RuntimeName,RuntimeName=p.RuntimeName,RuntimeGuid=p.RuntimeGuid.ToString("D"),RuntimeKindGuid=p.RuntimeKindGuid.ToString("D"),AttachProviders=AttachProviders(p.RuntimeGuid) }; }).ToArray(); }
 		}
+		// AttachableProcess does not say which provider produced it, so report the providers that can:
+		// the runtime GUID identifies the engine, and Unity's runtime is reachable through either of
+		// dnSpy's two Unity providers. These are the exact strings provider_names accepts.
+		static string[] AttachProviders(Guid runtimeGuid) =>
+			runtimeGuid==PredefinedDbgRuntimeGuids.DotNetFramework_Guid ? new[]{PredefinedAttachProgramOptionsProviderNames.DotNetFramework} :
+			runtimeGuid==PredefinedDbgRuntimeGuids.DotNet_Guid ? new[]{PredefinedAttachProgramOptionsProviderNames.DotNet} :
+			runtimeGuid==PredefinedDbgRuntimeGuids.DotNetUnity_Guid ? new[]{PredefinedAttachProgramOptionsProviderNames.UnityEditor,PredefinedAttachProgramOptionsProviderNames.UnityPlayer} :
+			Array.Empty<string>();
 		async Task<SessionState> AttachAsync(string id,CancellationToken cancellationToken) {
 			AttachableProcess p; lock(sync) if (!programCache.TryGetValue(id,out p!)) throw new RpcException("program_not_found","Refresh list_programs and use an exact program_id.");
 			// AttachableProcess.Attach() is exactly DbgManager.Start(GetOptions()) with the returned error

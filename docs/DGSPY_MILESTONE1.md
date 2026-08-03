@@ -32,15 +32,25 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 
 ## Tools
 
-`list_programs`, `attach`, `attach_endpoint`, `detach`, `list_sessions`, `get_session_state`,
-`pause`, `continue`, `set_il_breakpoint`, `list_breakpoints`, `remove_breakpoint`,
-`clear_breakpoints`, `wait_for_stop`, `list_threads`, `get_callstack`, `get_frame`.
+`get_host_info`, `get_capabilities`, `list_programs`, `attach`, `attach_endpoint`, `detach`,
+`list_sessions`, `get_session_state`, `pause`, `continue`, `set_il_breakpoint`, `list_breakpoints`,
+`remove_breakpoint`, `clear_breakpoints`, `wait_for_stop`, `list_threads`, `get_callstack`,
+`get_frame`.
 
 ## State and lifetime rules
 
+- `get_host_info` identifies the host: dnSpy/dgSpy versions, machine, architecture, supported engines,
+  and the live `session_id` if there is one. `get_capabilities` reports per-operation time bounds,
+  per-engine behavior, and limits. Engine differences are advertised, not assumed — most importantly
+  that Mono/Unity binds breakpoints only at sequence points and that a deadline cannot abort work that
+  has already started (`limits.cancels_in_flight_work: false`).
 - `list_programs` unfiltered probes every process and takes seconds. Pass `process_ids` or
   `process_names` (wildcards allowed) when the target is known — that is ~50 ms instead of ~2500 ms.
-  Each call replaces the set of valid `program_id` values.
+  `provider_names` selects dnSpy attach providers (`DotNetFramework`, `DotNet`, `UnityEditor`,
+  `UnityPlayer`) and skips the rest; each entry reports the providers that can produce it in
+  `attach_providers`, ready to pass back. `UnityPlayer` is the multicast scan and never runs unless
+  named. Each call replaces the set of valid `program_id` values — including a filtered call that
+  returns nothing.
 - `program_id` is composed from PID, runtime GUID, and the engine's discriminator (CLR version for
   CorDebug). `runtime_guid` is what separates .NET Framework from Unity/Mono; they share a kind GUID.
 - `attach` waits until the engine has enumerated threads before returning, avoiding a threadless stop.
@@ -90,7 +100,11 @@ without a preflight, so loopback binding alone would leave the debugger open to 
   the oldest available cursor. The extension caps the wait at 10 s.
 - Primitive locals are limited to values with a raw scalar; object expansion is outside milestone 1.
 - The gateway opens a new loopback TCP connection per request, so restarting dnSpy needs no gateway
-  restart.
+  restart; calls fail while dnSpy is down and succeed again once the extension is listening.
+- Per-tool gateway deadlines are derived from the bounds the extension advertises in
+  `get_capabilities` (`dgSpy.Protocol.CapabilityCatalog`), plus a margin, rather than guessed. A
+  gateway deadline shorter than the inner bound abandons work that was about to succeed; a unit test
+  keeps the two sides from drifting.
 
 ## Tests
 
@@ -110,11 +124,13 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj
 .\tests\run-milestone1-smoke.ps1
 ```
 
-The unit tests cover the wire contract, the gateway's access control, and the extension's pure
-program-identity, session-state, and bounded event-cursor invariants. The smoke script is the
-end-to-end test: it builds, deploys, starts a disposable target plus dnSpy plus the gateway, and
-asserts 70 checks across access control, x64 discovery, attach, thread/frame inspection, breakpoints, and detach. It
-stops everything it starts and exits non-zero on any failure.
+The unit tests cover the wire contract and capability catalog, the gateway's access control and its
+deadline-versus-bound invariant, and the extension's pure program-identity, session-state, and bounded
+event-cursor invariants. The smoke script is the end-to-end test: it builds, deploys, starts a
+disposable target plus dnSpy plus the gateway, and asserts 89 checks across access control, loopback-only
+reachability, dnSpy-restart recovery, host info and capabilities, x64 discovery and provider filtering,
+attach, thread/frame inspection, breakpoints, and detach. It stops everything it starts and exits
+non-zero on any failure.
 
 The smoke script covers `attach_endpoint`'s argument validation and failure path only; its success
 path needs a Mono/Unity target and is a manual checklist, [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md).

@@ -34,7 +34,10 @@ namespace dgSpy.Protocol {
 		/// so only this tells the engines apart.</summary>
 		[JsonProperty("runtime_guid")] public string RuntimeGuid { get; set; }="";
 		[JsonProperty("runtime_kind_guid")] public string RuntimeKindGuid { get; set; }="";
-		[JsonProperty("attach_provider")] public string AttachProvider { get; set; }="";
+		/// <summary>dnSpy attach-provider names that can produce this entry, ready to pass back as
+		/// <c>provider_names</c>. Empty when the runtime has no known provider — an entry reached through
+		/// attach_endpoint has none, because no provider ever enumerated it.</summary>
+		[JsonProperty("attach_providers")] public string[] AttachProviders { get; set; }=Array.Empty<string>();
 	}
 	public sealed class SessionSummary {
 		[JsonProperty("session_id")] public string SessionId { get; set; }=""; [JsonProperty("state")] public string State { get; set; }="";

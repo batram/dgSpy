@@ -13,6 +13,23 @@ public sealed class ExtensionCoreTests {
 		Assert.Equal("42:3b476d35a40111d2aad400c04f990171:CLR v4.0.30319",id);
 	}
 
+	[Fact]
+	public void TwoRuntimesAtOnePidGetDistinctStableIdentities() {
+		// A process can expose more than one supported runtime, and both entries must stay separately
+		// addressable. Identity is composed from typed fields, so the runtime GUID — the only thing that
+		// separates .NET Framework from Unity/Mono — has to reach the id.
+		var framework=Guid.Parse("CD03ACDD-4F3A-4736-8591-4902B4DCC8C1");
+		var unity=Guid.Parse("CE8A11EE-73EF-4A51-B5D0-BDA2E665A2B4");
+
+		var first=ProgramIdentity.Create(4242,framework,"CLR v4.0.30319");
+		var second=ProgramIdentity.Create(4242,unity,"Unity");
+
+		Assert.NotEqual(first,second);
+		Assert.Equal(first,ProgramIdentity.Create(4242,framework,"CLR v4.0.30319"));
+		Assert.StartsWith("4242:",first);
+		Assert.StartsWith("4242:",second);
+	}
+
 	[Theory]
 	[InlineData(true,false,false,null,"faulted")]
 	[InlineData(false,true,false,null,"attaching")]

@@ -124,9 +124,58 @@ try {
 	catch { $rejected = $_.Exception.Response.StatusCode.value__ -eq 403 }
 	Assert-That 'a request without the token is refused' $rejected
 
+	# Loopback binding is the extension RPC endpoint's only protection, so prove it is real rather than
+	# trusting the constructor argument. Connect to this machine's own LAN address on the RPC port: the
+	# listener is not bound there, so the stack refuses it.
+	$localAddress = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+		Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254.*' } |
+		Select-Object -First 1).IPAddress
+	if ($localAddress) {
+		$reachable = $false
+		try {
+			$probeClient = [Net.Sockets.TcpClient]::new()
+			$reachable = $probeClient.ConnectAsync($localAddress, $RpcPort).Wait(2000) -and $probeClient.Connected
+		} catch { $reachable = $false } finally { if ($probeClient) { $probeClient.Dispose() } }
+		Assert-That "the extension RPC port is unreachable on $localAddress" (-not $reachable)
+	}
+	else { Write-Host "  SKIP  no non-loopback IPv4 address to probe" -ForegroundColor DarkYellow }
+
+	# The gateway opens a fresh connection per request and holds no debugger state, so a dnSpy restart
+	# must be invisible to the next tool call. Do this before attaching: closing dnSpy with a session
+	# attached terminates the target.
+	Write-Host "== gateway survives a dnSpy restart ==" -ForegroundColor Cyan
+	Stop-Process -Id $dnSpyProcess.Id -Force
+	$dnSpyProcess.WaitForExit(10000) | Out-Null
+	$failedWhileDown = $false
+	try { Invoke-Tool -Name 'get_host_info' -Arguments @{} | Out-Null } catch { $failedWhileDown = $true }
+	Assert-That 'a tool call fails while dnSpy is down' $failedWhileDown
+	$dnSpyProcess = Start-Process -FilePath (Join-Path $dnSpyDir 'dnSpy.exe') -ArgumentList '--multiple' `
+		-WorkingDirectory $dnSpyDir -WindowStyle Hidden -PassThru
+	if (-not (Wait-Until { @(Get-NetTCPConnection -State Listen -LocalPort $RpcPort -ErrorAction SilentlyContinue).Count -gt 0 } 60)) {
+		throw "Extension RPC endpoint did not come back after the dnSpy restart."
+	}
+	$reconnected = Invoke-Tool -Name 'get_host_info' -Arguments @{}
+	Assert-That 'the gateway reconnects after a dnSpy restart without being restarted itself' ($reconnected.host_id -eq 'local')
+
+	Write-Host "== host info and capabilities ==" -ForegroundColor Cyan
+	Assert-That 'get_host_info reports this machine and a live connection' ($reconnected.machine_name -eq $env:COMPUTERNAME -and $reconnected.connection_state -eq 'connected')
+	Assert-That 'get_host_info reports an x64 dnSpy' ($reconnected.architecture -eq 'X64') "(was $($reconnected.architecture))"
+	Assert-That 'get_host_info reports both in-scope engines' (@($reconnected.engines) -contains 'cordebug' -and @($reconnected.engines) -contains 'unity')
+	Assert-That 'get_host_info reports no session before attach' ($null -eq $reconnected.session_id)
+	Assert-That 'get_host_info names a dnSpy version' (-not [string]::IsNullOrWhiteSpace($reconnected.dnspy_version)) "(was '$($reconnected.dnspy_version)')"
+
+	$capabilities = Invoke-Tool -Name 'get_capabilities' -Arguments @{}
+	Assert-That 'get_capabilities matches the protocol version the gateway reports' ($capabilities.protocol_version -eq (Invoke-RestMethod ($gatewayUrl + '/health')).protocol_version)
+	$cordebug = @($capabilities.engines) | Where-Object { $_.engine -eq 'cordebug' }
+	$unity = @($capabilities.engines) | Where-Object { $_.engine -eq 'unity' }
+	Assert-That 'capabilities separate CorDebug offsets from Mono sequence points' ($cordebug.arbitrary_il_offset_breakpoints -and $unity.sequence_point_breakpoints_only)
+	Assert-That 'capabilities say the Unity engine is not discoverable' (-not $unity.discoverable -and @($unity.acquisition) -contains 'attach_endpoint')
+	Assert-That 'capabilities admit that a deadline cannot abort in-flight work' ($capabilities.limits.cancels_in_flight_work -eq $false)
+	Assert-That 'capabilities bound every operation' (@(@($capabilities.operations) | Where-Object { $_.max_duration_ms -le 0 }).Count -eq 0)
+
 	Write-Host "== discovery ==" -ForegroundColor Cyan
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
-	foreach ($expected in 'list_programs','attach','attach_endpoint','detach','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','list_threads','get_callstack','get_frame') {
+	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','detach','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','list_threads','get_callstack','get_frame') {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
 	}
 
@@ -139,6 +188,18 @@ try {
 	Assert-That 'the .NET Framework test target is x64' ($program.architecture -eq 'X64') "(was $($program.architecture))"
 	Assert-That 'program_id carries no dnSpy type name' (-not $program.program_id.Contains('RuntimeId')) "(was $($program.program_id))"
 	Assert-That 'runtime_guid is distinct from runtime_kind_guid' ($program.runtime_guid -ne $program.runtime_kind_guid)
+	Assert-That 'the entry names an attach provider a caller can pass back' (@($program.attach_providers) -contains 'DotNetFramework') "(was $($program.attach_providers -join ','))"
+
+	# Provider selection is what keeps a caller from paying for scans it does not need. Naming the
+	# provider that owns this target must still find it; naming only the Unity providers must not.
+	$byProvider = @(Invoke-Tool -Name 'list_programs' -Arguments @{ process_ids = @($targetId); provider_names = @('DotNetFramework') })
+	Assert-That 'a provider-filtered listing still finds the target' (@($byProvider | Where-Object { $_.pid -eq $targetId }).Count -ge 1)
+	$wrongProvider = Invoke-Tool -Name 'list_programs' -Arguments @{ process_ids = @($targetId); provider_names = @('UnityEditor') } -AsText
+	Assert-That 'selecting only Unity providers excludes a .NET Framework target' (-not $wrongProvider.Contains("`"pid`":$targetId")) "(payload $wrongProvider)"
+
+	# Each listing replaces the set of valid program_id values, and the one above deliberately returned
+	# none. Re-establish the cache from a listing that contains the target before attaching to it.
+	$program = @(Invoke-Tool -Name 'list_programs' -Arguments @{ process_ids = @($targetId) })[0]
 
 	Write-Host "== attach and session tracking ==" -ForegroundColor Cyan
 	$session = Invoke-Tool -Name 'attach' -Arguments @{ program_id = $program.program_id }
@@ -156,6 +217,9 @@ try {
 
 	$err = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = 'not-a-session' } -ExpectError
 	Assert-That 'an unknown session_id is refused' ($err -match 'not active|No active')
+
+	$hostWithSession = Invoke-Tool -Name 'get_host_info' -Arguments @{}
+	Assert-That 'get_host_info reports the live session' ($hostWithSession.session_id -eq $sessionId)
 
 	Write-Host "== pause, inspect, resume ==" -ForegroundColor Cyan
 	$paused = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId }

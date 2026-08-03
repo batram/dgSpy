@@ -67,14 +67,22 @@ sealed class LocalRpcClient {
 		return JsonConvert.DeserializeObject<RpcResponse>(line) ?? throw new IOException("Invalid RPC response.");
 	}
 }
-static class ToolCatalog {
+public static class ToolCatalog {
 	static object Tool(string name, string description, object properties, string[]? required=null) => new { name, description, inputSchema=new { type="object", properties, required=required ?? Array.Empty<string>() } };
-	/// <summary>The gateway deadline must outlast the extension's own bound for the operation, or the
-	/// gateway gives up on work that was about to succeed. Attach waits up to 10 s for the engine to
-	/// enumerate threads, and attach_endpoint waits for the Mono connection timeout on top of that.</summary>
-	public static int DeadlineSeconds(string tool) => tool switch { "attach_endpoint" => 330, "attach" => 20, "detach" => 20, "wait_for_stop" => 12, "set_il_breakpoint" => 20, _ => 8 };
+	/// <summary>Margin between the extension's own bound for an operation and the gateway's deadline for
+	/// it. The gateway deadline must outlast the inner bound, or the gateway abandons work that was about
+	/// to succeed — a flat 8 s once cut off a successful 10 s attach.</summary>
+	public const int MarginSeconds = 5;
+	/// <summary>Derived from the extension's advertised bound rather than guessed. CapabilityCatalog is
+	/// the single source of truth for both sides; get_capabilities serves the same table to callers.</summary>
+	public static int DeadlineSeconds(string tool) {
+		var bound=CapabilityCatalog.BoundMs(tool);
+		return bound<=0 ? 8 : (int)Math.Ceiling(bound/1000.0)+MarginSeconds;
+	}
 	public static readonly object[] All = {
-		Tool("list_programs", "List dnSpy-attachable managed runtimes. Unfiltered enumeration probes every process on the machine and takes seconds; pass process_ids or process_names when the target is known. Each call replaces the set of valid program_id values.", new { process_ids=new { type="array", items=new { type="integer" }, description="Only these PIDs." }, process_names=new { type="array", items=new { type="string" }, description="Process names, wildcards * and ? allowed, eg. UltimateChickenHorse*." } }),
+		Tool("get_host_info", "Identify the dnSpy host this gateway talks to: versions, machine, architecture, supported engines, and whether a session is live.", new {}),
+		Tool("get_capabilities", "Report what this host supports before relying on it: per-operation time bounds, per-engine behavior (notably that Mono/Unity binds breakpoints only at sequence points), and limits. Engine differences are advertised here rather than assumed.", new {}),
+		Tool("list_programs", "List dnSpy-attachable managed runtimes. Unfiltered enumeration probes every process on the machine and takes seconds; pass process_ids or process_names when the target is known. Each call replaces the set of valid program_id values.", new { process_ids=new { type="array", items=new { type="integer" }, description="Only these PIDs." }, process_names=new { type="array", items=new { type="string" }, description="Process names, wildcards * and ? allowed, eg. UltimateChickenHorse*." }, provider_names=new { type="array", items=new { type="string" }, description="dnSpy attach providers to consult: DotNetFramework, DotNet, UnityEditor, UnityPlayer. Naming providers skips the rest. UnityPlayer runs a multicast scan and is skipped entirely unless named." } }),
 		Tool("attach", "Attach using a program_id returned by list_programs.", new { program_id=new { type="string" } }, new[]{"program_id"}),
 		Tool("attach_endpoint", "Attach to a Mono/Unity soft-debugger endpoint by address and port. Use this when the target was launched with --debugger-agent=transport=dt_socket,server=y,address=HOST:PORT: such a target emits no discovery beacon, so list_programs can never see it and attach cannot reach it. Returns state \"faulted\" with fault_message when the connection fails.", new { address=new { type="string", description="Default 127.0.0.1." }, port=new { type="integer", minimum=1, maximum=65535 }, engine=new { type="string", @enum=new[]{"unity","mono"}, description="Default unity. Must match the target's runtime." }, process_is_suspended=new { type="boolean", description="True when the agent was given suspend=y, ie. the target is parked waiting for a debugger." }, connection_timeout_ms=new { type="integer", description="Socket retry window. dnSpy's default is 10000; capped at 300000." } }, new[]{"port"}),
 		Tool("get_session_state", "Get current debugger session state.", new { session_id=new { type="string" } }, new[]{"session_id"}),
@@ -86,7 +94,7 @@ static class ToolCatalog {
 		Tool("list_breakpoints", "List all dnSpy breakpoints with their binding state. Breakpoints are global and outlive a session.", new {}),
 		Tool("remove_breakpoint", "Remove one breakpoint by the exact id returned by set_il_breakpoint or list_breakpoints. Unlike clear_breakpoints, this leaves every other dnSpy and UI breakpoint untouched.", new { breakpoint_id=new { type="integer" } }, new[]{"breakpoint_id"}),
 		Tool("clear_breakpoints", "Remove every dnSpy breakpoint, including any set by hand in the dnSpy UI. Breakpoints outlive a detach and rebind on the next attach, so clear them before reattaching if a fresh session should not stop on old ones.", new {}),
-		Tool("wait_for_stop", "Wait for a stop event after an event cursor.", new { session_id=new { type="string" }, after_event_id=new { type="integer" }, timeout_ms=new { type="integer", minimum=1, maximum=60000 } }, new[]{"session_id"}),
+		Tool("wait_for_stop", "Wait for a stop event after an event cursor.", new { session_id=new { type="string" }, after_event_id=new { type="integer" }, timeout_ms=new { type="integer", minimum=1, maximum=10000, description="Default 5000. The extension clamps to 10000; poll again with the returned cursor for longer waits." } }, new[]{"session_id"}),
 		Tool("list_threads", "List paused target threads with stable thread_id values. It does not eagerly fetch every stack because Unity threads can exit during frame retrieval; select a returned thread_id with get_callstack or get_frame.", new { session_id=new { type="string" } }, new[]{"session_id"}),
 		Tool("get_callstack", "Get a paused call stack and primitive locals. Pass thread_id for deterministic caller-selected inspection; omitting it preserves the managed-frame probe fallback.", new { session_id=new { type="string" }, thread_id=new { type="string" }, max_frames=new { type="integer", minimum=1, maximum=100 } }, new[]{"session_id"}),
 		Tool("get_frame", "Inspect one paused frame and its primitive locals by caller-selected thread_id and zero-based frame_index.", new { session_id=new { type="string" }, thread_id=new { type="string" }, frame_index=new { type="integer", minimum=0, maximum=99 } }, new[]{"session_id","thread_id","frame_index"})

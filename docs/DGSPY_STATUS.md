@@ -20,7 +20,15 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | MEF extension loads in x64 net48 dnSpy, logs version | ✅ verified |
 | Phase 0 engine acquisition: CorDebug via discovery, endpoint-launched UCH via `attach_endpoint` | ✅ verified both engines |
 | CorDebug smoke target is explicitly x64 and its reported architecture is asserted | ✅ automated |
+| **Phase 1 closed out** — see `IMPLEMENTATION_PLAN.md` for the one amended criterion | ✅ 2026-08-03 |
 | Loopback TCP RPC, versioned, structured errors | ✅ verified |
+| Extension RPC port refuses connections on a non-loopback interface | ✅ verified (this machine's LAN address) |
+| Gateway survives a dnSpy restart without being restarted | ✅ verified (kill, relaunch, next call succeeds) |
+| `get_host_info` — versions, machine, architecture, engines, live `session_id` | ✅ verified |
+| `get_capabilities` — per-operation bounds, per-engine rules, limits | ✅ verified |
+| Gateway deadlines derived from the extension's advertised bounds | ✅ unit-tested invariant, no longer a guess |
+| `list_programs` `provider_names` selection + `attach_providers` in each entry | ✅ verified |
+| Two runtimes at one PID yield distinct stable `program_id`s | ✅ unit-tested (no live fixture exists in scope) |
 | One-command build + deploy (`build-dgspy.ps1`) | ✅ verified |
 | `list_programs`, incl. `process_ids` / `process_names` filtering | ✅ verified (2454 ms → 55 ms) |
 | `program_id` from typed fields; `runtime_guid` surfaced | ✅ verified |
@@ -48,15 +56,15 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | Evaluation off the dispatcher (`EvaluationQueue`) | ✅ built and regression-tested, benefit not directly observable |
 | Response serialization off the dispatcher | ✅ built, not directly observable |
 | Extension split into entry point, RPC, debugger, events, and identity boundaries | ✅ built |
-| `dgSpy.Extension.Tests` identity, state, and event-cursor coverage | ✅ 10 tests |
+| `dgSpy.Extension.Tests` identity, state, and event-cursor coverage | ✅ 11 tests |
 
 Test suites, all green:
 
 ```powershell
-dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 10 checks, wire contract
-dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 13 checks, access control
-dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 10 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 70 checks, end to end
+dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 15 checks, wire + capability contract
+dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 51 checks, access control + deadline bounds
+dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 11 checks, extension core
+.\tests\run-milestone1-smoke.ps1                                       # 89 checks, end to end
 ```
 
 ## Remaining gaps
@@ -73,8 +81,10 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 10 chec
 
 1. **Cancellation cannot abort in-flight work.** An expired deadline abandons the *wait*; a queued
    dispatcher callback or a started evaluation runs to completion, because dnSpy exposes no way to
-   cancel either. Commented at both call sites in `ExtensionEntryPoint.cs`. Phase 1 asks for more than
-   this delivers.
+   cancel either. Commented at both call sites in `ExtensionEntryPoint.cs`. This is the one Phase 1
+   exit criterion that was amended rather than met; it is now advertised to callers as
+   `limits.cancels_in_flight_work: false` instead of being left to be discovered. Revisit when
+   func-eval makes evaluations long enough for the difference to bite.
 2. **The `stale_handle` path is untested.** `DescribeFrame` rejects a snapshot whose frame closed
    mid-evaluation, but with `NoFuncEval` evaluations are milliseconds and the race cannot be triggered
    reliably. Revisit when func-eval makes evaluations long enough to manipulate.
@@ -96,10 +106,12 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 10 chec
    behind an interface rather than passing dnSpy objects through the transport layer.
 2. **Gateway implements only the POST half of Streamable HTTP** — no `Mcp-Session-Id` handling, no
    SSE/GET. Fine for our client; a strict MCP client may object. `protocolVersion` is hardcoded.
-3. **Per-tool gateway deadlines are a hardcoded table** (`ToolCatalog.DeadlineSeconds`). They exist
-   because the gateway's old flat 8 s was shorter than the extension's own 10 s attach wait, so a
-   successful attach could be abandoned by the caller. The extension should advertise its bound rather
-   than the gateway guessing it.
+3. ~~**Per-tool gateway deadlines are a hardcoded table.**~~ Fixed 2026-08-03. The bounds live in
+   `dgSpy.Protocol.CapabilityCatalog`, the extension serves them through `get_capabilities`, and
+   `ToolCatalog.DeadlineSeconds` derives each deadline from the matching bound plus a margin. A gateway
+   unit test fails if any advertised tool loses that headroom or names an operation the catalog does not
+   know. Remaining wrinkle: the catalog's bounds are maintained by hand against the waits in `RpcHost`,
+   so a new wait needs its bound updated with it.
 
 ## Hard-won facts worth not rediscovering
 
@@ -150,12 +162,22 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 10 chec
 - **The extension needs `Newtonsoft.Json.dll` beside it**; dnSpy does not ship it, and a missing
   dependency makes dnSpy drop the extension silently.
 - **A stale extension copy in dnSpy's bin root is composed twice.** `build-dgspy.ps1` removes them.
+- **Every `list_programs` call replaces the set of valid `program_id` values — including one that
+  returns nothing.** A provider-filtered listing that matches no process empties the cache, and the
+  next `attach` fails with `program_not_found` on an id that was valid seconds earlier. This bit the
+  smoke script itself when provider filtering was added; it re-lists before attaching.
+- **`AttachableProcess` does not say which provider produced it.** The provider names in
+  `attach_providers` are derived from the runtime GUID, which is why Unity reports both `UnityEditor`
+  and `UnityPlayer`.
 - **Windows PowerShell 5.1 is .NET Framework**: no `RandomNumberGenerator.GetBytes(int)`, no
   `Convert.ToHexString`; `-match` against a collection returns matches rather than a boolean; and
   `ConvertFrom-Json '[]'` does not survive `.Count` checks. All three cost debugging cycles in the test
   harness — the smoke script has comments where each bit.
 
 ## Suggested order for the next session
+
+Phases 0 and 1 are closed. Phase 2 is largely covered by the attach/detach work already verified;
+`launch`, `terminate`, and `restart` remain unimplemented, as does dnSpy's own shutdown path.
 
 1. Phase 3/4 proper: full event stream, breakpoint conditions and hit counts, stepping. Follow
    `Extensions/dgSpy.Extension/README.md` and add each family in its owning partial file.

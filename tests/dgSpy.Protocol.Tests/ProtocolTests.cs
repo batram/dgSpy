@@ -123,4 +123,58 @@ public class IdentityContractTests {
 		Assert.False((bool?)wire["detached"]);
 		Assert.True((bool?)wire["terminated"]);
 	}
+
+	[Fact]
+	public void Program_reports_provider_names_a_caller_can_pass_back() {
+		// attach_provider used to carry the runtime GUID, which is not something list_programs accepts.
+		var wire = JObject.Parse(JsonConvert.SerializeObject(new ProgramInfo { AttachProviders = new[] { "DotNetFramework" } }));
+
+		Assert.Equal("DotNetFramework", (string?)wire["attach_providers"]![0]);
+	}
+}
+
+public class CapabilityContractTests {
+	[Fact]
+	public void Every_operation_has_a_unique_name_and_a_positive_bound() {
+		var operations = CapabilityCatalog.Operations;
+
+		Assert.Equal(operations.Length, operations.Select(o => o.Operation).Distinct().Count());
+		Assert.All(operations, o => Assert.True(o.MaxDurationMs > 0, $"{o.Operation} has no bound."));
+	}
+
+	[Fact]
+	public void The_two_supported_engines_advertise_their_incompatible_breakpoint_rules() {
+		// The one difference that silently breaks callers: CorDebug binds a breakpoint at any IL offset,
+		// Mono rejects anything that is not a sequence point. Advertised, not assumed.
+		var cordebug = CapabilityCatalog.Engines.Single(e => e.Engine == "cordebug");
+		var unity = CapabilityCatalog.Engines.Single(e => e.Engine == "unity");
+
+		Assert.True(cordebug.ArbitraryIlOffsetBreakpoints);
+		Assert.False(cordebug.SequencePointBreakpointsOnly);
+		Assert.False(unity.ArbitraryIlOffsetBreakpoints);
+		Assert.True(unity.SequencePointBreakpointsOnly);
+		Assert.True(cordebug.Discoverable);
+		// Unity's endpoint targets emit no beacon, so no provider can enumerate them.
+		Assert.False(unity.Discoverable);
+		Assert.Equal(new[] { "attach_endpoint" }, unity.Acquisition);
+	}
+
+	[Fact]
+	public void Cancellation_is_advertised_as_the_limitation_it_is() =>
+		// dnSpy cannot abort a queued dispatcher callback or a started evaluation. Saying so beats
+		// letting a caller infer that a deadline unwinds the debugger.
+		Assert.False(CapabilityCatalog.Limits.CancelsInFlightWork);
+
+	[Fact]
+	public void Capabilities_and_host_info_round_trip_with_snake_case_wire_names() {
+		var capabilities = JObject.Parse(JsonConvert.SerializeObject(CapabilityCatalog.Describe("0.1.0")));
+		var host = JObject.Parse(JsonConvert.SerializeObject(new HostInfo { HostId = CapabilityCatalog.HostId, MachineName = "TESTBOX" }));
+
+		Assert.Equal("local", (string?)capabilities["host_id"]);
+		Assert.Equal(ProtocolVersion.Current, (int?)capabilities["protocol_version"]);
+		Assert.Equal(1, (int?)capabilities["limits"]!["max_concurrent_sessions"]);
+		Assert.Equal("attach_endpoint", (string?)capabilities["engines"]![1]!["acquisition"]![0]);
+		Assert.Equal("TESTBOX", (string?)host["machine_name"]);
+		Assert.Equal("connected", (string?)host["connection_state"]);
+	}
 }
