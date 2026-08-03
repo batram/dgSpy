@@ -107,6 +107,34 @@ without a preflight, so loopback binding alone would leave the debugger open to 
   reads. A stale cursor sets `truncated` and returns `oldest_available_cursor`; waits cap at 10 s.
   `get_stop_reason` returns either an exact retained stop or the latest one. Normalized stops preserve
   reason, process, thread, breakpoint or exception identity, and stable IL location when dnSpy supplies it.
+- **An unrecognized `kinds` value is rejected with `invalid_argument`, not filtered on.** A near miss
+  like `breakpoint` for `breakpoint_hit` used to return a clean empty result, which is indistinguishable
+  from "the event never happened" — the same false-negative shape as reading the event cursor too late.
+  The error names the offending value and the whole valid set, which `get_capabilities` also serves as
+  `event_kinds` and `stop_reasons`.
+
+### Event kinds
+
+`wait_for_stop` filters on `stopped` — the synthesized whole-process stop, which is the one to wait on.
+The rest are informational.
+
+| Group | Kinds |
+|---|---|
+| Stop | `stopped` |
+| Session lifecycle | `session_started`, `session_ended`, `attached`, `attach_failed`, `detached`, `restarted`, `continued`, `terminated`, `restart_process_exited`, `session_exited` |
+| Process and runtime | `process_created`, `runtime_created`, `runtime_exited` |
+| Module and thread | `module_loaded`, `module_unloaded`, `thread_created`, `thread_exited` |
+| Raw debugger messages | `exception_thrown`, `breakpoint_hit`, `step_completed`, `entry_point`, `program_break`, `break` |
+
+A `stopped` event carries `stop_reason`: `breakpoint`, `exception`, `step`, `entry_point`,
+`program_break`, `pause`, or `unknown`. `unknown` is not an error — a Unity pause can arrive with no
+break message dgSpy recognizes — but the caller cannot infer why it stopped.
+
+Note the pairing: `breakpoint_hit` is the raw debugger message, `stopped` with
+`stop_reason: "breakpoint"` is the process actually being stopped by it. Waiting on the former can see
+an event for a process that is still being suspended. The vocabulary lives in
+`dgSpy.Protocol.EventKinds`, and every emitting call site names a constant from it, so a kind cannot
+ship without being filterable and advertised in the same edit.
 - Primitive locals are limited to values with a raw scalar; object expansion is outside milestone 1.
 - The gateway opens a new loopback TCP connection per request, so restarting dnSpy needs no gateway
   restart; calls fail while dnSpy is down and succeed again once the extension is listening.

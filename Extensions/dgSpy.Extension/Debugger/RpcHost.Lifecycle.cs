@@ -90,7 +90,7 @@ namespace dgSpy.Extension {
 				var restarted=await OnDebuggerAsync(()=>manager.IsDebugging && manager.Processes.Any(process=>!oldProcessIds.Contains(process.Id)),cancellationToken).ConfigureAwait(false);
 				if (!restarted) throw new RpcException("restart_failed","dnSpy did not create a replacement process before the operation deadline.");
 				lock(sync) { terminalExitCode=null; terminalReason=null; requestedOffsets.Clear(); }
-				Record("restarted");
+				Record(EventKinds.Restarted);
 				return await OnDebuggerAsync(State,cancellationToken).ConfigureAwait(false);
 			}
 			finally { lock(sync) lifecycleAction=null; }
@@ -105,7 +105,7 @@ namespace dgSpy.Extension {
 			var reason=action=="terminate" ? "terminated_by_client" : action=="restart" ? "restart" : "target_exited";
 			var terminal=action!="restart";
 			if (terminal) lock(sync) { terminalExitCode=e.ExitCode; terminalReason=reason; requestedOffsets.Clear(); }
-			Record(action=="terminate" ? "terminated" : action=="restart" ? "restart_process_exited" : "session_exited",terminal,e.Process.Id,e.ExitCode,reason);
+			Record(action=="terminate" ? EventKinds.Terminated : action=="restart" ? EventKinds.RestartProcessExited : EventKinds.SessionExited,terminal,e.Process.Id,e.ExitCode,reason);
 		}
 	}
 }

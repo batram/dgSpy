@@ -307,27 +307,43 @@ event and state versions. Buffer tests verify cancellation recovery and truncati
 - ✅ Resume followed by another stop produces a new state version and event ID.
 - ✅ Event-buffer truncation is reported with the new oldest available cursor.
 
-## Phase 4: Breakpoints and stepping
+## Milestone 1: complete
+
+Every item in "First implementation milestone" at the end of this document is delivered and verified;
+Phases 0 through 3 are closed. The phase numbering below understates that, because seven tools the
+original Phase 4 and Phase 5 lists own already ship: `set_il_breakpoint`, `list_breakpoints`,
+`remove_breakpoint`, `clear_breakpoints`, `list_threads`, `get_callstack`, and `get_frame`. They landed
+early because Milestone 1's vertical slice needed them, and the remaining phases are scoped around that
+rather than pretending it did not happen.
+
+## Phase 4: Breakpoint conditions and stepping
+
+Breakpoint *identity* is deliberately not in this phase. Setting a breakpoint by module/type/method
+name, and mapping it to a decompiled C# line, are symbol-resolution problems, and Phase 6 owns the
+metadata and decompiler layer that makes them possible. Leaving them here left Phase 4 half-blocked on
+a layer that does not exist yet; they now live in Phase 6, item 8.
+
+Everything below works on the token+offset identity that already ships.
 
 ### Work
 
-1. Resolve source-style locations by module/type/method and IL offset.
-2. Support metadata-token and exact IL-offset breakpoints as the dependable base representation. "Exact IL offset" is not portable: Mono accepts only sequence points and rejects everything else with `NO_SEQ_POINT_AT_IL_OFFSET`, while CorDebug accepts any offset. Advertise this as a capability and, where sequence points are known, offer to snap a requested offset to the nearest one rather than returning a breakpoint that silently never binds.
-3. Add decompiled C# line mapping where sequence-point or decompiler mappings permit it.
-4. Implement enabled state, conditions, hit counts, trace messages, and exception settings.
-5. Report binding state and per-runtime bound-breakpoint errors. This is not cosmetic: without it `set_il_breakpoint` returns an id for a breakpoint the engine refused, and the caller's only symptom is a `wait_for_stop` that never fires. Observed against UCH on 2026-08-03.
-6. Scope breakpoints to the session, or expose `clear_breakpoints`. dnSpy's `DbgCodeBreakpointsService` is global, so breakpoints survive `detach` and rebind on the next attach — a fresh session can stop on a breakpoint its caller never set.
-7. Implement step into, over, and out using the selected thread's `DbgStepper`.
-8. Close steppers and cloned code locations on every terminal path.
+1. ✅ Support metadata-token and exact IL-offset breakpoints as the dependable base representation. "Exact IL offset" is not portable: Mono accepts only sequence points and rejects everything else with `NO_SEQ_POINT_AT_IL_OFFSET`, while CorDebug accepts any offset. Advertised as a capability, and a requested offset is snapped to method entry rather than returning a breakpoint that silently never binds.
+2. ✅ Report binding state and per-runtime bound-breakpoint errors. This is not cosmetic: without it `set_il_breakpoint` returns an id for a breakpoint the engine refused, and the caller's only symptom is a `wait_for_stop` that never fires. Observed against UCH on 2026-08-03.
+3. ✅ Scope breakpoints to the session, or expose `clear_breakpoints`. dnSpy's `DbgCodeBreakpointsService` is global, so breakpoints survive `detach` and rebind on the next attach — a fresh session can stop on a breakpoint its caller never set. Delivered as `clear_breakpoints` plus `remove_breakpoint`; the breakpoints stay global and the documentation says so.
+4. Implement enabled state, conditions, hit counts, and trace messages.
+5. Implement exception breakpoint settings.
+6. Implement step into, over, and out using the selected thread's `DbgStepper`. Step completion already
+   normalizes into the event stream as `step_completed` and as a `stopped` event with
+   `stop_reason: "step"`; this phase supplies the operations, not the plumbing.
+7. Close steppers and cloned code locations on every terminal path.
 
 ### MCP tools
 
-- `set_breakpoint`
-- `set_il_breakpoint`
-- `list_breakpoints`
-- `update_breakpoint`
+- `set_il_breakpoint` (implemented)
+- `list_breakpoints` (implemented)
 - `remove_breakpoint` (implemented)
-- `clear_breakpoints`
+- `clear_breakpoints` (implemented)
+- `update_breakpoint`
 - `set_exception_breakpoint`
 - `step_into`
 - `step_over`
@@ -338,32 +354,43 @@ event and state versions. Buffer tests verify cancellation recovery and truncati
 - A breakpoint can be set before its module loads and later reports as bound.
 - Conditional breakpoints and hit counts are covered by integration tests.
 - Step completion is returned through the same event mechanism as breakpoint stops.
-- Invalid or ambiguous method locations return candidates instead of silently choosing one.
+- A stepper on a session that exits mid-step is closed without leaking or wedging the next session.
 
-## Phase 5: Threads, call stacks, locals, and watches
+## Phase 5: Expression evaluation and object inspection
+
+Enumeration and frame capture already ship. What is missing is the ability to look at anything that is
+not a primitive local, which is a function-evaluation problem, so this phase is scoped to that.
+
+Three tools from the original list are deliberately gone:
+
+- **`select_frame` is dropped.** It contradicts a decision already shipped and verified: `get_callstack`
+  and `get_frame` are stateless on caller-supplied `thread_id` + `frame_index`, precisely because
+  `DbgManager.CurrentThread` is set only by dnSpy's UI or a thread-carrying stop. Reintroducing
+  server-side frame selection recreates the problem headless callers hit in Phase 2. `evaluate` and
+  `set_value` take the same two parameters instead.
+- **`get_arguments`, `get_locals`, and `get_this` fold into `get_frame`**, which already returns
+  primitive locals, as an `include` parameter. They are one round trip, not four.
+- **`list_processes` and `list_runtimes` fold into `get_session_state`**, which already returns the
+  complete `process_ids` set. Under one session they carry no information it does not.
 
 ### Work
 
-1. Enumerate processes, runtimes, app domains, modules, threads, and stack frames.
-2. Capture stack frames only while paused and close dnSpy frame objects correctly.
-3. Expose arguments, locals, `this`, exceptions, return values, and object members.
-4. Add paging, maximum depth, cycle detection, string limits, collection limits, and evaluation timeouts.
-5. Preserve raw type information separately from formatted display text.
-6. Support writing locals, parameters, and fields where the runtime permits it.
-7. Implement watch expressions as stored expressions re-evaluated against a selected frame, not as permanent value handles.
+1. ✅ Enumerate threads and stack frames; capture frames only while paused and close dnSpy frame objects correctly.
+2. Expose arguments, `this`, exceptions, return values, and object members beyond primitive scalars.
+3. Add paging, maximum depth, cycle detection, string limits, collection limits, and evaluation timeouts.
+4. Preserve raw type information separately from formatted display text.
+5. Support writing locals, parameters, and fields where the runtime permits it.
+6. Implement watch expressions as stored expressions re-evaluated against a caller-selected frame, not as permanent value handles.
+7. Revisit the two limitations that func-eval makes testable: `stale_handle` cannot be provoked while
+   evaluations take milliseconds, and `limits.cancels_in_flight_work: false` does not yet bite. Both are
+   recorded in `docs/DGSPY_STATUS.md` and both become real once evaluation can run long.
 
 ### MCP tools
 
-- `list_processes`
-- `list_runtimes`
-- `list_modules`
 - `list_threads` (implemented)
 - `get_callstack` (implemented with caller-selected `thread_id`)
-- `get_frame` (implemented with caller-selected `thread_id` + `frame_index`)
-- `select_frame`
-- `get_arguments`
-- `get_locals`
-- `get_this`
+- `get_frame` (implemented; gains `include` for arguments, `this`, and non-primitive locals)
+- `list_modules` (shares symbol resolution with Phase 6's `list_documents`)
 - `get_exception`
 - `get_members`
 - `evaluate`
@@ -377,22 +404,34 @@ event and state versions. Buffer tests verify cancellation recovery and truncati
 - A breakpoint hit can be followed by call-stack and local-variable inspection through MCP only.
 - Optimized-away and unavailable values are distinguished from `null`.
 - Object expansion cannot recurse indefinitely or return unbounded data.
-- All paused-state handles become predictably stale after resume.
+- All paused-state handles become predictably stale after resume, and `stale_handle` is provoked by a test rather than reasoned about.
 
 ## Phase 6: Decompiled C#, IL, metadata, and search
 
+**Consider taking this before the rest of Phase 5.** Today a breakpoint requires the caller to already
+know a metadata token, which for the UCH workflow is the single largest gap between "the debugger works"
+and "an agent can use it unaided". That is a symbol-search problem, not an evaluation problem, and item 8
+below is what closes it. Evaluation is more capability; this is more reach.
+
 ### Work
 
-1. Resolve loaded modules to dnSpy documents and in-memory module images.
+1. Resolve loaded modules to dnSpy documents and in-memory module images. This also covers the deferred
+   limitation that a frame can name a module with no file (`data-000001BE153D3040` on a UCH stack), which
+   `set_il_breakpoint` cannot address because it takes a module path.
 2. Expose assembly, module, namespace, type, member, and metadata-token navigation.
 3. Decompile assemblies, types, and methods using an explicitly selected language.
 4. Provide IL instructions with offsets, operands, exception regions, locals, and sequence mappings.
 5. Search loaded documents and optionally user-opened documents by type/member/text pattern.
 6. Add reference analysis through dnSpy analyzer services where reusable; otherwise implement a headless service over the same metadata model.
 7. Return paged results and stable symbol identities.
+8. **Moved here from Phase 4.** Resolve source-style breakpoint locations by module/type/method name, and
+   map them to decompiled C# lines where sequence-point or decompiler mappings permit it. Both need the
+   symbol layer this phase builds; neither is possible against token identity alone. Invalid or ambiguous
+   method names must return candidates instead of silently choosing one.
 
 ### MCP tools
 
+- `set_breakpoint` (by module/type/method name; needs items 2 and 8)
 - `list_documents`
 - `list_types`
 - `list_members`
@@ -409,8 +448,10 @@ event and state versions. Buffer tests verify cancellation recovery and truncati
 ### Exit criteria
 
 - The agent can navigate from a paused frame to its method's C# and IL.
-- Dynamic and self-modifying modules can use their in-memory image when available.
+- Dynamic and self-modifying modules can use their in-memory image when available, including the
+  file-less modules a UCH stack can name.
 - Search results include enough identity to set breakpoints without parsing display text.
+- A breakpoint can be set from a type and method name alone, with no token supplied by the caller.
 - Large assemblies and result sets remain bounded and cancellable.
 
 ## Phase 7: Advanced evaluation and low-level debugging
@@ -418,6 +459,9 @@ event and state versions. Buffer tests verify cancellation recovery and truncati
 ### Work
 
 1. Support target method invocation and object construction behind explicit side-effect controls.
+   `invoke_method` and `create_object` are `evaluate` with side effects permitted, and stay separate
+   tools anyway: that makes the audit and permission boundary a property of the tool surface rather than
+   a flag someone can flip.
 2. Add memory reads and writes where the active engine supports them.
 3. Add native/managed disassembly and registers when exposed by the runtime.
 4. Add set-instruction-pointer after validating the selected frame and target location.
@@ -441,7 +485,11 @@ event and state versions. Buffer tests verify cancellation recovery and truncati
 - Unsupported features return structured capability failures.
 - Evaluation failures do not leave the session permanently unusable without an explicit reported fault.
 
-## Phase 8: dnSpy scripting
+## Phase 8: dnSpy scripting — direction only, not scheduled
+
+**Deliberately unscheduled.** This grants host-level code execution as the dnSpy user and adds a separate
+authorization axis, and nothing in the UCH workflow has wanted it once. It stays in the plan as direction.
+Pull it forward only against a concrete need that the typed operations genuinely cannot serve.
 
 dnSpy C# Interactive code runs inside dnSpy, not inside the paused target. It can access dnSpy services and therefore has control equivalent to code running as the dnSpy user.
 
@@ -611,7 +659,10 @@ dgSpy is complete when an authorized remote AI agent can, without UI automation:
 11. Recover cleanly from disconnects, exits, stale handles, timeouts, and unsupported runtime features.
 12. Perform all remote communication through an authenticated, encrypted, auditable transport.
 
-## First implementation milestone
+## First implementation milestone — delivered
+
+All ten items below are implemented and verified; see `docs/DGSPY_STATUS.md` for the record. Kept as
+written because it is the list the boundaries were chosen against.
 
 The first useful vertical slice should include only:
 

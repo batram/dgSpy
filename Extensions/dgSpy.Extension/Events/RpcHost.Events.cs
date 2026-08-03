@@ -10,7 +10,7 @@ using dnSpy.Contracts.Debugger.DotNet.Code;
 
 namespace dgSpy.Extension {
 	sealed partial class RpcHost {
-		Task<WaitResult> WaitForStopAsync(RpcRequest req,CancellationToken cancellationToken) => WaitForEventsAsync(req,new[]{"stopped"},cancellationToken);
+		Task<WaitResult> WaitForStopAsync(RpcRequest req,CancellationToken cancellationToken) => WaitForEventsAsync(req,new[]{EventKinds.Stopped},cancellationToken);
 		Task<WaitResult> WaitForEventAsync(RpcRequest req,CancellationToken cancellationToken) => WaitForEventsAsync(req,ReadKinds(req),cancellationToken);
 
 		async Task<WaitResult> WaitForEventsAsync(RpcRequest req,IReadOnlyCollection<string>? kinds,CancellationToken cancellationToken) {
@@ -36,35 +36,44 @@ namespace dgSpy.Extension {
 		DebugEvent GetStopReason(RpcRequest req) {
 			CheckSession(req);
 			var eventId=(long?)req.Arguments["event_id"];
-			if (!eventId.HasValue) return events.Latest("stopped") ?? throw new RpcException("stop_not_found","The session has no retained stop event.");
-			var snapshot=events.Snapshot(0,new[]{"stopped"});
+			if (!eventId.HasValue) return events.Latest(EventKinds.Stopped) ?? throw new RpcException("stop_not_found","The session has no retained stop event.");
+			var snapshot=events.Snapshot(0,new[]{EventKinds.Stopped});
 			var found=snapshot.Events.FirstOrDefault(e=>e.EventId==eventId.Value);
 			if (found is not null) return found;
 			if (eventId.Value<snapshot.OldestEventId) throw new RpcException("event_truncated",$"Event {eventId.Value} is no longer retained. Resume from cursor {snapshot.OldestAvailableCursor}.");
 			throw new RpcException("stop_not_found",$"Event {eventId.Value} is not a retained stop event.");
 		}
 
-		static string[]? ReadKinds(RpcRequest req) => req.Arguments["kinds"]?.ToObject<string[]>();
+		/// <summary>Reject an unrecognized kind instead of filtering on it. A typo used to produce a clean
+		/// empty result that is indistinguishable from "the event never happened" — the same false-negative
+		/// shape as reading the event cursor too late. The valid set is served by get_capabilities.</summary>
+		static string[]? ReadKinds(RpcRequest req) {
+			var kinds=req.Arguments["kinds"]?.ToObject<string[]>();
+			if (kinds is null) return null;
+			var unknown=kinds.Where(kind=>!EventKinds.IsKnown(kind)).ToArray();
+			if (unknown.Length!=0) throw new RpcException("invalid_argument",$"Unknown event kind(s) {string.Join(", ",unknown)}. Valid kinds: {string.Join(", ",EventKinds.All)}.");
+			return kinds;
+		}
 		static EventResult EventResult(EventBufferSnapshot snapshot) => new EventResult { Events=snapshot.Events,OldestEventId=snapshot.OldestEventId,OldestAvailableCursor=snapshot.OldestAvailableCursor,LastEventId=snapshot.LastEventId,Truncated=snapshot.Truncated };
 		static WaitResult WaitResult(EventBufferSnapshot snapshot,bool timedOut) => new WaitResult { Events=snapshot.Events,OldestEventId=snapshot.OldestEventId,OldestAvailableCursor=snapshot.OldestAvailableCursor,LastEventId=snapshot.LastEventId,Truncated=snapshot.Truncated,TimedOut=timedOut };
 
 		void OnDebuggerMessage(DbgMessageEventArgs message) {
 			lock(sync) if (sessionId is null) return;
 			switch(message) {
-			case DbgMessageProcessCreatedEventArgs e: Record(new DebugEvent { Kind="process_created",ProcessId=e.Process.Id }); break;
+			case DbgMessageProcessCreatedEventArgs e: Record(new DebugEvent { Kind=EventKinds.ProcessCreated,ProcessId=e.Process.Id }); break;
 			case DbgMessageProcessExitedEventArgs e: OnProcessExited(e); break;
-			case DbgMessageRuntimeCreatedEventArgs e: Record(RuntimeEvent("runtime_created",e.Runtime)); break;
-			case DbgMessageRuntimeExitedEventArgs e: Record(RuntimeEvent("runtime_exited",e.Runtime)); break;
-			case DbgMessageModuleLoadedEventArgs e: Record(ModuleEvent("module_loaded",e.Module)); break;
-			case DbgMessageModuleUnloadedEventArgs e: Record(ModuleEvent("module_unloaded",e.Module)); break;
-			case DbgMessageThreadCreatedEventArgs e: Record(ThreadEvent("thread_created",e.Thread)); break;
-			case DbgMessageThreadExitedEventArgs e: var thread=ThreadEvent("thread_exited",e.Thread); thread.ExitCode=e.ExitCode; Record(thread); break;
-			case DbgMessageExceptionThrownEventArgs e: Record(ExceptionEvent("exception_thrown",e.Exception)); break;
-			case DbgMessageBoundBreakpointEventArgs e: Record(BreakpointEvent("breakpoint_hit",e)); break;
-			case DbgMessageStepCompleteEventArgs e: Record(ThreadEvent("step_completed",e.Thread,error:e.Error)); break;
-			case DbgMessageEntryPointBreakEventArgs e: Record(ThreadEvent("entry_point",e.Thread)); break;
-			case DbgMessageProgramBreakEventArgs e: Record(ThreadEvent("program_break",e.Thread,runtime:e.Runtime)); break;
-			case DbgMessageBreakEventArgs e: Record(ThreadEvent("break",e.Thread,runtime:e.Runtime)); break;
+			case DbgMessageRuntimeCreatedEventArgs e: Record(RuntimeEvent(EventKinds.RuntimeCreated,e.Runtime)); break;
+			case DbgMessageRuntimeExitedEventArgs e: Record(RuntimeEvent(EventKinds.RuntimeExited,e.Runtime)); break;
+			case DbgMessageModuleLoadedEventArgs e: Record(ModuleEvent(EventKinds.ModuleLoaded,e.Module)); break;
+			case DbgMessageModuleUnloadedEventArgs e: Record(ModuleEvent(EventKinds.ModuleUnloaded,e.Module)); break;
+			case DbgMessageThreadCreatedEventArgs e: Record(ThreadEvent(EventKinds.ThreadCreated,e.Thread)); break;
+			case DbgMessageThreadExitedEventArgs e: var thread=ThreadEvent(EventKinds.ThreadExited,e.Thread); thread.ExitCode=e.ExitCode; Record(thread); break;
+			case DbgMessageExceptionThrownEventArgs e: Record(ExceptionEvent(EventKinds.ExceptionThrown,e.Exception)); break;
+			case DbgMessageBoundBreakpointEventArgs e: Record(BreakpointEvent(EventKinds.BreakpointHit,e)); break;
+			case DbgMessageStepCompleteEventArgs e: Record(ThreadEvent(EventKinds.StepCompleted,e.Thread,error:e.Error)); break;
+			case DbgMessageEntryPointBreakEventArgs e: Record(ThreadEvent(EventKinds.EntryPoint,e.Thread)); break;
+			case DbgMessageProgramBreakEventArgs e: Record(ThreadEvent(EventKinds.ProgramBreak,e.Thread,runtime:e.Runtime)); break;
+			case DbgMessageBreakEventArgs e: Record(ThreadEvent(EventKinds.Break,e.Thread,runtime:e.Runtime)); break;
 			}
 		}
 
@@ -80,13 +89,13 @@ namespace dgSpy.Extension {
 		DebugEvent StopEvent(DbgMessageEventArgs? cause,DbgProcess process,DbgThread? thread) {
 			DebugEvent value;
 			switch(cause) {
-			case DbgMessageBoundBreakpointEventArgs e: value=BreakpointEvent("stopped",e); value.StopReason="breakpoint"; break;
-			case DbgMessageExceptionThrownEventArgs e: value=ExceptionEvent("stopped",e.Exception); value.StopReason="exception"; break;
-			case DbgMessageStepCompleteEventArgs e: value=ThreadEvent("stopped",e.Thread,error:e.Error); value.StopReason="step"; break;
-			case DbgMessageEntryPointBreakEventArgs e: value=ThreadEvent("stopped",e.Thread); value.StopReason="entry_point"; break;
-			case DbgMessageProgramBreakEventArgs e: value=ThreadEvent("stopped",e.Thread,runtime:e.Runtime); value.StopReason="program_break"; break;
-			case DbgMessageBreakEventArgs e: value=ThreadEvent("stopped",e.Thread,runtime:e.Runtime); value.StopReason="pause"; break;
-			default: value=ThreadEvent("stopped",thread,process:process); value.StopReason="unknown"; break;
+			case DbgMessageBoundBreakpointEventArgs e: value=BreakpointEvent(EventKinds.Stopped,e); value.StopReason=StopReasons.Breakpoint; break;
+			case DbgMessageExceptionThrownEventArgs e: value=ExceptionEvent(EventKinds.Stopped,e.Exception); value.StopReason=StopReasons.Exception; break;
+			case DbgMessageStepCompleteEventArgs e: value=ThreadEvent(EventKinds.Stopped,e.Thread,error:e.Error); value.StopReason=StopReasons.Step; break;
+			case DbgMessageEntryPointBreakEventArgs e: value=ThreadEvent(EventKinds.Stopped,e.Thread); value.StopReason=StopReasons.EntryPoint; break;
+			case DbgMessageProgramBreakEventArgs e: value=ThreadEvent(EventKinds.Stopped,e.Thread,runtime:e.Runtime); value.StopReason=StopReasons.ProgramBreak; break;
+			case DbgMessageBreakEventArgs e: value=ThreadEvent(EventKinds.Stopped,e.Thread,runtime:e.Runtime); value.StopReason=StopReasons.Pause; break;
+			default: value=ThreadEvent(EventKinds.Stopped,thread,process:process); value.StopReason=StopReasons.Unknown; break;
 			}
 			value.ProcessId=process.Id;
 			if (value.ThreadId is null && thread is not null) value.ThreadId=ThreadId(thread);

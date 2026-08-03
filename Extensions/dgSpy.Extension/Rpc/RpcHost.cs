@@ -31,7 +31,7 @@ namespace dgSpy.Extension {
 		Task? listener; string? sessionId; string? attachedProgramId; string? sessionKind; string? lifecycleAction; long stateVersion; bool attaching; bool faulted; string? faultMessage; string? lastUserMessage; int? terminalExitCode; string? terminalReason;
 		public RpcHost(AttachableProcessesService programs, DbgManager manager, DbgCodeBreakpointsService breakpoints, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages) {
 			this.programs=programs; this.manager=manager; this.breakpoints=breakpoints; this.locations=locations; this.callStack=callStack; this.languages=languages;
-			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { if (manager.IsRunning==true) Record("continued"); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? "session_started" : "session_ended");
+			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { if (manager.IsRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded);
 			// An engine that fails to connect reports it here rather than through DbgManager.Start, which
 			// only rejects options it cannot build an engine from. Recording it turns "faulted" from a
 			// timeout guess into dnSpy's own reason. dnSpy's UI subscribes to the same event and shows a
@@ -154,7 +154,7 @@ namespace dgSpy.Extension {
 			// DbgManager.Start rejects options it cannot build an engine from synchronously. That is a
 			// caller error, not a session that came up and then died, so it never becomes a session.
 			if (rejected is not null) throw new RpcException("attach_failed",rejected);
-			Record("attached");
+			Record(EventKinds.Attached);
 			// Attach is asynchronous: the engine is not up when Start() returns. Wait for threads, not
 			// just for a process — a pause issued before the engine has enumerated threads produces a
 			// stop with no current thread and no call stack, and the session does not recover until it
@@ -164,7 +164,7 @@ namespace dgSpy.Extension {
 			// The engine never came up. Report it rather than leaving the caller polling "attaching".
 			if (!await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false)) {
 				lock(sync) { faulted=true; attaching=false; faultMessage=lastUserMessage ?? "The debug engine did not connect before the attach deadline."; }
-				Record("attach_failed");
+				Record(EventKinds.AttachFailed);
 			}
 			else lock(sync) { attachedProgramId=programId; faultMessage=null; }
 			return await OnDebuggerAsync(State,cancellationToken).ConfigureAwait(false);
@@ -182,7 +182,7 @@ namespace dgSpy.Extension {
 			await WaitForDebuggerAsync(()=>!manager.IsDebugging,cancellationToken).ConfigureAwait(false);
 			var stillDebugging=await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false);
 			string id; lock(sync) { id=sessionId!; if (!stillDebugging) { sessionId=null; attachedProgramId=null; sessionKind=null; lifecycleAction=null; attaching=false; faulted=false; faultMessage=null; lastUserMessage=null; terminalExitCode=null; terminalReason=null; } }
-			Record("detached");
+			Record(EventKinds.Detached);
 			return new DetachResult { SessionId=id,Detached=!stillDebugging && canDetach,Terminated=!stillDebugging && !canDetach,StateVersion=stateVersion };
 		}
 		async Task<SessionSummary[]> ListSessionsAsync(CancellationToken cancellationToken) => await OnDebuggerAsync(()=>{

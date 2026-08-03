@@ -23,6 +23,31 @@ time; `suspend=y` parks it until a debugger connects, and then `attach_endpoint`
 `process_is_suspended: true` — get that wrong and the target either hangs forever or you miss the
 start of execution.
 
+From PowerShell:
+
+```powershell
+$uch = 'S:\SteamLibrary\steamapps\common\Ultimate Chicken Horse'
+Start-Process -FilePath (Join-Path $uch 'UltimateChickenHorse.exe') -WorkingDirectory $uch -ArgumentList '--debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:55555,suspend=n'
+```
+
+Quote the argument as one single-quoted string. PowerShell splits an unquoted argument on its commas
+and passes three separate tokens, and Unity ignores a malformed `--debugger-agent` silently: the game
+starts normally, nothing listens on 55555, and `attach_endpoint` faults with a connection message that
+looks exactly like a target-side problem.
+
+`-WorkingDirectory` matters too — Doorstop resolves BepInEx relative to the process working directory,
+so launching from elsewhere gives an unmodded game and none of the plugin modules to set breakpoints in.
+
+The equivalent from a Cygwin/bash shell in the game directory, which is the same launch:
+
+```bash
+./UltimateChickenHorse.exe --debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:55555,suspend=n
+```
+
+Confirm the agent is actually listening by attaching, **not** by probing the port: `server=y` accepts
+one connection per launch, and a bare TCP connect consumes it. See the warning at the bottom of this
+document.
+
 Unity ships an unpatched `mono.dll` in some builds. If connecting fails with a message about
 patching, that is the cause, and it is a target-side problem rather than a dgSpy one.
 
@@ -176,3 +201,23 @@ Note the first frame's module: `data-000001BE153D3040`, an in-memory module with
   `get_callstack` returned seven frames and primitive locals, and `get_frame(thread_id, 0)` matched.
 - `remove_breakpoint` removed only the selected breakpoint, and detach returned
   `detached: true, terminated: false` with UCH still running.
+
+### Re-run 2026-08-03, after the event-vocabulary change
+
+A fresh UCH launch, 20 checks, all green (`ps_scratch\Test-UchEventVocabulary.ps1`):
+
+| Step | Result |
+|---|---|
+| `get_capabilities` | ✅ advertises `event_kinds` and `stop_reasons`; `breakpoint_hit` present, the near miss `breakpoint` absent |
+| `attach_endpoint` | ✅ `running` in 752 ms |
+| Emitted-vs-advertised cross-check | ✅ every kind the Mono engine actually produced — `session_started`, `attached`, `continued`, `process_created`, `runtime_created`, `module_loaded`, `thread_created` — is in the advertised vocabulary |
+| `wait_for_event` with `kinds: ["breakpoint"]` | ✅ `invalid_argument` naming `breakpoint_hit`, instead of a silent timeout |
+| `get_events` with `["stopped","nonsense"]` | ✅ rejected, naming the offending value |
+| `get_events` with `["module_loaded"]` | ✅ returns only that kind |
+| `wait_for_event` with `["step_completed"]` | ✅ times out on merit — a real kind milestone 1 never emits |
+| `pause` → `list_threads` | ✅ `paused`, 9 threads |
+| Normalized stop | ✅ `stop_reason: "pause"`, a value from the advertised set; `get_stop_reason` agrees |
+| `detach` | ✅ `detached: true, terminated: false`, game alive |
+
+The cross-check is the one worth keeping: it is what proves the catalog is complete on the Mono path
+rather than merely self-consistent.

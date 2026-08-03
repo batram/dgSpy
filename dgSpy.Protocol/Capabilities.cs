@@ -42,6 +42,11 @@ namespace dgSpy.Protocol {
 		[JsonProperty("operations")] public OperationBound[] Operations { get; set; }=Array.Empty<OperationBound>();
 		[JsonProperty("engines")] public EngineCapabilities[] Engines { get; set; }=Array.Empty<EngineCapabilities>();
 		[JsonProperty("limits")] public CapabilityLimits Limits { get; set; }=new CapabilityLimits();
+		/// <summary>Every value the normalized event stream can produce in <c>kind</c>, and therefore every
+		/// value the <c>kinds</c> filter accepts.</summary>
+		[JsonProperty("event_kinds")] public string[] EventKinds { get; set; }=Array.Empty<string>();
+		/// <summary>Every value a <c>stopped</c> event can carry in <c>stop_reason</c>.</summary>
+		[JsonProperty("stop_reasons")] public string[] StopReasons { get; set; }=Array.Empty<string>();
 	}
 	public sealed class HostInfo {
 		/// <summary>Milestone 1 exposes a single implicit host. host_id routing arrives with Phase 9; the
@@ -60,6 +65,61 @@ namespace dgSpy.Protocol {
 		/// <summary>How this endpoint authenticates callers. Milestone 1: none, loopback-only.</summary>
 		[JsonProperty("authentication")] public string Authentication { get; set; }="";
 		[JsonProperty("session_id", NullValueHandling=NullValueHandling.Ignore)] public string? SessionId { get; set; }
+	}
+	/// <summary>The complete vocabulary of the normalized event stream. These are constants rather than
+	/// literals at the call sites on purpose: <c>kinds</c> is a caller-supplied filter, and a kind that
+	/// exists in the extension but not in this list would silently match nothing — a working breakpoint
+	/// that appears never to fire. Every <c>Record</c> call site names a member of this class, so a new
+	/// kind cannot ship without becoming filterable and advertised in the same edit.</summary>
+	public static class EventKinds {
+		// Session and lifecycle, recorded by dgSpy itself.
+		public const string SessionStarted = "session_started";
+		public const string SessionEnded = "session_ended";
+		public const string Attached = "attached";
+		public const string AttachFailed = "attach_failed";
+		public const string Detached = "detached";
+		public const string Restarted = "restarted";
+		public const string Continued = "continued";
+		public const string Terminated = "terminated";
+		public const string RestartProcessExited = "restart_process_exited";
+		public const string SessionExited = "session_exited";
+		// Debugger messages, normalized from DbgMessageEventArgs.
+		public const string ProcessCreated = "process_created";
+		public const string RuntimeCreated = "runtime_created";
+		public const string RuntimeExited = "runtime_exited";
+		public const string ModuleLoaded = "module_loaded";
+		public const string ModuleUnloaded = "module_unloaded";
+		public const string ThreadCreated = "thread_created";
+		public const string ThreadExited = "thread_exited";
+		public const string ExceptionThrown = "exception_thrown";
+		public const string BreakpointHit = "breakpoint_hit";
+		public const string StepCompleted = "step_completed";
+		public const string EntryPoint = "entry_point";
+		public const string ProgramBreak = "program_break";
+		public const string Break = "break";
+		/// <summary>The synthesized whole-process stop. This, not the raw debugger message, is what
+		/// <c>wait_for_stop</c> waits on and what carries <c>stop_reason</c>.</summary>
+		public const string Stopped = "stopped";
+		public static readonly string[] All = {
+			SessionStarted, SessionEnded, Attached, AttachFailed, Detached, Restarted, Continued,
+			Terminated, RestartProcessExited, SessionExited, ProcessCreated, RuntimeCreated, RuntimeExited,
+			ModuleLoaded, ModuleUnloaded, ThreadCreated, ThreadExited, ExceptionThrown, BreakpointHit,
+			StepCompleted, EntryPoint, ProgramBreak, Break, Stopped,
+		};
+		public static bool IsKnown(string kind) => Array.IndexOf(All,kind)>=0;
+	}
+	/// <summary>What a <see cref="EventKinds.Stopped"/> event reports in <c>stop_reason</c>.</summary>
+	public static class StopReasons {
+		public const string Breakpoint = "breakpoint";
+		public const string Exception = "exception";
+		public const string Step = "step";
+		public const string EntryPoint = "entry_point";
+		public const string ProgramBreak = "program_break";
+		public const string Pause = "pause";
+		/// <summary>The process paused with no break message dgSpy recognizes. Not an error — a Unity pause
+		/// can arrive this way — but the caller cannot infer why it stopped.</summary>
+		public const string Unknown = "unknown";
+		public static readonly string[] All = { Breakpoint, Exception, Step, EntryPoint, ProgramBreak, Pause, Unknown };
 	}
 	/// <summary>The static half of the capability contract, shared by the extension that serves it and the
 	/// gateway that has to respect it. It lives in the protocol assembly precisely so the two cannot
@@ -120,6 +180,7 @@ namespace dgSpy.Protocol {
 		public static int BoundMs(string operation) => Operations.FirstOrDefault(o=>o.Operation==operation)?.MaxDurationMs ?? 0;
 		public static CapabilityInfo Describe(string extensionVersion) => new CapabilityInfo {
 			HostId=HostId, ExtensionVersion=extensionVersion, Operations=Operations, Engines=Engines, Limits=Limits,
+			EventKinds=dgSpy.Protocol.EventKinds.All, StopReasons=dgSpy.Protocol.StopReasons.All,
 		};
 	}
 }

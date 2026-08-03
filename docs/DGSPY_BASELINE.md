@@ -25,7 +25,15 @@
 | `dgSpy.Gateway` | `net7.0` | Standalone process, not loaded into dnSpy. |
 | `tests/TestTargets/Milestone1Target` | `net48`, x64 | CorDebug smoke target; the project pins `PlatformTarget=x64` and the smoke test verifies dnSpy reports `X64`. |
 
-The dgSpy projects are intentionally **not** in `dnSpy.sln`. The fork's own build stays exactly as upstream; dgSpy builds through `build-dgspy.ps1`.
+The dgSpy projects are intentionally **not** in `dnSpy.sln`, and dgSpy builds through `build-dgspy.ps1`. dnSpy's own sources are otherwise untouched, with one deliberate exception recorded below.
+
+### Edits to upstream dnSpy sources
+
+Keep this list at one entry if at all possible: every line here is a merge conflict with upstream and a behavior difference that only exists on this machine.
+
+| File | Change | Why |
+|---|---|---|
+| `dnSpy/dnSpy.Contracts.Debugger/DbgMessageEventArgs.cs` | `DbgMessageThreadExitedEventArgs` now assigns `ExitCode` in its constructor | Upstream accepts `exitCode` and drops it, so the property was always `null`. dgSpy reports thread exit codes in the `thread_exited` event and cannot synthesize what the ctor discarded. A one-line fix and a clean upstream PR candidate. |
 
 ## Build and deploy
 

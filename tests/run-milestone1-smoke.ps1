@@ -172,6 +172,9 @@ try {
 	Assert-That 'capabilities say the Unity engine is not discoverable' (-not $unity.discoverable -and @($unity.acquisition) -contains 'attach_endpoint')
 	Assert-That 'capabilities admit that a deadline cannot abort in-flight work' ($capabilities.limits.cancels_in_flight_work -eq $false)
 	Assert-That 'capabilities bound every operation' (@(@($capabilities.operations) | Where-Object { $_.max_duration_ms -le 0 }).Count -eq 0)
+	# The kinds filter is caller-supplied, so the vocabulary has to be discoverable rather than guessed.
+	Assert-That 'capabilities advertise the event-kind vocabulary' (@($capabilities.event_kinds) -contains 'stopped' -and @($capabilities.event_kinds) -contains 'breakpoint_hit')
+	Assert-That 'capabilities advertise the stop-reason vocabulary' (@($capabilities.stop_reasons) -contains 'breakpoint' -and @($capabilities.stop_reasons) -contains 'unknown')
 
 	Write-Host "== discovery ==" -ForegroundColor Cyan
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
@@ -289,8 +292,16 @@ try {
 	Assert-That 'get_stop_reason returns the latest stop when event_id is omitted' ($latestReason.event_id -eq $firstStop.event_id)
 	$filtered = Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $sessionId; after_event_id = $cursor; kinds = @('stopped') }
 	Assert-That 'get_events filters without consuming the stop' (@($filtered.events).Count -eq 1 -and @($filtered.events)[0].event_id -eq $firstStop.event_id)
-	$timedOut = Invoke-Tool -Name 'wait_for_event' -Arguments @{ session_id = $sessionId; after_event_id = $firstStop.event_id; kinds = @('never_emitted'); timeout_ms = 50 }
+	# step_completed is a real kind that milestone 1 never emits, so the wait times out on merit.
+	# Do not use a made-up kind here: unknown kinds are now rejected outright, which is the point below.
+	$timedOut = Invoke-Tool -Name 'wait_for_event' -Arguments @{ session_id = $sessionId; after_event_id = $firstStop.event_id; kinds = @('step_completed'); timeout_ms = 50 }
 	Assert-That 'wait_for_event reports a bounded timeout' ($timedOut.timed_out -and @($timedOut.events).Count -eq 0)
+	# A near miss must not look like "it never happened": that false negative is indistinguishable from a
+	# breakpoint that does not fire, which is exactly the class of bug the event cursor already produced.
+	$badKind = Invoke-Tool -Name 'wait_for_event' -Arguments @{ session_id = $sessionId; after_event_id = $cursor; kinds = @('breakpoint'); timeout_ms = 50 } -ExpectError
+	Assert-That 'an unknown event kind is rejected instead of matching nothing' ($badKind -match 'Unknown event kind' -and $badKind -match 'breakpoint_hit')
+	$badKindRead = Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $sessionId; after_event_id = $cursor; kinds = @('stopped','nonsense') } -ExpectError
+	Assert-That 'get_events rejects an unknown kind alongside a valid one' ($badKindRead -match 'nonsense')
 
 	# Issue two long polls while the target is paused, then resume it. Both callers must receive the
 	# same next stop; neither is allowed to consume the event or steal it from the other.

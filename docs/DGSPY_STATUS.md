@@ -67,15 +67,22 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | Response serialization off the dispatcher | ✅ built, not directly observable |
 | Extension split into entry point, RPC, debugger, events, and identity boundaries | ✅ built |
 | `dgSpy.Extension.Tests` identity, state, and event-cursor coverage | ✅ 15 tests |
+| Event-kind and stop-reason vocabularies advertised in `get_capabilities` | ✅ verified both engines |
+| Every kind the Mono engine actually emits is in the advertised vocabulary | ✅ cross-checked against a live UCH session |
+| An unknown `kinds` value is rejected rather than silently matching nothing | ✅ verified both engines |
 
 Test suites, all green:
 
 ```powershell
-dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 17 checks, wire + capability contract
+dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 19 checks, wire + capability contract
 dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 63 checks, access control + deadline bounds
 dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 118 checks, end to end
+.\tests\run-milestone1-smoke.ps1                                       # 122 checks, end to end
 ```
+
+All four suites were rerun on 2026-08-03 after the event-vocabulary change: 19 / 63 / 15 unit checks and
+122 live smoke checks, all green, including the four new smoke checks. The change was also verified
+against live UCH — see [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md).
 
 ## Remaining gaps
 
@@ -106,6 +113,13 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 chec
    connection per request. Those are now silent, with real faults going to `Output`.
 4. **Single global session.** One `sessionId` field, one target. `host_id` routing and multi-session
    ownership are Phase 9; nothing in the code anticipates them.
+5. ~~**The event-kind vocabulary is undiscoverable.**~~ Fixed 2026-08-03. The kinds lived as string
+   literals at the emitting call sites and were advertised nowhere, so a `kinds` filter with a near miss
+   like `breakpoint` for `breakpoint_hit` returned a clean empty result — indistinguishable from "the
+   event never happened", the same false-negative shape as reading the event cursor too late. The
+   vocabulary is now `dgSpy.Protocol.EventKinds`, every call site names a constant from it,
+   `get_capabilities` serves `event_kinds` and `stop_reasons`, and an unknown kind is rejected with
+   `invalid_argument` naming the valid set.
 
 ### Quality and structure
 
@@ -150,6 +164,9 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 chec
   before a follow-up `get_session_state` can return, so a cursor taken afterwards is already past the
   stop and `wait_for_stop` times out on a working breakpoint. This produced an entire table of false
   negatives before it was caught. `set_il_breakpoint` returns `cursor_event_id` for this.
+- **`DbgMessageThreadExitedEventArgs` upstream drops its own `exitCode`.** The constructor takes the
+  parameter and never assigns the property, so thread exit codes were always null. Fixed in the fork —
+  the only edit dgSpy makes to dnSpy's own sources, recorded in `DGSPY_BASELINE.md`.
 - **dnSpy's breakpoints are global, not session-scoped.** They survive `detach` and rebind on the next
   attach, so a fresh session can stop immediately on a breakpoint from the previous one.
 - **Thread handles can go stale between `list_threads` and inspection.** UCH creates and exits worker
@@ -186,11 +203,20 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 chec
 
 ## Suggested order for the next session
 
-Phases 0 through 3 are closed. The separate dnSpy-window shutdown path remains a host-lifecycle concern:
-closing dnSpy with an attachment has been observed to terminate the target, so callers must use `detach`.
+Phases 0 through 3 are closed and Milestone 1's full vertical slice is delivered. The separate
+dnSpy-window shutdown path remains a host-lifecycle concern: closing dnSpy with an attachment has been
+observed to terminate the target, so callers must use `detach`.
 
-1. Phase 4 proper: breakpoint conditions and hit counts, stepping. Follow
-   `Extensions/dgSpy.Extension/README.md` and add each family in its owning partial file.
+1. **Phase 6's symbol layer, ahead of the rest of Phase 5.** A breakpoint currently requires the caller
+   to already know a metadata token, which is the largest remaining gap between a working debugger and
+   one an agent can use unaided. `set_breakpoint` by type and method name moved into Phase 6 for this
+   reason; see the note at the head of that phase.
+2. Phase 4's remainder: breakpoint conditions, hit counts, `update_breakpoint`, exception breakpoints,
+   and stepping. The `step_completed` and `stopped`/`step` events are already normalized, so this is the
+   operations, not the plumbing. Follow `Extensions/dgSpy.Extension/README.md` and add each family in
+   its owning partial file.
+3. Phase 5's evaluation work last, and note it makes two recorded limitations testable for the first
+   time: `stale_handle` and `cancels_in_flight_work`.
 
 ## Local PowerShell scratchpads
 

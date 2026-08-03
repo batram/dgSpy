@@ -1,3 +1,5 @@
+using System.Linq;
+using System.Reflection;
 using dgSpy.Protocol;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -205,5 +207,30 @@ public class CapabilityContractTests {
 		Assert.Equal("attach_endpoint", (string?)capabilities["engines"]![1]!["acquisition"]![0]);
 		Assert.Equal("TESTBOX", (string?)host["machine_name"]);
 		Assert.Equal("connected", (string?)host["connection_state"]);
+	}
+
+	[Fact]
+	public void Every_declared_event_kind_is_listed_in_All() {
+		// The realistic drift is adding a const and forgetting the array: the extension would then emit a
+		// kind that get_capabilities never advertises and the kinds filter rejects as unknown.
+		var declared = typeof(EventKinds).GetFields(BindingFlags.Public | BindingFlags.Static)
+			.Where(f => f.IsLiteral && f.FieldType == typeof(string))
+			.Select(f => (string)f.GetRawConstantValue()!)
+			.ToArray();
+
+		Assert.Equal(declared.OrderBy(k => k), EventKinds.All.OrderBy(k => k));
+		Assert.Equal(EventKinds.All.Length, EventKinds.All.Distinct().Count());
+	}
+
+	[Fact]
+	public void The_event_kind_vocabulary_is_advertised_and_checkable() {
+		var capabilities = JObject.Parse(JsonConvert.SerializeObject(CapabilityCatalog.Describe("0.1.0")));
+
+		// wait_for_stop filters on exactly this kind, so a caller must be able to discover it.
+		Assert.Contains(EventKinds.Stopped, capabilities["event_kinds"]!.ToObject<string[]>()!);
+		Assert.Contains(StopReasons.Breakpoint, capabilities["stop_reasons"]!.ToObject<string[]>()!);
+		Assert.True(EventKinds.IsKnown(EventKinds.BreakpointHit));
+		// The near miss that used to produce a clean empty wait instead of an error.
+		Assert.False(EventKinds.IsKnown("breakpoint"));
 	}
 }
