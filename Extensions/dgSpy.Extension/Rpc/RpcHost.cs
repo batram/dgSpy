@@ -85,6 +85,14 @@ namespace dgSpy.Extension {
 			case "step_into": return RpcResponse.Success(req.RequestId,await StepAsync(req,StepKinds.Into,requestCancellation.Token).ConfigureAwait(false));
 			case "step_over": return RpcResponse.Success(req.RequestId,await StepAsync(req,StepKinds.Over,requestCancellation.Token).ConfigureAwait(false));
 			case "step_out": return RpcResponse.Success(req.RequestId,await StepAsync(req,StepKinds.Out,requestCancellation.Token).ConfigureAwait(false));
+			case "evaluate": return RpcResponse.Success(req.RequestId,await EvaluateAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_members": return RpcResponse.Success(req.RequestId,await GetMembersAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "set_value": return RpcResponse.Success(req.RequestId,await SetValueAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_exception": return RpcResponse.Success(req.RequestId,await GetExceptionAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "add_watch": CheckSession(req); return RpcResponse.Success(req.RequestId,AddWatch(req));
+			case "list_watches": return RpcResponse.Success(req.RequestId,await ListWatchesAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "remove_watch": CheckSession(req); return RpcResponse.Success(req.RequestId,RemoveWatch(req));
+			case "list_modules": return RpcResponse.Success(req.RequestId,await ListModulesAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			default: return RpcResponse.Failure(req.RequestId,"unsupported","Unknown operation: "+req.Operation);
 			}
 		} catch (OperationCanceledException) { return RpcResponse.Failure(req.RequestId,"deadline_exceeded","The operation exceeded its deadline."); } catch (RpcException ex) { return RpcResponse.Failure(req.RequestId,ex.Code,ex.Message); } catch (Exception ex) { return RpcResponse.Failure(req.RequestId,"internal_error",ex.Message); } }
@@ -380,7 +388,9 @@ namespace dgSpy.Extension {
 			req.Arguments["max_frames"]=index+1;
 			var frames=await GetCallStackAsync(req,cancellationToken).ConfigureAwait(false);
 			if (index>=frames.Length) throw new RpcException("frame_not_found",$"Thread {(string?)req.Arguments["thread_id"]} has no frame at index {index}. Refresh get_callstack and use an available frame_index.");
-			return frames[index];
+			var include=req.Arguments["include"]?.ToObject<string[]>();
+			if (include is null || include.Length==0) return frames[index];
+			return await GetFrameWithIncludesAsync(req,frames[index],include,cancellationToken).ConfigureAwait(false);
 		}
 		readonly struct CapturedFrame {
 			public readonly DbgStackFrame Frame; public readonly DbgLanguage Language; public readonly FrameInfo Info;

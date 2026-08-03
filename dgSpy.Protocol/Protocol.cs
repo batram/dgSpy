@@ -118,7 +118,12 @@ namespace dgSpy.Protocol {
 		[JsonProperty("module_name")] public string ModuleName { get; set; }="";
 		[JsonProperty("method_token")] public uint MethodToken { get; set; }
 		[JsonProperty("il_offset")] public uint IlOffset { get; set; }
+		/// <summary>Locals that have a raw scalar. Objects are omitted; ask for <c>include: ["locals"]</c>
+		/// on <c>get_frame</c> to get everything, or <c>get_members</c> to expand one.</summary>
 		[JsonProperty("locals")] public IReadOnlyList<PrimitiveValue> Locals { get; set; }=Array.Empty<PrimitiveValue>();
+		/// <summary>Populated only when <c>get_frame</c> is called with <c>include</c>. Unlike
+		/// <see cref="Locals"/> this holds every requested value, objects included.</summary>
+		[JsonProperty("values", NullValueHandling=NullValueHandling.Ignore)] public EvaluatedValue[]? Values { get; set; }
 	}
 	public sealed class PrimitiveValue { [JsonProperty("name")] public string Name { get; set; }=""; [JsonProperty("type")] public string Type { get; set; }=""; [JsonProperty("value")] public object? Value { get; set; } }
 	public sealed class BreakpointInfo {
@@ -192,6 +197,84 @@ namespace dgSpy.Protocol {
 		[JsonProperty("stop_first_chance")] public bool StopFirstChance { get; set; }
 		[JsonProperty("stop_second_chance")] public bool StopSecondChance { get; set; }
 		[JsonProperty("state_version")] public long StateVersion { get; set; }
+	}
+	/// <summary>One evaluated expression, member, or watch. Raw value and display text are separate
+	/// fields on purpose: an agent that needs to compare or compute wants the scalar, one that needs to
+	/// show something wants dnSpy's formatting, and collapsing them forces every caller to parse display
+	/// text back into a value.</summary>
+	public sealed class EvaluatedValue {
+		/// <summary>Expression that produces this value again, including for a member reached by
+		/// expansion. This is what makes depth the caller's to control: pass a member's expression back
+		/// to get_members to go one level deeper.</summary>
+		[JsonProperty("expression")] public string Expression { get; set; }="";
+		[JsonProperty("name")] public string Name { get; set; }="";
+		[JsonProperty("type")] public string Type { get; set; }="";
+		/// <summary>dnSpy's formatted text, eg. <c>{Milestone1Target.Program}</c>. Display only.</summary>
+		[JsonProperty("display")] public string Display { get; set; }="";
+		/// <summary>The raw scalar when there is one. Absent for objects and for values the runtime
+		/// cannot supply.</summary>
+		[JsonProperty("value", NullValueHandling=NullValueHandling.Ignore)] public object? Value { get; set; }
+		/// <summary>Distinguishes a value of <c>null</c> from no value at all. A null reference has a raw
+		/// value of null and <c>has_raw_value: true</c>; an optimized-away or unavailable local has
+		/// <c>has_raw_value: false</c> and usually an <c>error</c> saying which.</summary>
+		[JsonProperty("has_raw_value")] public bool HasRawValue { get; set; }
+		[JsonProperty("error", NullValueHandling=NullValueHandling.Ignore)] public string? Error { get; set; }
+		[JsonProperty("read_only")] public bool ReadOnly { get; set; }
+		/// <summary>True when reading this value ran target code, eg. a property getter.</summary>
+		[JsonProperty("causes_side_effects")] public bool CausesSideEffects { get; set; }
+		/// <summary>Null when dnSpy does not know without evaluating.</summary>
+		[JsonProperty("has_children", NullValueHandling=NullValueHandling.Ignore)] public bool? HasChildren { get; set; }
+	}
+	/// <summary>One level of an object's members, paged. Expansion is never recursive: a cyclic object
+	/// graph would be unbounded, and the caller cannot cancel a walk it did not ask for.</summary>
+	public sealed class MemberList {
+		[JsonProperty("expression")] public string Expression { get; set; }="";
+		[JsonProperty("members")] public EvaluatedValue[] Members { get; set; }=Array.Empty<EvaluatedValue>();
+		[JsonProperty("total")] public long Total { get; set; }
+		[JsonProperty("offset")] public int Offset { get; set; }
+		[JsonProperty("truncated")] public bool Truncated { get; set; }
+		[JsonProperty("session_id", NullValueHandling=NullValueHandling.Ignore)] public string? SessionId { get; set; }
+		[JsonProperty("state_version")] public long StateVersion { get; set; }
+	}
+	public sealed class AssignmentResult {
+		[JsonProperty("expression")] public string Expression { get; set; }="";
+		[JsonProperty("assigned")] public bool Assigned { get; set; }
+		/// <summary>The value read back after a successful assignment.</summary>
+		[JsonProperty("value", NullValueHandling=NullValueHandling.Ignore)] public EvaluatedValue? Value { get; set; }
+		[JsonProperty("error", NullValueHandling=NullValueHandling.Ignore)] public string? Error { get; set; }
+		/// <summary>True when the expression did not compile, which means no target code ran. False with
+		/// an error means the target may already have been touched.</summary>
+		[JsonProperty("compiler_error", NullValueHandling=NullValueHandling.Ignore)] public bool? CompilerError { get; set; }
+		[JsonProperty("session_id", NullValueHandling=NullValueHandling.Ignore)] public string? SessionId { get; set; }
+		[JsonProperty("state_version")] public long StateVersion { get; set; }
+	}
+	/// <summary>A stored expression, re-evaluated on demand. Deliberately not a retained value handle:
+	/// a handle goes stale on the next resume, an expression does not.</summary>
+	public sealed class WatchInfo {
+		[JsonProperty("watch_id")] public int WatchId { get; set; }
+		[JsonProperty("expression")] public string Expression { get; set; }="";
+		[JsonProperty("value", NullValueHandling=NullValueHandling.Ignore)] public EvaluatedValue? Value { get; set; }
+	}
+	public sealed class WatchRemovalResult {
+		[JsonProperty("watch_id")] public int WatchId { get; set; }
+		[JsonProperty("removed")] public bool Removed { get; set; }
+	}
+	public sealed class ModuleInfo {
+		[JsonProperty("name")] public string Name { get; set; }="";
+		[JsonProperty("filename")] public string Filename { get; set; }="";
+		[JsonProperty("process_id")] public int ProcessId { get; set; }
+		[JsonProperty("runtime_guid")] public string RuntimeGuid { get; set; }="";
+		[JsonProperty("is_dynamic")] public bool IsDynamic { get; set; }
+		[JsonProperty("is_in_memory")] public bool IsInMemory { get; set; }
+		[JsonProperty("is_optimized", NullValueHandling=NullValueHandling.Ignore)] public bool? IsOptimized { get; set; }
+		[JsonProperty("order")] public int Order { get; set; }
+		[JsonProperty("address")] public ulong Address { get; set; }
+		[JsonProperty("size")] public uint Size { get; set; }
+		[JsonProperty("version", NullValueHandling=NullValueHandling.Ignore)] public string? Version { get; set; }
+		/// <summary>False for a module <c>set_il_breakpoint</c> cannot address, because it takes a module
+		/// path and this module has none. Reported per module rather than left to be discovered from a
+		/// breakpoint that never binds. Phase 6 owns in-memory module identity.</summary>
+		[JsonProperty("can_set_breakpoint")] public bool CanSetBreakpoint { get; set; }
 	}
 	/// <summary>Bounded listing of exception stop settings. Bounded on purpose: dnSpy stops on second
 	/// chance for essentially every .NET exception it knows, so an unfiltered listing is thousands of

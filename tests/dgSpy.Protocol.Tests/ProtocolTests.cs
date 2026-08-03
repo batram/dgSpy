@@ -261,6 +261,32 @@ public class CapabilityContractTests {
 	}
 
 	[Fact]
+	public void An_unavailable_value_is_distinguishable_from_null_on_the_wire() {
+		var nullReference = JObject.Parse(JsonConvert.SerializeObject(new EvaluatedValue { Name = "s", Display = "null", Value = null, HasRawValue = true }));
+		var optimizedAway = JObject.Parse(JsonConvert.SerializeObject(new EvaluatedValue { Name = "s", Error = "Optimized away", HasRawValue = false }));
+
+		// Both omit `value`, so has_raw_value is the only thing separating "this is null" from "the
+		// runtime cannot tell you". A caller that conflates them reports a bug that is not there.
+		Assert.Null(nullReference["value"]);
+		Assert.Null(optimizedAway["value"]);
+		Assert.True((bool?)nullReference["has_raw_value"]);
+		Assert.False((bool?)optimizedAway["has_raw_value"]);
+		Assert.Equal("Optimized away", (string?)optimizedAway["error"]);
+	}
+
+	[Fact]
+	public void Phase5_operations_are_bounded_and_only_set_value_mutates() {
+		foreach (var name in new[] { "evaluate", "get_members", "set_value", "get_exception", "add_watch", "list_watches", "remove_watch", "list_modules" })
+			Assert.True(CapabilityCatalog.BoundMs(name) > 0, $"{name} has no bound");
+
+		// Reading must not be marked as mutating, or a client that serializes mutations pointlessly
+		// serializes every inspection too. set_value always executes in the target, so it does mutate.
+		Assert.True(CapabilityCatalog.Operations.Single(o => o.Operation == "set_value").MutatesSession);
+		foreach (var name in new[] { "evaluate", "get_members", "get_exception", "list_watches", "list_modules" })
+			Assert.False(CapabilityCatalog.Operations.Single(o => o.Operation == name).MutatesSession, $"{name} claims to mutate");
+	}
+
+	[Fact]
 	public void A_step_result_round_trips_with_snake_case_wire_names() {
 		var step = JObject.Parse(JsonConvert.SerializeObject(new StepResult {
 			SessionId = "s", ThreadId = "100:200", StepKind = StepKinds.Over, CursorEventId = 42, Completed = false,

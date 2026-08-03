@@ -198,6 +198,17 @@ namespace dgSpy.Protocol {
 			Op("step_into",15000,mutates:true),
 			Op("step_over",15000,mutates:true),
 			Op("step_out",15000,mutates:true),
+			// Phase 5. Evaluation runs on its own thread, not the dispatcher, and with func-eval off it is
+			// milliseconds. The bound is the frame-capture waits plus room for a func-eval the caller
+			// opted into; set_value always executes in the target, so it gets the same headroom.
+			Op("evaluate",20000),
+			Op("get_members",20000),
+			Op("set_value",20000,mutates:true),
+			Op("get_exception",20000),
+			Op("add_watch",5000),
+			Op("list_watches",20000),
+			Op("remove_watch",5000),
+			Op("list_modules",8000),
 		};
 		public static readonly EngineCapabilities[] Engines = {
 			new EngineCapabilities {

@@ -179,7 +179,7 @@ try {
 
 	Write-Host "== discovery ==" -ForegroundColor Cyan
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
-	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame','update_breakpoint','set_exception_breakpoint','list_exception_breakpoints','step_into','step_over','step_out') {
+	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame','update_breakpoint','set_exception_breakpoint','list_exception_breakpoints','step_into','step_over','step_out','evaluate','get_members','set_value','get_exception','add_watch','list_watches','remove_watch','list_modules') {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
 	}
 
@@ -390,6 +390,76 @@ try {
 	Assert-That 'an unknown exception category is refused with the known ones' ($badCategory -match 'DotNet')
 	$noChange = Invoke-Tool -Name 'set_exception_breakpoint' -Arguments @{ name = 'System.Exception' } -ExpectError
 	Assert-That 'set_exception_breakpoint refuses a no-op' ($noChange -match 'stop_first_chance')
+
+	Write-Host "== evaluation ==" -ForegroundColor Cyan
+	$stepThread = $secondStop1.thread_id
+	$evaluated = Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $sessionId; expression = 'input'; thread_id = $stepThread; frame_index = 0 }
+	Assert-That 'evaluate returns a raw scalar, not just display text' ($evaluated.has_raw_value -and $evaluated.value -eq 41) "(value=$($evaluated.value) display='$($evaluated.display)')"
+	Assert-That 'evaluate reports the type separately from the value' ($evaluated.type -match 'int|Int32') "(was '$($evaluated.type)')"
+	$arithmetic = Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $sessionId; expression = 'input + 1'; thread_id = $stepThread; frame_index = 0 }
+	Assert-That 'evaluate computes an expression, not just a variable lookup' ($arithmetic.value -eq 42) "(was $($arithmetic.value))"
+	$badExpression = Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $sessionId; expression = 'no_such_local'; thread_id = $stepThread; frame_index = 0 }
+	Assert-That 'a bad expression reports an error rather than a fabricated value' (-not [string]::IsNullOrWhiteSpace($badExpression.error) -and -not $badExpression.has_raw_value)
+	# Tick is static, so `this` genuinely does not exist here. The right answer is an error, not a
+	# fabricated value — and it exercises the same path a caller hits by asking for the wrong thing.
+	$thisValue = Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $sessionId; expression = 'this'; thread_id = $stepThread; frame_index = 0 }
+	Assert-That 'this in a static method reports an error rather than a fabricated value' (-not [string]::IsNullOrWhiteSpace($thisValue.error) -and -not $thisValue.has_raw_value) "(error='$($thisValue.error)')"
+	$label = Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $sessionId; expression = 'label'; thread_id = $stepThread; frame_index = 0 }
+	Assert-That 'a reference local evaluates without a raw scalar or an error' ($null -eq $label.error) "(error='$($label.error)')"
+
+	$frameValues = Invoke-Tool -Name 'get_frame' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0; include = @('locals') }
+	Assert-That 'get_frame include returns the full value list, objects included' (@($frameValues.values).Count -ge 1) "(got $(@($frameValues.values).Count))"
+	Assert-That 'get_frame still reports primitive locals in locals' (@($frameValues.locals).Count -ge 1)
+	$badInclude = Invoke-Tool -Name 'get_frame' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0; include = @('arguments') } -ExpectError
+	Assert-That 'an unknown include value is rejected with the valid set' ($badInclude -match 'locals')
+
+	# Depth is the caller's to control: a member's own expression is what goes back into get_members.
+	# Frame 1 is Main, whose commandLine is a reference type that exists regardless of what Tick has run.
+	$members = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $sessionId; expression = 'commandLine'; thread_id = $stepThread; frame_index = 1; count = 5 }
+	Assert-That 'get_members expands a reference one level' ($members.total -ge 0 -and $members.expression -eq 'commandLine')
+	Assert-That 'get_members reports paging state' ($members.offset -eq 0 -and -not $members.truncated)
+	Assert-That 'every returned member carries the expression that reaches it again' (@($members.members | Where-Object { [string]::IsNullOrWhiteSpace($_.expression) }).Count -eq 0)
+	# A primitive has nothing to expand. Zero members is the correct answer, not an error.
+	$noMembers = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $sessionId; expression = 'input'; thread_id = $stepThread; frame_index = 0 }
+	Assert-That 'expanding a primitive yields zero members rather than an error' ($noMembers.total -eq 0 -and @($noMembers.members).Count -eq 0)
+	$memberFail = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $sessionId; expression = 'no_such_local'; thread_id = $stepThread; frame_index = 0 } -ExpectError
+	Assert-That 'expanding a bad expression fails loudly' ($memberFail.Length -gt 0)
+
+	# set_value executes in the target, so the read-back is the proof it took effect.
+	$assigned = Invoke-Tool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'input'; value = '99'; thread_id = $stepThread; frame_index = 0 }
+	Assert-That 'set_value assigns a local in the target' ($assigned.assigned) "(error='$($assigned.error)')"
+	Assert-That 'set_value reads the new value back' ($assigned.value.value -eq 99) "(was $($assigned.value.value))"
+	$badAssign = Invoke-Tool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'input'; value = '"not an int"'; thread_id = $stepThread; frame_index = 0 }
+	Assert-That 'a type-mismatched assignment reports a compiler error and runs nothing' (-not $badAssign.assigned -and $badAssign.compiler_error) "(error='$($badAssign.error)' compiler=$($badAssign.compiler_error))"
+
+	$noException = Invoke-Tool -Name 'get_exception' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0 } -AsText
+	Assert-That 'get_exception returns empty at a non-exception stop' ($noException -eq '[]') "(payload $noException)"
+
+	$watch = Invoke-Tool -Name 'add_watch' -Arguments @{ session_id = $sessionId; expression = 'input' }
+	Assert-That 'add_watch returns an id' ($watch.watch_id -ge 1)
+	$sameWatch = Invoke-Tool -Name 'add_watch' -Arguments @{ session_id = $sessionId; expression = 'input' }
+	Assert-That 'adding the same expression twice reuses the id' ($sameWatch.watch_id -eq $watch.watch_id)
+	$brokenWatch = Invoke-Tool -Name 'add_watch' -Arguments @{ session_id = $sessionId; expression = 'no_such_local' }
+	# @(...) around a ConvertFrom-Json array can yield a one-element array holding the collection in
+	# Windows PowerShell 5.1. Piping through ForEach-Object is the idiom that reliably flattens it.
+	$watchList = @(Invoke-Tool -Name 'list_watches' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0 } | ForEach-Object { $_ })
+	# Select into a variable before reaching through two levels. Chaining .value.error across a filtered
+	# collection reads as fine and silently yields nothing in Windows PowerShell 5.1.
+	$goodWatch = $watchList | Where-Object { $_.watch_id -eq $watch.watch_id } | Select-Object -First 1
+	$failedWatch = $watchList | Where-Object { $_.watch_id -eq $brokenWatch.watch_id } | Select-Object -First 1
+	Assert-That 'list_watches re-evaluates stored expressions' ($goodWatch.value.value -eq 99) "(was $($goodWatch.value.value))"
+	# One bad expression must not hide the rest: that is the whole reason watches are evaluated in a
+	# single pass with per-watch errors instead of failing the call.
+	Assert-That 'a failing watch reports its own error without failing the call' ($watchList.Count -eq 2 -and -not [string]::IsNullOrWhiteSpace($failedWatch.value.error)) "(error='$($failedWatch.value.error)')"
+	$removedWatch = Invoke-Tool -Name 'remove_watch' -Arguments @{ session_id = $sessionId; watch_id = $brokenWatch.watch_id }
+	Assert-That 'remove_watch removes exactly one watch' ($removedWatch.removed -and $removedWatch.watch_id -eq $brokenWatch.watch_id)
+	$missingWatch = Invoke-Tool -Name 'remove_watch' -Arguments @{ session_id = $sessionId; watch_id = 999999 } -ExpectError
+	Assert-That 'remove_watch refuses an unknown id' ($missingWatch -match 'does not exist')
+
+	$modules = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId })
+	Assert-That 'list_modules finds the target module' (@($modules | Where-Object { $_.filename -like '*Milestone1Target.exe' }).Count -eq 1) "(got $($modules.Count) modules)"
+	Assert-That 'a file-backed module reports that it can carry a breakpoint' (@($modules | Where-Object { $_.filename -like '*Milestone1Target.exe' }).can_set_breakpoint)
+	Assert-That 'every module without a path is marked as unable to carry a breakpoint' (@($modules | Where-Object { [string]::IsNullOrEmpty($_.filename) -and $_.can_set_breakpoint }).Count -eq 0)
 
 	$reenabled = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true }
 	Assert-That 'the code breakpoint can be re-enabled after stepping' ($reenabled.enabled)

@@ -11,6 +11,9 @@ on the next — dispatcher delivery is FIFO, so the queued work runs in between.
 in the same callback that changed it reports the old settings and looks like a write that did nothing.
 - `Events/`: normalized debugger/lifecycle events, bounded non-destructive cursor reads, cancellable
   shared-signal waits, stop-reason lookup, and truncation reporting.
+- `Evaluation/`: expression evaluation, member expansion, assignment, watches and module listing. Every
+  evaluation runs on the `EvaluationQueue`, never the dispatcher — func-eval executes code inside the
+  target and would otherwise stall event delivery for the whole session.
 - `Identity/`: stable protocol identities derived from dnSpy values, plus host identity and capability
   advertisement (`RpcHost.Host.cs`).
 

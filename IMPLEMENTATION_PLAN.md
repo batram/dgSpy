@@ -374,7 +374,10 @@ Everything below works on the token+offset identity that already ships.
 - ✅ A stepper is closed on every terminal path; a step is refused outright on a running target, on an
   unknown thread, and when no thread is current, rather than guessing which thread to resume.
 
-## Phase 5: Expression evaluation and object inspection
+## Phase 5: Expression evaluation and object inspection — **complete**
+
+Closed out 2026-08-03 on CorDebug. Evaluation, one-level paged member expansion, assignment, exception
+reads, watches and module listing are covered by the live smoke.
 
 Enumeration and frame capture already ship. What is missing is the ability to look at anything that is
 not a primitive local, which is a function-evaluation problem, so this phase is scoped to that.
@@ -394,35 +397,46 @@ Three tools from the original list are deliberately gone:
 ### Work
 
 1. ✅ Enumerate threads and stack frames; capture frames only while paused and close dnSpy frame objects correctly.
-2. Expose arguments, `this`, exceptions, return values, and object members beyond primitive scalars.
-3. Add paging, maximum depth, cycle detection, string limits, collection limits, and evaluation timeouts.
-4. Preserve raw type information separately from formatted display text.
-5. Support writing locals, parameters, and fields where the runtime permits it.
-6. Implement watch expressions as stored expressions re-evaluated against a caller-selected frame, not as permanent value handles.
-7. Revisit the two limitations that func-eval makes testable: `stale_handle` cannot be provoked while
-   evaluations take milliseconds, and `limits.cancels_in_flight_work: false` does not yet bite. Both are
-   recorded in `docs/DGSPY_STATUS.md` and both become real once evaluation can run long.
+2. ✅ Expose arguments, `this`, exceptions, and object members beyond primitive scalars. Arguments are
+   *not* a separate tool: dnSpy's locals provider does not separate them from locals, so pretending
+   otherwise would be a lie in the tool surface. Return values are deferred — they need `ReturnValuesProvider`
+   and a step-completion stop to be meaningful, so they belong with whatever exercises stepping on Mono.
+3. ✅ Add paging and collection limits (`offset`/`count`, `total`, `truncated`, hard cap 200). Depth and
+   cycle detection are handled by *not recursing*: expansion is one level, and a member carries the
+   expression that reaches it, so depth is the caller's to spend and cancel. Evaluation timeouts come
+   from the operation bounds the gateway already derives from `get_capabilities`.
+4. ✅ Preserve raw type information separately from formatted display text. `value` is the scalar,
+   `display` is dnSpy's formatting, and `has_raw_value` separates a value of `null` from a value the
+   runtime cannot supply.
+5. ✅ Support writing locals, parameters, and fields. `set_value` reports `compiler_error` so a caller
+   can tell "the expression did not compile and nothing ran" from "the target may already be touched".
+6. ✅ Implement watch expressions as stored expressions re-evaluated against a caller-selected frame.
+   A failing watch reports its own error rather than failing the call.
+7. ⏭️ Deferred with reason: func-eval is now *possible* (`allow_func_eval`) but off by default, and
+   nothing in the CorDebug fixture makes an evaluation long enough to provoke `stale_handle` or to make
+   `cancels_in_flight_work: false` bite. Both remain recorded in `docs/DGSPY_STATUS.md`.
 
 ### MCP tools
 
 - `list_threads` (implemented)
 - `get_callstack` (implemented with caller-selected `thread_id`)
-- `get_frame` (implemented; gains `include` for arguments, `this`, and non-primitive locals)
-- `list_modules` (shares symbol resolution with Phase 6's `list_documents`)
-- `get_exception`
-- `get_members`
-- `evaluate`
-- `set_value`
-- `add_watch`
-- `list_watches`
-- `remove_watch`
+- `get_frame` (implemented; `include: ["locals","this"]` returns objects too, in `values`)
+- `list_modules` (implemented; `can_set_breakpoint` flags modules Phase 6 still owes identity for)
+- `get_exception` (implemented)
+- `get_members` (implemented, paged, one level)
+- `evaluate` (implemented; func-eval opt-in)
+- `set_value` (implemented)
+- `add_watch` / `list_watches` / `remove_watch` (implemented)
 
 ### Exit criteria
 
-- A breakpoint hit can be followed by call-stack and local-variable inspection through MCP only.
-- Optimized-away and unavailable values are distinguished from `null`.
-- Object expansion cannot recurse indefinitely or return unbounded data.
-- All paused-state handles become predictably stale after resume, and `stale_handle` is provoked by a test rather than reasoned about.
+- ✅ A breakpoint hit can be followed by call-stack and local-variable inspection through MCP only.
+- ✅ Optimized-away and unavailable values are distinguished from `null`, by `has_raw_value` plus the
+  runtime's own error text. Unit-tested on the wire and exercised live against a static method's `this`.
+- ✅ Object expansion cannot recurse indefinitely or return unbounded data: one level, capped at 200,
+  with `total` and `truncated`.
+- ⏭️ `stale_handle` is still reasoned about rather than provoked — see work item 7. The check exists and
+  runs on every evaluation; what is missing is an evaluation slow enough to lose the race deliberately.
 
 ## Phase 6: Decompiled C#, IL, metadata, and search
 

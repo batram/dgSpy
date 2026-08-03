@@ -75,20 +75,28 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | A continuing tracepoint warns that it produces no stop | ✅ automated live |
 | `set_exception_breakpoint` / `list_exception_breakpoints`, first-chance by default and bounded | ✅ automated live |
 | `step_into` / `step_over` / `step_out`, completion through `wait_for_stop` with `stop_reason: "step"` | ✅ automated live |
+| **Phase 5 closed out** — evaluation, member expansion, assignment, watches, modules | ✅ 2026-08-03 (CorDebug) |
+| `evaluate` — raw scalar and display text separate; arithmetic, not just lookup | ✅ automated live |
+| `has_raw_value` separates `null` from optimized-away/unavailable | ✅ unit-tested + live (`this` in a static method) |
+| `get_members` — one level, paged, `total` / `truncated`, member expressions round-trip | ✅ automated live |
+| `set_value` — assigns in the target, reads back, reports `compiler_error` | ✅ automated live |
+| `add_watch` / `list_watches` / `remove_watch`; a failing watch does not fail the call | ✅ automated live |
+| `list_modules` — `can_set_breakpoint` false for path-less modules | ✅ automated live |
 
 Test suites, all green:
 
 ```powershell
-dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 22 checks, wire + capability contract
-dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 75 checks, access control + deadline bounds
+dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 24 checks, wire + capability contract
+dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 91 checks, access control + deadline bounds
 dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 160 checks, end to end
+.\tests\run-milestone1-smoke.ps1                                       # 195 checks, end to end
 ```
 
-All four suites are green as of the Phase 4 close-out on 2026-08-03: 22 / 75 / 15 unit checks and 160
+All four suites are green as of the Phase 5 close-out on 2026-08-03: 24 / 91 / 15 unit checks and 195
 live smoke checks. The event-vocabulary work was additionally verified against live UCH — see
-[DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). Phase 4 is verified on CorDebug only; stepping
-and conditions have not been exercised against Mono/Unity yet.
+[DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). **Phases 4 and 5 are verified on CorDebug only.**
+Stepping, conditions and evaluation have not been exercised against Mono/Unity, and Mono differs enough
+elsewhere (sequence points, asynchronous frame fetch) that this is a real gap rather than a formality.
 
 ## Remaining gaps
 
@@ -215,6 +223,10 @@ and conditions have not been exercised against Mono/Unity yet.
 - **`AttachableProcess` does not say which provider produced it.** The provider names in
   `attach_providers` are derived from the runtime GUID, which is why Unity reports both `UnityEditor`
   and `UnityPlayer`.
+- **`@(...)` around a `ConvertFrom-Json` array can produce a one-element array holding the collection.**
+  `$list.Count` then reads 1 while the payload plainly contains several items, and a `Where-Object`
+  filter over it matches nothing. Pipe through `ForEach-Object { $_ }` to flatten. This cost a full
+  smoke cycle chasing a watch-evaluation "bug" whose JSON was correct all along.
 - **Windows PowerShell 5.1 is .NET Framework**: no `RandomNumberGenerator.GetBytes(int)`, no
   `Convert.ToHexString`; `-match` against a collection returns matches rather than a boolean; and
   `ConvertFrom-Json '[]'` does not survive `.Count` checks. All three cost debugging cycles in the test

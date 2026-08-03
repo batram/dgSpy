@@ -153,6 +153,24 @@ ship without being filterable and advertised in the same edit.
   `stop_reason: "step"`. `completed: false` means still running, not failed. The cursor matters for the
   same reason it does for breakpoints: a step over a fast call lands before a follow-up state read
   returns.
+- **`value` and `display` are separate on purpose.** `value` is the raw scalar, `display` is dnSpy's
+  formatted text. An agent comparing numbers wants the first; one showing something wants the second.
+  Collapsing them would force every caller to parse display text back into a value.
+- **`has_raw_value` separates `null` from "unavailable".** A null reference has `value` absent and
+  `has_raw_value: true`; an optimized-away or out-of-scope local has `has_raw_value: false` and an
+  `error` saying which. Conflating them reports a bug that is not there.
+- **Func-eval is off by default on every evaluating tool.** `allow_func_eval` runs target code —
+  property getters, `ToString` — which can deadlock a target holding a lock and can mutate the state
+  being inspected. `set_value` is always side-effecting; its `compiler_error` flag tells you whether
+  anything actually ran.
+- **`get_members` expands one level and never recurses.** A member carries the `expression` that reaches
+  it, so the caller spends and cancels its own depth. Server-side recursion is unbounded on a cyclic
+  object graph. Paged with `offset`/`count`, capped at 200, reporting `total` and `truncated`.
+- **Watches are stored expressions, not value handles.** A handle goes stale on the next resume; an
+  expression is re-evaluated against whatever frame you name. A watch whose expression fails reports its
+  own error instead of failing the whole call.
+- **`get_frame`'s `include` covers arguments under `locals`** — dnSpy's provider does not separate
+  arguments from locals, so there is no separate `arguments` value pretending it does.
 - **Stepping never guesses a thread.** With no `thread_id` it steps the thread that carried the stop,
   and refuses outright if none is current — stepping the wrong thread resumes the target and stops
   somewhere unrelated, which is worse than an error.
