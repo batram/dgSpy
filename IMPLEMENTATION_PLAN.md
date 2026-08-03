@@ -64,12 +64,21 @@ Add the following projects without mixing transport code into existing dnSpy con
 Extensions/dgSpy.Extension/
     dgSpy.Extension.csproj
     ExtensionEntryPoint.cs
+    README.md
     Debugger/
+        RpcHost.Scheduling.cs
+        SessionStateCalculator.cs
     Decompiler/
     Evaluation/
     Events/
+        DebugEventBuffer.cs
+        RpcHost.Events.cs
     Handles/
+    Identity/
+        ProgramIdentity.cs
     Rpc/
+        RpcException.cs
+        RpcHost.cs
 
 dgSpy.Protocol/
     dgSpy.Protocol.csproj
@@ -95,6 +104,12 @@ tests/
 ```
 
 `dgSpy.Protocol` must contain DTOs only and must not reference WPF or dnSpy implementation assemblies. This keeps the gateway independently testable and allows transport replacement without changing debugger behavior.
+
+Milestone 1 keeps MEF composition/lifetime in `ExtensionEntryPoint.cs`; the loopback host and operation
+dispatch in `Rpc/RpcHost.cs`; dispatcher scheduling in `Debugger/`; event cursor behavior in `Events/`;
+and stable identities in `Identity/`. New tool families belong in focused `RpcHost.<Family>.cs` partials
+under their owning directory. Pure rule files are linked into `dgSpy.Extension.Tests`, so those
+invariants run on net7 without loading WPF or dnSpy.
 
 ## State model
 
@@ -497,6 +512,7 @@ Loopback binding is not by itself a trust boundary for the HTTP gateway. A brows
 - Protocol serialization and compatibility
 - Handle generation and invalidation
 - Event cursor and truncation behavior
+- Program identity and session-state precedence
 - Capability and authorization policy
 - MCP argument validation and structured errors
 - Paging and output bounds

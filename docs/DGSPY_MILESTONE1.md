@@ -6,6 +6,10 @@ Three components:
 - `Extensions/dgSpy.Extension`: the MEF extension and authoritative debugger-state owner.
 - `dgSpy.Gateway`: a loopback-only Streamable HTTP MCP endpoint.
 
+The extension is organized by responsibility: MEF lifetime at the root, RPC transport/dispatch in
+`Rpc/`, debugger scheduling and state in `Debugger/`, bounded cursor handling in `Events/`, and stable
+protocol identities in `Identity/`. See `Extensions/dgSpy.Extension/README.md` before adding tools.
+
 Build and deploy with `.\build-dgspy.ps1` (see [DGSPY_BASELINE.md](DGSPY_BASELINE.md)), then start dnSpy
 and the gateway with the same `DGSPY_RPC_PORT`:
 
@@ -99,10 +103,15 @@ dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj
 ```
 
 ```powershell
+dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj
+```
+
+```powershell
 .\tests\run-milestone1-smoke.ps1
 ```
 
-The unit tests cover the wire contract and the gateway's access control. The smoke script is the
+The unit tests cover the wire contract, the gateway's access control, and the extension's pure
+program-identity, session-state, and bounded event-cursor invariants. The smoke script is the
 end-to-end test: it builds, deploys, starts a disposable target plus dnSpy plus the gateway, and
 asserts 69 checks across access control, discovery, attach, thread/frame inspection, breakpoints, and detach. It
 stops everything it starts and exits non-zero on any failure.

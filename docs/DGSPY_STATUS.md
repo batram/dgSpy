@@ -43,12 +43,15 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | Gateway `Origin` validation + `X-dgSpy-Token`, fails closed | ✅ verified |
 | Evaluation off the dispatcher (`EvaluationQueue`) | ✅ built and regression-tested, benefit not directly observable |
 | Response serialization off the dispatcher | ✅ built, not directly observable |
+| Extension split into entry point, RPC, debugger, events, and identity boundaries | ✅ built |
+| `dgSpy.Extension.Tests` identity, state, and event-cursor coverage | ✅ 10 tests |
 
 Test suites, all green:
 
 ```powershell
 dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 10 checks, wire contract
 dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 13 checks, access control
+dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 10 checks, extension core
 .\tests\run-milestone1-smoke.ps1                                       # 69 checks, end to end
 ```
 
@@ -82,18 +85,18 @@ dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 13 chec
 
 ### Quality and structure
 
-1. **`ExtensionEntryPoint.cs` is one flat file** (426 dense lines) against the plan's
-   `Debugger/ Rpc/ Events/ Handles/` layout. Worth splitting before it grows further.
-2. **No `dgSpy.Extension.Tests`.** All extension logic is covered only through the smoke script, which
-   needs a real dnSpy and a real target. Extraction of the pure logic (state computation, identity
-   composition, event cursor) would make it unit-testable.
-3. **Gateway implements only the POST half of Streamable HTTP** — no `Mcp-Session-Id` handling, no
+1. **Milestone 1 operations still share one partial `RpcHost`.** That intentionally preserves ownership
+   of dnSpy dispatcher-bound objects, but physical responsibilities are now separated into `Rpc/`,
+   `Debugger/`, `Events/`, and `Identity/`. Add Phase 3/4 families as focused
+   `RpcHost.<Family>.cs` partials; if a family gains independently testable policy, extract that policy
+   behind an interface rather than passing dnSpy objects through the transport layer.
+2. **Gateway implements only the POST half of Streamable HTTP** — no `Mcp-Session-Id` handling, no
    SSE/GET. Fine for our client; a strict MCP client may object. `protocolVersion` is hardcoded.
-4. **Per-tool gateway deadlines are a hardcoded table** (`ToolCatalog.DeadlineSeconds`). They exist
+3. **Per-tool gateway deadlines are a hardcoded table** (`ToolCatalog.DeadlineSeconds`). They exist
    because the gateway's old flat 8 s was shorter than the extension's own 10 s attach wait, so a
    successful attach could be abandoned by the caller. The extension should advertise its bound rather
    than the gateway guessing it.
-5. **`dnSpy\dnSpy\bin\Release\net48` contains a nested `bin\bin`** from `build.ps1` having run more
+4. **`dnSpy\dnSpy\bin\Release\net48` contains a nested `bin\bin`** from `build.ps1` having run more
     than once. Harmless, pre-existing, confusing when hunting deploy problems.
 
 ## Hard-won facts worth not rediscovering
@@ -152,8 +155,8 @@ dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 13 chec
 
 ## Suggested order for the next session
 
-1. Split `ExtensionEntryPoint.cs` and add `dgSpy.Extension.Tests` before the tool surface grows.
-2. Then Phase 3/4 proper: full event stream, breakpoint conditions and hit counts, stepping.
+1. Phase 3/4 proper: full event stream, breakpoint conditions and hit counts, stepping. Follow
+   `Extensions/dgSpy.Extension/README.md` and add each family in its owning partial file.
 
 ## Local PowerShell scratchpads
 
