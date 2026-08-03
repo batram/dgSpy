@@ -200,19 +200,20 @@ Milestone 1 exposes a single implicit host and a single session. `host_id` routi
 
 1. Attach using the exact options returned by the chosen `AttachableProcess`.
 2. Add launch support through dnSpy debugger start options, not `Process.Start` followed by a race-prone attach.
-3. **`attach_endpoint` (deferred, not yet implemented)** — attach directly to a Mono soft-debugger endpoint by address and port via `UnityAttachToProgramOptions` (`Address`, `Port`) and `DbgManager.Start`. Required for the UCH workflow: a target launched with `--debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:55555,suspend=n` emits no multicast beacon, so no attach provider will ever enumerate it and `list_programs` cannot reach it. This is the only route to the Mono/Unity engine.
-3. Track debugger processes and runtimes from `DbgManager` events.
+3. **`attach_endpoint` (implemented)** — attach directly to a Mono soft-debugger endpoint by address and port. Required for the UCH workflow: a target launched with `--debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:55555,suspend=n` emits no multicast beacon, so no attach provider will ever enumerate it and `list_programs` cannot reach it. This is the only route to the Mono/Unity engine. `UnityAttachToProgramOptions` is internal to dnSpy's Mono engine; the public equivalent is `UnityConnectStartDebuggingOptions` (`Address`, `Port`, `ProcessIsSuspended`, `ConnectionTimeout`) passed to `DbgManager.Start`, which `DbgEngineProviderImpl` maps onto the same engine and `DbgEngineImpl.StartCore` treats as an attach.
+4. Track debugger processes and runtimes from `DbgManager` events.
    - `attach` must not report ready until the engine has enumerated **threads**, not merely a process. A pause issued inside that window produces a stop with no current thread and an empty call stack, and the session does not recover until it runs again. Waiting for the first thread costs a few hundred milliseconds and makes pause-then-inspect deterministic.
    - The call stack follows `DbgManager.CurrentThread`, which only dnSpy's UI or a thread-carrying stop sets. Headless callers must select a thread themselves when none is current.
-4. Implement pause, continue, detach, stop, and restart where supported.
-5. Define selection rules for sessions containing multiple processes or runtimes.
-6. Preserve process-exit and attach-failure details in the event log.
+5. Implement pause, continue, detach, stop, and restart where supported.
+6. Define selection rules for sessions containing multiple processes or runtimes.
+7. Preserve process-exit and attach-failure details in the event log. Attach failures have two shapes and must stay distinguishable: options `DbgManager.Start` rejects outright are a caller error and never become a session, whereas an engine that starts and then fails to connect reports through `DbgManager.MessageUserMessage`, which is what makes a `faulted` session carry a real reason instead of a timeout guess.
 
 ### MCP tools
 
 - `list_hosts`
 - `list_programs`
 - `attach`
+- `attach_endpoint`
 - `launch`
 - `list_sessions`
 - `get_session_state`
@@ -260,12 +261,13 @@ Milestone 1 exposes a single implicit host and a single session. `host_id` routi
 ### Work
 
 1. Resolve source-style locations by module/type/method and IL offset.
-2. Support metadata-token and exact IL-offset breakpoints as the dependable base representation.
+2. Support metadata-token and exact IL-offset breakpoints as the dependable base representation. "Exact IL offset" is not portable: Mono accepts only sequence points and rejects everything else with `NO_SEQ_POINT_AT_IL_OFFSET`, while CorDebug accepts any offset. Advertise this as a capability and, where sequence points are known, offer to snap a requested offset to the nearest one rather than returning a breakpoint that silently never binds.
 3. Add decompiled C# line mapping where sequence-point or decompiler mappings permit it.
 4. Implement enabled state, conditions, hit counts, trace messages, and exception settings.
-5. Report binding state and per-runtime bound-breakpoint errors.
-6. Implement step into, over, and out using the selected thread's `DbgStepper`.
-7. Close steppers and cloned code locations on every terminal path.
+5. Report binding state and per-runtime bound-breakpoint errors. This is not cosmetic: without it `set_il_breakpoint` returns an id for a breakpoint the engine refused, and the caller's only symptom is a `wait_for_stop` that never fires. Observed against UCH on 2026-08-03.
+6. Scope breakpoints to the session, or expose `clear_breakpoints`. dnSpy's `DbgCodeBreakpointsService` is global, so breakpoints survive `detach` and rebind on the next attach — a fresh session can stop on a breakpoint its caller never set.
+7. Implement step into, over, and out using the selected thread's `DbgStepper`.
+8. Close steppers and cloned code locations on every terminal path.
 
 ### MCP tools
 

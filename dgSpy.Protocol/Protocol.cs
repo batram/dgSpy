@@ -50,6 +50,9 @@ namespace dgSpy.Protocol {
 		[JsonProperty("session_id")] public string SessionId { get; set; }=""; [JsonProperty("state")] public string State { get; set; }="running";
 		[JsonProperty("state_version")] public long StateVersion { get; set; } [JsonProperty("last_event_id")] public long LastEventId { get; set; }
 		[JsonProperty("process_ids")] public int[] ProcessIds { get; set; }=Array.Empty<int>();
+		/// <summary>Why the session is <c>faulted</c>. dnSpy's own connect-failure text when it produced
+		/// one, otherwise a deadline description. Absent for every other state.</summary>
+		[JsonProperty("fault_message", NullValueHandling=NullValueHandling.Ignore)] public string? FaultMessage { get; set; }
 	}
 	public sealed class DebugEvent { [JsonProperty("event_id")] public long EventId { get; set; } [JsonProperty("kind")] public string Kind { get; set; }=""; [JsonProperty("state_version")] public long StateVersion { get; set; } [JsonProperty("timestamp_utc")] public DateTime TimestampUtc { get; set; }=DateTime.UtcNow; }
 	public sealed class WaitResult { [JsonProperty("events")] public DebugEvent[] Events { get; set; }=Array.Empty<DebugEvent>(); [JsonProperty("timed_out")] public bool TimedOut { get; set; } [JsonProperty("oldest_event_id")] public long OldestEventId { get; set; } }
@@ -66,4 +69,37 @@ namespace dgSpy.Protocol {
 		[JsonProperty("locals")] public IReadOnlyList<PrimitiveValue> Locals { get; set; }=Array.Empty<PrimitiveValue>();
 	}
 	public sealed class PrimitiveValue { [JsonProperty("name")] public string Name { get; set; }=""; [JsonProperty("type")] public string Type { get; set; }=""; [JsonProperty("value")] public object? Value { get; set; } }
+	public sealed class BreakpointInfo {
+		[JsonProperty("breakpoint_id")] public int BreakpointId { get; set; }
+		[JsonProperty("module")] public string Module { get; set; }=""; [JsonProperty("method_token")] public uint MethodToken { get; set; }
+		[JsonProperty("il_offset")] public uint IlOffset { get; set; }
+		/// <summary>The offset the caller asked for. Differs from <see cref="IlOffset"/> only when
+		/// <see cref="Snapped"/> is true.</summary>
+		[JsonProperty("requested_il_offset")] public uint RequestedIlOffset { get; set; }
+		/// <summary>True when the breakpoint moved to a different offset because the engine refused the
+		/// requested one. The breakpoint will stop somewhere other than where it was asked to.</summary>
+		[JsonProperty("snapped")] public bool Snapped { get; set; }
+		[JsonProperty("enabled")] public bool Enabled { get; set; }
+		/// <summary>True only when the engine actually created the breakpoint. False with
+		/// <c>severity: "error"</c> means it will never be hit — on Mono, usually because the offset is
+		/// not a sequence point. False with no error means it is pending, eg. the module is not loaded.</summary>
+		[JsonProperty("bound")] public bool Bound { get; set; }
+		[JsonProperty("bound_count")] public int BoundCount { get; set; }
+		/// <summary><c>none</c>, <c>warning</c> or <c>error</c>.</summary>
+		[JsonProperty("severity")] public string Severity { get; set; }="none";
+		[JsonProperty("message", NullValueHandling=NullValueHandling.Ignore)] public string? Message { get; set; }
+		[JsonProperty("warning", NullValueHandling=NullValueHandling.Ignore)] public string? Warning { get; set; }
+		[JsonProperty("session_id", NullValueHandling=NullValueHandling.Ignore)] public string? SessionId { get; set; }
+		/// <summary>Event cursor taken immediately before the breakpoint existed. Pass this as
+		/// <c>after_event_id</c> to <c>wait_for_stop</c>. A cursor read after setting a breakpoint on a
+		/// hot method has already missed the first hit, and the wait then times out on a breakpoint that
+		/// is working perfectly. Only <c>set_il_breakpoint</c> returns it: for a breakpoint that already
+		/// existed there is no meaningful "just before", and emitting 0 would invite a caller to replay
+		/// the whole event log.</summary>
+		[JsonProperty("cursor_event_id", NullValueHandling=NullValueHandling.Ignore)] public long? CursorEventId { get; set; }
+		[JsonProperty("state_version")] public long StateVersion { get; set; }
+	}
+	public sealed class ClearBreakpointsResult {
+		[JsonProperty("removed")] public int Removed { get; set; } [JsonProperty("state_version")] public long StateVersion { get; set; }
+	}
 }

@@ -51,6 +51,12 @@ extension did not load. The two things that actually cause this:
   directory and `Extensions\*`, so a leftover copy is composed twice. `build-dgspy.ps1` removes any
   before deploying.
 
+The inverse also holds: dnSpy's *own* contract assemblies must **not** be copied into the deploy
+directory. `dgSpy.Extension` references `dnSpy.Contracts.Debugger.DotNet.Mono` (for `attach_endpoint`),
+and MSBuild puts it in the extension's build output — but `build-dgspy.ps1` copies an explicit file
+list rather than the whole directory, so it is left behind. A second copy would load into the
+`LoadFrom` context and its types would not match the ones dnSpy already has.
+
 ## Thread-affinity rules
 
 These rules govern everything the extension does with dnSpy objects. They belong with the RPC

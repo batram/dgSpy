@@ -7,6 +7,10 @@
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.DnSpy\dnSpy.Contracts.DnSpy.csproj" />
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.Debugger\dnSpy.Contracts.Debugger.csproj" />
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.Debugger.DotNet\dnSpy.Contracts.Debugger.DotNet.csproj" />
+    <!-- For UnityConnectStartDebuggingOptions (attach_endpoint). dnSpy ships this assembly in its own
+         bin directory, so build-dgspy.ps1 deliberately does not copy it next to the extension: a second
+         copy would load into the LoadFrom context and its types would not match dnSpy's. -->
+    <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.Debugger.DotNet.Mono\dnSpy.Contracts.Debugger.DotNet.Mono.csproj" />
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.Logic\dnSpy.Contracts.Logic.csproj" />
   </ItemGroup>
 </Project>

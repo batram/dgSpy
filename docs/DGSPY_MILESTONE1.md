@@ -28,8 +28,9 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 
 ## Tools
 
-`list_programs`, `attach`, `detach`, `list_sessions`, `get_session_state`, `pause`, `continue`,
-`set_il_breakpoint`, `wait_for_stop`, `get_callstack`.
+`list_programs`, `attach`, `attach_endpoint`, `detach`, `list_sessions`, `get_session_state`,
+`pause`, `continue`, `set_il_breakpoint`, `list_breakpoints`, `clear_breakpoints`, `wait_for_stop`,
+`get_callstack`.
 
 ## State and lifetime rules
 
@@ -40,6 +41,16 @@ without a preflight, so loopback binding alone would leave the debugger open to 
   CorDebug). `runtime_guid` is what separates .NET Framework from Unity/Mono; they share a kind GUID.
 - `attach` waits until the engine has enumerated threads before returning, so a following `pause` has
   a call stack. It refuses to start a second session while one is live.
+- `attach_endpoint` connects to a Mono/Unity soft-debugger endpoint by address and port. Use it for a
+  target launched with `--debugger-agent=transport=dt_socket,server=y,address=HOST:PORT`: that target
+  broadcasts no discovery beacon, so `list_programs` can never see it and `attach` has no `program_id`
+  to take. Pass `process_is_suspended: true` when the agent argument said `suspend=y`. The session is
+  an attach either way, so `detach` leaves the target running. See
+  [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md).
+- A session that comes up and then fails reports `state: "faulted"` with `fault_message` — dnSpy's own
+  connect-failure text when it produced one. Options dnSpy rejects outright are a caller error and
+  return `attach_failed` instead, without creating a session. A faulted session still holds the
+  `session_id`; clear it with `detach`.
 - `pause` and `continue` return the state they produced, not the state before the transition.
 - **`detach` is the only safe way to end a session.** Closing dnSpy with a session attached terminates
   the target. `detach` refuses with `detach_would_terminate` when dnSpy cannot detach cleanly, unless
@@ -48,6 +59,23 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 - Mutations may include `expected_state_version`; a mismatch returns `stale_state`.
 - Frame identity is `module` + `method_token` + `il_offset`, which is exactly what `set_il_breakpoint`
   takes. `name` is formatted for display and must not be parsed.
+- **On Mono/Unity, `il_offset` must be a sequence point** or the engine refuses the breakpoint. Many
+  offsets qualify, but a frame's own `il_offset` often does not — so round-tripping it from
+  `get_callstack` into `set_il_breakpoint`, which works on CorDebug, is refused on Mono. Check `bound`:
+  `false` with `severity: "error"` will never be hit, `false` with no error is pending a module load.
+  By default a refused offset is retried at method entry, which sets `snapped` and a `warning`; pass
+  `snap_to_sequence_point=false` to get the failure instead. `bound` claims the engine installed the
+  breakpoint, not that it will be reached.
+- **Take the event cursor before setting a breakpoint, not after.** Use the `cursor_event_id` that
+  `set_il_breakpoint` returns as `wait_for_stop`'s `after_event_id`. On a hot method the breakpoint
+  fires before a subsequent `get_session_state` returns, and a cursor read afterwards has already
+  missed the stop — the wait then times out on a breakpoint that works.
+- Breakpoints are dnSpy-global, not session-scoped: they survive `detach` and rebind on the next
+  attach, so a new session can stop on a breakpoint set by the previous one. `clear_breakpoints`
+  removes them all, including any set by hand in dnSpy's UI.
+- **A Mono/Unity endpoint accepts one connection per game launch.** A clean `detach` lets the agent
+  listen again; any other connection to the port — including a "is it up?" TCP probe — consumes it for
+  good and the target must be relaunched. Let `attach_endpoint` be the only thing that touches it.
 - `wait_for_stop` is cursor-based and non-destructive. The extension retains 256 events and reports
   the oldest available cursor. The extension caps the wait at 10 s.
 - Primitive locals are limited to values with a raw scalar; object expansion is outside milestone 1.
@@ -70,5 +98,8 @@ dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj
 
 The unit tests cover the wire contract and the gateway's access control. The smoke script is the
 end-to-end test: it builds, deploys, starts a disposable target plus dnSpy plus the gateway, and
-asserts 37 checks across access control, discovery, attach, inspection, breakpoints, and detach. It
+asserts 54 checks across access control, discovery, attach, inspection, breakpoints, and detach. It
 stops everything it starts and exits non-zero on any failure.
+
+The smoke script covers `attach_endpoint`'s argument validation and failure path only; its success
+path needs a Mono/Unity target and is a manual checklist, [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md).

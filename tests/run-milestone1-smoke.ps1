@@ -126,7 +126,7 @@ try {
 
 	Write-Host "== discovery ==" -ForegroundColor Cyan
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
-	foreach ($expected in 'list_programs','attach','detach','list_sessions','get_session_state','pause','continue','set_il_breakpoint','wait_for_stop','get_callstack') {
+	foreach ($expected in 'list_programs','attach','attach_endpoint','detach','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','clear_breakpoints','wait_for_stop','get_callstack') {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
 	}
 
@@ -174,6 +174,12 @@ try {
 	Write-Host "== breakpoint and event cursor ==" -ForegroundColor Cyan
 	$breakpoint = Invoke-Tool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
 	Assert-That 'set_il_breakpoint returns an id' ($null -ne $breakpoint.breakpoint_id)
+	# The point of reporting binding state: an unbound breakpoint must not look like a bound one.
+	Assert-That 'set_il_breakpoint reports the breakpoint as bound' ($breakpoint.bound -and $breakpoint.bound_count -ge 1) "(bound=$($breakpoint.bound) severity=$($breakpoint.severity) msg='$($breakpoint.message)')"
+	Assert-That 'a bound breakpoint carries no error severity' ($breakpoint.severity -eq 'none') "(was $($breakpoint.severity))"
+	Assert-That 'CorDebug accepts the offset without snapping' (-not $breakpoint.snapped)
+	$listed = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{})
+	Assert-That 'list_breakpoints reports the breakpoint' (@($listed | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id }).Count -eq 1)
 	$cursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
 	Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
 	$stop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $cursor; timeout_ms = 8000 }
@@ -189,6 +195,12 @@ try {
 	$running = Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId } -ExpectError
 	Assert-That 'get_callstack on a running target is refused' ($running -match 'not_paused|Pause the session')
 
+	Write-Host "== clear_breakpoints ==" -ForegroundColor Cyan
+	$cleared = Invoke-Tool -Name 'clear_breakpoints' -Arguments @{}
+	Assert-That 'clear_breakpoints reports what it removed' ($cleared.removed -ge 1) "(removed=$($cleared.removed))"
+	$after = Invoke-Tool -Name 'list_breakpoints' -Arguments @{} -AsText
+	Assert-That 'no breakpoints remain' ($after -eq '[]') "(payload $after)"
+
 	Write-Host "== detach leaves the target alive ==" -ForegroundColor Cyan
 	$detach = Invoke-Tool -Name 'detach' -Arguments @{ session_id = $sessionId }
 	Assert-That 'detach reports detached, not terminated' ($detach.detached -and -not $detach.terminated)
@@ -198,6 +210,32 @@ try {
 	Assert-That 'no sessions remain' (-not $remaining.Contains($sessionId)) "(payload $remaining)"
 	$err = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId } -ExpectError
 	Assert-That 'the detached session_id is no longer usable' ($err -match 'not active|No active')
+
+	# The success path needs a Mono/Unity target, which this harness cannot produce; see the manual
+	# checklist in docs/DGSPY_UNITY_CHECKLIST.md. What is testable here is argument validation and the
+	# failure path — that a refused endpoint faults with dnSpy's own reason instead of hanging or
+	# reporting a healthy session. Run last: dnSpy pops a modal error box on connect failure (on its UI
+	# thread, so it blocks neither the dispatcher nor this RPC, but it stays on screen).
+	Write-Host "== attach_endpoint ==" -ForegroundColor Cyan
+	$err = Invoke-Tool -Name 'attach_endpoint' -Arguments @{ address = '127.0.0.1' } -ExpectError
+	Assert-That 'attach_endpoint without a port is refused' ($err -match 'port is required')
+	$err = Invoke-Tool -Name 'attach_endpoint' -Arguments @{ port = 70000 } -ExpectError
+	Assert-That 'attach_endpoint rejects an out-of-range port' ($err -match 'between 1 and 65535')
+	$err = Invoke-Tool -Name 'attach_endpoint' -Arguments @{ port = 55555; engine = 'coreclr' } -ExpectError
+	Assert-That 'attach_endpoint rejects an unsupported engine' ($err -match 'unity.*mono')
+
+	# A port nothing is listening on. Bind and immediately release one so it is closed but plausible.
+	$probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+	$probe.Start(); $deadPort = ([Net.IPEndPoint]$probe.LocalEndpoint).Port; $probe.Stop()
+	$watch = [Diagnostics.Stopwatch]::StartNew()
+	$faulted = Invoke-Tool -Name 'attach_endpoint' -Arguments @{ port = $deadPort; connection_timeout_ms = 2000 }
+	$faultMs = $watch.ElapsedMilliseconds
+	Assert-That 'a refused endpoint reports faulted' ($faulted.state -eq 'faulted') "(was $($faulted.state))"
+	Assert-That 'the fault carries dnSpy''s own reason' ($faulted.fault_message -match 'connect') "(was '$($faulted.fault_message)')"
+	Assert-That 'the fault is reported near the connection timeout' ($faultMs -lt 12000) "(took ${faultMs}ms)"
+	Invoke-Tool -Name 'detach' -Arguments @{ session_id = $faulted.session_id } | Out-Null
+	$remaining = Invoke-Tool -Name 'list_sessions' -Arguments @{} -AsText
+	Assert-That 'a faulted session can be cleared with detach' (-not $remaining.Contains($faulted.session_id)) "(payload $remaining)"
 
 	Write-Host ''
 	if ($script:failures.Count -eq 0) {
