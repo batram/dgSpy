@@ -233,4 +233,43 @@ public class CapabilityContractTests {
 		// The near miss that used to produce a clean empty wait instead of an error.
 		Assert.False(EventKinds.IsKnown("breakpoint"));
 	}
+
+	[Fact]
+	public void Phase4_vocabularies_are_advertised_and_rejectable() {
+		var capabilities = JObject.Parse(JsonConvert.SerializeObject(CapabilityCatalog.Describe("0.1.0")));
+
+		Assert.Equal(new[] { "into", "over", "out" }, capabilities["step_kinds"]!.ToObject<string[]>());
+		Assert.Contains("when_changed", capabilities["condition_kinds"]!.ToObject<string[]>()!);
+		Assert.Contains("multiple_of", capabilities["hit_count_kinds"]!.ToObject<string[]>()!);
+		// dnSpy calls it GreaterThanOrEquals; the wire name says what it does without the caller
+		// having to know dnSpy's enum.
+		Assert.Contains("at_least", HitCountKinds.All);
+		Assert.False(StepKinds.IsKnown("step_into"));
+		Assert.False(HitCountKinds.IsKnown("greater_than_or_equals"));
+	}
+
+	[Fact]
+	public void Every_phase4_operation_is_bounded_and_marked_for_mutation() {
+		foreach (var name in new[] { "update_breakpoint", "set_exception_breakpoint", "step_into", "step_over", "step_out" }) {
+			var op = CapabilityCatalog.Operations.Single(o => o.Operation == name);
+			Assert.True(op.MaxDurationMs > 0, $"{name} has no bound");
+			// Each of these changes debugger state the caller can observe afterwards, so a client that
+			// serializes mutations has to be able to tell.
+			Assert.True(op.MutatesSession, $"{name} is not marked as mutating");
+		}
+		Assert.False(CapabilityCatalog.Operations.Single(o => o.Operation == "list_exception_breakpoints").MutatesSession);
+	}
+
+	[Fact]
+	public void A_step_result_round_trips_with_snake_case_wire_names() {
+		var step = JObject.Parse(JsonConvert.SerializeObject(new StepResult {
+			SessionId = "s", ThreadId = "100:200", StepKind = StepKinds.Over, CursorEventId = 42, Completed = false,
+		}));
+
+		Assert.Equal("over", (string?)step["step_kind"]);
+		Assert.Equal(42, (long?)step["cursor_event_id"]);
+		// An unfinished step must not look like a failed one: completed is present and false, error absent.
+		Assert.False((bool?)step["completed"]);
+		Assert.Null(step["error"]);
+	}
 }

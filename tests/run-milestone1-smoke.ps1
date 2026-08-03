@@ -175,10 +175,11 @@ try {
 	# The kinds filter is caller-supplied, so the vocabulary has to be discoverable rather than guessed.
 	Assert-That 'capabilities advertise the event-kind vocabulary' (@($capabilities.event_kinds) -contains 'stopped' -and @($capabilities.event_kinds) -contains 'breakpoint_hit')
 	Assert-That 'capabilities advertise the stop-reason vocabulary' (@($capabilities.stop_reasons) -contains 'breakpoint' -and @($capabilities.stop_reasons) -contains 'unknown')
+	Assert-That 'capabilities advertise the Phase 4 vocabularies' (@($capabilities.step_kinds) -contains 'over' -and @($capabilities.condition_kinds) -contains 'when_changed' -and @($capabilities.hit_count_kinds) -contains 'at_least')
 
 	Write-Host "== discovery ==" -ForegroundColor Cyan
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
-	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame') {
+	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame','update_breakpoint','set_exception_breakpoint','list_exception_breakpoints','step_into','step_over','step_out') {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
 	}
 
@@ -292,7 +293,7 @@ try {
 	Assert-That 'get_stop_reason returns the latest stop when event_id is omitted' ($latestReason.event_id -eq $firstStop.event_id)
 	$filtered = Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $sessionId; after_event_id = $cursor; kinds = @('stopped') }
 	Assert-That 'get_events filters without consuming the stop' (@($filtered.events).Count -eq 1 -and @($filtered.events)[0].event_id -eq $firstStop.event_id)
-	# step_completed is a real kind that milestone 1 never emits, so the wait times out on merit.
+	# step_completed is a real kind, and no step has been issued yet, so the wait times out on merit.
 	# Do not use a made-up kind here: unknown kinds are now rejected outright, which is the point below.
 	$timedOut = Invoke-Tool -Name 'wait_for_event' -Arguments @{ session_id = $sessionId; after_event_id = $firstStop.event_id; kinds = @('step_completed'); timeout_ms = 50 }
 	Assert-That 'wait_for_event reports a bounded timeout' ($timedOut.timed_out -and @($timedOut.events).Count -eq 0)
@@ -321,6 +322,77 @@ try {
 	$secondStop2 = @($concurrent2.events)[0]
 	Assert-That 'two waiters issued before resume observe the same breakpoint stop' (-not $concurrent1.timed_out -and -not $concurrent2.timed_out -and $secondStop1.event_id -eq $secondStop2.event_id)
 	Assert-That 'resume then stop advances both event id and state version' ($secondStop1.event_id -gt $firstStop.event_id -and $secondStop1.state_version -gt $firstStop.state_version)
+
+	Write-Host "== breakpoint settings ==" -ForegroundColor Cyan
+	# The target is paused at the breakpoint here, which is the only state in which stepping is legal.
+	$disabled = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
+	Assert-That 'update_breakpoint disables a breakpoint' (-not $disabled.enabled)
+	$conditioned = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; condition = 'input == 41'; hit_count = 3; hit_count_kind = 'multiple_of' }
+	Assert-That 'update_breakpoint stores the condition' ($conditioned.condition -eq 'input == 41' -and $conditioned.condition_kind -eq 'is_true')
+	Assert-That 'update_breakpoint stores the hit count and its kind' ($conditioned.hit_count -eq 3 -and $conditioned.hit_count_kind -eq 'multiple_of')
+	Assert-That 'update_breakpoint leaves untouched fields alone' (-not $conditioned.enabled)
+	$listedSettings = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{}) | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id }
+	Assert-That 'list_breakpoints reports the stored settings' ($listedSettings.condition -eq 'input == 41' -and $listedSettings.hit_count -eq 3)
+	# A tracepoint that continues never stops, so wait_for_stop would wait forever on it. Saying so in a
+	# warning is the difference between a documented behaviour and a hang the caller has to diagnose.
+	$traced = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; trace_message = 'tick {input}'; trace_continue = $true }
+	Assert-That 'update_breakpoint stores a tracepoint' ($traced.trace_message -eq 'tick {input}' -and $traced.trace_continue)
+	Assert-That 'a continuing tracepoint warns that it produces no stop' ($traced.warning -match 'no stopped event|wait_for_stop')
+	$cleared1 = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; condition = ''; trace_message = '' }
+	Assert-That 'an empty string clears a condition rather than setting one' ($null -eq $cleared1.condition -and $null -eq $cleared1.trace_message)
+	$badKindArg = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; condition = 'x'; condition_kind = 'if_true' } -ExpectError
+	Assert-That 'an unknown condition_kind is rejected with the valid set' ($badKindArg -match 'when_changed')
+	$noFields = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id } -ExpectError
+	Assert-That 'update_breakpoint refuses a no-op' ($noFields -match 'at least one')
+	$missingBp = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = 2147483647; enabled = $true } -ExpectError
+	Assert-That 'update_breakpoint refuses an unknown id' ($missingBp -match 'does not exist')
+
+	Write-Host "== stepping ==" -ForegroundColor Cyan
+	# The breakpoint stays disabled across the step. Tick is hot enough that a re-arm would race the
+	# step and stop for the breakpoint instead, which would pass for the wrong reason.
+	$stepCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
+	$stepped = Invoke-Tool -Name 'step_over' -Arguments @{ session_id = $sessionId; thread_id = $secondStop1.thread_id }
+	Assert-That 'step_over reports the thread it stepped' ($stepped.thread_id -eq $secondStop1.thread_id) "(was $($stepped.thread_id))"
+	Assert-That 'step_over reports its own kind' ($stepped.step_kind -eq 'over')
+	Assert-That 'step_over returns a cursor taken before the step' ($stepped.cursor_event_id -ge $stepCursor)
+	Assert-That 'step_over reports no engine error' ($null -eq $stepped.error) "(was $($stepped.error))"
+	# Completion arrives on the event stream exactly like a breakpoint hit: same tool, same cursor
+	# discipline, different stop_reason. That is the Phase 4 exit criterion.
+	$stepStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $stepped.cursor_event_id; timeout_ms = 8000 }
+	Assert-That 'the step completion arrives through wait_for_stop' (-not $stepStop.timed_out -and @($stepStop.events).Count -gt 0)
+	$stepEvent = @($stepStop.events)[0]
+	Assert-That 'the step stop is reported as a step, not a breakpoint' ($stepEvent.stop_reason -eq 'step') "(was $($stepEvent.stop_reason))"
+	Assert-That 'the step stop names the stepped thread' ($stepEvent.thread_id -eq $secondStop1.thread_id)
+	$stepEvents = Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $sessionId; after_event_id = $stepped.cursor_event_id; kinds = @('step_completed') }
+	Assert-That 'the raw step_completed event is recorded alongside the stop' (@($stepEvents.events).Count -ge 1)
+	$badThreadStep = Invoke-Tool -Name 'step_into' -Arguments @{ session_id = $sessionId; thread_id = 'not-a-thread' } -ExpectError
+	# The tool result carries the structured error's message, not its code. Match the message.
+	Assert-That 'stepping an unknown thread is refused rather than guessed' ($badThreadStep -match 'is not active') "(was '$badThreadStep')"
+
+	Write-Host "== exception breakpoints ==" -ForegroundColor Cyan
+	$exception = Invoke-Tool -Name 'set_exception_breakpoint' -Arguments @{ name = 'System.InvalidOperationException'; stop_first_chance = $true }
+	Assert-That 'set_exception_breakpoint reports what it set' ($exception.name -eq 'System.InvalidOperationException' -and $exception.stop_first_chance)
+	Assert-That 'set_exception_breakpoint defaults to the DotNet category' ($exception.category -eq 'DotNet') "(was $($exception.category))"
+	$exceptionList = Invoke-Tool -Name 'list_exception_breakpoints' -Arguments @{}
+	Assert-That 'list_exception_breakpoints reports the configured entry' (@($exceptionList.entries | Where-Object { $_.name -eq 'System.InvalidOperationException' }).Count -eq 1)
+	# The default listing is first-chance only, and that is the whole point: dnSpy stops on second chance
+	# for essentially every .NET exception, so an unfiltered list is thousands of stock entries that are
+	# identical on every machine. A first run of this check returned ~2500 of them.
+	Assert-That 'the default listing is the deliberately configured set, not dnSpy stock defaults' (@($exceptionList.entries | Where-Object { -not $_.stop_first_chance }).Count -eq 0 -and $exceptionList.entries.Count -lt 50) "(got $($exceptionList.total))"
+	Assert-That 'the default listing says it excluded second chance' (-not $exceptionList.included_second_chance)
+	$stock = Invoke-Tool -Name 'list_exception_breakpoints' -Arguments @{ include_second_chance = $true; max_results = 10 }
+	Assert-That 'including second chance exposes dnSpy stock defaults, bounded' ($stock.truncated -and $stock.total -gt 100 -and @($stock.entries).Count -eq 10) "(total=$($stock.total))"
+	$exceptionOff = Invoke-Tool -Name 'set_exception_breakpoint' -Arguments @{ name = 'System.InvalidOperationException'; stop_first_chance = $false }
+	Assert-That 'an exception breakpoint can be turned back off' (-not $exceptionOff.stop_first_chance)
+	$afterOff = Invoke-Tool -Name 'list_exception_breakpoints' -Arguments @{}
+	Assert-That 'a disabled exception entry leaves the first-chance list' (@($afterOff.entries | Where-Object { $_.name -eq 'System.InvalidOperationException' }).Count -eq 0)
+	$badCategory = Invoke-Tool -Name 'set_exception_breakpoint' -Arguments @{ category = 'Klingon'; name = 'X'; stop_first_chance = $true } -ExpectError
+	Assert-That 'an unknown exception category is refused with the known ones' ($badCategory -match 'DotNet')
+	$noChange = Invoke-Tool -Name 'set_exception_breakpoint' -Arguments @{ name = 'System.Exception' } -ExpectError
+	Assert-That 'set_exception_breakpoint refuses a no-op' ($noChange -match 'stop_first_chance')
+
+	$reenabled = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true }
+	Assert-That 'the code breakpoint can be re-enabled after stepping' ($reenabled.enabled)
 
 	$stale = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId; expected_state_version = 1 } -ExpectError
 	Assert-That 'a stale expected_state_version is rejected' ($stale -match 'stale|Expected state')

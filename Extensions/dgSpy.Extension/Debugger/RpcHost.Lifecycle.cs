@@ -69,7 +69,7 @@ namespace dgSpy.Extension {
 			if (!await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false)) throw new RpcException("session_not_running","The session has already ended.");
 			lock(sync) lifecycleAction="terminate";
 			try {
-				await OnDebuggerAsync(()=>{ manager.TerminateAll(); return true; },cancellationToken).ConfigureAwait(false);
+				await OnDebuggerAsync(()=>{ CloseStepper(); manager.TerminateAll(); return true; },cancellationToken).ConfigureAwait(false);
 				await WaitForDebuggerAsync(()=>!manager.IsDebugging,cancellationToken).ConfigureAwait(false);
 				if (await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false)) throw new RpcException("terminate_timed_out","dnSpy did not terminate the target before the operation deadline.");
 				lock(sync) { terminalReason="terminated_by_client"; requestedOffsets.Clear(); }
@@ -85,7 +85,7 @@ namespace dgSpy.Extension {
 			if (!canRestart) throw new RpcException("restart_unsupported","Only a target launched through dgSpy can be restarted, and the active engine must advertise restart support.");
 			lock(sync) lifecycleAction="restart";
 			try {
-				await OnDebuggerAsync(()=>{ manager.Restart(); return true; },cancellationToken).ConfigureAwait(false);
+				await OnDebuggerAsync(()=>{ CloseStepper(); manager.Restart(); return true; },cancellationToken).ConfigureAwait(false);
 				await WaitForDebuggerAsync(()=>manager.IsDebugging && manager.Processes.Any(process=>!oldProcessIds.Contains(process.Id)) && manager.Processes.SelectMany(process=>process.Threads).Any(),cancellationToken,TimeSpan.FromSeconds(12)).ConfigureAwait(false);
 				var restarted=await OnDebuggerAsync(()=>manager.IsDebugging && manager.Processes.Any(process=>!oldProcessIds.Contains(process.Id)),cancellationToken).ConfigureAwait(false);
 				if (!restarted) throw new RpcException("restart_failed","dnSpy did not create a replacement process before the operation deadline.");
@@ -104,6 +104,9 @@ namespace dgSpy.Extension {
 			}
 			var reason=action=="terminate" ? "terminated_by_client" : action=="restart" ? "restart" : "target_exited";
 			var terminal=action!="restart";
+			// Raised on the debugger dispatcher, so this is the right thread to release a stepper the
+			// target just took with it. A step in flight when the process dies never raises StepComplete.
+			CloseStepper();
 			if (terminal) lock(sync) { terminalExitCode=e.ExitCode; terminalReason=reason; requestedOffsets.Clear(); }
 			Record(action=="terminate" ? EventKinds.Terminated : action=="restart" ? EventKinds.RestartProcessExited : EventKinds.SessionExited,terminal,e.Process.Id,e.ExitCode,reason);
 		}

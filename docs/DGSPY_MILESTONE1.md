@@ -136,6 +136,26 @@ an event for a process that is still being suspended. The vocabulary lives in
 `dgSpy.Protocol.EventKinds`, and every emitting call site names a constant from it, so a kind cannot
 ship without being filterable and advertised in the same edit.
 - Primitive locals are limited to values with a raw scalar; object expansion is outside milestone 1.
+- **`update_breakpoint` distinguishes "clear" from "leave alone".** An omitted field keeps its current
+  value; an empty string for `condition` or `trace_message` removes it. Without that distinction the
+  only way to drop a condition would be to delete and recreate the breakpoint, which changes its id.
+- **A tracepoint with `trace_continue` never stops**, so it produces no `stopped` event and
+  `wait_for_stop` on it waits until its timeout. `update_breakpoint` returns a `warning` saying so when
+  it sets one. Pass `trace_continue=false` to print *and* stop.
+- Conditions and hit counts are evaluated by the engine inside the target, so an expression that cannot
+  be evaluated fails at hit time — dnSpy then stops anyway — rather than being rejected when it is set.
+- **`list_exception_breakpoints` reports first-chance entries by default.** dnSpy stops on *second*
+  chance for essentially every .NET exception it ships, so the unfiltered list is ~2500 stock entries
+  that are identical on every machine and say nothing about what this session configured. Pass
+  `include_second_chance` to see them; the listing is bounded and reports `total` and `truncated`.
+- **A step completes on the event stream, not in its own reply.** `step_into`/`step_over`/`step_out`
+  return `cursor_event_id`; wait from it with `wait_for_stop` and the stop arrives with
+  `stop_reason: "step"`. `completed: false` means still running, not failed. The cursor matters for the
+  same reason it does for breakpoints: a step over a fast call lands before a follow-up state read
+  returns.
+- **Stepping never guesses a thread.** With no `thread_id` it steps the thread that carried the stop,
+  and refuses outright if none is current — stepping the wrong thread resumes the target and stops
+  somewhere unrelated, which is worse than an error.
 - The gateway opens a new loopback TCP connection per request, so restarting dnSpy needs no gateway
   restart; calls fail while dnSpy is down and succeed again once the extension is listening.
 - Per-tool gateway deadlines are derived from the bounds the extension advertises in

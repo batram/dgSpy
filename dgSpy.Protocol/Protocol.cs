@@ -150,6 +150,61 @@ namespace dgSpy.Protocol {
 		/// the whole event log.</summary>
 		[JsonProperty("cursor_event_id", NullValueHandling=NullValueHandling.Ignore)] public long? CursorEventId { get; set; }
 		[JsonProperty("state_version")] public long StateVersion { get; set; }
+		/// <summary>Condition expression, evaluated in the target when the breakpoint is reached. Absent
+		/// when the breakpoint is unconditional.</summary>
+		[JsonProperty("condition", NullValueHandling=NullValueHandling.Ignore)] public string? Condition { get; set; }
+		/// <summary><c>is_true</c> or <c>when_changed</c>. See <c>BreakpointConditionKinds</c>.</summary>
+		[JsonProperty("condition_kind", NullValueHandling=NullValueHandling.Ignore)] public string? ConditionKind { get; set; }
+		[JsonProperty("hit_count", NullValueHandling=NullValueHandling.Ignore)] public int? HitCount { get; set; }
+		/// <summary><c>equals</c>, <c>multiple_of</c> or <c>at_least</c>. See <c>HitCountKinds</c>.</summary>
+		[JsonProperty("hit_count_kind", NullValueHandling=NullValueHandling.Ignore)] public string? HitCountKind { get; set; }
+		/// <summary>Trace message printed when the breakpoint is reached.</summary>
+		[JsonProperty("trace_message", NullValueHandling=NullValueHandling.Ignore)] public string? TraceMessage { get; set; }
+		/// <summary>True when a tracepoint prints and keeps running instead of stopping. A tracepoint that
+		/// does not stop produces no <c>stopped</c> event, so <c>wait_for_stop</c> will never see it.</summary>
+		[JsonProperty("trace_continue", NullValueHandling=NullValueHandling.Ignore)] public bool? TraceContinue { get; set; }
+	}
+	/// <summary>Result of a step request. The step itself completes asynchronously: the stop arrives on
+	/// the event stream, exactly like a breakpoint hit.</summary>
+	public sealed class StepResult {
+		[JsonProperty("session_id")] public string SessionId { get; set; }="";
+		[JsonProperty("thread_id")] public string ThreadId { get; set; }="";
+		/// <summary><c>into</c>, <c>over</c> or <c>out</c>.</summary>
+		[JsonProperty("step_kind")] public string StepKind { get; set; }="";
+		/// <summary>Event cursor taken before the step was issued, for the same reason
+		/// <c>set_il_breakpoint</c> returns one: a short step completes before a follow-up state read
+		/// returns, and a cursor taken afterwards has already missed the stop.</summary>
+		[JsonProperty("cursor_event_id")] public long CursorEventId { get; set; }
+		/// <summary>True when the step completed before this call returned. False is not a failure — wait
+		/// for the <c>stopped</c> event with <c>stop_reason: "step"</c> from <c>cursor_event_id</c>.</summary>
+		[JsonProperty("completed")] public bool Completed { get; set; }
+		/// <summary>The engine's own reason when the step failed, eg. stepping out of the outermost frame.</summary>
+		[JsonProperty("error", NullValueHandling=NullValueHandling.Ignore)] public string? Error { get; set; }
+		[JsonProperty("state_version")] public long StateVersion { get; set; }
+	}
+	/// <summary>One exception category's stop settings.</summary>
+	public sealed class ExceptionBreakpointInfo {
+		/// <summary>dnSpy's exception category, eg. <c>DotNet</c>.</summary>
+		[JsonProperty("category")] public string Category { get; set; }="";
+		/// <summary>Fully qualified exception type name, or absent for the category's default setting
+		/// that governs every exception it does not name.</summary>
+		[JsonProperty("name", NullValueHandling=NullValueHandling.Ignore)] public string? Name { get; set; }
+		[JsonProperty("stop_first_chance")] public bool StopFirstChance { get; set; }
+		[JsonProperty("stop_second_chance")] public bool StopSecondChance { get; set; }
+		[JsonProperty("state_version")] public long StateVersion { get; set; }
+	}
+	/// <summary>Bounded listing of exception stop settings. Bounded on purpose: dnSpy stops on second
+	/// chance for essentially every .NET exception it knows, so an unfiltered listing is thousands of
+	/// entries that are identical on every machine.</summary>
+	public sealed class ExceptionBreakpointList {
+		[JsonProperty("entries")] public ExceptionBreakpointInfo[] Entries { get; set; }=Array.Empty<ExceptionBreakpointInfo>();
+		/// <summary>How many matched before <c>max_results</c> was applied.</summary>
+		[JsonProperty("total")] public int Total { get; set; }
+		[JsonProperty("truncated")] public bool Truncated { get; set; }
+		/// <summary>False by default. When false the listing is the set someone deliberately configured to
+		/// break on throw, rather than dnSpy's stock second-chance defaults.</summary>
+		[JsonProperty("included_second_chance")] public bool IncludedSecondChance { get; set; }
+		[JsonProperty("state_version")] public long StateVersion { get; set; }
 	}
 	public sealed class ClearBreakpointsResult {
 		[JsonProperty("removed")] public int Removed { get; set; } [JsonProperty("state_version")] public long StateVersion { get; set; }

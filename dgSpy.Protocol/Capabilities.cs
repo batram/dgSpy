@@ -47,6 +47,12 @@ namespace dgSpy.Protocol {
 		[JsonProperty("event_kinds")] public string[] EventKinds { get; set; }=Array.Empty<string>();
 		/// <summary>Every value a <c>stopped</c> event can carry in <c>stop_reason</c>.</summary>
 		[JsonProperty("stop_reasons")] public string[] StopReasons { get; set; }=Array.Empty<string>();
+		/// <summary><c>step_into</c>, <c>step_over</c> and <c>step_out</c> accept these.</summary>
+		[JsonProperty("step_kinds")] public string[] StepKinds { get; set; }=Array.Empty<string>();
+		/// <summary>Values <c>update_breakpoint</c> accepts for <c>condition_kind</c>.</summary>
+		[JsonProperty("condition_kinds")] public string[] ConditionKinds { get; set; }=Array.Empty<string>();
+		/// <summary>Values <c>update_breakpoint</c> accepts for <c>hit_count_kind</c>.</summary>
+		[JsonProperty("hit_count_kinds")] public string[] HitCountKinds { get; set; }=Array.Empty<string>();
 	}
 	public sealed class HostInfo {
 		/// <summary>Milestone 1 exposes a single implicit host. host_id routing arrives with Phase 9; the
@@ -121,6 +127,33 @@ namespace dgSpy.Protocol {
 		public const string Unknown = "unknown";
 		public static readonly string[] All = { Breakpoint, Exception, Step, EntryPoint, ProgramBreak, Pause, Unknown };
 	}
+	/// <summary>Caller-supplied vocabularies for Phase 4. Same rule as <see cref="EventKinds"/>: a value a
+	/// caller has to type is worthless unless it is advertised and an unrecognized one is rejected.</summary>
+	public static class StepKinds {
+		public const string Into = "into";
+		public const string Over = "over";
+		public const string Out = "out";
+		public static readonly string[] All = { Into, Over, Out };
+		public static bool IsKnown(string kind) => Array.IndexOf(All,kind)>=0;
+	}
+	public static class BreakpointConditionKinds {
+		/// <summary>Stop when the expression evaluates true.</summary>
+		public const string IsTrue = "is_true";
+		/// <summary>Stop when the expression's value differs from the previous hit.</summary>
+		public const string WhenChanged = "when_changed";
+		public static readonly string[] All = { IsTrue, WhenChanged };
+		public static bool IsKnown(string kind) => Array.IndexOf(All,kind)>=0;
+	}
+	public static class HitCountKinds {
+		/// <summary>Stop on exactly the nth hit.</summary>
+		public const string Equals = "equals";
+		/// <summary>Stop on every nth hit.</summary>
+		public const string MultipleOf = "multiple_of";
+		/// <summary>Stop on the nth hit and every hit after it. dnSpy calls this GreaterThanOrEquals.</summary>
+		public const string AtLeast = "at_least";
+		public static readonly string[] All = { Equals, MultipleOf, AtLeast };
+		public static bool IsKnown(string kind) => Array.IndexOf(All,kind)>=0;
+	}
 	/// <summary>The static half of the capability contract, shared by the extension that serves it and the
 	/// gateway that has to respect it. It lives in the protocol assembly precisely so the two cannot
 	/// drift: the gateway's per-tool deadline is computed from <see cref="BoundMs"/>, not guessed.</summary>
@@ -157,6 +190,14 @@ namespace dgSpy.Protocol {
 			Op("list_threads",8000),
 			Op("get_callstack",20000),
 			Op("get_frame",20000),
+			// Phase 4. A step is issued and acknowledged; the stop arrives on the event stream, so the
+			// bound covers issuing it plus a short grace for a step that lands immediately.
+			Op("update_breakpoint",10000,mutates:true),
+			Op("set_exception_breakpoint",5000,mutates:true),
+			Op("list_exception_breakpoints",5000),
+			Op("step_into",15000,mutates:true),
+			Op("step_over",15000,mutates:true),
+			Op("step_out",15000,mutates:true),
 		};
 		public static readonly EngineCapabilities[] Engines = {
 			new EngineCapabilities {
@@ -181,6 +222,8 @@ namespace dgSpy.Protocol {
 		public static CapabilityInfo Describe(string extensionVersion) => new CapabilityInfo {
 			HostId=HostId, ExtensionVersion=extensionVersion, Operations=Operations, Engines=Engines, Limits=Limits,
 			EventKinds=dgSpy.Protocol.EventKinds.All, StopReasons=dgSpy.Protocol.StopReasons.All,
+			StepKinds=dgSpy.Protocol.StepKinds.All, ConditionKinds=dgSpy.Protocol.BreakpointConditionKinds.All,
+			HitCountKinds=dgSpy.Protocol.HitCountKinds.All,
 		};
 	}
 }

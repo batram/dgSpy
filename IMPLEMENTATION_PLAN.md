@@ -316,7 +316,10 @@ original Phase 4 and Phase 5 lists own already ship: `set_il_breakpoint`, `list_
 early because Milestone 1's vertical slice needed them, and the remaining phases are scoped around that
 rather than pretending it did not happen.
 
-## Phase 4: Breakpoint conditions and stepping
+## Phase 4: Breakpoint conditions and stepping — **complete**
+
+Closed out 2026-08-03. Conditions, hit counts, tracepoints, exception breakpoints and all three step
+kinds are covered by the live CorDebug smoke.
 
 Breakpoint *identity* is deliberately not in this phase. Setting a breakpoint by module/type/method
 name, and mapping it to a decompiled C# line, are symbol-resolution problems, and Phase 6 owns the
@@ -330,12 +333,21 @@ Everything below works on the token+offset identity that already ships.
 1. ✅ Support metadata-token and exact IL-offset breakpoints as the dependable base representation. "Exact IL offset" is not portable: Mono accepts only sequence points and rejects everything else with `NO_SEQ_POINT_AT_IL_OFFSET`, while CorDebug accepts any offset. Advertised as a capability, and a requested offset is snapped to method entry rather than returning a breakpoint that silently never binds.
 2. ✅ Report binding state and per-runtime bound-breakpoint errors. This is not cosmetic: without it `set_il_breakpoint` returns an id for a breakpoint the engine refused, and the caller's only symptom is a `wait_for_stop` that never fires. Observed against UCH on 2026-08-03.
 3. ✅ Scope breakpoints to the session, or expose `clear_breakpoints`. dnSpy's `DbgCodeBreakpointsService` is global, so breakpoints survive `detach` and rebind on the next attach — a fresh session can stop on a breakpoint its caller never set. Delivered as `clear_breakpoints` plus `remove_breakpoint`; the breakpoints stay global and the documentation says so.
-4. Implement enabled state, conditions, hit counts, and trace messages.
-5. Implement exception breakpoint settings.
-6. Implement step into, over, and out using the selected thread's `DbgStepper`. Step completion already
+4. ✅ Implement enabled state, conditions, hit counts, and trace messages. All four are one dnSpy
+   settings object written as a unit. An empty string clears a condition or trace message; an omitted
+   field is left alone, which is the only way to remove one without recreating the breakpoint. A
+   tracepoint with `trace_continue` produces **no stop at all**, so `update_breakpoint` returns a warning
+   rather than leaving the caller to discover it from a `wait_for_stop` that never returns.
+5. ✅ Implement exception breakpoint settings. Listing defaults to first-chance entries: dnSpy stops on
+   *second* chance for essentially every .NET exception it ships, so "everything that stops" is ~2500
+   stock entries identical on every machine. The listing is bounded and reports `total` and `truncated`.
+6. ✅ Implement step into, over, and out using the selected thread's `DbgStepper`. Step completion
    normalizes into the event stream as `step_completed` and as a `stopped` event with
-   `stop_reason: "step"`; this phase supplies the operations, not the plumbing.
-7. Close steppers and cloned code locations on every terminal path.
+   `stop_reason: "step"`, so the caller waits for it exactly as for a breakpoint — including the same
+   cursor discipline, since a short step lands before a follow-up state read returns.
+7. ✅ Close steppers on every terminal path. The normal path is dnSpy's own `autoClose`; the tracked
+   reference covers detach, terminate, restart, and the target exiting mid-step, where `StepComplete` is
+   never raised. Code locations were already closed on the duplicate-breakpoint path in Phase 3.
 
 ### MCP tools
 
@@ -343,18 +355,24 @@ Everything below works on the token+offset identity that already ships.
 - `list_breakpoints` (implemented)
 - `remove_breakpoint` (implemented)
 - `clear_breakpoints` (implemented)
-- `update_breakpoint`
-- `set_exception_breakpoint`
-- `step_into`
-- `step_over`
-- `step_out`
+- `update_breakpoint` (implemented)
+- `set_exception_breakpoint` (implemented)
+- `list_exception_breakpoints` (implemented; not in the original plan — a caller that can set an
+  exception breakpoint needs to see what is already set, and dnSpy's stock defaults make that
+  non-obvious)
+- `step_into` / `step_over` / `step_out` (implemented)
 
 ### Exit criteria
 
-- A breakpoint can be set before its module loads and later reports as bound.
-- Conditional breakpoints and hit counts are covered by integration tests.
-- Step completion is returned through the same event mechanism as breakpoint stops.
-- A stepper on a session that exits mid-step is closed without leaking or wedging the next session.
+- ⏭️ A breakpoint set before its module loads reporting as bound is deferred to Phase 6, which owns
+  module identity. `set_il_breakpoint` takes a module path, so a not-yet-loaded module can be named but
+  the pending-then-bound transition is only meaningful once modules can be resolved by name.
+- ✅ Conditional breakpoints and hit counts are covered by the live smoke, including that an empty
+  string clears rather than sets, and that an unknown `condition_kind` is rejected with the valid set.
+- ✅ Step completion is returned through the same event mechanism as breakpoint stops: same
+  `wait_for_stop`, same cursor, `stop_reason: "step"`.
+- ✅ A stepper is closed on every terminal path; a step is refused outright on a running target, on an
+  unknown thread, and when no thread is current, rather than guessing which thread to resume.
 
 ## Phase 5: Expression evaluation and object inspection
 

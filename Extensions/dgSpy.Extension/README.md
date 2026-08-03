@@ -2,7 +2,13 @@
 
 - `ExtensionEntryPoint.cs`: MEF composition and dnSpy application lifetime only.
 - `Rpc/`: loopback transport, request dispatch, and structured RPC errors.
-- `Debugger/`: debugger-dispatcher scheduling, lifecycle control, and debugger-state rules.
+- `Debugger/`: debugger-dispatcher scheduling, lifecycle control, debugger-state rules, breakpoint
+  settings and exception settings (`RpcHost.Breakpoints.cs`), and stepping (`RpcHost.Stepping.cs`).
+
+A dnSpy *settings* write does not take effect on the dispatcher hop that makes it: the setter posts the
+real work back to the dispatcher even when the caller is already on it. Write on one hop and read back
+on the next — dispatcher delivery is FIFO, so the queued work runs in between. Describing a breakpoint
+in the same callback that changed it reports the old settings and looks like a write that did nothing.
 - `Events/`: normalized debugger/lifecycle events, bounded non-destructive cursor reads, cancellable
   shared-signal waits, stop-reason lookup, and truncation reporting.
 - `Identity/`: stable protocol identities derived from dnSpy values, plus host identity and capability

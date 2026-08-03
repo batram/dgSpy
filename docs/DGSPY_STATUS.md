@@ -70,19 +70,25 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | Event-kind and stop-reason vocabularies advertised in `get_capabilities` | ✅ verified both engines |
 | Every kind the Mono engine actually emits is in the advertised vocabulary | ✅ cross-checked against a live UCH session |
 | An unknown `kinds` value is rejected rather than silently matching nothing | ✅ verified both engines |
+| **Phase 4 closed out** — conditions, hit counts, tracepoints, exception breakpoints, stepping | ✅ 2026-08-03 |
+| `update_breakpoint` — enabled, condition, hit count, trace; empty string clears | ✅ automated live |
+| A continuing tracepoint warns that it produces no stop | ✅ automated live |
+| `set_exception_breakpoint` / `list_exception_breakpoints`, first-chance by default and bounded | ✅ automated live |
+| `step_into` / `step_over` / `step_out`, completion through `wait_for_stop` with `stop_reason: "step"` | ✅ automated live |
 
 Test suites, all green:
 
 ```powershell
-dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 19 checks, wire + capability contract
-dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 63 checks, access control + deadline bounds
+dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 22 checks, wire + capability contract
+dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 75 checks, access control + deadline bounds
 dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 122 checks, end to end
+.\tests\run-milestone1-smoke.ps1                                       # 160 checks, end to end
 ```
 
-All four suites were rerun on 2026-08-03 after the event-vocabulary change: 19 / 63 / 15 unit checks and
-122 live smoke checks, all green, including the four new smoke checks. The change was also verified
-against live UCH — see [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md).
+All four suites are green as of the Phase 4 close-out on 2026-08-03: 22 / 75 / 15 unit checks and 160
+live smoke checks. The event-vocabulary work was additionally verified against live UCH — see
+[DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). Phase 4 is verified on CorDebug only; stepping
+and conditions have not been exercised against Mono/Unity yet.
 
 ## Remaining gaps
 
@@ -164,6 +170,19 @@ against live UCH — see [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md).
   before a follow-up `get_session_state` can return, so a cursor taken afterwards is already past the
   stop and `wait_for_stop` times out on a working breakpoint. This produced an entire table of false
   negatives before it was caught. `set_il_breakpoint` returns `cursor_event_id` for this.
+- **A dnSpy settings write does not take effect on the dispatcher hop that makes it.**
+  `DbgCodeBreakpointImpl.Settings` does not assign — it calls `DbgCodeBreakpointsServiceImpl.Modify`,
+  which posts `ModifyCore` back to the dispatcher *even when the caller is already on it*. Describing
+  the breakpoint in the same callback therefore returns the previous settings, and the write looks like
+  it silently did nothing. Write on one hop, read back on the next; dispatcher delivery is FIFO, so the
+  queued work runs in between. The exception settings service behaves the same way. This produced six
+  simultaneous false failures the first time `update_breakpoint` was exercised.
+- **dnSpy stops on second chance for essentially every .NET exception it ships.** Listing "everything
+  that stops" returned ~2500 stock entries identical on every machine. `list_exception_breakpoints`
+  therefore defaults to first-chance only, which is the set someone actually configured, and is bounded
+  with `total` and `truncated`.
+- **A tracepoint that continues produces no stop event at all**, so `wait_for_stop` on one waits
+  forever. `update_breakpoint` returns a warning when it sets one.
 - **`DbgMessageThreadExitedEventArgs` upstream drops its own `exitCode`.** The constructor takes the
   parameter and never assigns the property, so thread exit codes were always null. Fixed in the fork —
   the only edit dgSpy makes to dnSpy's own sources, recorded in `DGSPY_BASELINE.md`.
@@ -207,6 +226,8 @@ Phases 0 through 3 are closed and Milestone 1's full vertical slice is delivered
 dnSpy-window shutdown path remains a host-lifecycle concern: closing dnSpy with an attachment has been
 observed to terminate the target, so callers must use `detach`.
 
+0. **Exercise Phase 4 against UCH.** Stepping, conditions and hit counts are verified on CorDebug only.
+   Mono's stepping is a different implementation and its sequence-point rule already bit breakpoints.
 1. **Phase 6's symbol layer, ahead of the rest of Phase 5.** A breakpoint currently requires the caller
    to already know a metadata token, which is the largest remaining gap between a working debugger and
    one an agent can use unaided. `set_breakpoint` by type and method name moved into Phase 6 for this

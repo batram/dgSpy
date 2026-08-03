@@ -16,6 +16,7 @@ using dnSpy.Contracts.Debugger.CallStack;
 using dnSpy.Contracts.Debugger.DotNet.Code;
 using dnSpy.Contracts.Debugger.DotNet.Mono;
 using dnSpy.Contracts.Debugger.Evaluation;
+using dnSpy.Contracts.Debugger.Exceptions;
 using dnSpy.Contracts.Debugger.Text;
 using dnSpy.Contracts.Metadata;
 using Newtonsoft.Json;
@@ -23,14 +24,14 @@ using Newtonsoft.Json.Linq;
 
 namespace dgSpy.Extension {
 	sealed partial class RpcHost : IDisposable {
-		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DbgCodeBreakpointsService breakpoints; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages;
+		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DbgCodeBreakpointsService breakpoints; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions;
 		readonly EvaluationQueue evaluations=new EvaluationQueue();
 		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>();
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		TcpListener? tcpListener;
 		Task? listener; string? sessionId; string? attachedProgramId; string? sessionKind; string? lifecycleAction; long stateVersion; bool attaching; bool faulted; string? faultMessage; string? lastUserMessage; int? terminalExitCode; string? terminalReason;
-		public RpcHost(AttachableProcessesService programs, DbgManager manager, DbgCodeBreakpointsService breakpoints, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages) {
-			this.programs=programs; this.manager=manager; this.breakpoints=breakpoints; this.locations=locations; this.callStack=callStack; this.languages=languages;
+		public RpcHost(AttachableProcessesService programs, DbgManager manager, DbgCodeBreakpointsService breakpoints, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions) {
+			this.programs=programs; this.manager=manager; this.breakpoints=breakpoints; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions;
 			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { if (manager.IsRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded);
 			// An engine that fails to connect reports it here rather than through DbgManager.Start, which
 			// only rejects options it cannot build an engine from. Recording it turns "faulted" from a
@@ -78,6 +79,12 @@ namespace dgSpy.Extension {
 			case "list_threads": return RpcResponse.Success(req.RequestId,await ListThreadsAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_callstack": return RpcResponse.Success(req.RequestId,await GetCallStackAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_frame": return RpcResponse.Success(req.RequestId,await GetFrameAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "update_breakpoint": return RpcResponse.Success(req.RequestId,await UpdateBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "set_exception_breakpoint": return RpcResponse.Success(req.RequestId,await SetExceptionBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "list_exception_breakpoints": return RpcResponse.Success(req.RequestId,await ListExceptionBreakpointsAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "step_into": return RpcResponse.Success(req.RequestId,await StepAsync(req,StepKinds.Into,requestCancellation.Token).ConfigureAwait(false));
+			case "step_over": return RpcResponse.Success(req.RequestId,await StepAsync(req,StepKinds.Over,requestCancellation.Token).ConfigureAwait(false));
+			case "step_out": return RpcResponse.Success(req.RequestId,await StepAsync(req,StepKinds.Out,requestCancellation.Token).ConfigureAwait(false));
 			default: return RpcResponse.Failure(req.RequestId,"unsupported","Unknown operation: "+req.Operation);
 			}
 		} catch (OperationCanceledException) { return RpcResponse.Failure(req.RequestId,"deadline_exceeded","The operation exceeded its deadline."); } catch (RpcException ex) { return RpcResponse.Failure(req.RequestId,ex.Code,ex.Message); } catch (Exception ex) { return RpcResponse.Failure(req.RequestId,"internal_error",ex.Message); } }
@@ -178,7 +185,7 @@ namespace dgSpy.Extension {
 			var canDetach=await OnDebuggerAsync(()=>!manager.IsDebugging || manager.CanDetachWithoutTerminating,cancellationToken).ConfigureAwait(false);
 			if (!canDetach && !allowTerminate) throw new RpcException("detach_would_terminate","dnSpy cannot detach from this target without terminating it. Pass allow_terminate=true to stop debugging anyway.");
 			if (!canDetach) lock(sync) lifecycleAction="terminate";
-			await OnDebuggerAsync(()=>{ if (manager.IsDebugging) { if (canDetach) manager.DetachAll(); else manager.StopDebuggingAll(); } return true; },cancellationToken).ConfigureAwait(false);
+			await OnDebuggerAsync(()=>{ CloseStepper(); if (manager.IsDebugging) { if (canDetach) manager.DetachAll(); else manager.StopDebuggingAll(); } return true; },cancellationToken).ConfigureAwait(false);
 			await WaitForDebuggerAsync(()=>!manager.IsDebugging,cancellationToken).ConfigureAwait(false);
 			var stillDebugging=await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false);
 			string id; lock(sync) { id=sessionId!; if (!stillDebugging) { sessionId=null; attachedProgramId=null; sessionKind=null; lifecycleAction=null; attaching=false; faulted=false; faultMessage=null; lastUserMessage=null; terminalExitCode=null; terminalReason=null; } }
@@ -267,6 +274,16 @@ namespace dgSpy.Extension {
 				Bound=bp.BoundBreakpoints.Length!=0 && message.Severity==DbgBoundCodeBreakpointSeverity.None,
 				BoundCount=bp.BoundBreakpoints.Length,Severity=severity,Message=message.Message.Length==0 ? null : message.Message,
 				SessionId=sessionId,StateVersion=stateVersion,
+				Condition=bp.Condition?.Condition,
+				ConditionKind=bp.Condition is null ? null : bp.Condition.Value.Kind==DbgCodeBreakpointConditionKind.WhenChanged ? BreakpointConditionKinds.WhenChanged : BreakpointConditionKinds.IsTrue,
+				HitCount=bp.HitCount?.Count,
+				HitCountKind=bp.HitCount is null ? null : bp.HitCount.Value.Kind switch {
+					DbgCodeBreakpointHitCountKind.MultipleOf => HitCountKinds.MultipleOf,
+					DbgCodeBreakpointHitCountKind.GreaterThanOrEquals => HitCountKinds.AtLeast,
+					_ => HitCountKinds.Equals,
+				},
+				TraceMessage=bp.Trace?.Message,
+				TraceContinue=bp.Trace?.Continue,
 			};
 		}
 		async Task<BreakpointInfo[]> ListBreakpointsAsync(CancellationToken cancellationToken) =>
