@@ -7,3 +7,6 @@ _ReSharper*/
 *_wpftmp.csproj
 launchSettings.json
 .idea/
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json

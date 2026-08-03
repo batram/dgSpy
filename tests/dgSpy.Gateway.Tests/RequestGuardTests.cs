@@ -1,0 +1,65 @@
+using System.Net;
+using dgSpy.Gateway;
+using Xunit;
+
+namespace dgSpy.Gateway.Tests;
+
+/// <summary>
+/// These cover the drive-by attack the gateway exists to stop: a page the user visits POSTing to
+/// 127.0.0.1 to drive the debugger. Loopback binding alone does not prevent it.
+/// </summary>
+public class RequestGuardTests {
+	const string Token = "secret-token";
+	static readonly IPAddress Loopback = IPAddress.Loopback;
+
+	[Fact]
+	public void Local_client_with_the_token_is_allowed() =>
+		Assert.Null(RequestGuard.Reject(origin: null, presentedToken: Token, Token, Loopback));
+
+	[Fact]
+	public void A_web_page_is_rejected_even_with_a_stolen_looking_request() {
+		var rejection = RequestGuard.Reject("https://evil.example", presentedToken: Token, Token, Loopback);
+
+		Assert.NotNull(rejection);
+		Assert.Contains("evil.example", rejection);
+	}
+
+	[Theory]
+	[InlineData("http://127.0.0.1:7350")]
+	[InlineData("http://localhost:3000")]
+	[InlineData("http://[::1]:8080")]
+	public void Loopback_origins_are_allowed(string origin) =>
+		Assert.Null(RequestGuard.Reject(origin, Token, Token, Loopback));
+
+	[Theory]
+	[InlineData("http://127.0.0.1.evil.example")]
+	[InlineData("http://localhost.evil.example")]
+	[InlineData("http://192.168.1.10")]
+	[InlineData("not-a-url")]
+	public void Origins_that_only_look_like_loopback_are_rejected(string origin) =>
+		Assert.NotNull(RequestGuard.Reject(origin, Token, Token, Loopback));
+
+    [Fact]
+	public void Missing_token_is_rejected() =>
+		Assert.NotNull(RequestGuard.Reject(null, presentedToken: null, Token, Loopback));
+
+	[Fact]
+	public void Wrong_token_is_rejected() =>
+		Assert.NotNull(RequestGuard.Reject(null, presentedToken: "guess", Token, Loopback));
+
+	[Fact]
+	public void A_gateway_with_no_token_configured_refuses_to_serve() {
+		// Fail closed: an unset token must not degrade into "no authentication required".
+		var rejection = RequestGuard.Reject(null, presentedToken: null, expectedToken: "", Loopback);
+
+		Assert.NotNull(rejection);
+	}
+
+	[Fact]
+	public void Non_loopback_clients_are_refused_before_any_other_check() {
+		var rejection = RequestGuard.Reject(null, Token, Token, IPAddress.Parse("10.0.0.5"));
+
+		Assert.NotNull(rejection);
+		Assert.Contains("10.0.0.5", rejection);
+	}
+}

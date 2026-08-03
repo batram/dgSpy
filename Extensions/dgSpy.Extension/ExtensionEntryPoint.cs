@@ -1,0 +1,222 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.ComponentModel.Composition;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Linq;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using dgSpy.Protocol;
+using dnSpy.Contracts.Debugger;
+using dnSpy.Contracts.Debugger.Attach;
+using dnSpy.Contracts.Debugger.Breakpoints.Code;
+using dnSpy.Contracts.Debugger.CallStack;
+using dnSpy.Contracts.Debugger.DotNet.Code;
+using dnSpy.Contracts.Debugger.Evaluation;
+using dnSpy.Contracts.Debugger.Text;
+using dnSpy.Contracts.Extension;
+using dnSpy.Contracts.Metadata;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+
+namespace dgSpy.Extension {
+	[ExportExtension]
+	sealed class ExtensionEntryPoint : IExtension {
+		readonly RpcHost host;
+		[ImportingConstructor]
+		ExtensionEntryPoint(AttachableProcessesService programs, DbgManager manager, DbgCodeBreakpointsService breakpoints, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages) => host=new RpcHost(programs, manager, breakpoints, locations, callStack, languages);
+		public IEnumerable<string> MergedResourceDictionaries { get { yield break; } }
+		public ExtensionInfo ExtensionInfo => new ExtensionInfo { ShortDescription="dgSpy MCP debugger bridge 0.1.0" };
+		public void OnEvent(ExtensionEvent @event, object? obj) { if (@event==ExtensionEvent.AppLoaded) host.Start(); else if (@event==ExtensionEvent.AppExit) host.Dispose(); }
+	}
+
+	sealed class RpcHost : IDisposable {
+		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DbgCodeBreakpointsService breakpoints; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages;
+		readonly EvaluationQueue evaluations=new EvaluationQueue();
+		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly List<DebugEvent> events=new List<DebugEvent>(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>();
+		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
+		TcpListener? tcpListener;
+		Task? listener; string? sessionId; string? attachedProgramId; long stateVersion; long eventId; bool attaching; bool faulted;
+		public RpcHost(AttachableProcessesService programs, DbgManager manager, DbgCodeBreakpointsService breakpoints, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages) {
+			this.programs=programs; this.manager=manager; this.breakpoints=breakpoints; this.locations=locations; this.callStack=callStack; this.languages=languages;
+			manager.ProcessPaused += (_,__) => Record("stopped"); manager.IsRunningChanged += (_,__) => { if (manager.IsRunning==true) Record("continued"); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? "session_started" : "session_ended");
+		}
+		public void Start() { if (listener is not null) return; manager.WriteMessage($"dgSpy 0.1.0 listening on 127.0.0.1:{rpcPort}"); listener=Task.Run(ListenAsync); }
+		async Task ListenAsync() { try { tcpListener=new TcpListener(IPAddress.Loopback,rpcPort); tcpListener.Start(8); while(!shutdown.IsCancellationRequested) { var client=await tcpListener.AcceptTcpClientAsync().ConfigureAwait(false); _=HandleClientAsync(client); } } catch(ObjectDisposedException) when(shutdown.IsCancellationRequested) { } catch(Exception ex) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.ErrorUser,"dgSpy TCP listener: "+ex.Message); } }
+		async Task HandleClientAsync(TcpClient client) { using(client) try { using var stream=client.GetStream(); using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); using var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true}; string? line; while ((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null) { var req=JsonConvert.DeserializeObject<RpcRequest>(line); var response=req is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(req).ConfigureAwait(false); await writer.WriteLineAsync(JsonConvert.SerializeObject(response)).ConfigureAwait(false); } } catch(Exception ex) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.ErrorUser,"dgSpy TCP client: "+ex.Message); } }
+		async Task<RpcResponse> DispatchAsync(RpcRequest req) { try {
+			if (req.Version!=ProtocolVersion.Current) return RpcResponse.Failure(req.RequestId,"incompatible_protocol",$"Protocol {req.Version} is unsupported; expected {ProtocolVersion.Current}.");
+			if (req.DeadlineUtc is DateTime deadline && deadline<=DateTime.UtcNow) return RpcResponse.Failure(req.RequestId,"deadline_exceeded","Request deadline has expired.");
+			using var requestCancellation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
+			if (req.DeadlineUtc is DateTime requestDeadline) requestCancellation.CancelAfter(requestDeadline-DateTime.UtcNow > TimeSpan.Zero ? requestDeadline-DateTime.UtcNow : TimeSpan.FromMilliseconds(1));
+			switch (req.Operation) {
+			case "ping": return RpcResponse.Success(req.RequestId,new Handshake());
+			case "list_programs": return RpcResponse.Success(req.RequestId,await ListProgramsAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "attach": return RpcResponse.Success(req.RequestId,await AttachAsync((string?)req.Arguments["program_id"] ?? "",requestCancellation.Token).ConfigureAwait(false));
+			case "get_session_state": CheckSession(req); return RpcResponse.Success(req.RequestId,await OnDebuggerAsync(State,requestCancellation.Token).ConfigureAwait(false));
+			case "list_sessions": return RpcResponse.Success(req.RequestId,await ListSessionsAsync(requestCancellation.Token).ConfigureAwait(false));
+			case "detach": return RpcResponse.Success(req.RequestId,await DetachAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "pause": CheckSession(req); await OnDebuggerAsync(()=>{ CheckVersion(req); manager.BreakAll(); return true; }).ConfigureAwait(false); await WaitForDebuggerAsync(()=>!manager.IsDebugging || manager.IsRunning==false,requestCancellation.Token).ConfigureAwait(false); return RpcResponse.Success(req.RequestId,await OnDebuggerAsync(State,requestCancellation.Token).ConfigureAwait(false));
+			case "continue": CheckSession(req); await OnDebuggerAsync(()=>{ CheckVersion(req); manager.RunAll(); return true; }).ConfigureAwait(false); await WaitForDebuggerAsync(()=>!manager.IsDebugging || manager.IsRunning!=false,requestCancellation.Token).ConfigureAwait(false); return RpcResponse.Success(req.RequestId,await OnDebuggerAsync(State,requestCancellation.Token).ConfigureAwait(false));
+			case "set_il_breakpoint": return RpcResponse.Success(req.RequestId,await SetBreakpointAsync(req).ConfigureAwait(false));
+			case "wait_for_stop": return RpcResponse.Success(req.RequestId,await WaitAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_callstack": return RpcResponse.Success(req.RequestId,await GetCallStackAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			default: return RpcResponse.Failure(req.RequestId,"unsupported","Unknown operation: "+req.Operation);
+			}
+		} catch (OperationCanceledException) { return RpcResponse.Failure(req.RequestId,"deadline_exceeded","The operation exceeded its deadline."); } catch (RpcException ex) { return RpcResponse.Failure(req.RequestId,ex.Code,ex.Message); } catch (Exception ex) { return RpcResponse.Failure(req.RequestId,"internal_error",ex.Message); } }
+		// Unfiltered discovery probes every process on the machine. Passing process ids or names lets
+		// dnSpy skip the rest, which is the difference between seconds and milliseconds when the
+		// caller already knows what it is looking for.
+		async Task<ProgramInfo[]> ListProgramsAsync(RpcRequest req,CancellationToken cancellationToken) {
+			var processIds=req.Arguments["process_ids"]?.ToObject<int[]>();
+			var processNames=req.Arguments["process_names"]?.ToObject<string[]>();
+			var values=await programs.GetAttachableProcessesAsync(processNames,processIds,null,cancellationToken).ConfigureAwait(false);
+			lock(sync) { programCache.Clear(); return values.Select(p=>{
+				// RuntimeId has no string form, so identity is composed from typed fields: pid, the
+				// runtime GUID (the only thing separating .NET Framework from Unity/Mono), and the
+				// engine's own discriminator, which is the CLR version for CorDebug.
+				var id=$"{p.ProcessId}:{p.RuntimeGuid:N}:{p.RuntimeName}";
+				programCache[id]=p;
+				return new ProgramInfo { ProgramId=id,ProcessId=p.ProcessId,Executable=p.Filename,Title=p.Title,Architecture=p.Architecture.ToString(),RuntimeId=p.RuntimeName,RuntimeName=p.RuntimeName,RuntimeGuid=p.RuntimeGuid.ToString("D"),RuntimeKindGuid=p.RuntimeKindGuid.ToString("D"),AttachProvider=p.RuntimeGuid.ToString("D") }; }).ToArray(); }
+		}
+		async Task<SessionState> AttachAsync(string id,CancellationToken cancellationToken) {
+			AttachableProcess p; lock(sync) if (!programCache.TryGetValue(id,out p!)) throw new RpcException("program_not_found","Refresh list_programs and use an exact program_id.");
+			if (sessionId is not null && await OnDebuggerAsync(()=>manager.IsDebugging).ConfigureAwait(false)) throw new RpcException("session_already_active","Detach the current session before attaching to another program.");
+			await OnDebuggerAsync(()=>{ attaching=true; faulted=false; p.Attach(); sessionId=Guid.NewGuid().ToString("N"); stateVersion++; return true; }).ConfigureAwait(false);
+			Record("attached");
+			// Attach is asynchronous: the engine is not up when Attach() returns. Wait for threads, not
+			// just for a process — a pause issued before the engine has enumerated threads produces a
+			// stop with no current thread and no call stack, and the session does not recover until it
+			// runs again.
+			await WaitForDebuggerAsync(()=>manager.IsDebugging && manager.Processes.SelectMany(p=>p.Threads).Any(),cancellationToken).ConfigureAwait(false);
+			// The engine never came up. Report it rather than leaving the caller polling "attaching".
+			if (!await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false)) { lock(sync) { faulted=true; attaching=false; } Record("attach_failed"); }
+			else lock(sync) attachedProgramId=id;
+			return await OnDebuggerAsync(State,cancellationToken).ConfigureAwait(false);
+		}
+		// Detach is the only safe way to end a session: closing dnSpy with a live CorDebug attachment
+		// terminates the target. If dnSpy cannot detach without killing it, say so instead of doing it.
+		async Task<DetachResult> DetachAsync(RpcRequest req,CancellationToken cancellationToken) {
+			CheckSession(req);
+			bool allowTerminate=(bool?)req.Arguments["allow_terminate"] ?? false;
+			var canDetach=await OnDebuggerAsync(()=>!manager.IsDebugging || manager.CanDetachWithoutTerminating,cancellationToken).ConfigureAwait(false);
+			if (!canDetach && !allowTerminate) throw new RpcException("detach_would_terminate","dnSpy cannot detach from this target without terminating it. Pass allow_terminate=true to stop debugging anyway.");
+			await OnDebuggerAsync(()=>{ if (manager.IsDebugging) { if (canDetach) manager.DetachAll(); else manager.StopDebuggingAll(); } return true; },cancellationToken).ConfigureAwait(false);
+			await WaitForDebuggerAsync(()=>!manager.IsDebugging,cancellationToken).ConfigureAwait(false);
+			var stillDebugging=await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false);
+			string id; lock(sync) { id=sessionId!; if (!stillDebugging) { sessionId=null; attachedProgramId=null; attaching=false; faulted=false; } }
+			Record("detached");
+			return new DetachResult { SessionId=id,Detached=!stillDebugging && canDetach,Terminated=!stillDebugging && !canDetach,StateVersion=stateVersion };
+		}
+		async Task<SessionSummary[]> ListSessionsAsync(CancellationToken cancellationToken) => await OnDebuggerAsync(()=>{
+			if (sessionId is null) return Array.Empty<SessionSummary>();
+			var state=State();
+			return new[] { new SessionSummary { SessionId=state.SessionId,State=state.State,ProgramId=attachedProgramId ?? "",StateVersion=state.StateVersion,LastEventId=state.LastEventId,ProcessIds=state.ProcessIds,CanDetachWithoutTerminating=manager.IsDebugging && manager.CanDetachWithoutTerminating } };
+		},cancellationToken).ConfigureAwait(false);
+		SessionState State() { if (sessionId is null) throw new RpcException("session_not_found","No active dgSpy session."); if (attaching && manager.IsDebugging && manager.Processes.Length!=0) attaching=false; return new SessionState { SessionId=sessionId,State=faulted ? "faulted" : attaching && !manager.IsDebugging ? "attaching" : !manager.IsDebugging ? "exited" : manager.IsRunning==true ? "running" : manager.IsRunning==false ? "paused" : "mixed",StateVersion=stateVersion,LastEventId=eventId,ProcessIds=manager.Processes.Select(p=>p.Id).ToArray() }; }
+		// Polls on the dispatcher so callers observe the state the operation actually produced. Bounded
+		// by the request deadline; a timeout returns the current state rather than throwing, so the
+		// caller still learns where the session got to.
+		async Task WaitForDebuggerAsync(Func<bool> predicate,CancellationToken cancellationToken,TimeSpan maxWait=default) {
+			var end=DateTime.UtcNow.Add(maxWait==default ? TimeSpan.FromSeconds(10) : maxWait);
+			while (DateTime.UtcNow<end) {
+				if (await OnDebuggerAsync(predicate).ConfigureAwait(false)) return;
+				await Task.Delay(25,cancellationToken).ConfigureAwait(false);
+			}
+		}
+		async Task<object> SetBreakpointAsync(RpcRequest req) { CheckSession(req); return await OnDebuggerAsync<object>(()=>{ var module=(string?)req.Arguments["module"] ?? throw new RpcException("invalid_arguments","module is required"); var token=(uint?)req.Arguments["method_token"] ?? 0; var offset=(uint?)req.Arguments["il_offset"] ?? 0; var location=locations.Create(ModuleId.Create(module),token,offset); var bp=breakpoints.Add(new DbgCodeBreakpointInfo(location,new DbgCodeBreakpointSettings { IsEnabled=true })); if (bp is null) { manager.Close(location); throw new RpcException("duplicate_breakpoint","A breakpoint already exists at that location."); } return new { breakpoint_id=bp.Id, session_id=sessionId, state_version=stateVersion }; }).ConfigureAwait(false); }
+		async Task<WaitResult> WaitAsync(RpcRequest req,CancellationToken cancellationToken) { CheckSession(req); long after=(long?)req.Arguments["after_event_id"] ?? 0; int timeout=Math.Min(10000,Math.Max(1,(int?)req.Arguments["timeout_ms"] ?? 5000)); var end=DateTime.UtcNow.AddMilliseconds(timeout); while (DateTime.UtcNow<end) { lock(sync) { var found=events.Where(e=>e.EventId>after && e.Kind=="stopped").ToArray(); if(found.Length!=0) return new WaitResult { Events=found,OldestEventId=events.Count==0 ? eventId+1 : events[0].EventId }; } await Task.Delay(50,cancellationToken).ConfigureAwait(false); } lock(sync) return new WaitResult { TimedOut=true,OldestEventId=events.Count==0 ? eventId+1 : events[0].EventId }; }
+		async Task<FrameInfo[]> GetCallStackAsync(RpcRequest req,CancellationToken cancellationToken) {
+			CheckSession(req);
+			int max=Math.Min(100,Math.Max(1,(int?)req.Arguments["max_frames"] ?? 50));
+			// The call stack is built from DbgManager.CurrentThread, which dnSpy sets from the UI or
+			// from a stop that carries a thread. A pause issued right after attach has neither, and
+			// the engine may not have enumerated any threads yet either. So: wait for a thread to
+			// exist, then select one if nothing is current.
+			await WaitForDebuggerAsync(()=>manager.IsRunning!=false || manager.Processes.SelectMany(p=>p.Threads).Any(),cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+			await OnDebuggerAsync(()=>{ if (manager.IsRunning==false && manager.CurrentThread.Current is null) { var thread=manager.Processes.SelectMany(p=>p.Threads).FirstOrDefault(); if (thread is not null) manager.CurrentThread.Current=thread; } return true; }).ConfigureAwait(false);
+			// DbgCallStackService then refreshes its frames on the dispatcher, so wait for them rather
+			// than racing. A stack still empty after the wait is reported as empty, not as an error.
+			await WaitForDebuggerAsync(()=>manager.IsRunning!=false || callStack.Frames.Frames.Count!=0,cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+			// Identity is read on the dispatcher, where DbgObject access belongs. Evaluation of names
+			// and locals then happens on the evaluation thread so it cannot stall event delivery.
+			var captured=await OnDebuggerAsync(()=>{
+				if(manager.IsRunning!=false) throw new RpcException("not_paused","Pause the session before requesting its call stack.");
+				return callStack.Frames.Frames.Take(max).Select((frame,index)=>new CapturedFrame(frame,languages.GetCurrentLanguage(frame.Runtime.RuntimeKindGuid),new FrameInfo {
+					FrameId=$"{sessionId}:{stateVersion}:{index}",Module=frame.Module?.Filename ?? "",ModuleName=frame.Module?.Name ?? "",
+					MethodToken=frame.FunctionToken,IlOffset=frame.FunctionOffset,Name=$"0x{frame.FunctionToken:X8}+0x{frame.FunctionOffset:X}",
+				})).ToArray();
+			},cancellationToken).ConfigureAwait(false);
+			using var evaluation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token,cancellationToken);
+			return await evaluations.RunAsync(()=>captured.Select(c=>DescribeFrame(c,evaluation.Token)).ToArray(),cancellationToken).ConfigureAwait(false);
+		}
+		readonly struct CapturedFrame {
+			public readonly DbgStackFrame Frame; public readonly DbgLanguage Language; public readonly FrameInfo Info;
+			public CapturedFrame(DbgStackFrame frame,DbgLanguage language,FrameInfo info) { Frame=frame; Language=language; Info=info; }
+		}
+		// Frame identity is module + method token + IL offset, which is exactly what set_il_breakpoint
+		// takes. The formatted name is display only; agents must never have to parse it.
+		// Runs on the evaluation thread, so the frame it was handed may have been closed in the
+		// meantime — the dispatcher is now free to process a resume while this runs. That is the price
+		// of not holding the dispatcher, and it is why the snapshot is rejected rather than patched up.
+		FrameInfo DescribeFrame(CapturedFrame captured,CancellationToken cancellationToken) {
+			var (frame,language,info)=(captured.Frame,captured.Language,captured.Info);
+			if (frame.IsClosed) throw new RpcException("stale_handle","The target resumed while its call stack was being read. Pause again and request a fresh snapshot.");
+			var context=language.CreateContext(frame,cancellationToken:cancellationToken);
+			try {
+				var eval=new DbgEvaluationInfo(context,frame,cancellationToken);
+				var name=new DbgStringBuilderTextWriter();
+				language.Formatter.FormatFrame(eval,name,DbgStackFrameFormatterOptions.DeclaringTypes|DbgStackFrameFormatterOptions.ParameterTypes|DbgStackFrameFormatterOptions.ReturnTypes,DbgValueFormatterOptions.None,null);
+				if (name.Text.Length!=0) info.Name=name.Text;
+				info.Locals=GetPrimitiveLocals(language,eval);
+			}
+			finally { context.Close(); }
+			return info;
+		}
+		PrimitiveValue[] GetPrimitiveLocals(DbgLanguage language,DbgEvaluationInfo eval) { var nodes=language.LocalsProvider.GetNodes(eval,DbgValueNodeEvaluationOptions.NoFuncEval,DbgLocalsValueNodeEvaluationOptions.None).Select(n=>n.ValueNode).ToArray(); try { return nodes.Where(n=>n.Value is not null && n.Value.HasRawValue && n.Value.ValueType!=DbgSimpleValueType.Other && n.Value.ValueType!=DbgSimpleValueType.Void).Select(n=>{ var name=new DbgStringBuilderTextWriter(); var type=new DbgStringBuilderTextWriter(); n.FormatName(eval,name,DbgValueFormatterOptions.None); n.FormatActualType(eval,type,DbgValueFormatterTypeOptions.None,DbgValueFormatterOptions.None,null); return new PrimitiveValue { Name=name.Text,Type=type.Text,Value=n.Value!.RawValue }; }).ToArray(); } finally { manager.Close(nodes); } }
+		void Record(string kind) { lock(sync) { stateVersion++; events.Add(new DebugEvent { EventId=++eventId,Kind=kind,StateVersion=stateVersion }); if(events.Count>256) events.RemoveAt(0); } }
+		void CheckSession(RpcRequest req) { var id=(string?)req.Arguments["session_id"]; if(sessionId is null || id!=sessionId) throw new RpcException("session_not_found","The session_id is not active."); }
+		void CheckVersion(RpcRequest req) { var expected=(long?)req.Arguments["expected_state_version"]; if(expected.HasValue && expected.Value!=stateVersion) throw new RpcException("stale_state",$"Expected state {expected.Value}, current state is {stateVersion}."); }
+		// RunContinuationsAsynchronously matters: without it every continuation after an await —
+		// response serialization, socket writes — runs inline on the debugger dispatcher thread, which
+		// stalls event delivery for every session. See docs/DGSPY_BASELINE.md.
+		// The token abandons the *wait*, not the queued work; dnSpy gives us no way to cancel a
+		// dispatcher callback, so the callback still runs and its result is dropped.
+		Task<T> OnDebuggerAsync<T>(Func<T> callback,CancellationToken cancellationToken=default) {
+			var tcs=new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+			manager.Dispatcher.BeginInvoke(()=>{ try { tcs.TrySetResult(callback()); } catch(Exception ex) { tcs.TrySetException(ex); } });
+			if (!cancellationToken.CanBeCanceled) return tcs.Task;
+			var registration=cancellationToken.Register(()=>tcs.TrySetCanceled(cancellationToken));
+			return tcs.Task.ContinueWith(t=>{ registration.Dispose(); return t.GetAwaiter().GetResult(); },CancellationToken.None,TaskContinuationOptions.ExecuteSynchronously,TaskScheduler.Default);
+		}
+		public void Dispose() { shutdown.Cancel(); tcpListener?.Stop(); evaluations.Dispose(); shutdown.Dispose(); }
+	}
+	sealed class RpcException : Exception { public string Code { get; } public RpcException(string code,string message):base(message)=>Code=code; }
+
+	/// <summary>
+	/// Runs debugger expression evaluation on one dedicated thread that is NOT the dnSpy dispatcher.
+	/// Evaluation blocks on the engine's own thread and, once func-eval is enabled, runs code inside
+	/// the target; doing that on the dispatcher would stall debugger event delivery for every session
+	/// while it ran. dnSpy has the same rule — it evaluates on its UI thread, never the dispatcher.
+	/// A single thread keeps evaluations serialized, which the dnSpy object model requires anyway.
+	/// </summary>
+	sealed class EvaluationQueue : IDisposable {
+		readonly BlockingCollection<Action> work=new BlockingCollection<Action>();
+		public EvaluationQueue() { var thread=new Thread(Loop) { IsBackground=true,Name="dgSpy evaluation" }; thread.Start(); }
+		void Loop() { foreach (var item in work.GetConsumingEnumerable()) { try { item(); } catch { /* per-item faults are reported through the item's own task */ } } }
+		public Task<T> RunAsync<T>(Func<T> callback,CancellationToken cancellationToken) {
+			var tcs=new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+			try { work.Add(()=>{ if (cancellationToken.IsCancellationRequested) { tcs.TrySetCanceled(cancellationToken); return; } try { tcs.TrySetResult(callback()); } catch (Exception ex) { tcs.TrySetException(ex); } }); }
+			catch (InvalidOperationException) { tcs.TrySetCanceled(); return tcs.Task; }
+			if (!cancellationToken.CanBeCanceled) return tcs.Task;
+			// Cancellation abandons the wait; the queued evaluation still runs to completion because
+			// dnSpy cannot abort one mid-flight. It no longer holds the dispatcher while it does.
+			var registration=cancellationToken.Register(()=>tcs.TrySetCanceled(cancellationToken));
+			return tcs.Task.ContinueWith(t=>{ registration.Dispose(); return t.GetAwaiter().GetResult(); },CancellationToken.None,TaskContinuationOptions.ExecuteSynchronously,TaskScheduler.Default);
+		}
+		public void Dispose() => work.CompleteAdding();
+	}
+}
