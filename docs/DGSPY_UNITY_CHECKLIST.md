@@ -37,15 +37,17 @@ Record for each: pass/fail, elapsed time, and the exact `fault_message` on any f
    message is the Mono one here.
 3. **Session recovery.** `list_sessions` reports the session with `program_id` beginning `endpoint:unity:`.
 4. **Second attach refused.** A second `attach_endpoint` returns `session_already_active`.
-5. **Pause.** `pause` returns `paused`, and does so with a thread selected — this is the case
-   `attach`'s wait-for-threads rule exists for, and the Mono engine has not been exercised against it.
+5. **Pause.** `pause` returns `paused`. `list_threads` then returns selectable thread IDs, but an
+   arbitrary Unity pause can legitimately expose only native/unavailable stacks. A managed breakpoint
+   stop should identify its stopping thread as current.
 6. **Call stack.** `get_callstack` returns frames with a `module`, a non-zero `method_token`, and a
    formatted `name`. Note whether module paths are real files or in-memory Unity assemblies, since
    `set_il_breakpoint` takes the module path.
 7. **Primitive locals.** Frames report locals with raw scalar values. Note any that come back empty —
    Mono and CorDebug differ here and the difference belongs in the capability model.
-8. **Breakpoint.** `set_il_breakpoint` with a module/token/offset taken straight from a frame binds,
-   then `continue` + `wait_for_stop` observes the hit.
+8. **Breakpoint.** `set_il_breakpoint` with a file-backed module/token and a known sequence-point
+   offset binds, then `continue` + `wait_for_stop` observes the hit. A frame's current offset is not
+   guaranteed to be a sequence point; check `bound` / `snapped`.
 9. **Resume.** `continue` returns `running` and the game is responsive again.
 10. **Detach.** `detach` returns `detached: true, terminated: false` and **the game keeps running**.
     This is the one that costs a live process when it is wrong.
@@ -73,9 +75,10 @@ What was unknown going in, now answered:
 
 - **`CanDetachWithoutTerminating` is true for the Mono engine.** `detach` works normally and leaves the
   game running; `allow_terminate` is not needed. Verified twice.
-- **Module identities are real on-disk files**, not in-memory images:
-  `...\UltimateChickenHorse_Data\Managed\Assembly-CSharp.dll`. `set_il_breakpoint` consumes a frame's
-  `module` field unchanged.
+- **Module identities can be either file-backed or in-memory.** One stack used
+  `...\UltimateChickenHorse_Data\Managed\Assembly-CSharp.dll`; a later UI-thread stack began in
+  `data-000001BE153D3040`. `set_il_breakpoint` currently consumes file-backed module paths unchanged;
+  in-memory module images belong to Phase 6.
 - **A failed connect does leave dnSpy's modal error dialog on screen.** It blocked nothing, as
   predicted, but it has to be clicked away by hand.
 
@@ -122,7 +125,8 @@ whole table of false negatives during this work before it was spotted. `set_il_b
 
 Step 11 returned `paused` rather than `running` because the breakpoint from step 8 survived the detach,
 rebound on reconnect, and hit immediately. dnSpy keeps breakpoints in `DbgCodeBreakpointsService`,
-which is global rather than session-scoped. `clear_breakpoints` now exists for this.
+which is global rather than session-scoped. `remove_breakpoint` now removes one exact ID, while
+`clear_breakpoints` removes the global collection.
 
 ### Not reproducible — do not trust the earlier note
 
@@ -152,7 +156,17 @@ Note the first frame's module: `data-000001BE153D3040`, an in-memory module with
 
 ### Also observed
 
-- Headless thread selection took `Processes.SelectMany(p => p.Threads).First()`, which on Unity
-  routinely lands on a thread with no managed frames at all — `get_callstack` then returned empty. It
-  now probes threads with a throwaway `DbgThread.CreateStackWalker()` and selects one that has frames.
-  Callers still cannot choose a thread; `list_threads` is Phase 5.
+- Headless thread selection originally took `Processes.SelectMany(p => p.Threads).First()`, which on
+  Unity routinely landed on a thread with no managed frames. `list_threads` now returns metadata
+  without fetching every stack, and callers select `thread_id` explicitly with `get_callstack` or
+  `get_frame`. The fallback probe used when no ID is supplied is bounded because a disappearing Unity
+  thread can otherwise lose the Mono `GET_FRAME_INFO` reply and wedge dnSpy's debugger thread.
+
+### Re-run 2026-08-03, after caller selection and bounded frame fetch
+
+- An arbitrary pause listed seven threads and returned no managed stacks, then resumed and detached
+  cleanly instead of wedging dnSpy.
+- A breakpoint in `AIBridgeServer.Handle` stopped the current `UE-AIBridge` thread; caller-selected
+  `get_callstack` returned seven frames and primitive locals, and `get_frame(thread_id, 0)` matched.
+- `remove_breakpoint` removed only the selected breakpoint, and detach returned
+  `detached: true, terminated: false` with UCH still running.

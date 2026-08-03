@@ -29,8 +29,8 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 ## Tools
 
 `list_programs`, `attach`, `attach_endpoint`, `detach`, `list_sessions`, `get_session_state`,
-`pause`, `continue`, `set_il_breakpoint`, `list_breakpoints`, `clear_breakpoints`, `wait_for_stop`,
-`get_callstack`.
+`pause`, `continue`, `set_il_breakpoint`, `list_breakpoints`, `remove_breakpoint`,
+`clear_breakpoints`, `wait_for_stop`, `list_threads`, `get_callstack`, `get_frame`.
 
 ## State and lifetime rules
 
@@ -39,8 +39,9 @@ without a preflight, so loopback binding alone would leave the debugger open to 
   Each call replaces the set of valid `program_id` values.
 - `program_id` is composed from PID, runtime GUID, and the engine's discriminator (CLR version for
   CorDebug). `runtime_guid` is what separates .NET Framework from Unity/Mono; they share a kind GUID.
-- `attach` waits until the engine has enumerated threads before returning, so a following `pause` has
-  a call stack. It refuses to start a second session while one is live.
+- `attach` waits until the engine has enumerated threads before returning, avoiding a threadless stop.
+  An arbitrary Unity pause can still expose only native/unavailable stacks; inspect a caller-selected
+  thread or stop at a known managed breakpoint. It refuses a second session while one is live.
 - `attach_endpoint` connects to a Mono/Unity soft-debugger endpoint by address and port. Use it for a
   target launched with `--debugger-agent=transport=dt_socket,server=y,address=HOST:PORT`: that target
   broadcasts no discovery beacon, so `list_programs` can never see it and `attach` has no `program_id`
@@ -57,8 +58,13 @@ without a preflight, so loopback binding alone would leave the debugger open to 
   `allow_terminate=true`.
 - `list_sessions` recovers a lost `session_id`.
 - Mutations may include `expected_state_version`; a mismatch returns `stale_state`.
-- Frame identity is `module` + `method_token` + `il_offset`, which is exactly what `set_il_breakpoint`
-  takes. `name` is formatted for display and must not be parsed.
+- `list_threads` requires a paused session and returns stable `thread_id` values as
+  `process_id:os_thread_id`, including managed ID, name and state. It deliberately does not fetch every
+  stack: Unity threads can exit during frame retrieval, and some Mono runtimes never answer that raced
+  request. Pass an ID to `get_callstack` for bounded, deterministic selection; omit it to retain the
+  best-effort managed-frame probe. `get_frame(thread_id, frame_index)` inspects exactly one frame.
+- Frame identity is `thread_id` + `frame_index` for paused selection, and `module` + `method_token` +
+  `il_offset` for code identity and `set_il_breakpoint`. `name` is display-only and must not be parsed.
 - **On Mono/Unity, `il_offset` must be a sequence point** or the engine refuses the breakpoint. Many
   offsets qualify, but a frame's own `il_offset` often does not — so round-tripping it from
   `get_callstack` into `set_il_breakpoint`, which works on CorDebug, is refused on Mono. Check `bound`:
@@ -71,8 +77,8 @@ without a preflight, so loopback binding alone would leave the debugger open to 
   fires before a subsequent `get_session_state` returns, and a cursor read afterwards has already
   missed the stop — the wait then times out on a breakpoint that works.
 - Breakpoints are dnSpy-global, not session-scoped: they survive `detach` and rebind on the next
-  attach, so a new session can stop on a breakpoint set by the previous one. `clear_breakpoints`
-  removes them all, including any set by hand in dnSpy's UI.
+  attach, so a new session can stop on a breakpoint set by the previous one. `remove_breakpoint`
+  removes exactly one listed ID; `clear_breakpoints` removes them all, including UI breakpoints.
 - **A Mono/Unity endpoint accepts one connection per game launch.** A clean `detach` lets the agent
   listen again; any other connection to the port — including a "is it up?" TCP probe — consumes it for
   good and the target must be relaunched. Let `attach_endpoint` be the only thing that touches it.
@@ -98,7 +104,7 @@ dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj
 
 The unit tests cover the wire contract and the gateway's access control. The smoke script is the
 end-to-end test: it builds, deploys, starts a disposable target plus dnSpy plus the gateway, and
-asserts 54 checks across access control, discovery, attach, inspection, breakpoints, and detach. It
+asserts 69 checks across access control, discovery, attach, thread/frame inspection, breakpoints, and detach. It
 stops everything it starts and exits non-zero on any failure.
 
 The smoke script covers `attach_endpoint`'s argument validation and failure path only; its success

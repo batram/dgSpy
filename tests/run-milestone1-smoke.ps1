@@ -126,7 +126,7 @@ try {
 
 	Write-Host "== discovery ==" -ForegroundColor Cyan
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
-	foreach ($expected in 'list_programs','attach','attach_endpoint','detach','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','clear_breakpoints','wait_for_stop','get_callstack') {
+	foreach ($expected in 'list_programs','attach','attach_endpoint','detach','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','list_threads','get_callstack','get_frame') {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
 	}
 
@@ -160,8 +160,28 @@ try {
 	$paused = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId }
 	Assert-That 'pause reports paused, not the pre-pause state' ($paused.state -eq 'paused') "(was $($paused.state))"
 
-	$frames = @(Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId; max_frames = 10 })
+	# Windows PowerShell's ConvertFrom-Json emits a JSON array as one Object[] pipeline item when it
+	# leaves a function. Re-pipeline it here so selection receives individual thread records rather
+	# than one nested array whose member access returns another array.
+	$threadPayload = Invoke-Tool -Name 'list_threads' -Arguments @{ session_id = $sessionId }
+	$threads = @($threadPayload | ForEach-Object { $_ })
+	Assert-That 'list_threads reports target threads' ($threads.Count -gt 0)
+	Assert-That 'thread_id values are unique' (@($threads.thread_id | Select-Object -Unique).Count -eq $threads.Count)
+	$selectedThread = $threads | Where-Object { $_.is_current } | Select-Object -First 1
+	if ($null -eq $selectedThread) { $selectedThread = $threads | Select-Object -First 1 }
+	Assert-That 'list_threads identifies the current or first selectable thread' ($null -ne $selectedThread)
+	Assert-That 'thread identity includes process and OS thread ids' ($selectedThread.thread_id -eq "$($selectedThread.process_id):$($selectedThread.os_thread_id)") "(was $($selectedThread.thread_id))"
+	$badThread = Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId; thread_id = 'not-a-thread' } -ExpectError
+	Assert-That 'unknown caller-selected thread is refused' ($badThread -match 'not active|list_threads')
+
+	$framePayload = Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId; thread_id = $selectedThread.thread_id; max_frames = 10 }
+	$frames = @($framePayload | ForEach-Object { $_ })
 	Assert-That 'the call stack is populated right after attach+pause' ($frames.Count -gt 0)
+	Assert-That 'caller-selected call stack stays on the requested thread' (@($frames | Where-Object { $_.thread_id -ne $selectedThread.thread_id }).Count -eq 0)
+	$topFrame = Invoke-Tool -Name 'get_frame' -Arguments @{ session_id = $sessionId; thread_id = $selectedThread.thread_id; frame_index = 0 }
+	Assert-That 'get_frame returns the caller-selected frame' ($topFrame.thread_id -eq $selectedThread.thread_id -and $topFrame.frame_index -eq 0 -and $topFrame.frame_id -eq $frames[0].frame_id)
+	$badFrame = Invoke-Tool -Name 'get_frame' -Arguments @{ session_id = $sessionId; thread_id = $selectedThread.thread_id; frame_index = 99 } -ExpectError
+	Assert-That 'unavailable caller-selected frame is refused' ($badFrame -match 'no frame|available frame_index')
 	$tick = $frames | Where-Object { $_.method_token -eq $methodToken } | Select-Object -First 1
 	Assert-That 'the stack contains the target method by token' ($null -ne $tick)
 	if ($tick) {
@@ -180,6 +200,14 @@ try {
 	Assert-That 'CorDebug accepts the offset without snapping' (-not $breakpoint.snapped)
 	$listed = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{})
 	Assert-That 'list_breakpoints reports the breakpoint' (@($listed | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id }).Count -eq 1)
+	$missingBreakpoint = Invoke-Tool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = 2147483647 } -ExpectError
+	Assert-That 'remove_breakpoint refuses an unknown id' ($missingBreakpoint -match 'does not exist|list_breakpoints')
+	$removed = Invoke-Tool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id }
+	Assert-That 'remove_breakpoint reports the exact removed id' ($removed.removed -and $removed.breakpoint_id -eq $breakpoint.breakpoint_id)
+	$afterRemove = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{})
+	Assert-That 'remove_breakpoint leaves the removed breakpoint absent' (@($afterRemove | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id }).Count -eq 0)
+	$breakpoint = Invoke-Tool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
+	Assert-That 'a breakpoint can be recreated after targeted removal' ($breakpoint.bound)
 	$cursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
 	Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
 	$stop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $cursor; timeout_ms = 8000 }

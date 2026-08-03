@@ -8,5 +8,8 @@ _ReSharper*/
 launchSettings.json
 .idea/
 
+# Local agent/debugger scratchpads. See docs/DGSPY_STATUS.md.
+ps_scratch/
+
 # Claude Code local settings (machine-specific)
 .claude/settings.local.json

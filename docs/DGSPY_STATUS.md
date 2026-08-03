@@ -23,12 +23,15 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | `attach` — waits for threads, refuses a second session | ✅ verified |
 | `attach_endpoint` — argument validation and failure path | ✅ verified (faults in ~2 s with dnSpy's own reason) |
 | `attach_endpoint` — connecting to a live Mono/Unity endpoint | ✅ **verified against UCH** (1120 ms; reattach 415 ms) |
-| Mono/Unity pause, call stack, primitive locals, detach | ✅ verified against UCH; detach leaves the game running |
+| Mono/Unity pause and detach | ✅ reverified against UCH after bounded frame-fetch fix; detach leaves the game running |
+| Mono/Unity call stack and primitive locals | ✅ reverified on the known managed breakpoint stopping thread |
 | `set_il_breakpoint` reports `bound` / `severity` / `message` | ✅ verified both engines |
 | Mono sequence-point snapping (`snapped`, `warning`) | ✅ verified against UCH |
 | `list_breakpoints`, `clear_breakpoints` | ✅ verified (CorDebug smoke + UCH) |
+| `remove_breakpoint` — exact single-ID removal | ✅ verified (CorDebug smoke + UCH) |
 | `cursor_event_id` — cursor sampled before the breakpoint exists | ✅ verified against UCH |
 | Unity `get_callstack` thread probe — picks a thread with frames | ✅ verified against UCH (landed on the UI thread) |
+| `list_threads`, caller-selected `get_callstack` / `get_frame` | ✅ verified (CorDebug smoke + UCH breakpoint stop) |
 | `faulted` carries `fault_message` from `MessageUserMessage` | ✅ verified |
 | `detach` — leaves target alive, refuses unsafe detach | ✅ verified |
 | `list_sessions` — recovers a lost `session_id` | ✅ verified |
@@ -44,58 +47,53 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 Test suites, all green:
 
 ```powershell
-dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 8 checks, wire contract
+dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 10 checks, wire contract
 dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 13 checks, access control
-.\tests\run-milestone1-smoke.ps1                                       # 54 checks, end to end
+.\tests\run-milestone1-smoke.ps1                                       # 69 checks, end to end
 ```
 
 ## Remaining gaps
 
-### Blocks the UCH goal
+### Deferred Phase 6 limitation
 
-1. **Frames can name a module that has no file.** A UCH stack contained
+**Frames can name a module that has no file.** A UCH stack contained
    `data-000001BE153D3040` — an in-memory or dynamic module — and `set_il_breakpoint` takes a module
-   *path*, so no breakpoint can be set on such a frame. Phase 6's in-memory module image is the fix.
-2. **No `remove_breakpoint`.** `clear_breakpoints` is all-or-nothing, and it also removes breakpoints
-   set by hand in dnSpy's UI, because dnSpy keeps one global collection and dgSpy does not own a
-   subset of it.
-3. **Thread selection is still not the caller's.** `get_callstack` now probes for a thread that has
-   managed frames instead of taking the first one blindly — which is what made Unity stacks usable —
-   but there is no way to ask for a particular thread, and which thread you get is incidental.
-   `list_threads` and a thread argument are Phase 5.
+   *path*, so no breakpoint can be set on such a frame. This does not block the current UCH debugger
+   workflow: file-backed modules work. Phase 6 owns navigation and breakpoint identity for in-memory
+   module images.
 
 ### Correctness and safety
 
-4. **Cancellation cannot abort in-flight work.** An expired deadline abandons the *wait*; a queued
+1. **Cancellation cannot abort in-flight work.** An expired deadline abandons the *wait*; a queued
    dispatcher callback or a started evaluation runs to completion, because dnSpy exposes no way to
    cancel either. Commented at both call sites in `ExtensionEntryPoint.cs`. Phase 1 asks for more than
    this delivers.
-5. **The `stale_handle` path is untested.** `DescribeFrame` rejects a snapshot whose frame closed
+2. **The `stale_handle` path is untested.** `DescribeFrame` rejects a snapshot whose frame closed
    mid-evaluation, but with `NoFuncEval` evaluations are milliseconds and the race cannot be triggered
    reliably. Revisit when func-eval makes evaluations long enough to manipulate.
-6. **A connect failure leaves a modal dnSpy error dialog on screen.** dnSpy's own UI subscribes to
+3. **A connect failure leaves a modal dnSpy error dialog on screen.** dnSpy's own UI subscribes to
    `MessageUserMessage` and shows a message box. It runs on the UI thread, so it blocks neither the
    debugger dispatcher nor RPC — dgSpy keeps working around it — but nothing headless dismisses it, and
    they accumulate. dgSpy no longer *adds* to this: routine client disconnects used to go to
    `WriteMessage(ErrorUser, …)`, which is dnSpy's message-box channel, and the gateway opens a fresh
    connection per request. Those are now silent, with real faults going to `Output`.
-7. **Single global session.** One `sessionId` field, one target. `host_id` routing and multi-session
+4. **Single global session.** One `sessionId` field, one target. `host_id` routing and multi-session
    ownership are Phase 9; nothing in the code anticipates them.
 
 ### Quality and structure
 
-8. **`ExtensionEntryPoint.cs` is one flat file** (~230 dense lines) against the plan's
+1. **`ExtensionEntryPoint.cs` is one flat file** (426 dense lines) against the plan's
    `Debugger/ Rpc/ Events/ Handles/` layout. Worth splitting before it grows further.
-9. **No `dgSpy.Extension.Tests`.** All extension logic is covered only through the smoke script, which
+2. **No `dgSpy.Extension.Tests`.** All extension logic is covered only through the smoke script, which
    needs a real dnSpy and a real target. Extraction of the pure logic (state computation, identity
    composition, event cursor) would make it unit-testable.
-10. **Gateway implements only the POST half of Streamable HTTP** — no `Mcp-Session-Id` handling, no
+3. **Gateway implements only the POST half of Streamable HTTP** — no `Mcp-Session-Id` handling, no
    SSE/GET. Fine for our client; a strict MCP client may object. `protocolVersion` is hardcoded.
-11. **Per-tool gateway deadlines are a hardcoded table** (`ToolCatalog.DeadlineSeconds`). They exist
+4. **Per-tool gateway deadlines are a hardcoded table** (`ToolCatalog.DeadlineSeconds`). They exist
    because the gateway's old flat 8 s was shorter than the extension's own 10 s attach wait, so a
    successful attach could be abandoned by the caller. The extension should advertise its bound rather
    than the gateway guessing it.
-12. **`dnSpy\dnSpy\bin\Release\net48` contains a nested `bin\bin`** from `build.ps1` having run more
+5. **`dnSpy\dnSpy\bin\Release\net48` contains a nested `bin\bin`** from `build.ps1` having run more
     than once. Harmless, pre-existing, confusing when hunting deploy problems.
 
 ## Hard-won facts worth not rediscovering
@@ -127,6 +125,17 @@ dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 13 chec
   negatives before it was caught. `set_il_breakpoint` returns `cursor_event_id` for this.
 - **dnSpy's breakpoints are global, not session-scoped.** They survive `detach` and rebind on the next
   attach, so a fresh session can stop immediately on a breakpoint from the previous one.
+- **Thread handles can go stale between `list_threads` and inspection.** UCH creates and exits worker
+  threads during an ordinary pause. `get_callstack` returns `thread_not_found` for that exact stale
+  handle instead of silently switching threads; refresh `list_threads` and retry another returned ID.
+- **Mono's asynchronous `GET_FRAME_INFO` can lose its reply when a Unity thread exits.** The upstream
+  `ThreadMirror.GetFrames()` waited forever, monopolizing dnSpy's single Mono debugger thread so Pause,
+  Continue and Detach all queued behind it. The wait is now bounded to three seconds, and
+  `list_threads` returns metadata without probing every thread. A 2026-08-03 live UCH stress run walked
+  all seven listed threads, resumed, and detached successfully instead of leaving dnSpy stuck Running.
+- **An arbitrary manual Unity pause can expose only native/unavailable stacks.** One live pause listed
+  seven threads but returned no managed frames; this is not a debugger wedge. At a known managed
+  breakpoint stop, the current `UE-AIBridge` thread returned seven selected frames and primitive locals.
 - **`DbgManager.Start` returning null does not mean the target is connected.** It only means an engine
   was built. A Mono connect then retries the socket for the whole connection timeout and reports
   failure through `MessageUserMessage`, not through the `Start` return value.
@@ -143,8 +152,13 @@ dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 13 chec
 
 ## Suggested order for the next session
 
-1. One clean UCH run to verify the thread probe and `cursor_event_id` (gap 1). Relaunch the game first;
-   the endpoint is single-use.
-2. `remove_breakpoint` (gap 2), then Phase 5's `list_threads` plus a caller-chosen thread (gap 3).
-3. Split `ExtensionEntryPoint.cs` and add `dgSpy.Extension.Tests` before the tool surface grows (8, 9).
-4. Then Phase 3/4 proper: full event stream, breakpoint conditions and hit counts, stepping.
+1. Split `ExtensionEntryPoint.cs` and add `dgSpy.Extension.Tests` before the tool surface grows.
+2. Then Phase 3/4 proper: full event stream, breakpoint conditions and hit counts, stepping.
+
+## Local PowerShell scratchpads
+
+Reusable agent-side debugger scripts live in `ps_scratch/`. The directory is deliberately ignored by
+Git because these scripts contain machine-local paths, ports, process ownership, and transient session
+workflows; inspect and reuse them before writing another temporary RPC harness. Current helpers cover
+starting the repo-built dnSpy, calling the extension RPC safely, listing/detaching sessions, and the
+live UCH pause/call-stack/breakpoint-cursor check. Keep durable product tests in `tests/`, not here.

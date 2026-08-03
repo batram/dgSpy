@@ -56,8 +56,26 @@ namespace dgSpy.Protocol {
 	}
 	public sealed class DebugEvent { [JsonProperty("event_id")] public long EventId { get; set; } [JsonProperty("kind")] public string Kind { get; set; }=""; [JsonProperty("state_version")] public long StateVersion { get; set; } [JsonProperty("timestamp_utc")] public DateTime TimestampUtc { get; set; }=DateTime.UtcNow; }
 	public sealed class WaitResult { [JsonProperty("events")] public DebugEvent[] Events { get; set; }=Array.Empty<DebugEvent>(); [JsonProperty("timed_out")] public bool TimedOut { get; set; } [JsonProperty("oldest_event_id")] public long OldestEventId { get; set; } }
+	public sealed class ThreadInfo {
+		[JsonProperty("thread_id")] public string ThreadId { get; set; }="";
+		[JsonProperty("process_id")] public int ProcessId { get; set; }
+		[JsonProperty("os_thread_id")] public ulong OsThreadId { get; set; }
+		[JsonProperty("managed_thread_id", NullValueHandling=NullValueHandling.Ignore)] public ulong? ManagedThreadId { get; set; }
+		[JsonProperty("name")] public string Name { get; set; }="";
+		[JsonProperty("kind")] public string Kind { get; set; }="";
+		[JsonProperty("is_main")] public bool IsMain { get; set; }
+		[JsonProperty("is_current")] public bool IsCurrent { get; set; }
+		/// <summary>Present only when frame availability is already known. list_threads deliberately does
+		/// not probe every thread: a Unity thread can exit during GET_FRAME_INFO and older Mono runtimes
+		/// can omit the reply. Select a thread with get_callstack to discover its frames safely.</summary>
+		[JsonProperty("has_managed_frames", NullValueHandling=NullValueHandling.Ignore)] public bool? HasManagedFrames { get; set; }
+		[JsonProperty("suspended_count")] public int SuspendedCount { get; set; }
+		[JsonProperty("states")] public string[] States { get; set; }=Array.Empty<string>();
+	}
 	public sealed class FrameInfo {
 		[JsonProperty("frame_id")] public string FrameId { get; set; }="";
+		[JsonProperty("thread_id")] public string ThreadId { get; set; }="";
+		[JsonProperty("frame_index")] public int FrameIndex { get; set; }
 		/// <summary>Formatted frame, eg. "Milestone1Target.Program.Tick(int)". Display only.</summary>
 		[JsonProperty("name")] public string Name { get; set; }="";
 		/// <summary>Module filename. Together with method_token and il_offset this is the durable
@@ -101,5 +119,10 @@ namespace dgSpy.Protocol {
 	}
 	public sealed class ClearBreakpointsResult {
 		[JsonProperty("removed")] public int Removed { get; set; } [JsonProperty("state_version")] public long StateVersion { get; set; }
+	}
+	public sealed class RemoveBreakpointResult {
+		[JsonProperty("breakpoint_id")] public int BreakpointId { get; set; }
+		[JsonProperty("removed")] public bool Removed { get; set; }
+		[JsonProperty("state_version")] public long StateVersion { get; set; }
 	}
 }

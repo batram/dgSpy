@@ -76,9 +76,12 @@ namespace dgSpy.Extension {
 			case "continue": CheckSession(req); await OnDebuggerAsync(()=>{ CheckVersion(req); manager.RunAll(); return true; }).ConfigureAwait(false); await WaitForDebuggerAsync(()=>!manager.IsDebugging || manager.IsRunning!=false,requestCancellation.Token).ConfigureAwait(false); return RpcResponse.Success(req.RequestId,await OnDebuggerAsync(State,requestCancellation.Token).ConfigureAwait(false));
 			case "set_il_breakpoint": return RpcResponse.Success(req.RequestId,await SetBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "list_breakpoints": return RpcResponse.Success(req.RequestId,await ListBreakpointsAsync(requestCancellation.Token).ConfigureAwait(false));
+			case "remove_breakpoint": return RpcResponse.Success(req.RequestId,await RemoveBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "clear_breakpoints": return RpcResponse.Success(req.RequestId,await ClearBreakpointsAsync(requestCancellation.Token).ConfigureAwait(false));
 			case "wait_for_stop": return RpcResponse.Success(req.RequestId,await WaitAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "list_threads": return RpcResponse.Success(req.RequestId,await ListThreadsAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_callstack": return RpcResponse.Success(req.RequestId,await GetCallStackAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_frame": return RpcResponse.Success(req.RequestId,await GetFrameAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			default: return RpcResponse.Failure(req.RequestId,"unsupported","Unknown operation: "+req.Operation);
 			}
 		} catch (OperationCanceledException) { return RpcResponse.Failure(req.RequestId,"deadline_exceeded","The operation exceeded its deadline."); } catch (RpcException ex) { return RpcResponse.Failure(req.RequestId,ex.Code,ex.Message); } catch (Exception ex) { return RpcResponse.Failure(req.RequestId,"internal_error",ex.Message); } }
@@ -259,35 +262,70 @@ namespace dgSpy.Extension {
 		}
 		async Task<BreakpointInfo[]> ListBreakpointsAsync(CancellationToken cancellationToken) =>
 			await OnDebuggerAsync(()=>breakpoints.Breakpoints.Select(b=>Describe(b)).OrderBy(b=>b.BreakpointId).ToArray(),cancellationToken).ConfigureAwait(false);
+		async Task<RemoveBreakpointResult> RemoveBreakpointAsync(RpcRequest req,CancellationToken cancellationToken) {
+			var id=(int?)req.Arguments["breakpoint_id"] ?? throw new RpcException("invalid_arguments","breakpoint_id is required.");
+			return await OnDebuggerAsync(()=>{
+				var found=breakpoints.Breakpoints.FirstOrDefault(b=>b.Id==id);
+				if (found is null) throw new RpcException("breakpoint_not_found",$"Breakpoint {id} does not exist. Refresh list_breakpoints and use an exact breakpoint_id.");
+				breakpoints.Remove(new[]{found});
+				lock(sync) requestedOffsets.Remove(id);
+				return new RemoveBreakpointResult { BreakpointId=id,Removed=true,StateVersion=stateVersion };
+			},cancellationToken).ConfigureAwait(false);
+		}
 		// Clears every dnSpy breakpoint, including any set by hand in the UI — dnSpy keeps one global
 		// collection and dgSpy does not own a subset of it. Breakpoints outlive a session and rebind on
 		// the next attach, so without this a fresh session can stop on a breakpoint nobody set.
 		async Task<ClearBreakpointsResult> ClearBreakpointsAsync(CancellationToken cancellationToken) =>
 			await OnDebuggerAsync(()=>{ var count=breakpoints.Breakpoints.Length; breakpoints.Clear(); lock(sync) requestedOffsets.Clear(); return new ClearBreakpointsResult { Removed=count,StateVersion=stateVersion }; },cancellationToken).ConfigureAwait(false);
 		async Task<WaitResult> WaitAsync(RpcRequest req,CancellationToken cancellationToken) { CheckSession(req); long after=(long?)req.Arguments["after_event_id"] ?? 0; int timeout=Math.Min(10000,Math.Max(1,(int?)req.Arguments["timeout_ms"] ?? 5000)); var end=DateTime.UtcNow.AddMilliseconds(timeout); while (DateTime.UtcNow<end) { lock(sync) { var found=events.Where(e=>e.EventId>after && e.Kind=="stopped").ToArray(); if(found.Length!=0) return new WaitResult { Events=found,OldestEventId=events.Count==0 ? eventId+1 : events[0].EventId }; } await Task.Delay(50,cancellationToken).ConfigureAwait(false); } lock(sync) return new WaitResult { TimedOut=true,OldestEventId=events.Count==0 ? eventId+1 : events[0].EventId }; }
+		string ThreadId(DbgThread thread) => $"{thread.Process.Id}:{thread.Id}";
+		async Task<ThreadInfo[]> ListThreadsAsync(RpcRequest req,CancellationToken cancellationToken) {
+			CheckSession(req);
+			return await OnDebuggerAsync(()=>{
+				if (manager.IsRunning!=false) throw new RpcException("not_paused","Pause the session before listing threads so managed-frame availability is stable.");
+				return manager.Processes.SelectMany(process=>process.Threads).Select(thread=>{
+					return new ThreadInfo { ThreadId=ThreadId(thread),ProcessId=thread.Process.Id,OsThreadId=thread.Id,ManagedThreadId=thread.ManagedId,
+						Name=thread.Name,Kind=thread.Kind,IsMain=thread.IsMain,IsCurrent=thread==manager.CurrentThread.Current,
+						SuspendedCount=thread.SuspendedCount,States=thread.State.Select(state=>state.State).ToArray() };
+				}).OrderBy(thread=>thread.ProcessId).ThenBy(thread=>thread.OsThreadId).ToArray();
+			},cancellationToken).ConfigureAwait(false);
+		}
 		async Task<FrameInfo[]> GetCallStackAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
 			int max=Math.Min(100,Math.Max(1,(int?)req.Arguments["max_frames"] ?? 50));
+			var requestedThreadId=(string?)req.Arguments["thread_id"];
 			// The call stack is built from DbgManager.CurrentThread, which dnSpy sets from the UI or
 			// from a stop that carries a thread. A pause issued right after attach has neither, and
 			// the engine may not have enumerated any threads yet either. So: wait for a thread to
 			// exist, then select one if nothing is current.
 			await WaitForDebuggerAsync(()=>manager.IsRunning!=false || manager.Processes.SelectMany(p=>p.Threads).Any(),cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
-			await OnDebuggerAsync(()=>{ if (manager.IsRunning==false && manager.CurrentThread.Current is null) { var thread=manager.Processes.SelectMany(p=>p.Threads).FirstOrDefault(); if (thread is not null) manager.CurrentThread.Current=thread; } return true; }).ConfigureAwait(false);
+			var selectedThreadId=await OnDebuggerAsync(()=>{
+				if (manager.IsRunning!=false) throw new RpcException("not_paused","Pause the session before requesting its call stack.");
+				var all=manager.Processes.SelectMany(p=>p.Threads).ToArray();
+				if (!string.IsNullOrEmpty(requestedThreadId)) {
+					var requested=all.FirstOrDefault(thread=>ThreadId(thread)==requestedThreadId);
+					if (requested is null) throw new RpcException("thread_not_found",$"Thread {requestedThreadId} is not active. Refresh list_threads and use an exact thread_id.");
+					manager.CurrentThread.Current=requested;
+				}
+				else if (manager.CurrentThread.Current is null) {
+					var first=all.FirstOrDefault(); if (first is not null) manager.CurrentThread.Current=first;
+				}
+				return manager.CurrentThread.Current is null ? "" : ThreadId(manager.CurrentThread.Current);
+			},cancellationToken).ConfigureAwait(false);
 			// That picks an arbitrary thread, and on Unity the arbitrary one routinely has no managed
 			// frames at all — the caller then gets an empty stack and no way to ask for a different
 			// thread. Probe threads with a throwaway stack walker and select one that actually has
 			// frames. The walker and its frames are ours to close; the frames the call stack service
 			// then produces are not, which is why this only probes and does not return them.
 			await OnDebuggerAsync(()=>{
-				if (manager.IsRunning!=false || callStack.Frames.Frames.Count!=0) return true;
+				if (!string.IsNullOrEmpty(requestedThreadId) || manager.IsRunning!=false || callStack.Frames.Frames.Count!=0) return true;
 				foreach (var thread in manager.Processes.SelectMany(process=>process.Threads)) {
 					var walker=thread.CreateStackWalker();
 					try {
 						var probe=walker.GetNextStackFrames(1);
 						if (probe.Length==0) continue;
 						manager.Close(probe);
-						manager.CurrentThread.Current=thread;
+						manager.CurrentThread.Current=thread; selectedThreadId=ThreadId(thread);
 						return true;
 					}
 					finally { walker.Close(); }
@@ -296,18 +334,28 @@ namespace dgSpy.Extension {
 			},cancellationToken).ConfigureAwait(false);
 			// DbgCallStackService then refreshes its frames on the dispatcher, so wait for them rather
 			// than racing. A stack still empty after the wait is reported as empty, not as an error.
-			await WaitForDebuggerAsync(()=>manager.IsRunning!=false || callStack.Frames.Frames.Count!=0,cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+			await WaitForDebuggerAsync(()=>manager.IsRunning!=false || (callStack.Frames.Frames.Count!=0 && ThreadId(callStack.Frames.Frames[0].Thread)==selectedThreadId),cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
 			// Identity is read on the dispatcher, where DbgObject access belongs. Evaluation of names
 			// and locals then happens on the evaluation thread so it cannot stall event delivery.
 			var captured=await OnDebuggerAsync(()=>{
 				if(manager.IsRunning!=false) throw new RpcException("not_paused","Pause the session before requesting its call stack.");
-				return callStack.Frames.Frames.Take(max).Select((frame,index)=>new CapturedFrame(frame,languages.GetCurrentLanguage(frame.Runtime.RuntimeKindGuid),new FrameInfo {
-					FrameId=$"{sessionId}:{stateVersion}:{index}",Module=frame.Module?.Filename ?? "",ModuleName=frame.Module?.Name ?? "",
+				return callStack.Frames.Frames.Where(frame=>ThreadId(frame.Thread)==selectedThreadId).Take(max).Select((frame,index)=>new CapturedFrame(frame,languages.GetCurrentLanguage(frame.Runtime.RuntimeKindGuid),new FrameInfo {
+					FrameId=$"{sessionId}:{stateVersion}:{selectedThreadId}:{index}",ThreadId=selectedThreadId,FrameIndex=index,Module=frame.Module?.Filename ?? "",ModuleName=frame.Module?.Name ?? "",
 					MethodToken=frame.FunctionToken,IlOffset=frame.FunctionOffset,Name=$"0x{frame.FunctionToken:X8}+0x{frame.FunctionOffset:X}",
 				})).ToArray();
 			},cancellationToken).ConfigureAwait(false);
 			using var evaluation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token,cancellationToken);
 			return await evaluations.RunAsync(()=>captured.Select(c=>DescribeFrame(c,evaluation.Token)).ToArray(),cancellationToken).ConfigureAwait(false);
+		}
+		async Task<FrameInfo> GetFrameAsync(RpcRequest req,CancellationToken cancellationToken) {
+			CheckSession(req);
+			if (string.IsNullOrEmpty((string?)req.Arguments["thread_id"])) throw new RpcException("invalid_arguments","thread_id is required.");
+			var index=(int?)req.Arguments["frame_index"] ?? throw new RpcException("invalid_arguments","frame_index is required.");
+			if (index<0 || index>=100) throw new RpcException("invalid_arguments","frame_index must be between 0 and 99.");
+			req.Arguments["max_frames"]=index+1;
+			var frames=await GetCallStackAsync(req,cancellationToken).ConfigureAwait(false);
+			if (index>=frames.Length) throw new RpcException("frame_not_found",$"Thread {(string?)req.Arguments["thread_id"]} has no frame at index {index}. Refresh get_callstack and use an available frame_index.");
+			return frames[index];
 		}
 		readonly struct CapturedFrame {
 			public readonly DbgStackFrame Frame; public readonly DbgLanguage Language; public readonly FrameInfo Info;

@@ -83,6 +83,33 @@ public class IdentityContractTests {
 	}
 
 	[Fact]
+	public void Thread_and_frame_selection_have_explicit_wire_identity() {
+		var thread = JObject.Parse(JsonConvert.SerializeObject(new ThreadInfo {
+			ThreadId = "1234:99", ProcessId = 1234, OsThreadId = 99, ManagedThreadId = 7, HasManagedFrames = true,
+		}));
+		var frame = JObject.Parse(JsonConvert.SerializeObject(new FrameInfo {
+			FrameId = "session:5:1234:99:2", ThreadId = "1234:99", FrameIndex = 2,
+		}));
+
+		Assert.Equal("1234:99", (string?)thread["thread_id"]);
+		Assert.Equal(99ul, (ulong?)thread["os_thread_id"]);
+		Assert.Equal(7ul, (ulong?)thread["managed_thread_id"]);
+		Assert.True((bool?)thread["has_managed_frames"]);
+		Assert.Equal("1234:99", (string?)frame["thread_id"]);
+		Assert.Equal(2, (int?)frame["frame_index"]);
+	}
+
+	[Fact]
+	public void Remove_breakpoint_result_names_the_exact_removed_id() {
+		var wire = JObject.Parse(JsonConvert.SerializeObject(new RemoveBreakpointResult {
+			BreakpointId = 42, Removed = true, StateVersion = 9,
+		}));
+
+		Assert.Equal(42, (int?)wire["breakpoint_id"]);
+		Assert.True((bool?)wire["removed"]);
+	}
+
+	[Fact]
 	public void Session_summary_reports_whether_detaching_is_safe() {
 		var wire = JObject.Parse(JsonConvert.SerializeObject(new SessionSummary { CanDetachWithoutTerminating = true }));
 

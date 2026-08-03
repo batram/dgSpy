@@ -228,7 +228,7 @@ Milestone 1 exposes a single implicit host and a single session. `host_id` routi
 - An agent can list and attach to a .NET test process by PID and runtime.
 - State transitions are observable without reading dnSpy UI state.
 - Detach leaves the target alive; terminate has separately tested semantics.
-- **Observed 2026-08-03**: with a CorDebug session attached to a live process, closing dnSpy and confirming its shutdown prompt *terminated the attached target*. Until `detach` exists there is no safe way to end a session, so `detach` is the highest-priority Phase 2 tool, and the shutdown path needs its own test.
+- **Observed 2026-08-03**: with a CorDebug session attached to a live process, closing dnSpy and confirming its shutdown prompt *terminated the attached target*. `detach` is now implemented and verified as the safe exit; the dnSpy shutdown path still needs its own test.
 - Unexpected target exit produces a terminal event and releases all handles.
 
 ## Phase 3: Event stream and breakpoint waiting
@@ -275,7 +275,7 @@ Milestone 1 exposes a single implicit host and a single session. `host_id` routi
 - `set_il_breakpoint`
 - `list_breakpoints`
 - `update_breakpoint`
-- `remove_breakpoint`
+- `remove_breakpoint` (implemented)
 - `clear_breakpoints`
 - `set_exception_breakpoint`
 - `step_into`
@@ -306,8 +306,9 @@ Milestone 1 exposes a single implicit host and a single session. `host_id` routi
 - `list_processes`
 - `list_runtimes`
 - `list_modules`
-- `list_threads`
-- `get_callstack`
+- `list_threads` (implemented)
+- `get_callstack` (implemented with caller-selected `thread_id`)
+- `get_frame` (implemented with caller-selected `thread_id` + `frame_index`)
 - `select_frame`
 - `get_arguments`
 - `get_locals`
