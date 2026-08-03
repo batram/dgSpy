@@ -128,13 +128,19 @@ rebound on reconnect, and hit immediately. dnSpy keeps breakpoints in `DbgCodeBr
 which is global rather than session-scoped. `remove_breakpoint` now removes one exact ID, while
 `clear_breakpoints` removes the global collection.
 
-### Not reproducible — do not trust the earlier note
+### Reconnect-state race before breakpoint binding
 
-One run reported "The breakpoint will not currently be hit. Can't set a breakpoint when the process is
-paused" (severity `warning`). That message is dnSpy's own text, but the conclusion drawn from it — that
-Mono cannot bind while paused — **does not reproduce**. Setting a breakpoint while paused binds cleanly
-(`bound: true`, severity `none`) and hits on resume. The one sighting was during a session whose
-connection was already broken.
+The warning "The breakpoint will not currently be hit. Can't set a breakpoint when the process is
+paused" is reproducible immediately after some Mono reconnects, even when dgSpy's session snapshot
+already says `running`. The session state and Mono's breakpoint engine have not converged yet. A full
+`pause` -> `continue` transition followed by a short settle makes binding deterministic; the next
+breakpoint binds with severity `none` and hits normally. This is a reconnect-state race, not a general
+rule that Mono cannot bind while paused: ordinary paused-session binding still works.
+
+Re-run on 2026-08-03 after the clean build/deploy fix: the unsynchronized first bind reproduced the
+warning, while the synchronized retry bound `AIBridgeServer.Handle`, observed event 18 after cursor 17,
+returned seven caller-selected frames on `UE-AIBridge` with primitive locals, and detached without
+terminating UCH.
 
 ### Re-run 2026-08-03, after the binding/cursor/thread-probe fixes
 

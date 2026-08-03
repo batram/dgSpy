@@ -32,12 +32,24 @@ The dgSpy projects are intentionally **not** in `dnSpy.sln`. The fork's own buil
 .\build.ps1 netframework
 ```
 
+If MSBuild is installed but not on PATH, pass its resolved executable explicitly:
+
+```powershell
+.\build.ps1 netframework -MSBuildPath 'C:\path\to\MSBuild.exe'
+```
+
+The framework build clears its validated `dnSpy\dnSpy\bin\Release\net48` output before compiling and
+then packages dependencies under `net48\bin`. This makes repeated builds idempotent; a second run must
+not produce `net48\bin\bin`.
+
 ```powershell
 .\build-dgspy.ps1
 ```
 
 The second command builds the three dgSpy projects and copies the extension into
-`dnSpy\dnSpy\bin\Release\net48\Extensions\dgSpy\`. dnSpy scans that directory one level deep for
+`dnSpy\dnSpy\bin\Release\net48\bin\Extensions\dgSpy\`. In the packaged net48 layout,
+`AppDirectories.BinDirectory` is the dependency `bin` containing `dnSpy.Contracts.DnSpy.dll`; dnSpy
+scans that directory and its `Extensions` children for
 `*.x.dll` at startup, so no registration step is needed. Use `-DnSpyDir <path>` to deploy into an
 installed dnSpy instead of the build output.
 

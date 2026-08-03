@@ -96,8 +96,6 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 10 chec
    because the gateway's old flat 8 s was shorter than the extension's own 10 s attach wait, so a
    successful attach could be abandoned by the caller. The extension should advertise its bound rather
    than the gateway guessing it.
-4. **`dnSpy\dnSpy\bin\Release\net48` contains a nested `bin\bin`** from `build.ps1` having run more
-    than once. Harmless, pre-existing, confusing when hunting deploy problems.
 
 ## Hard-won facts worth not rediscovering
 

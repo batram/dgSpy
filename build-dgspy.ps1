@@ -24,7 +24,11 @@ if (-not (Test-Path $DnSpyDir)) {
 }
 
 $extensionOutput = Join-Path $PSScriptRoot "Extensions\dgSpy.Extension\bin\$Configuration\net48"
-$deployDir = Join-Path $DnSpyDir 'Extensions\dgSpy'
+$runtimeBin = Join-Path $DnSpyDir 'bin'
+if (-not (Test-Path -LiteralPath (Join-Path $runtimeBin 'dnSpy.Contracts.DnSpy.dll'))) {
+	throw "Packaged dnSpy runtime directory not found: $runtimeBin. Run .\build.ps1 netframework first."
+}
+$deployDir = Join-Path $runtimeBin 'Extensions\dgSpy'
 
 # dnSpy holds the extension assemblies open, so an instance running *from the deploy target*
 # blocks the copy. Other dnSpy instances are unaffected.
@@ -34,11 +38,23 @@ if ($running.Count -gt 0) {
 	throw "dnSpy is running from $resolvedDnSpyDir (PID $($running.Id -join ', ')). Close it before deploying."
 }
 
-# dnSpy scans its bin directory *and* Extensions\* for *.x.dll. A stale copy left directly in the
-# bin directory would be composed a second time, so remove any before deploying.
-foreach ($stale in Get-ChildItem $DnSpyDir -Filter 'dgSpy.*' -File -ErrorAction SilentlyContinue) {
+# AppDirectories.BinDirectory is the directory containing dnSpy.Contracts.DnSpy.dll, which the
+# packaged net48 layout places under net48\bin. dnSpy scans that directory and its Extensions\*
+# children. Remove stale direct copies there so the extension cannot be composed twice.
+foreach ($stale in Get-ChildItem $runtimeBin -Filter 'dgSpy.*' -File -ErrorAction SilentlyContinue) {
 	Remove-Item $stale.FullName -Force
-	Write-Host "Removed stale $($stale.Name) from $DnSpyDir"
+	Write-Host "Removed stale $($stale.Name) from $runtimeBin"
+}
+
+# Versions before the idempotent net48 packaging fix deployed beside dnSpy.exe, which is not an
+# extension search path in the packaged layout. Remove that obsolete tree during migration.
+$obsoleteDeployDir = Join-Path $DnSpyDir 'Extensions\dgSpy'
+if (Test-Path -LiteralPath $obsoleteDeployDir) {
+	Remove-Item -LiteralPath $obsoleteDeployDir -Recurse -Force
+	$obsoleteParent = Split-Path $obsoleteDeployDir
+	if (@(Get-ChildItem -LiteralPath $obsoleteParent -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+		Remove-Item -LiteralPath $obsoleteParent -Force
+	}
 }
 
 New-Item -ItemType Directory -Path $deployDir -Force | Out-Null
