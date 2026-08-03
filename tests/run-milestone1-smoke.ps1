@@ -136,6 +136,7 @@ try {
 	Assert-That 'a pid-filtered listing finds the target' ($programs.Count -ge 1 -and $programs[0].pid -eq $targetId)
 	Assert-That 'a pid-filtered listing is fast' ($filteredMs -lt 1000) "(took ${filteredMs}ms)"
 	$program = $programs[0]
+	Assert-That 'the .NET Framework test target is x64' ($program.architecture -eq 'X64') "(was $($program.architecture))"
 	Assert-That 'program_id carries no dnSpy type name' (-not $program.program_id.Contains('RuntimeId')) "(was $($program.program_id))"
 	Assert-That 'runtime_guid is distinct from runtime_kind_guid' ($program.runtime_guid -ne $program.runtime_kind_guid)
 

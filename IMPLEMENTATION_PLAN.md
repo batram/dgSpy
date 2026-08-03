@@ -155,7 +155,12 @@ Each handle records:
 
 Resuming execution increments the value/frame generation. Accessing an invalidated handle returns `stale_handle` with guidance to request a fresh snapshot.
 
-## Phase 0: Build baseline and extension spike
+## Phase 0: Build baseline and extension spike — complete
+
+Completed and verified on 2026-08-03. CorDebug is acquired through `list_programs` + `attach`;
+endpoint-launched UCH is acquired through `attach_endpoint` because that launch mode emits no discovery
+beacon. The automated CorDebug smoke target is explicitly x64 and dnSpy's reported architecture is
+asserted end to end.
 
 ### Work
 
@@ -166,7 +171,9 @@ Resuming execution increments the value/frame generation. Accessing an invalidat
 5. Inject and read `DbgManager`, `AttachableProcessesService`, `DbgCodeBreakpointsService`, `DbgCallStackService`, `DbgLanguageService`, and `DbgDotNetCodeLocationFactory`. Document services deferred to later phases rather than importing them speculatively.
 6. Prove safe calls from a background request thread through `DbgManager.Dispatcher`, and write down the thread-affinity rules next to that abstraction.
 7. Add an x64 .NET Framework test target with a known method token and a long-running loop.
-8. Verify the Unity/Mono attach path manually against UCH and record what `list_programs` returns for it.
+8. Verify the Unity/Mono attach path manually against UCH. Record whether the launch mode is discoverable
+   through `list_programs`; when UCH is launched with an explicit soft-debugger endpoint and emits no
+   discovery beacon, verify it through `attach_endpoint` instead.
 
 ### Exit criteria
 
@@ -175,7 +182,8 @@ Resuming execution increments the value/frame generation. Accessing an invalidat
 - Required services resolve through MEF without a debug session being active.
 - Debugger state can be queried from an RPC thread without running request serialization, socket I/O, or expression evaluation on the debugger dispatcher thread.
 - Thread-affinity rules are documented next to the RPC dispatcher abstraction.
-- Both engines in scope appear in `list_programs`: the .NET Framework test target and UCH.
+- Both engines in scope are reachable through their supported acquisition path: the .NET Framework test
+  target through `list_programs` + `attach`, and endpoint-launched UCH through `attach_endpoint`.
 
 ## Phase 1: Local RPC and discovery
 

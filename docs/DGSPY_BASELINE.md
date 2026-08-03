@@ -23,6 +23,7 @@
 | `dgSpy.Protocol` | `netstandard2.0` | DTOs only. Referenced by both sides, so it must stay loadable from net48 and net7.0. |
 | `Extensions/dgSpy.Extension` | `net48` | Pinned; does not inherit `net5.0-windows` from `DnSpyCommon.props`. Output is `dgSpy.Extension.x.dll` — dnSpy's scanner only loads `*.x.dll`. |
 | `dgSpy.Gateway` | `net7.0` | Standalone process, not loaded into dnSpy. |
+| `tests/TestTargets/Milestone1Target` | `net48`, x64 | CorDebug smoke target; the project pins `PlatformTarget=x64` and the smoke test verifies dnSpy reports `X64`. |
 
 The dgSpy projects are intentionally **not** in `dnSpy.sln`. The fork's own build stays exactly as upstream; dgSpy builds through `build-dgspy.ps1`.
 

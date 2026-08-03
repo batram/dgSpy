@@ -113,7 +113,7 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj
 The unit tests cover the wire contract, the gateway's access control, and the extension's pure
 program-identity, session-state, and bounded event-cursor invariants. The smoke script is the
 end-to-end test: it builds, deploys, starts a disposable target plus dnSpy plus the gateway, and
-asserts 69 checks across access control, discovery, attach, thread/frame inspection, breakpoints, and detach. It
+asserts 70 checks across access control, x64 discovery, attach, thread/frame inspection, breakpoints, and detach. It
 stops everything it starts and exits non-zero on any failure.
 
 The smoke script covers `attach_endpoint`'s argument validation and failure path only; its success

@@ -1,13 +1,15 @@
 # dgSpy status and handoff
 
-Last updated 2026-08-03. Branch `dgspy-mcp-milestone-1`; the milestone 1 slice is committed as
-`f1e9e35a1`.
+Last updated 2026-08-03. Branch `dgspy-mcp-milestone-1`.
 
 Scope in force: x64 only, .NET Framework CorDebug (`CLR v4.0.30319`), plus the Mono/Unity path for UCH.
 CoreCLR and x86 are out. See [DGSPY_BASELINE.md](DGSPY_BASELINE.md) for the toolchain and thread rules,
 [DGSPY_MILESTONE1.md](DGSPY_MILESTONE1.md) for the tool surface,
 [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md) for the manual Mono/Unity pass,
 `IMPLEMENTATION_PLAN.md` for the roadmap.
+
+**Phase 0 is complete.** All exit criteria are verified, including both supported engine acquisition
+paths and the automated x64 target assertion.
 
 ## Done and verified
 
@@ -16,6 +18,8 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | Capability | Status |
 |---|---|
 | MEF extension loads in x64 net48 dnSpy, logs version | ✅ verified |
+| Phase 0 engine acquisition: CorDebug via discovery, endpoint-launched UCH via `attach_endpoint` | ✅ verified both engines |
+| CorDebug smoke target is explicitly x64 and its reported architecture is asserted | ✅ automated |
 | Loopback TCP RPC, versioned, structured errors | ✅ verified |
 | One-command build + deploy (`build-dgspy.ps1`) | ✅ verified |
 | `list_programs`, incl. `process_ids` / `process_names` filtering | ✅ verified (2454 ms → 55 ms) |
@@ -52,7 +56,7 @@ Test suites, all green:
 dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 10 checks, wire contract
 dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 13 checks, access control
 dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 10 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 69 checks, end to end
+.\tests\run-milestone1-smoke.ps1                                       # 70 checks, end to end
 ```
 
 ## Remaining gaps
