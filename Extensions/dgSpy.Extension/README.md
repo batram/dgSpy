@@ -14,6 +14,10 @@ in the same callback that changed it reports the old settings and looks like a w
 - `Evaluation/`: expression evaluation, member expansion, assignment, watches and module listing. Every
   evaluation runs on the `EvaluationQueue`, never the dispatcher — func-eval executes code inside the
   target and would otherwise stall event delivery for the whole session.
+- `Decompiler/`: metadata, symbol search, IL, decompilation and breakpoint-by-name. Metadata and
+  decompilation also run on the `EvaluationQueue`: dnlib loads lazily and dnSpy caches one `ModuleDef`
+  per module, so two concurrent readers of the same module race, and a large decompile on the
+  dispatcher would stall event delivery for the whole session.
 - `Identity/`: stable protocol identities derived from dnSpy values, plus host identity and capability
   advertisement (`RpcHost.Host.cs`).
 

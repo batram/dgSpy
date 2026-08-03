@@ -153,6 +153,20 @@ ship without being filterable and advertised in the same edit.
   `stop_reason: "step"`. `completed: false` means still running, not failed. The cursor matters for the
   same reason it does for breakpoints: a step over a fast call lands before a follow-up state read
   returns.
+- **`search_symbols` is how you get from a name to a breakpoint.** It returns module plus metadata
+  token, which is exactly what `set_il_breakpoint` takes, so an agent never has to parse display text
+  into an identity. `set_breakpoint` does the same resolution server-side and then follows the identical
+  path, so binding state and Mono snapping cannot diverge between the two tools.
+- **`get_il` marks the offsets Mono will accept.** `is_sequence_point` per instruction answers the
+  question that previously took trial and error. `has_sequence_points: false` means no PDB was
+  available — *not* that there are no legal offsets.
+- **Ambiguity is reported, never resolved by guessing.** An ambiguous type name or an overloaded method
+  returns the candidates. A breakpoint silently placed in the wrong overload is undetectable from the
+  caller's side.
+- **Metadata is reachable for in-memory and dynamic modules; breakpoints on them are not.**
+  `get_csharp`, `get_il`, `list_types` and `list_members` resolve them through dnSpy's metadata service.
+  `set_breakpoint` refuses with `module_has_no_path`, and `list_modules` flags them
+  `can_set_breakpoint: false`, because dnSpy addresses breakpoint locations by file path.
 - **`value` and `display` are separate on purpose.** `value` is the raw scalar, `display` is dnSpy's
   formatted text. An agent comparing numbers wants the first; one showing something wants the second.
   Collapsing them would force every caller to parse display text back into a value.

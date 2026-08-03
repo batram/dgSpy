@@ -82,31 +82,47 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | `set_value` — assigns in the target, reads back, reports `compiler_error` | ✅ automated live |
 | `add_watch` / `list_watches` / `remove_watch`; a failing watch does not fail the call | ✅ automated live |
 | `list_modules` — `can_set_breakpoint` false for path-less modules | ✅ automated live |
+| **Phase 6 symbol layer closed out** — search is partial, see Remaining gaps | ✅ 2026-08-03 (CorDebug) |
+| `list_documents` / `list_types` / `list_members` — paged, tokens included | ✅ automated live |
+| `search_symbols` — name to module + token, bounded | ✅ automated live |
+| `get_il` — offsets, operands, and `is_sequence_point` per instruction | ✅ automated live |
+| `get_csharp` — method and whole-type decompilation | ✅ automated live |
+| `set_breakpoint` by type + method name, same path as `set_il_breakpoint` | ✅ automated live |
 
 Test suites, all green:
 
 ```powershell
 dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 24 checks, wire + capability contract
-dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 91 checks, access control + deadline bounds
+dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 105 checks, access control + deadline bounds
 dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 195 checks, end to end
+.\tests\run-milestone1-smoke.ps1                                       # 222 checks, end to end
 ```
 
-All four suites are green as of the Phase 5 close-out on 2026-08-03: 24 / 91 / 15 unit checks and 195
-live smoke checks. The event-vocabulary work was additionally verified against live UCH — see
+All four suites are green as of the Phase 6 symbol-layer close-out on 2026-08-03: 24 / 105 / 15 unit
+checks and 222 live smoke checks. The event-vocabulary work was additionally verified against live UCH — see
 [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). **Phases 4 and 5 are verified on CorDebug only.**
 Stepping, conditions and evaluation have not been exercised against Mono/Unity, and Mono differs enough
 elsewhere (sequence points, asynchronous frame fetch) that this is a real gap rather than a formality.
 
 ## Remaining gaps
 
-### Deferred Phase 6 limitation
+### Phase 6 shortfall — search and analysis tools not built
 
-**Frames can name a module that has no file.** A UCH stack contained
-   `data-000001BE153D3040` — an in-memory or dynamic module — and `set_il_breakpoint` takes a module
-   *path*, so no breakpoint can be set on such a frame. This does not block the current UCH debugger
-   workflow: file-backed modules work. Phase 6 owns navigation and breakpoint identity for in-memory
-   module images.
+`search_text`, `find_references`, `find_implementations`, `get_metadata` (raw metadata tables) and
+`get_raw_module` are **not implemented**. The symbol layer they would sit on now exists, and none of
+them blocks the debugger workflow, but the phase is not finished until they are — or until they are
+consciously dropped. Reference analysis in particular should reuse dnSpy's analyzer services rather
+than a hand-rolled metadata scan. `get_method_body` is subsumed by `get_il`.
+
+### Partly addressed: frames can name a module that has no file
+
+A UCH stack contained `data-000001BE153D3040` — an in-memory or dynamic module. **Metadata for such a
+module is now reachable**: `DbgMetadataService` resolves it, so `get_csharp`, `get_il`, `list_types` and
+`list_members` all work against it. **Breakpoints still cannot be set on one**, because dnSpy's code
+location factory addresses modules by path. That is now an explicit `module_has_no_path` error and a
+`can_set_breakpoint: false` flag on `list_modules` rather than a breakpoint that silently never binds.
+Neither behaviour has been verified against a real file-less module — the CorDebug fixture has none, and
+the only known instance is on a UCH stack.
 
 ### Correctness and safety
 
@@ -240,16 +256,11 @@ observed to terminate the target, so callers must use `detach`.
 
 0. **Exercise Phase 4 against UCH.** Stepping, conditions and hit counts are verified on CorDebug only.
    Mono's stepping is a different implementation and its sequence-point rule already bit breakpoints.
-1. **Phase 6's symbol layer, ahead of the rest of Phase 5.** A breakpoint currently requires the caller
-   to already know a metadata token, which is the largest remaining gap between a working debugger and
-   one an agent can use unaided. `set_breakpoint` by type and method name moved into Phase 6 for this
-   reason; see the note at the head of that phase.
-2. Phase 4's remainder: breakpoint conditions, hit counts, `update_breakpoint`, exception breakpoints,
-   and stepping. The `step_completed` and `stopped`/`step` events are already normalized, so this is the
-   operations, not the plumbing. Follow `Extensions/dgSpy.Extension/README.md` and add each family in
-   its owning partial file.
-3. Phase 5's evaluation work last, and note it makes two recorded limitations testable for the first
-   time: `stale_handle` and `cancels_in_flight_work`.
+1. **Finish Phase 6**: `search_text`, `find_references`, `find_implementations`, `get_metadata`,
+   `get_raw_module` — or decide to drop them explicitly. See the shortfall note above.
+2. **Verify the file-less module path against UCH**, which is the only place a real one has been seen.
+   Metadata should now resolve for it; `set_breakpoint` should refuse it with `module_has_no_path`.
+3. Phase 7 or Phase 9, whichever the workflow needs first.
 
 ## Local PowerShell scratchpads
 

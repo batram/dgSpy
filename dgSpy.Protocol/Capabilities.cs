@@ -209,6 +209,16 @@ namespace dgSpy.Protocol {
 			Op("list_watches",20000),
 			Op("remove_watch",5000),
 			Op("list_modules",8000),
+			// Phase 6. Metadata loads lazily and decompilation is CPU-bound over an arbitrarily large
+			// method, so these get the widest bounds in the table. They run on the evaluation queue, not
+			// the dispatcher, so a slow one delays other evaluations but never event delivery.
+			Op("list_documents",30000),
+			Op("list_types",30000),
+			Op("list_members",30000),
+			Op("search_symbols",60000),
+			Op("get_il",30000),
+			Op("get_csharp",60000),
+			Op("set_breakpoint",30000,mutates:true),
 		};
 		public static readonly EngineCapabilities[] Engines = {
 			new EngineCapabilities {

@@ -179,7 +179,7 @@ try {
 
 	Write-Host "== discovery ==" -ForegroundColor Cyan
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
-	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame','update_breakpoint','set_exception_breakpoint','list_exception_breakpoints','step_into','step_over','step_out','evaluate','get_members','set_value','get_exception','add_watch','list_watches','remove_watch','list_modules') {
+	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame','update_breakpoint','set_exception_breakpoint','list_exception_breakpoints','step_into','step_over','step_out','evaluate','get_members','set_value','get_exception','add_watch','list_watches','remove_watch','list_modules','list_documents','list_types','list_members','search_symbols','get_il','get_csharp','set_breakpoint') {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
 	}
 
@@ -460,6 +460,54 @@ try {
 	Assert-That 'list_modules finds the target module' (@($modules | Where-Object { $_.filename -like '*Milestone1Target.exe' }).Count -eq 1) "(got $($modules.Count) modules)"
 	Assert-That 'a file-backed module reports that it can carry a breakpoint' (@($modules | Where-Object { $_.filename -like '*Milestone1Target.exe' }).can_set_breakpoint)
 	Assert-That 'every module without a path is marked as unable to carry a breakpoint' (@($modules | Where-Object { [string]::IsNullOrEmpty($_.filename) -and $_.can_set_breakpoint }).Count -eq 0)
+
+	Write-Host "== symbols, IL and decompilation ==" -ForegroundColor Cyan
+	$documents = @(Invoke-Tool -Name 'list_documents' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
+	$targetDoc = $documents | Where-Object { $_.filename -like '*Milestone1Target.exe' } | Select-Object -First 1
+	Assert-That 'list_documents finds the target and loads its metadata' ($null -ne $targetDoc -and $targetDoc.has_metadata) "(has_metadata=$($targetDoc.has_metadata))"
+	Assert-That 'list_documents reports assembly identity and a type count' (-not [string]::IsNullOrWhiteSpace($targetDoc.assembly_full_name) -and $targetDoc.type_count -ge 1)
+
+	$types = Invoke-Tool -Name 'list_types' -Arguments @{ session_id = $sessionId; module = $targetExe; name_pattern = 'Program' }
+	Assert-That 'list_types finds a type by pattern' (@($types.symbols | Where-Object { $_.full_name -eq 'Milestone1Target.Program' }).Count -eq 1) "(total=$($types.total))"
+	$members = Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.Program'; name_pattern = 'Tick' }
+	$tickMember = $members.symbols | Where-Object { $_.name -eq 'Tick' } | Select-Object -First 1
+	# The whole point of the symbol layer: a name in, the exact token set_il_breakpoint takes out.
+	Assert-That 'list_members returns the metadata token the breakpoint tools take' ($tickMember.method_token -eq $methodToken) "(was $($tickMember.method_token), expected $methodToken)"
+	Assert-That 'a member reports its declaring type and kind' ($tickMember.kind -eq 'method' -and $tickMember.declaring_type -eq 'Milestone1Target.Program')
+
+	$search = Invoke-Tool -Name 'search_symbols' -Arguments @{ session_id = $sessionId; pattern = 'Tick'; module = 'Milestone1Target'; kinds = @('method') }
+	Assert-That 'search_symbols reaches a method by name across modules' (@($search.symbols | Where-Object { $_.method_token -eq $methodToken }).Count -eq 1) "(total=$($search.total))"
+	$bounded = Invoke-Tool -Name 'search_symbols' -Arguments @{ session_id = $sessionId; pattern = 'e'; module = 'Milestone1Target'; count = 3 }
+	Assert-That 'search_symbols is bounded and reports truncation' (@($bounded.symbols).Count -le 3 -and $bounded.total -ge @($bounded.symbols).Count)
+
+	$il = Invoke-Tool -Name 'get_il' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken }
+	Assert-That 'get_il disassembles the method by token' (@($il.instructions).Count -gt 0 -and $il.method_token -eq $methodToken)
+	Assert-That 'get_il names the method and its declaring type' ($il.full_name -match 'Tick' -and $il.declaring_type -eq 'Milestone1Target.Program')
+	# This is what makes Mono's sequence-point rule discoverable instead of trial and error.
+	Assert-That 'get_il marks which offsets a Mono breakpoint could bind at' ($il.has_sequence_points -and @($il.instructions | Where-Object { $_.is_sequence_point }).Count -ge 1)
+	$ilByName = Invoke-Tool -Name 'get_il' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.Program'; method = 'Tick' }
+	Assert-That 'get_il resolves the same method by name as by token' ($ilByName.method_token -eq $methodToken)
+	$missingMethod = Invoke-Tool -Name 'get_il' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.Program'; method = 'NoSuchMethod' } -ExpectError
+	Assert-That 'an unknown method is refused with a pointer to list_members' ($missingMethod -match 'list_members')
+
+	$csharp = Invoke-Tool -Name 'get_csharp' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken }
+	Assert-That 'get_csharp decompiles the method body' ($csharp.code -match 'Tick' -and $csharp.code -match 'Sleep') "(len=$($csharp.code.Length))"
+	Assert-That 'get_csharp names the language it used' ($csharp.language -match 'C#')
+
+	# set_breakpoint by name must be the same breakpoint set_il_breakpoint produces, not a parallel path.
+	Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
+	$named = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = 'Tick' }
+	Assert-That 'set_breakpoint resolves a name to the right method token' ($named.method_token -eq $methodToken) "(was $($named.method_token))"
+	Assert-That 'set_breakpoint binds exactly as the token-based tool does' ($named.bound -and $named.severity -eq 'none') "(bound=$($named.bound) msg='$($named.message)')"
+	Assert-That 'set_breakpoint returns a cursor for wait_for_stop' ($null -ne $named.cursor_event_id)
+	$ambiguous = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = 'ReadInt' } -ExpectError:$false
+	Assert-That 'a non-overloaded sibling method also resolves' ($ambiguous.method_token -gt 0)
+	$badType = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Nope.Missing'; method = 'Tick' } -ExpectError
+	Assert-That 'an unknown type is refused with a pointer to list_types' ($badType -match 'list_types')
+	$badModule = Invoke-Tool -Name 'get_il' -Arguments @{ session_id = $sessionId; module = 'NotLoaded.dll'; method_token = $methodToken } -ExpectError
+	Assert-That 'an unloaded module is refused with a pointer to list_modules' ($badModule -match 'list_modules')
+	Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
+	$breakpoint = Invoke-Tool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
 
 	$reenabled = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true }
 	Assert-That 'the code breakpoint can be re-enabled after stepping' ($reenabled.enabled)

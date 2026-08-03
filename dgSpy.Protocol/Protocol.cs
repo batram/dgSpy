@@ -276,6 +276,67 @@ namespace dgSpy.Protocol {
 		/// breakpoint that never binds. Phase 6 owns in-memory module identity.</summary>
 		[JsonProperty("can_set_breakpoint")] public bool CanSetBreakpoint { get; set; }
 	}
+	/// <summary>A type or member, identified the way a breakpoint takes it. Display text is never the
+	/// identity: module plus token is, so a caller never has to parse a name back into one.</summary>
+	public sealed class SymbolInfo {
+		/// <summary><c>type</c>, <c>method</c>, <c>field</c>, <c>property</c> or <c>event</c>.</summary>
+		[JsonProperty("kind")] public string Kind { get; set; }="";
+		[JsonProperty("module")] public string Module { get; set; }="";
+		/// <summary>Metadata token. For a method this is exactly what <c>set_il_breakpoint</c> takes.</summary>
+		[JsonProperty("method_token")] public uint MethodToken { get; set; }
+		[JsonProperty("name")] public string Name { get; set; }="";
+		[JsonProperty("full_name")] public string FullName { get; set; }="";
+		[JsonProperty("declaring_type", NullValueHandling=NullValueHandling.Ignore)] public string? DeclaringType { get; set; }
+		[JsonProperty("namespace", NullValueHandling=NullValueHandling.Ignore)] public string? Namespace { get; set; }
+	}
+	public sealed class SymbolList {
+		[JsonProperty("symbols")] public SymbolInfo[] Symbols { get; set; }=Array.Empty<SymbolInfo>();
+		[JsonProperty("total")] public int Total { get; set; }
+		[JsonProperty("offset")] public int Offset { get; set; }
+		[JsonProperty("truncated")] public bool Truncated { get; set; }
+	}
+	public sealed class DocumentInfo {
+		[JsonProperty("name")] public string Name { get; set; }="";
+		[JsonProperty("filename")] public string Filename { get; set; }="";
+		[JsonProperty("process_id")] public int ProcessId { get; set; }
+		[JsonProperty("is_dynamic")] public bool IsDynamic { get; set; }
+		[JsonProperty("is_in_memory")] public bool IsInMemory { get; set; }
+		/// <summary>False for a module whose metadata dnSpy cannot load. Reported rather than the module
+		/// being omitted, because a silently missing module makes a type that exists look like it does not.</summary>
+		[JsonProperty("has_metadata")] public bool HasMetadata { get; set; }
+		[JsonProperty("assembly_full_name", NullValueHandling=NullValueHandling.Ignore)] public string? AssemblyFullName { get; set; }
+		[JsonProperty("type_count", NullValueHandling=NullValueHandling.Ignore)] public int? TypeCount { get; set; }
+	}
+	public sealed class IlInstruction {
+		[JsonProperty("offset")] public uint Offset { get; set; }
+		[JsonProperty("opcode")] public string OpCode { get; set; }="";
+		[JsonProperty("operand", NullValueHandling=NullValueHandling.Ignore)] public string? Operand { get; set; }
+		/// <summary>True when a breakpoint may sit here on Mono. Mono rejects every other offset with
+		/// <c>NO_SEQ_POINT_AT_IL_OFFSET</c>, which dnSpy turns into a silently unbound breakpoint;
+		/// CorDebug accepts any offset.</summary>
+		[JsonProperty("is_sequence_point")] public bool IsSequencePoint { get; set; }
+		[JsonProperty("line", NullValueHandling=NullValueHandling.Ignore)] public int? Line { get; set; }
+	}
+	public sealed class MethodBodyInfo {
+		[JsonProperty("module")] public string Module { get; set; }="";
+		[JsonProperty("method_token")] public uint MethodToken { get; set; }
+		[JsonProperty("full_name")] public string FullName { get; set; }="";
+		[JsonProperty("declaring_type", NullValueHandling=NullValueHandling.Ignore)] public string? DeclaringType { get; set; }
+		[JsonProperty("max_stack")] public ushort MaxStack { get; set; }
+		[JsonProperty("code_size")] public uint CodeSize { get; set; }
+		[JsonProperty("local_count")] public int LocalCount { get; set; }
+		[JsonProperty("exception_handler_count")] public int ExceptionHandlerCount { get; set; }
+		/// <summary>False means no PDB was available — <em>not</em> that there are no legal breakpoint
+		/// offsets. Those are very different answers for a Mono caller.</summary>
+		[JsonProperty("has_sequence_points")] public bool HasSequencePoints { get; set; }
+		[JsonProperty("instructions")] public IlInstruction[] Instructions { get; set; }=Array.Empty<IlInstruction>();
+	}
+	public sealed class DecompiledCode {
+		[JsonProperty("module")] public string Module { get; set; }="";
+		[JsonProperty("name")] public string Name { get; set; }="";
+		[JsonProperty("language")] public string Language { get; set; }="";
+		[JsonProperty("code")] public string Code { get; set; }="";
+	}
 	/// <summary>Bounded listing of exception stop settings. Bounded on purpose: dnSpy stops on second
 	/// chance for essentially every .NET exception it knows, so an unfiltered listing is thousands of
 	/// entries that are identical on every machine.</summary>

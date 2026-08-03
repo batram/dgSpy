@@ -438,7 +438,17 @@ Three tools from the original list are deliberately gone:
 - ⏭️ `stale_handle` is still reasoned about rather than provoked — see work item 7. The check exists and
   runs on every evaluation; what is missing is an evaluation slow enough to lose the race deliberately.
 
-## Phase 6: Decompiled C#, IL, metadata, and search
+## Phase 6: Decompiled C#, IL, metadata, and search — **symbol layer complete, search partial**
+
+Closed out 2026-08-03 for everything that unblocks a caller who does not already know a metadata token:
+`list_documents`, `list_types`, `list_members`, `search_symbols`, `get_il`, `get_csharp`, and
+`set_breakpoint` by type and method name. Verified by the live CorDebug smoke.
+
+**Deliberately not built, and still open:** `search_text`, `find_references`, `find_implementations`,
+`get_metadata` (raw metadata tables), and `get_raw_module`. `get_method_body` is subsumed by `get_il`,
+which returns the body with offsets, operands and sequence points. The five that remain are analysis
+conveniences over metadata that is now reachable; none of them blocks the debugger workflow, and
+reference analysis in particular wants dnSpy's analyzer services rather than a hand-rolled scan.
 
 **Consider taking this before the rest of Phase 5.** Today a breakpoint requires the caller to already
 know a metadata token, which for the UCH workflow is the single largest gap between "the debugger works"
@@ -463,7 +473,19 @@ below is what closes it. Evaluation is more capability; this is more reach.
 
 ### MCP tools
 
-- `set_breakpoint` (by module/type/method name; needs items 2 and 8)
+- `set_breakpoint` (implemented — resolves the name, then takes the identical `set_il_breakpoint` path,
+  so binding state, Mono snapping and `cursor_event_id` cannot diverge between the two)
+- `list_documents` (implemented)
+- `list_types` (implemented, paged and filtered)
+- `list_members` (implemented, paged and filtered)
+- `search_symbols` (implemented, bounded)
+- `get_il` (implemented, with `is_sequence_point` per instruction)
+- `get_csharp` (implemented, method or whole type)
+- `search_text`, `find_references`, `find_implementations`, `get_metadata`, `get_raw_module` — **open**
+- `get_method_body` — subsumed by `get_il`
+
+Original list, retained for reference:
+
 - `list_documents`
 - `list_types`
 - `list_members`
@@ -479,12 +501,19 @@ below is what closes it. Evaluation is more capability; this is more reach.
 
 ### Exit criteria
 
-- The agent can navigate from a paused frame to its method's C# and IL.
-- Dynamic and self-modifying modules can use their in-memory image when available, including the
-  file-less modules a UCH stack can name.
-- Search results include enough identity to set breakpoints without parsing display text.
-- A breakpoint can be set from a type and method name alone, with no token supplied by the caller.
-- Large assemblies and result sets remain bounded and cancellable.
+- ✅ The agent can navigate from a paused frame to its method's C# and IL: the frame reports module and
+  token, and both `get_il` and `get_csharp` take exactly those.
+- ⚠️ Dynamic and in-memory modules resolve *metadata* through `DbgMetadataService`, so `get_csharp` and
+  `get_il` reach them. `set_breakpoint` still cannot: dnSpy's code-location factory addresses modules by
+  path. That is now an explicit `module_has_no_path` error plus a `can_set_breakpoint: false` flag on
+  `list_modules`, rather than a breakpoint that never binds. Not verified against a real file-less
+  module — the CorDebug fixture has none, and the known one is a UCH stack.
+- ✅ Search results include enough identity to set breakpoints without parsing display text: module plus
+  metadata token, verified by feeding a `list_members` token straight into the breakpoint tools.
+- ✅ A breakpoint can be set from a type and method name alone, with no token supplied by the caller.
+  Ambiguous types and overloaded methods return the candidates rather than picking one.
+- ✅ Large assemblies and result sets remain bounded: every listing is paged or capped and reports
+  `total` and `truncated`, and every operation carries a bound the gateway derives its deadline from.
 
 ## Phase 7: Advanced evaluation and low-level debugging
 
