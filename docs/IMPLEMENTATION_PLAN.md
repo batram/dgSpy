@@ -43,23 +43,34 @@ Progress:
 - **Complete:** stable extension `host_id`, authenticated gateway-to-extension RPC, and central-Gateway
   registration/discovery/routing through loopback tunnel endpoints. Requests fail closed on missing or
   invalid credentials, ambiguous/unknown hosts, mismatched identity, and non-loopback registry addresses.
-- **Open:** live SSH-tunnel acceptance, MCP client identity, leases, permissions, disconnect policy, audit
-  records, client-to-Gateway HTTPS, and any direct encrypted listener.
+- **Open:** self-contained remote-host packaging, live SSH-tunnel acceptance, MCP client identity, leases,
+  permissions, disconnect policy, audit records, client-to-Gateway HTTPS, and any direct encrypted
+  listener.
 
-1. Verify multi-host registration, discovery, and routing over live SSH tunnels.
-2. Retain authenticated extension RPC and loopback binding as the default endpoint boundary.
-3. Complete MCP Streamable HTTP session behavior required by strict clients.
-4. Define session ownership or leases before supporting competing clients or independent sessions.
-5. Add per-client and per-target permissions for discovery, inspection, execution control, mutation,
+1. Produce a self-contained x64 remote debugger-host bundle built on the central development machine:
+   dnSpyEx, a compatible dgSpy extension target, protocol/runtime dependencies, and a process-scoped
+   launcher. A remote Windows host must not need Git, an SDK, Visual Studio/MSBuild, a separately
+   installed .NET runtime, a VC++ redistributable installer, or a local Gateway. Include any required
+   managed and native runtime files in the bundle and publish a deterministic manifest with hashes.
+2. Verify the bundle on a clean Windows Server host using copy/extract plus the launcher only. Prove MEF
+   composition, authenticated port 7351 startup, host identity persistence, debugger attach/control, safe
+   detach, restart, and removal without leaving machine-wide configuration behind.
+3. Verify multi-host registration, discovery, and routing over live SSH tunnels.
+4. Retain authenticated extension RPC and loopback binding as the default endpoint boundary.
+5. Complete MCP Streamable HTTP session behavior required by strict clients.
+6. Define session ownership or leases before supporting competing clients or independent sessions.
+7. Add per-client and per-target permissions for discovery, inspection, execution control, mutation,
    termination, host export, target-code execution, artifact editing, live patching, and host scripting.
-6. Define disconnect behavior that never silently resumes, detaches, or terminates a paused target.
-7. Add bounded, redacted audit records for side-effecting operations.
-8. Document SSH or WireGuard tunnels as the default remote path. Direct exposure additionally requires
+8. Define disconnect behavior that never silently resumes, detaches, or terminates a paused target.
+9. Add bounded, redacted audit records for side-effecting operations.
+10. Document SSH or WireGuard tunnels as the default remote path. Direct exposure additionally requires
    TLS, mutual client authentication, request/rate limits, and explicit capability policies.
 
 Exit criteria:
 
 - An authenticated remote client can select a host and debug a target through the supported path.
+- A supported remote Windows host can run the published debugger bundle after file deployment alone,
+  without installing development tools, frameworks, runtimes, redistributables, or the Gateway.
 - The debugger is unreachable from the VM or LAN except through that path.
 - Reconnection preserves session state and event cursors when dnSpy survives.
 - Authorization tests prove an inspection-only client cannot control, mutate, terminate, export,
