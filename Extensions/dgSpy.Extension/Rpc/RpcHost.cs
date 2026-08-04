@@ -27,14 +27,14 @@ using Newtonsoft.Json.Linq;
 
 namespace dgSpy.Extension {
 	sealed partial class RpcHost : IDisposable {
-		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DebuggerSettings debuggerSettings; readonly DbgCodeBreakpointsService breakpoints; readonly DbgModuleBreakpointsService moduleBreakpoints; readonly DbgObjectIdService objectIds; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions; readonly DbgMetadataService metadataService; readonly IDecompilerService decompilers;
+		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DebuggerSettings debuggerSettings; readonly DbgCodeBreakpointsService breakpoints; readonly DbgModuleBreakpointsService moduleBreakpoints; readonly DbgObjectIdService objectIds; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions; readonly DbgMetadataService metadataService; readonly Lazy<DbgModuleIdProvider>[] moduleIdProviders; readonly IDecompilerService decompilers;
 		readonly EvaluationQueue evaluations=new EvaluationQueue(); readonly SemaphoreSlim targetControl=new SemaphoreSlim(1,1);
 		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>();
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		TcpListener? tcpListener;
 		Task? listener; string? sessionId; string? attachedProgramId; string? sessionKind; string? lifecycleAction; long stateVersion; bool attaching; bool faulted; string? faultMessage; string? lastUserMessage; int? terminalExitCode; string? terminalReason;
-		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDecompilerService decompilers) {
-			this.programs=programs; this.manager=manager; this.debuggerSettings=debuggerSettings; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.decompilers=decompilers;
+		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers) {
+			this.programs=programs; this.manager=manager; this.debuggerSettings=debuggerSettings; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.moduleIdProviders=moduleIdProviders.ToArray(); this.decompilers=decompilers;
 			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { if (manager.IsRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded);
 			// An engine that fails to connect reports it here rather than through DbgManager.Start, which
 			// only rejects options it cannot build an engine from. Recording it turns "faulted" from a
@@ -288,17 +288,20 @@ namespace dgSpy.Extension {
 			var token=(uint?)req.Arguments["method_token"] ?? 0;
 			var requested=(uint?)req.Arguments["il_offset"] ?? 0;
 			bool snap=(bool?)req.Arguments["snap_to_sequence_point"] ?? true;
+			// Loaded modules use the engine's exact identity, including dynamic/in-memory discriminators;
+			// unloaded file paths retain dnSpy's pending-breakpoint behavior.
+			var moduleId=await ResolveBreakpointModuleIdAsync(req,module,cancellationToken).ConfigureAwait(false);
 			// Captured before the breakpoint can exist. A breakpoint on a hot method is hit before the
 			// caller can read an event cursor afterwards, so a cursor taken after this call has already
 			// missed the stop and wait_for_stop reports a timeout for a breakpoint that is working.
 			long cursor; lock(sync) cursor=events.LastEventId;
-			var info=await AddBreakpointAsync(module,token,requested,requested,cancellationToken).ConfigureAwait(false);
+			var info=await AddBreakpointAsync(moduleId,token,requested,requested,cancellationToken).ConfigureAwait(false);
 			info.CursorEventId=cursor;
 			// Only an outright Error means refused. No bound breakpoints with no error is a pending
 			// breakpoint whose module has not loaded yet, which is legitimate and must not be retried.
 			if (info.Bound || info.Severity!="error" || !snap || requested==0) return info;
 			await RemoveBreakpointAsync(info.BreakpointId,cancellationToken).ConfigureAwait(false);
-			var entry=await AddBreakpointAsync(module,token,0,requested,cancellationToken).ConfigureAwait(false);
+			var entry=await AddBreakpointAsync(moduleId,token,0,requested,cancellationToken).ConfigureAwait(false);
 			// Remembered so list_breakpoints keeps reporting that this breakpoint is not where it was asked
 			// to be; the location itself no longer carries that.
 			lock(sync) requestedOffsets[entry.BreakpointId]=requested;
@@ -306,9 +309,9 @@ namespace dgSpy.Extension {
 			entry.Warning=$"The engine refused IL offset 0x{requested:X} ({info.Message}); on Mono a breakpoint can only sit on a sequence point. This one is at method entry (offset 0) instead, so it stops earlier than requested — and if the method is only entered once, possibly not at all. Pass snap_to_sequence_point=false to get the failure instead.";
 			return entry;
 		}
-		async Task<BreakpointInfo> AddBreakpointAsync(string module,uint token,uint offset,uint requested,CancellationToken cancellationToken) {
+		async Task<BreakpointInfo> AddBreakpointAsync(ModuleId module,uint token,uint offset,uint requested,CancellationToken cancellationToken) {
 			var bp=await OnDebuggerAsync(()=>{
-				var location=locations.Create(ModuleId.Create(module),token,offset);
+				var location=locations.Create(module,token,offset);
 				var added=breakpoints.Add(new DbgCodeBreakpointInfo(location,new DbgCodeBreakpointSettings { IsEnabled=true }));
 				// Add returns null when the location is already taken; the location we just cloned would
 				// otherwise leak, since only the owning breakpoint closes it.
@@ -462,7 +465,7 @@ namespace dgSpy.Extension {
 		// of not holding the dispatcher, and it is why the snapshot is rejected rather than patched up.
 		FrameInfo DescribeFrame(CapturedFrame captured,CancellationToken cancellationToken) {
 			var (frame,language,info)=(captured.Frame,captured.Language,captured.Info);
-			if (frame.IsClosed) throw new RpcException("stale_handle","The target resumed while its call stack was being read. Pause again and request a fresh snapshot.");
+			FrameSnapshotGuard.EnsureOpen(frame.IsClosed,"The target resumed while its call stack was being read. Pause again and request a fresh snapshot.");
 			var context=language.CreateContext(frame,cancellationToken:cancellationToken);
 			try {
 				var eval=new DbgEvaluationInfo(context,frame,cancellationToken);

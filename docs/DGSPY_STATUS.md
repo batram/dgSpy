@@ -62,7 +62,7 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | Evaluation off the dispatcher (`EvaluationQueue`)                                                                             | ✅ built and regression-tested, benefit not directly observable                         |
 | Response serialization off the dispatcher                                                                                     | ✅ built, not directly observable                                                       |
 | Extension split into entry point, RPC, debugger, events, and identity boundaries                                              | ✅ built                                                                                |
-| `dgSpy.Extension.Tests` identity, state, and event-cursor coverage                                                            | ✅ 15 tests                                                                             |
+| `dgSpy.Extension.Tests` identity, state, event-cursor, and stale-frame coverage                                               | ✅ 17 tests                                                                             |
 | Event-kind and stop-reason vocabularies advertised in `get_capabilities`                                                      | ✅ verified both engines                                                                |
 | Every kind the Mono engine actually emits is in the advertised vocabulary                                                     | ✅ cross-checked against a live UCH session                                             |
 | An unknown `kinds` value is rejected rather than silently matching nothing                                                    | ✅ verified both engines                                                                |
@@ -77,8 +77,8 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | `get_members` — one level, paged, `total` / `truncated`, member expressions round-trip                                        | ✅ automated live                                                                       |
 | `set_value` — assigns in the target, reads back, reports `compiler_error`                                                     | ✅ automated live                                                                       |
 | `add_watch` / `list_watches` / `remove_watch`; a failing watch does not fail the call                                         | ✅ automated live                                                                       |
-| `list_modules` — `can_set_breakpoint` false for file-less modules                                                             | ✅ automated live                                                                       |
-| Dynamic and in-memory modules — metadata, IL, C#, raw image, refusal, and a frame naming one                                  | ✅ automated live (CorDebug); Mono open                                                 |
+| `list_modules` — `can_set_breakpoint` follows the engine's published module identity                                         | ✅ automated CorDebug + live Mono                                                       |
+| Dynamic and in-memory modules — metadata, IL, C#, raw image, breakpoints, and a frame naming one                              | ✅ automated CorDebug + live Mono binding                                                |
 | **Phase 6 closed out** — symbols, decompilation, text search, analysis, metadata, raw modules                                 | ✅ 2026-08-04 (CorDebug + UCH)                                                          |
 | `list_documents` / `list_types` / `list_members` — paged, tokens included                                                     | ✅ automated live                                                                       |
 | `search_symbols` — name to module + token, bounded                                                                            | ✅ automated live                                                                       |
@@ -106,13 +106,13 @@ Test suites, all green:
 
 ```powershell
 dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 29 checks, wire + capability contract
-dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 174 checks, access control + deadline bounds
-dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 16 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 363 checks, end to end
+dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 182 checks, access control + transport + deadlines
+dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 17 checks, extension core
+.\tests\run-milestone1-smoke.ps1                                       # 365 checks, end to end
 ```
 
-All four suites are green as of 2026-08-04: 29 / 174 / 16 unit
-checks and 363 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
+All four suites are green as of 2026-08-04: 29 / 182 / 17 unit
+checks and 365 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
 verified against live UCH — see
 [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). **Phases 4 and 5 are verified on CorDebug only.**
 Phase 8 has a dedicated 29-check UCH pass, including an actual module-unload breakpoint stop, an actual
@@ -121,34 +121,34 @@ detach-driven object-ID cleanup. Phase 7 mutation and low-level operations have 
 Mono/Unity; Mono differs enough elsewhere (sequence points, asynchronous frame fetch) that those remain real
 gaps rather than formalities.
 
-## Remaining gaps
+## Closed gaps and explicit boundaries
 
-### Partly addressed: frames can name a module that has no file
+### Closed: frames can name a module that has no file
 
 A UCH stack contained `data-000001BE153D3040` — an in-memory or dynamic module. **Metadata for such a
-module is now reachable**: `DbgMetadataService` resolves it, so `get_csharp`, `get_il`, `list_types` and
-`list_members` all work against it. **Breakpoints still cannot be set on one**, because dnSpy's code
-location factory addresses modules by path. That is now an explicit `module_has_no_path` error and a
-`can_set_breakpoint: false` flag on `list_modules` rather than a breakpoint that silently never binds.
+module is reachable**: `DbgMetadataService` resolves it, so `get_csharp`, `get_il`, `list_types` and
+`list_members` all work against it. **Breakpoints now work as well.** dgSpy imports dnSpy's engine
+`DbgModuleIdProvider` instances and uses their full runtime identity rather than a path-only identity.
+`list_modules.can_set_breakpoint` reports whether an engine provider published that identity.
 
 Verified on CorDebug as of 2026-08-04. The fixture now carries two file-less modules of its own — an
 assembly loaded from bytes and a Reflection.Emit dynamic assembly — each reached only through a callback
 into the target, so a breakpoint in the callee leaves the file-less module's frame at index 1. The smoke
-drives metadata, IL, C#, raw image, the refusal and that frame for both. What the live run corrected:
+drives metadata, IL, C#, raw image, breakpoint binding and a real stop, plus that frame for both.
+What the live run corrected:
 
-- **An in-memory module reports a bare assembly name as its filename**, not an empty string. The
-  `can_set_breakpoint` flag already accounted for that; the `set_breakpoint` guard did not, and accepted
-  such a module — producing exactly the never-binding breakpoint the flag exists to prevent. Both now
-  share `RpcHost.CanCarryBreakpoint`.
+- **An in-memory module reports a bare assembly name as its filename**, not an empty string. File paths
+  are therefore display data, not breakpoint identity; the engine's `DbgModuleIdProvider` is authoritative.
 - **dnSpy reports a dynamic module as in-memory as well.** `is_dynamic` is what separates the two.
-- **`set_il_breakpoint` still has no such guard** — it takes a path and gets a name. It does not report
-  the breakpoint as bound, so the gap is visible, but it is not refused. Unchanged and asserted as-is.
+- Both breakpoint entry points now resolve a loaded module through the same runtime identity. An
+  unloaded file-backed path retains dnSpy's pending-breakpoint behavior.
 
 **Mono verified 2026-08-04** against live UCH — see [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md).
-A modded UCH carries 16 file-less modules (MonoMod, four `HarmonyDTFAssembly*`, an in-memory copy of
-`UnityEngine.CoreModule`, nine `eval-*`); metadata, IL, C#, raw image and the refusal all behave as on
-CorDebug, and `eval-*` modules — which publish no metadata at all — refuse with `metadata_unavailable`
-rather than returning empty data. The one thing still not reproduced on Mono is a _frame_ whose module
+A modded UCH carries metadata-backed MonoMod/Harmony/Unity modules plus transient `eval-*` modules;
+metadata, IL, C#, and raw image behave as on
+CorDebug. Breakpoint binding is live-verified on three metadata-backed file-less Mono modules. The
+`eval-*` modules publish neither metadata nor a stable identity, so reads refuse with
+`metadata_unavailable` and `can_set_breakpoint` stays false. The one thing still not reproduced on Mono is a _frame_ whose module
 has no file: Harmony patch frames report the original file-backed module, and the single historical
 sighting was a rendering UI-thread stack.
 
@@ -158,11 +158,11 @@ sighting was a rendering UI-thread stack.
    dispatcher callback or a started evaluation runs to completion, because dnSpy exposes no way to
    cancel either. Commented at both call sites in `ExtensionEntryPoint.cs`. This is the one Phase 1
    exit criterion that was amended rather than met; it is now advertised to callers as
-   `limits.cancels_in_flight_work: false` instead of being left to be discovered. Revisit when
-   func-eval makes evaluations long enough for the difference to bite.
-2. **The `stale_handle` path is untested.** `DescribeFrame` rejects a snapshot whose frame closed
-   mid-evaluation, but with `NoFuncEval` evaluations are milliseconds and the race cannot be triggered
-   reliably. Revisit when func-eval makes evaluations long enough to manipulate.
+   `limits.cancels_in_flight_work: false` instead of being left to be discovered. Func-eval has its
+   own hard engine timeout; a dispatcher callback already executing remains an upstream constraint.
+2. **The `stale_handle` path has deterministic contract coverage.** `FrameSnapshotGuard` is called
+   immediately before frame reads and evaluation, and its exact error code is unit-tested. The physical
+   resume-at-that-instruction race remains intentionally unsuitable as a deterministic live fixture.
 3. **A connect failure leaves a modal dnSpy error dialog on screen.** dnSpy's own UI subscribes to
    `MessageUserMessage` and shows a message box. It runs on the UI thread, so it blocks neither the
    debugger dispatcher nor RPC — dgSpy keeps working around it — but nothing headless dismisses it, and
@@ -181,13 +181,14 @@ sighting was a rendering UI-thread stack.
 
 ### Quality and structure
 
-1. **Milestone 1 operations still share one partial `RpcHost`.** That intentionally preserves ownership
-   of dnSpy dispatcher-bound objects, but physical responsibilities are now separated into `Rpc/`,
-   `Debugger/`, `Events/`, and `Identity/`. Add Phase 3/4 families as focused
-   `RpcHost.<Family>.cs` partials; if a family gains independently testable policy, extract that policy
-   behind an interface rather than passing dnSpy objects through the transport layer.
-2. **Gateway implements only the POST half of Streamable HTTP** — no `Mcp-Session-Id` handling, no
-   SSE/GET. Fine for our client; a strict MCP client may object. `protocolVersion` is hardcoded.
+1. **`RpcHost` remains one logical owner split across focused partials.** Physical responsibilities are
+   separated into RPC, debugger, evaluation, decompiler, events, and identity files; independently
+   testable policy lives in pure helpers. dnSpy dispatcher objects deliberately do not cross that owner.
+2. **Streamable HTTP compatibility is closed.** `POST /mcp` negotiates supported protocol revisions,
+   validates subsequent version headers, and returns 202 for notifications. `GET /mcp` returns the
+   specification-defined 405 because dgSpy has no server-initiated SSE messages. The transport is
+   deliberately stateless and therefore does not mint optional `MCP-Session-Id` values; debugger
+   ownership continues to use explicit tool `session_id` arguments.
 3. ~~**Per-tool gateway deadlines are a hardcoded table.**~~ Fixed 2026-08-03. The bounds live in
    `dgSpy.Protocol.CapabilityCatalog`, the extension serves them through `get_capabilities`, and
    `ToolCatalog.DeadlineSeconds` derives each deadline from the matching bound plus a margin. A gateway

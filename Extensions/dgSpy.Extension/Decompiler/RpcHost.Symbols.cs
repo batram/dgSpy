@@ -11,6 +11,7 @@ using dnlib.DotNet.Emit;
 using dnSpy.Contracts.Debugger;
 using dnSpy.Contracts.Debugger.DotNet.Metadata;
 using dnSpy.Contracts.Decompiler;
+using dnSpy.Contracts.Metadata;
 
 namespace dgSpy.Extension {
 	sealed partial class RpcHost {
@@ -24,13 +25,23 @@ namespace dgSpy.Extension {
 		/// <summary>Resolves a caller-supplied module name or path to a live debugger module. Accepts a
 		/// full path, a filename, or the module's short name, because a caller holding a frame has a
 		/// path, one holding a search result has a name, and refusing either is just friction.</summary>
-		/// <summary>Whether <c>set_il_breakpoint</c> can address this module, which takes a file path.
-		/// An in-memory module reports a bare assembly name as its filename rather than nothing at all,
-		/// so emptiness alone is not the test — and getting that wrong is how the caller ends up with a
-		/// breakpoint that never binds instead of a refusal. <c>list_modules</c> reports this same
-		/// predicate as <c>can_set_breakpoint</c>; the two must never disagree.</summary>
-		internal static bool CanCarryBreakpoint(DbgModule module) =>
-			!string.IsNullOrEmpty(module.Filename) && !module.IsInMemory && !module.IsDynamic;
+		/// <summary>Gets the engine's stable identity for breakpoint binding. An in-memory module reports
+		/// a bare assembly name as its filename rather than nothing at all, but that display value omits
+		/// the engine's per-module discriminator and produces a breakpoint that never binds.
+		/// <c>list_modules</c> reports this same predicate as
+		/// <c>can_set_breakpoint</c>; the two must never disagree.</summary>
+		ModuleId? GetModuleId(DbgModule module) => moduleIdProviders.Select(provider=>provider.Value.GetModuleId(module)).FirstOrDefault(id=>id is not null);
+
+		bool CanCarryBreakpoint(DbgModule module) => GetModuleId(module) is not null;
+
+		async Task<ModuleId> ResolveBreakpointModuleIdAsync(RpcRequest req,string module,CancellationToken cancellationToken) {
+			DbgModule? loaded=null;
+			try { loaded=await OnDebuggerAsync(()=>FindModule(req,module),cancellationToken).ConfigureAwait(false); }
+			catch (RpcException ex) when (ex.Code=="module_not_found") { }
+			if (loaded is null) return ModuleId.Create(module);
+			return await OnDebuggerAsync(()=>GetModuleId(loaded)
+				?? throw new RpcException("metadata_unavailable",$"dnSpy cannot construct a breakpoint identity for '{module}' because the runtime published no module identity."),cancellationToken).ConfigureAwait(false);
+		}
 
 		DbgModule FindModule(string module) {
 			var all=manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules).ToArray();
@@ -378,11 +389,6 @@ namespace dgSpy.Extension {
 				return method.MDToken.ToUInt32();
 			},cancellationToken).ConfigureAwait(false);
 			var module=req.Arguments.Value<string>("module")!;
-			var dbgModule=await OnDebuggerAsync(()=>FindModule(req,module),cancellationToken).ConfigureAwait(false);
-			var (path,addressable)=await OnDebuggerAsync(()=>(dbgModule.Filename,CanCarryBreakpoint(dbgModule)),cancellationToken).ConfigureAwait(false);
-			if (!addressable)
-				throw new RpcException("module_has_no_path",$"'{module}' is an in-memory or dynamic module, so it has no file path for set_il_breakpoint to address; the runtime reports '{path}', which is not one. Its metadata is readable through get_csharp and get_il.");
-			req.Arguments["module"]=path;
 			req.Arguments["method_token"]=resolved;
 			if (req.Arguments["il_offset"] is null) req.Arguments["il_offset"]=0;
 			return await SetBreakpointAsync(req,cancellationToken).ConfigureAwait(false);

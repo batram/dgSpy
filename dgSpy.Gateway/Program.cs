@@ -24,6 +24,9 @@ if (string.IsNullOrEmpty(token)) {
 Console.WriteLine($"dgSpy gateway listening; send it as the {RequestGuard.TokenHeader} header.");
 
 app.MapGet("/health", () => Results.Json(new { status="ok", protocol_version=ProtocolVersion.Current }));
+// dgSpy has no server-initiated MCP messages. Streamable HTTP requires GET to exist, but explicitly
+// permits 405 when a server offers no SSE stream.
+app.MapGet("/mcp", () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed));
 app.MapPost("/mcp", async (HttpContext http, LocalRpcClient rpc, CancellationToken cancellationToken) => {
 	var rejection = RequestGuard.Reject(http.Request.Headers.Origin, http.Request.Headers[RequestGuard.TokenHeader], token, http.Connection.RemoteIpAddress);
 	if (rejection is not null) return Results.Json(new { jsonrpc="2.0", id=(JToken?)null, error=new { code=-32600, message=rejection } }, statusCode: StatusCodes.Status403Forbidden);
@@ -32,8 +35,14 @@ app.MapPost("/mcp", async (HttpContext http, LocalRpcClient rpc, CancellationTok
 	var id = root["id"];
 	try {
 		var method = (string?)root["method"];
-		if (method == "initialize") return Results.Json(new { jsonrpc="2.0", id, result=new { protocolVersion="2025-03-26", capabilities=new { tools=new {} }, serverInfo=new { name="dgSpy", version="0.1.0" } } });
-		if (method == "notifications/initialized") return Results.NoContent();
+		if (method == "initialize") {
+			var negotiated=McpProtocol.Negotiate((string?)root["params"]?["protocolVersion"]);
+			return Results.Json(new { jsonrpc="2.0", id, result=new { protocolVersion=negotiated, capabilities=new { tools=new { listChanged=false } }, serverInfo=new { name="dgSpy", version="0.1.0" } } });
+		}
+		if (!McpProtocol.IsValidRequestVersion(http.Request.Headers[McpProtocol.VersionHeader]))
+			return Results.BadRequest(new { jsonrpc="2.0", id, error=new { code=-32600, message=$"Unsupported {McpProtocol.VersionHeader}. Supported: {string.Join(", ",McpProtocol.Supported)}." } });
+		// Accepted JSON-RPC notifications have no response body and use 202 in Streamable HTTP.
+		if (id is null) return Results.Accepted();
 		if (method == "tools/list") return Results.Json(new { jsonrpc="2.0", id, result=new { tools=ToolCatalog.All } });
 		if (method != "tools/call") return McpError(id, -32601, "Method not found");
 		var name=(string?)root["params"]?["name"] ?? ""; var args=(JObject?)root["params"]?["arguments"] ?? new JObject();
@@ -129,7 +138,7 @@ public static class ToolCatalog {
 		Tool("add_watch", "Store an expression to re-evaluate later. Watches are expressions, not value handles: a handle goes stale on the next resume, an expression survives it. Adding the same expression twice returns the existing watch_id.", new { session_id=new { type="string" }, expression=new { type="string" } }, new[]{"session_id","expression"}),
 		Tool("list_watches", "Evaluate every stored watch against a paused frame in one pass. A watch whose expression fails reports its own error instead of failing the call, so one bad expression cannot hide the rest.", new { session_id=new { type="string" }, thread_id=new { type="string" }, frame_index=new { type="integer", minimum=0 }, allow_func_eval=new { type="boolean" } }, new[]{"session_id"}),
 		Tool("remove_watch", "Remove one stored watch by id.", new { session_id=new { type="string" }, watch_id=new { type="integer" } }, new[]{"session_id","watch_id"}),
-		Tool("list_modules", "List loaded modules for every runtime in the session, with the file path set_il_breakpoint needs. can_set_breakpoint is false for in-memory and dynamic modules, which have no path and therefore cannot carry a breakpoint yet.", new { session_id=new { type="string" } }, new[]{"session_id"}),
+		Tool("list_modules", "List loaded modules for every runtime in the session. can_set_breakpoint reflects whether the engine publishes a stable ModuleId; metadata-backed in-memory and dynamic modules are supported even without a file path.", new { session_id=new { type="string" } }, new[]{"session_id"}),
 		Tool("list_documents", "List loaded modules with their metadata state: assembly full name, type count, and whether dnSpy could load metadata at all. A module whose metadata fails to load is reported with has_metadata=false rather than omitted, because a silently missing module makes a type that exists look like it does not.", new { session_id=new { type="string" } }, new[]{"session_id"}),
 		Tool("list_types", "List types in a loaded module, filtered and paged. Each result carries the metadata token, so a breakpoint can be set from it without parsing display text.", new { session_id=new { type="string" }, module=new { type="string", description="Full path, filename, or module name from list_modules." }, name_pattern=new { type="string", description="Case-insensitive substring match on the full type name." }, offset=new { type="integer", minimum=0 }, count=new { type="integer", minimum=1, maximum=500, description="Default 100." } }, new[]{"session_id","module"}),
 		Tool("list_members", "List methods, fields, properties and events of a type, with metadata tokens. An ambiguous type name is reported with the candidates rather than resolved by guessing.", new { session_id=new { type="string" }, module=new { type="string" }, type=new { type="string", description="Full type name, or a unique short name." }, name_pattern=new { type="string" }, offset=new { type="integer", minimum=0 }, count=new { type="integer", minimum=1, maximum=500, description="Default 200." } }, new[]{"session_id","module","type"}),

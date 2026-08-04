@@ -97,7 +97,7 @@ Required checks:
 - Clean dnSpy/dgSpy build and sequential unit suites.
 - CorDebug raw module, metadata, IL, C#, dynamic assembly, in-memory assembly, analyzer, and export paths.
 - Mono/Unity file-backed and file-less metadata/IL/C#/raw-module paths.
-- SHA-256, paging, truncation, malformed metadata, and breakpoint refusal for modules without usable paths.
+- SHA-256, paging, truncation, malformed metadata, and engine identity for modules without usable paths.
 
 Exit criteria:
 
@@ -179,11 +179,8 @@ requires them:
 
 - CoreCLR and x86 support, each with its own engine fixtures and capability expectations.
 - Visual Basic parity.
-- Strict Streamable HTTP GET/SSE and negotiated protocol versions.
 - A deterministic Unity fixture for currently manual or unsafe Mono verification gaps.
-- Reliable stale-frame race coverage once longer evaluation makes it triggerable.
 - Headless handling of dnSpy's modal connection-failure dialog.
-- Breakpoints for in-memory/dynamic modules if dnSpy/dnSpyEx exposes a stable non-path code identity.
 - Multi-session isolation beyond multiple targets inside the default debugger manager.
 
 ## Section 5 — Documentation completion

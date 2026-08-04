@@ -555,9 +555,9 @@ try {
 	$modules = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
 	Assert-That 'list_modules finds the target module' (@($modules | Where-Object { $_.filename -like '*Milestone1Target.exe' }).Count -eq 1) "(got $($modules.Count) modules)"
 	Assert-That 'a file-backed module reports that it can carry a breakpoint' (@($modules | Where-Object { $_.filename -like '*Milestone1Target.exe' }).can_set_breakpoint)
-	# Not "has no filename": an in-memory module reports a bare assembly name there, which is not a path
-	# set_il_breakpoint can use. The dynamic and in-memory flags are the honest test.
-	Assert-That 'every dynamic or in-memory module is marked as unable to carry a breakpoint' (@($modules | Where-Object { ($_.is_dynamic -or $_.is_in_memory) -and $_.can_set_breakpoint }).Count -eq 0)
+	# Not "has no filename": an in-memory module reports a bare assembly name there, while the engine
+	# identity carries the additional discriminator breakpoint binding needs.
+	Assert-That 'metadata-backed dynamic or in-memory fixture modules can carry breakpoints' (@($modules | Where-Object { ($_.is_dynamic -or $_.is_in_memory) -and $_.can_set_breakpoint }).Count -ge 2)
 
 	Write-Host "== advanced evaluation and low-level debugging ==" -ForegroundColor Cyan
 	$invoked = Invoke-Tool -Name 'invoke_method' -Arguments @{ session_id = $sessionId; expression = 'System.Math.Abs(-7)'; thread_id = $stepThread; frame_index = 0; timeout_ms = 2000 }
@@ -749,7 +749,7 @@ try {
 
 		$flModule = $flModules | Where-Object { $_.name -eq $flName } | Select-Object -First 1
 		Assert-That "list_modules lists $($flCase.Label) module under the name list_documents used" ($null -ne $flModule)
-		Assert-That "list_modules flags $($flCase.Label) module as unable to carry a breakpoint" ($null -ne $flModule -and -not $flModule.can_set_breakpoint)
+		Assert-That "list_modules flags metadata-backed $($flCase.Label) module as breakpoint-capable" ($null -ne $flModule -and $flModule.can_set_breakpoint)
 
 		# Everything below addresses the module by that name alone, which is all a caller holding a frame
 		# or a search result has. A path would be the easy case and is not the one in question.
@@ -774,14 +774,16 @@ try {
 		Assert-That "get_raw_module serializes $($flCase.Label) module to a PE image" ($flRawBytes.Length -eq 64 -and $flRawBytes[0] -eq 0x4D -and $flRawBytes[1] -eq 0x5A -and $flRaw.total_size -gt 64 -and $flRaw.truncated) "(total=$($flRaw.total_size))"
 		Assert-That "get_raw_module hashes the whole serialized image" ($flRaw.sha256 -match '^[0-9a-f]{64}$') "(was '$($flRaw.sha256)')"
 
-		# The point of the whole flag: refused explicitly, with the reason, rather than accepted as a
-		# breakpoint that silently never binds.
-		$flRefused = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = $flName; type = $flCase.Type; method = 'Call' } -ExpectError
-		Assert-That "set_breakpoint refuses $($flCase.Label) module by name with the reason" ($flRefused -match 'in-memory or dynamic module') "(was '$flRefused')"
-		# set_il_breakpoint has no such guard — it takes a path and gets a name. It must at least not
-		# claim to be bound, which is what would make the gap invisible to a caller.
-		$flUnbound = Invoke-Tool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $flName; method_token = $flCall.method_token; il_offset = 0 }
-		Assert-That "set_il_breakpoint on $($flCase.Label) module does not report a bound breakpoint" (-not $flUnbound.bound) "(bound=$($flUnbound.bound) severity=$($flUnbound.severity))"
+		# The engine's own identity must produce a real binding and stop, not merely an accepted id.
+		$flBreakpoint = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = $flName; type = $flCase.Type; method = 'Call' }
+		Assert-That "set_breakpoint binds inside $($flCase.Label) module" ($flBreakpoint.bound) "(bound=$($flBreakpoint.bound) severity=$($flBreakpoint.severity) msg='$($flBreakpoint.message)')"
+		Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
+		$flOwnStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $flBreakpoint.cursor_event_id; timeout_ms = 8000 }
+		Assert-That "the breakpoint inside $($flCase.Label) module actually stops" (-not $flOwnStop.timed_out -and @($flOwnStop.events).Count -gt 0)
+		if (-not $flOwnStop.timed_out) {
+			$flOwnFrames = @(Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId; thread_id = @($flOwnStop.events)[0].thread_id; max_frames = 2 } | ForEach-Object { $_ })
+			Assert-That "the stop frame belongs to $($flCase.Label) module" ($flOwnFrames[0].module_name -eq $flName -and $flOwnFrames[0].name -match 'Call') "(module='$($flOwnFrames[0].module_name)' name='$($flOwnFrames[0].name)')"
+		}
 		Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
 
 		# The original UCH observation was a *frame* naming a module with no file. Reproduce it: the

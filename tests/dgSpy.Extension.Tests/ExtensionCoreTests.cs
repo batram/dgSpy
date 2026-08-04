@@ -142,4 +142,13 @@ public sealed class ExtensionCoreTests {
 		var wait=buffer.WaitAsync(snapshot.Last,cancelled.Token); cancelled.Cancel();
 		await Assert.ThrowsAnyAsync<OperationCanceledException>(()=>wait);
 	}
+
+	[Fact]
+	public void Closed_frame_has_the_documented_stale_handle_contract() {
+		FrameSnapshotGuard.EnsureOpen(false,"still valid");
+
+		var error=Assert.Throws<RpcException>(()=>FrameSnapshotGuard.EnsureOpen(true,"refresh the snapshot"));
+		Assert.Equal("stale_handle",error.Code);
+		Assert.Contains("refresh",error.Message);
+	}
 }

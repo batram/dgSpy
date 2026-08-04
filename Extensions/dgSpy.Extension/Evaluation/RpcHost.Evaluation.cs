@@ -67,7 +67,7 @@ namespace dgSpy.Extension {
 			var timeoutMs=Math.Min(CapabilityCatalog.Limits.MaxEvaluationTimeoutMs,Math.Max(1,(int?)req.Arguments["timeout_ms"] ?? 1000));
 			using var evaluation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token,cancellationToken);
 			return await evaluations.RunAsync(()=>{
-				if (captured.Frame.IsClosed) throw new RpcException("stale_handle","The target resumed while this frame was being evaluated. Pause again and request a fresh snapshot.");
+				FrameSnapshotGuard.EnsureOpen(captured.Frame.IsClosed,"The target resumed while this frame was being evaluated. Pause again and request a fresh snapshot.");
 				// dnSpy forwards this deadline to the engine's func-eval implementation. CorDebug aborts a
 				// timed-out eval and temporarily disables further func-eval if recovery itself fails.
 				var context=captured.Language.CreateContext(captured.Frame,funcEvalTimeout:TimeSpan.FromMilliseconds(timeoutMs),cancellationToken:evaluation.Token);
@@ -282,12 +282,13 @@ namespace dgSpy.Extension {
 		// no other way to find one.
 		async Task<ModuleInfo[]> ListModulesAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
-			return await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules).Select(m=>new ModuleInfo {
+			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules).ToArray(),cancellationToken).ConfigureAwait(false);
+			return await evaluations.RunAsync(()=>modules.Select(m=>new ModuleInfo {
 				Name=m.Name,Filename=m.Filename,ProcessId=m.Process.Id,RuntimeGuid=m.Runtime.Guid.ToString("D"),
 				IsDynamic=m.IsDynamic,IsInMemory=m.IsInMemory,IsOptimized=m.IsOptimized,Order=m.Order,
 				Address=m.Address,Size=m.Size,Version=m.Version,
-				// A module with no file cannot carry a breakpoint today: set_il_breakpoint takes a path.
-				// Saying so per module beats letting the caller discover it from a breakpoint that never binds.
+				// The engine-provided ModuleId includes the runtime discriminator needed by dynamic and
+				// in-memory modules; modules for which no provider supplies one remain explicitly false.
 				CanSetBreakpoint=CanCarryBreakpoint(m),
 			}).OrderBy(m=>m.ProcessId).ThenBy(m=>m.Order).ToArray(),cancellationToken).ConfigureAwait(false);
 		}

@@ -179,15 +179,14 @@ ship without being filterable and advertised in the same edit.
 - **Ambiguity is reported, never resolved by guessing.** An ambiguous type name or an overloaded method
   returns the candidates. A breakpoint silently placed in the wrong overload is undetectable from the
   caller's side.
-- **Metadata is reachable for in-memory and dynamic modules; breakpoints on them are not.**
+- **Metadata-backed in-memory and dynamic modules support breakpoints.**
   `get_csharp`, `get_il`, `list_types`, `list_members`, `get_metadata` and `get_raw_module` resolve them
   through dnSpy's metadata service. `get_raw_module` returns paged base64 with a whole-image SHA-256;
   for a file-less module the image is reconstructed from runtime metadata.
-  `set_breakpoint` refuses with `module_has_no_path`, and `list_modules` flags them
-  `can_set_breakpoint: false`, because dnSpy addresses breakpoint locations by file path. Note that
-  such a module does not necessarily report an *empty* filename: an in-memory one reports its bare
-  assembly name, which is not a path anything can load. `is_dynamic` / `is_in_memory` are the reliable
-  test, and both tools now derive the refusal from them.
+  Both breakpoint tools use the active engine's full `ModuleId`, including the discriminator required
+  for file-less modules. `list_modules.can_set_breakpoint` is false only when no engine provider
+  publishes a stable identity (for example Mono `eval-*` scratch modules with no metadata). A file-less
+  module may still report a bare assembly name as its filename; that display value is not its identity.
 - **Analysis results remain debugger-addressable.** `search_text` returns the containing method's module
   and token, `find_references` returns methods whose IL names the target member, and
   `find_implementations` returns loaded direct subclasses or interface implementers. All are bounded;
@@ -242,9 +241,10 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj
 ```
 
 The unit tests cover the wire contract and capability catalog, the gateway's access control and its
-deadline-versus-bound invariant, and the extension's pure program-identity, session-state, and bounded
+Streamable HTTP version policy and deadline-versus-bound invariant, and the extension's pure
+program-identity, session-state, stale-frame, and bounded
 event-cursor invariants. The smoke script is the end-to-end test: it builds, deploys, starts a
-disposable targets plus dnSpy plus the gateway, and currently asserts 363 checks across the delivered
+disposable targets plus dnSpy plus the gateway, and currently asserts 365 checks across the delivered
 CorDebug surface. It stops everything it starts and exits non-zero on any failure.
 
 The smoke script covers `attach_endpoint`'s argument validation and failure path only; its success

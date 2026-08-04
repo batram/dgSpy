@@ -203,9 +203,9 @@ A modded UCH carries **16 file-less modules**, so this is the normal case here, 
 | `eval-0`–`eval-8` (Mono func-eval scratch assemblies) | dynamic | ❌ none published |
 
 Verified against each of the first three: `get_metadata`, `list_types`, `list_members`, `get_il`,
-`get_csharp` and `get_raw_module` all resolve **by module name alone**, and `set_breakpoint` refuses
-with `module_has_no_path`. The `eval-*` modules refuse every read with `metadata_unavailable` rather
-than returning empty data, and are still listed rather than dropped.
+`get_csharp` and `get_raw_module` all resolve **by module name alone**, and `set_breakpoint` binds using
+the Mono engine's full module identity. The `eval-*` modules refuse every read with
+`metadata_unavailable`, report `can_set_breakpoint: false`, and remain listed rather than dropped.
 
 What this pass corrected:
 
