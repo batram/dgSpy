@@ -11,96 +11,96 @@ evidence and limitations that should not be compressed into the active roadmap.
 
 Verified means exercised end to end against a real dnSpy and a real target, not just compiled.
 
-| Capability | Status |
-|---|---|
-| MEF extension loads in x64 net48 dnSpy, logs version | ✅ verified |
-| Phase 0 engine acquisition: CorDebug via discovery, endpoint-launched UCH via `attach_endpoint` | ✅ verified both engines |
-| CorDebug smoke target is explicitly x64 and its reported architecture is asserted | ✅ automated |
-| **Phase 1 closed out** — one cancellation criterion was amended; see Correctness and safety below | ✅ 2026-08-03 |
-| **Phase 2 closed out** — attach, launch, lifecycle control, terminal cleanup | ✅ 2026-08-03 |
-| **Phase 3 closed out** — normalized event stream and non-destructive waiting | ✅ 2026-08-03 |
-| Loopback TCP RPC, versioned, structured errors | ✅ verified |
-| Extension RPC port refuses connections on a non-loopback interface | ✅ verified (this machine's LAN address) |
-| Gateway survives a dnSpy restart without being restarted | ✅ verified (kill, relaunch, next call succeeds) |
-| `get_host_info` — versions, machine, architecture, engines, live `session_id` | ✅ verified |
-| `get_capabilities` — per-operation bounds, per-engine rules, limits | ✅ verified |
-| Gateway deadlines derived from the extension's advertised bounds | ✅ unit-tested invariant, no longer a guess |
-| `list_programs` `provider_names` selection + `attach_providers` in each entry | ✅ verified |
-| Two runtimes at one PID yield distinct stable `program_id`s | ✅ unit-tested (no live fixture exists in scope) |
-| One-command build + deploy (`build-dgspy.ps1`) | ✅ verified |
-| `list_programs`, incl. `process_ids` / `process_names` filtering | ✅ verified (2454 ms → 55 ms) |
-| `program_id` from typed fields; `runtime_guid` surfaced | ✅ verified |
-| `attach` — waits for threads, refuses a second session | ✅ verified |
-| `attach_endpoint` — argument validation and failure path | ✅ verified (faults in ~2 s with dnSpy's own reason) |
-| `attach_endpoint` — connecting to a live Mono/Unity endpoint | ✅ **verified against UCH** (1120 ms; reattach 415 ms) |
-| `launch` — CorDebug target starts through dnSpy options | ✅ automated live |
-| `restart` — same logical session, replacement target PID | ✅ automated live |
-| `terminate` — explicit semantics, target is gone | ✅ automated live |
-| Unexpected target exit — terminal event with PID, reason, nonzero exit code | ✅ automated live (exit 23) |
-| Mono/Unity pause and detach | ✅ reverified against UCH after bounded frame-fetch fix; detach leaves the game running |
-| Mono/Unity call stack and primitive locals | ✅ reverified on the known managed breakpoint stopping thread |
-| `set_il_breakpoint` reports `bound` / `severity` / `message` | ✅ verified both engines |
-| Mono sequence-point snapping (`snapped`, `warning`) | ✅ verified against UCH |
-| `list_breakpoints`, `clear_breakpoints` | ✅ verified (CorDebug smoke + UCH) |
-| `remove_breakpoint` — exact single-ID removal | ✅ verified (CorDebug smoke + UCH) |
-| `cursor_event_id` — cursor sampled before the breakpoint exists | ✅ verified against UCH |
-| Unity `get_callstack` thread probe — picks a thread with frames | ✅ verified against UCH (landed on the UI thread) |
-| `list_threads`, caller-selected `get_callstack` / `get_frame` | ✅ verified (CorDebug smoke + UCH breakpoint stop) |
-| `faulted` carries `fault_message` from `MessageUserMessage` | ✅ verified |
-| `detach` — leaves target alive, refuses unsafe detach | ✅ verified |
-| `list_sessions` — recovers a lost `session_id` | ✅ verified |
-| `get_session_state` — validates `session_id` | ✅ verified |
-| `pause` / `continue` — report the state they produced | ✅ verified |
-| `set_il_breakpoint` by module + token + IL offset | ✅ verified |
-| `wait_for_stop` — cursor-based, non-destructive | ✅ verified |
-| `wait_for_event`, event-kind filters, bounded timeout | ✅ automated live |
-| Normalized breakpoint stop — process, thread, breakpoint, module/token/offset | ✅ automated live |
-| Concurrent waits before resume receive the same next stop | ✅ automated live |
-| Event truncation cursor and waiter cancellation recovery | ✅ unit-tested |
-| `get_callstack` — method names, frame identity, primitive locals | ✅ verified |
-| Gateway `Origin` validation + `X-dgSpy-Token`, fails closed | ✅ verified |
-| Evaluation off the dispatcher (`EvaluationQueue`) | ✅ built and regression-tested, benefit not directly observable |
-| Response serialization off the dispatcher | ✅ built, not directly observable |
-| Extension split into entry point, RPC, debugger, events, and identity boundaries | ✅ built |
-| `dgSpy.Extension.Tests` identity, state, and event-cursor coverage | ✅ 15 tests |
-| Event-kind and stop-reason vocabularies advertised in `get_capabilities` | ✅ verified both engines |
-| Every kind the Mono engine actually emits is in the advertised vocabulary | ✅ cross-checked against a live UCH session |
-| An unknown `kinds` value is rejected rather than silently matching nothing | ✅ verified both engines |
-| **Phase 4 closed out** — conditions, hit counts, tracepoints, exception breakpoints, stepping | ✅ 2026-08-03 |
-| `update_breakpoint` — enabled, condition, hit count, trace; empty string clears | ✅ automated live |
-| A continuing tracepoint warns that it produces no stop | ✅ automated live |
-| `set_exception_breakpoint` / `list_exception_breakpoints`, first-chance by default and bounded | ✅ automated live |
-| `step_into` / `step_over` / `step_out`, completion through `wait_for_stop` with `stop_reason: "step"` | ✅ automated live |
-| **Phase 5 closed out** — evaluation, member expansion, assignment, watches, modules | ✅ 2026-08-03 (CorDebug) |
-| `evaluate` — raw scalar and display text separate; arithmetic, not just lookup | ✅ automated live |
-| `has_raw_value` separates `null` from optimized-away/unavailable | ✅ unit-tested + live (`this` in a static method) |
-| `get_members` — one level, paged, `total` / `truncated`, member expressions round-trip | ✅ automated live |
-| `set_value` — assigns in the target, reads back, reports `compiler_error` | ✅ automated live |
-| `add_watch` / `list_watches` / `remove_watch`; a failing watch does not fail the call | ✅ automated live |
-| `list_modules` — `can_set_breakpoint` false for file-less modules | ✅ automated live |
-| Dynamic and in-memory modules — metadata, IL, C#, raw image, refusal, and a frame naming one | ✅ automated live (CorDebug); Mono open |
-| **Phase 6 closed out** — symbols, decompilation, text search, analysis, metadata, raw modules | ✅ 2026-08-04 (CorDebug + UCH) |
-| `list_documents` / `list_types` / `list_members` — paged, tokens included | ✅ automated live |
-| `search_symbols` — name to module + token, bounded | ✅ automated live |
-| `get_il` — offsets, operands, and `is_sequence_point` per instruction | ✅ automated live |
-| `get_csharp` — method and whole-type decompilation | ✅ automated live |
-| `search_text` / `find_references` / `find_implementations` — bounded analysis with symbol identities | ✅ automated CorDebug + live UCH |
-| `get_metadata` / `get_raw_module` — token facts and paged image with SHA-256 | ✅ automated CorDebug + live UCH |
-| `set_breakpoint` by type + method name, same path as `set_il_breakpoint` | ✅ automated live |
-| **Phase 7 closed out** — explicit invocation, memory, disassembly, capabilities, set-IP, hard func-eval timeout | ✅ 2026-08-04 (CorDebug) |
-| `invoke_method` / `create_object` — separate side-effecting tools with audit ids | ✅ automated live |
-| `read_memory` / `write_memory` — bounded target access; writes visibly side-effecting | ✅ automated live |
-| `get_disassembly` — managed IL and CorDebug JIT-native blocks | ✅ automated live |
-| `get_registers` — explicit `capability_unsupported` on this dnSpy contract | ✅ automated live failure contract |
-| `set_instruction_pointer` — current-frame/method and engine validation, audited | ✅ automated live |
-| **Phase 8 complete** — debugger completeness | ✅ CorDebug end to end + safe Mono subset verified |
-| Object IDs across resume/release and structured C# Autos | ✅ automated live |
-| Bounded cursor-based debugger output, separate from stop events | ✅ unit + automated live |
-| Module load/unload breakpoint filters | ✅ automated CorDebug load + unload stops; Mono filter round-trip |
-| Canonical bounded breakpoint export/import; merge/replace and dry-run contracts | ✅ automated live replace + dry-run |
-| Exception categories, flags, module conditions, removal and reset | ✅ automated CorDebug actual stop + policy lifecycle; Mono policy round-trip |
-| Value export chunks and host writes below `DGSPY_EXPORT_ROOT` | ✅ automated live, including traversal/overwrite refusal |
-| `analyze_symbol` typed caller/callee/field/construction/override/implementation/attribute/event edges with a hard scan budget | ✅ automated live across all listed edge kinds |
+| Capability                                                                                                                    | Status                                                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| MEF extension loads in x64 net48 dnSpy, logs version                                                                          | ✅ verified                                                                             |
+| Phase 0 engine acquisition: CorDebug via discovery, endpoint-launched UCH via `attach_endpoint`                               | ✅ verified both engines                                                                |
+| CorDebug smoke target is explicitly x64 and its reported architecture is asserted                                             | ✅ automated                                                                            |
+| **Phase 1 closed out** — one cancellation criterion was amended; see Correctness and safety below                             | ✅ 2026-08-03                                                                           |
+| **Phase 2 closed out** — attach, launch, lifecycle control, terminal cleanup                                                  | ✅ 2026-08-03                                                                           |
+| **Phase 3 closed out** — normalized event stream and non-destructive waiting                                                  | ✅ 2026-08-03                                                                           |
+| Loopback TCP RPC, versioned, structured errors                                                                                | ✅ verified                                                                             |
+| Extension RPC port refuses connections on a non-loopback interface                                                            | ✅ verified (this machine's LAN address)                                                |
+| Gateway survives a dnSpy restart without being restarted                                                                      | ✅ verified (kill, relaunch, next call succeeds)                                        |
+| `get_host_info` — versions, machine, architecture, engines, live `session_id`                                                 | ✅ verified                                                                             |
+| `get_capabilities` — per-operation bounds, per-engine rules, limits                                                           | ✅ verified                                                                             |
+| Gateway deadlines derived from the extension's advertised bounds                                                              | ✅ unit-tested invariant, no longer a guess                                             |
+| `list_programs` `provider_names` selection + `attach_providers` in each entry                                                 | ✅ verified                                                                             |
+| Two runtimes at one PID yield distinct stable `program_id`s                                                                   | ✅ unit-tested (no live fixture exists in scope)                                        |
+| One-command build + deploy (`build-dgspy.ps1`)                                                                                | ✅ verified                                                                             |
+| `list_programs`, incl. `process_ids` / `process_names` filtering                                                              | ✅ verified (2454 ms → 55 ms)                                                           |
+| `program_id` from typed fields; `runtime_guid` surfaced                                                                       | ✅ verified                                                                             |
+| `attach` — waits for threads, refuses a second session                                                                        | ✅ verified                                                                             |
+| `attach_endpoint` — argument validation and failure path                                                                      | ✅ verified (faults in ~2 s with dnSpy's own reason)                                    |
+| `attach_endpoint` — connecting to a live Mono/Unity endpoint                                                                  | ✅ **verified against UCH** (1120 ms; reattach 415 ms)                                  |
+| `launch` — CorDebug target starts through dnSpy options                                                                       | ✅ automated live                                                                       |
+| `restart` — same logical session, replacement target PID                                                                      | ✅ automated live                                                                       |
+| `terminate` — explicit semantics, target is gone                                                                              | ✅ automated live                                                                       |
+| Unexpected target exit — terminal event with PID, reason, nonzero exit code                                                   | ✅ automated live (exit 23)                                                             |
+| Mono/Unity pause and detach                                                                                                   | ✅ reverified against UCH after bounded frame-fetch fix; detach leaves the game running |
+| Mono/Unity call stack and primitive locals                                                                                    | ✅ reverified on the known managed breakpoint stopping thread                           |
+| `set_il_breakpoint` reports `bound` / `severity` / `message`                                                                  | ✅ verified both engines                                                                |
+| Mono sequence-point snapping (`snapped`, `warning`)                                                                           | ✅ verified against UCH                                                                 |
+| `list_breakpoints`, `clear_breakpoints`                                                                                       | ✅ verified (CorDebug smoke + UCH)                                                      |
+| `remove_breakpoint` — exact single-ID removal                                                                                 | ✅ verified (CorDebug smoke + UCH)                                                      |
+| `cursor_event_id` — cursor sampled before the breakpoint exists                                                               | ✅ verified against UCH                                                                 |
+| Unity `get_callstack` thread probe — picks a thread with frames                                                               | ✅ verified against UCH (landed on the UI thread)                                       |
+| `list_threads`, caller-selected `get_callstack` / `get_frame`                                                                 | ✅ verified (CorDebug smoke + UCH breakpoint stop)                                      |
+| `faulted` carries `fault_message` from `MessageUserMessage`                                                                   | ✅ verified                                                                             |
+| `detach` — leaves target alive, refuses unsafe detach                                                                         | ✅ verified                                                                             |
+| `list_sessions` — recovers a lost `session_id`                                                                                | ✅ verified                                                                             |
+| `get_session_state` — validates `session_id`                                                                                  | ✅ verified                                                                             |
+| `pause` / `continue` — report the state they produced                                                                         | ✅ verified                                                                             |
+| `set_il_breakpoint` by module + token + IL offset                                                                             | ✅ verified                                                                             |
+| `wait_for_stop` — cursor-based, non-destructive                                                                               | ✅ verified                                                                             |
+| `wait_for_event`, event-kind filters, bounded timeout                                                                         | ✅ automated live                                                                       |
+| Normalized breakpoint stop — process, thread, breakpoint, module/token/offset                                                 | ✅ automated live                                                                       |
+| Concurrent waits before resume receive the same next stop                                                                     | ✅ automated live                                                                       |
+| Event truncation cursor and waiter cancellation recovery                                                                      | ✅ unit-tested                                                                          |
+| `get_callstack` — method names, frame identity, primitive locals                                                              | ✅ verified                                                                             |
+| Gateway `Origin` validation + `X-dgSpy-Token`, fails closed                                                                   | ✅ verified                                                                             |
+| Evaluation off the dispatcher (`EvaluationQueue`)                                                                             | ✅ built and regression-tested, benefit not directly observable                         |
+| Response serialization off the dispatcher                                                                                     | ✅ built, not directly observable                                                       |
+| Extension split into entry point, RPC, debugger, events, and identity boundaries                                              | ✅ built                                                                                |
+| `dgSpy.Extension.Tests` identity, state, and event-cursor coverage                                                            | ✅ 15 tests                                                                             |
+| Event-kind and stop-reason vocabularies advertised in `get_capabilities`                                                      | ✅ verified both engines                                                                |
+| Every kind the Mono engine actually emits is in the advertised vocabulary                                                     | ✅ cross-checked against a live UCH session                                             |
+| An unknown `kinds` value is rejected rather than silently matching nothing                                                    | ✅ verified both engines                                                                |
+| **Phase 4 closed out** — conditions, hit counts, tracepoints, exception breakpoints, stepping                                 | ✅ 2026-08-03                                                                           |
+| `update_breakpoint` — enabled, condition, hit count, trace; empty string clears                                               | ✅ automated live                                                                       |
+| A continuing tracepoint warns that it produces no stop                                                                        | ✅ automated live                                                                       |
+| `set_exception_breakpoint` / `list_exception_breakpoints`, first-chance by default and bounded                                | ✅ automated live                                                                       |
+| `step_into` / `step_over` / `step_out`, completion through `wait_for_stop` with `stop_reason: "step"`                         | ✅ automated live                                                                       |
+| **Phase 5 closed out** — evaluation, member expansion, assignment, watches, modules                                           | ✅ 2026-08-03 (CorDebug)                                                                |
+| `evaluate` — raw scalar and display text separate; arithmetic, not just lookup                                                | ✅ automated live                                                                       |
+| `has_raw_value` separates `null` from optimized-away/unavailable                                                              | ✅ unit-tested + live (`this` in a static method)                                       |
+| `get_members` — one level, paged, `total` / `truncated`, member expressions round-trip                                        | ✅ automated live                                                                       |
+| `set_value` — assigns in the target, reads back, reports `compiler_error`                                                     | ✅ automated live                                                                       |
+| `add_watch` / `list_watches` / `remove_watch`; a failing watch does not fail the call                                         | ✅ automated live                                                                       |
+| `list_modules` — `can_set_breakpoint` false for file-less modules                                                             | ✅ automated live                                                                       |
+| Dynamic and in-memory modules — metadata, IL, C#, raw image, refusal, and a frame naming one                                  | ✅ automated live (CorDebug); Mono open                                                 |
+| **Phase 6 closed out** — symbols, decompilation, text search, analysis, metadata, raw modules                                 | ✅ 2026-08-04 (CorDebug + UCH)                                                          |
+| `list_documents` / `list_types` / `list_members` — paged, tokens included                                                     | ✅ automated live                                                                       |
+| `search_symbols` — name to module + token, bounded                                                                            | ✅ automated live                                                                       |
+| `get_il` — offsets, operands, and `is_sequence_point` per instruction                                                         | ✅ automated live                                                                       |
+| `get_csharp` — method and whole-type decompilation                                                                            | ✅ automated live                                                                       |
+| `search_text` / `find_references` / `find_implementations` — bounded analysis with symbol identities                          | ✅ automated CorDebug + live UCH                                                        |
+| `get_metadata` / `get_raw_module` — token facts and paged image with SHA-256                                                  | ✅ automated CorDebug + live UCH                                                        |
+| `set_breakpoint` by type + method name, same path as `set_il_breakpoint`                                                      | ✅ automated live                                                                       |
+| **Phase 7 closed out** — explicit invocation, memory, disassembly, capabilities, set-IP, hard func-eval timeout               | ✅ 2026-08-04 (CorDebug)                                                                |
+| `invoke_method` / `create_object` — separate side-effecting tools with audit ids                                              | ✅ automated live                                                                       |
+| `read_memory` / `write_memory` — bounded target access; writes visibly side-effecting                                         | ✅ automated live                                                                       |
+| `get_disassembly` — managed IL and CorDebug JIT-native blocks                                                                 | ✅ automated live                                                                       |
+| `get_registers` — explicit `capability_unsupported` on this dnSpy contract                                                    | ✅ automated live failure contract                                                      |
+| `set_instruction_pointer` — current-frame/method and engine validation, audited                                               | ✅ automated live                                                                       |
+| **Phase 8 complete** — debugger completeness                                                                                  | ✅ CorDebug end to end + safe Mono subset verified                                      |
+| Object IDs across resume/release/detach and structured C# Autos                                                               | ✅ automated CorDebug + live Mono                                                       |
+| Bounded cursor-based debugger output, separate from stop events                                                               | ✅ unit + automated live                                                                |
+| Module load/unload breakpoint filters                                                                                         | ✅ automated CorDebug load + unload stops; live Mono unload stop                        |
+| Canonical bounded breakpoint export/import; merge/replace and dry-run contracts                                               | ✅ automated live replace + dry-run                                                     |
+| Exception categories, flags, module conditions, removal and reset                                                             | ✅ actual CorDebug + Mono first-chance stops and policy lifecycle                        |
+| Value export chunks and host writes below `DGSPY_EXPORT_ROOT`                                                                 | ✅ CorDebug automated + live Mono write/reparse refusal                                  |
+| `analyze_symbol` typed caller/callee/field/construction/override/implementation/attribute/event edges with a hard scan budget | ✅ automated live across all listed edge kinds                                          |
 
 Test suites, all green:
 
@@ -115,22 +115,13 @@ All four suites are green as of 2026-08-04: 29 / 174 / 16 unit
 checks and 363 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
 verified against live UCH — see
 [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). **Phases 4 and 5 are verified on CorDebug only.**
-Phase 8's safe surface has a dedicated 20-check UCH pass. Phase 7 operations and Phase 8's actual
-module-unload and categorized-exception stops have not been exercised against Mono/Unity; Mono differs
-enough elsewhere (sequence points, asynchronous frame fetch) that these remain real gaps rather than formalities.
+Phase 8 has a dedicated 29-check UCH pass, including an actual module-unload breakpoint stop, an actual
+categorized first-chance exception stop, successful host value export and reparse-point refusal, and
+detach-driven object-ID cleanup. Phase 7 mutation and low-level operations have not been exercised against
+Mono/Unity; Mono differs enough elsewhere (sequence points, asynchronous frame fetch) that those remain real
+gaps rather than formalities.
 
 ## Remaining gaps
-
-### Phase 8 cross-engine verification boundaries
-
-The CorDebug fixture proves reachable multi-target attach/launch, selected pause/continue/detach/terminate,
-aggregate `mixed` state, ambiguous no-op behavior, actual module load/unload stops, an actual categorized
-exception stop, breakpoint replacement, detach-driven object-ID cleanup, and every analyzer edge kind. The
-live UCH pass proves Mono Autos, object IDs across resume/release, scalar value export, bounded analysis,
-module-breakpoint filters, breakpoint interchange dry-run, exception-policy lifecycle, output messages, and
-safe detach. Actual Mono module-unload and categorized-exception stops, Mono teardown-driven object-ID cleanup,
-and reparse-point host-export refusal remain fixture or host-bound verification gaps, not open Phase 8
-implementation work.
 
 ### Partly addressed: frames can name a module that has no file
 
@@ -157,13 +148,13 @@ drives metadata, IL, C#, raw image, the refusal and that frame for both. What th
 A modded UCH carries 16 file-less modules (MonoMod, four `HarmonyDTFAssembly*`, an in-memory copy of
 `UnityEngine.CoreModule`, nine `eval-*`); metadata, IL, C#, raw image and the refusal all behave as on
 CorDebug, and `eval-*` modules — which publish no metadata at all — refuse with `metadata_unavailable`
-rather than returning empty data. The one thing still not reproduced on Mono is a *frame* whose module
+rather than returning empty data. The one thing still not reproduced on Mono is a _frame_ whose module
 has no file: Harmony patch frames report the original file-backed module, and the single historical
 sighting was a rendering UI-thread stack.
 
 ### Correctness and safety
 
-1. **Cancellation cannot abort in-flight work.** An expired deadline abandons the *wait*; a queued
+1. **Cancellation cannot abort in-flight work.** An expired deadline abandons the _wait_; a queued
    dispatcher callback or a started evaluation runs to completion, because dnSpy exposes no way to
    cancel either. Commented at both call sites in `ExtensionEntryPoint.cs`. This is the one Phase 1
    exit criterion that was amended rather than met; it is now advertised to callers as
@@ -175,7 +166,7 @@ sighting was a rendering UI-thread stack.
 3. **A connect failure leaves a modal dnSpy error dialog on screen.** dnSpy's own UI subscribes to
    `MessageUserMessage` and shows a message box. It runs on the UI thread, so it blocks neither the
    debugger dispatcher nor RPC — dgSpy keeps working around it — but nothing headless dismisses it, and
-   they accumulate. dgSpy no longer *adds* to this: routine client disconnects used to go to
+   they accumulate. dgSpy no longer _adds_ to this: routine client disconnects used to go to
    `WriteMessage(ErrorUser, …)`, which is dnSpy's message-box channel, and the gateway opens a fresh
    connection per request. Those are now silent, with real faults going to `Output`.
 4. **Single global session.** One `sessionId` field, one target. `host_id` routing and multi-session
@@ -222,7 +213,7 @@ sighting was a rendering UI-thread stack.
 - **Mono only accepts a breakpoint at a sequence point.** `vm.CreateBreakpointRequest(method, offset)`
   throws `NO_SEQ_POINT_AT_IL_OFFSET` otherwise, and dnSpy turns that into an unbound breakpoint with
   "Could not create the breakpoint". CorDebug accepts any IL offset, so nothing in the .NET Framework
-  tests could have caught this. The rule is *sequence point*, not *offset 0* — `Thread.Sleep+0x1A` hits
+  tests could have caught this. The rule is _sequence point_, not _offset 0_ — `Thread.Sleep+0x1A` hits
   fine. Feeding a frame's own `il_offset` straight back in usually does not.
 - **A Mono `server=y` endpoint accepts one connection per launch.** A clean `detach` lets it listen
   again; anything else consumes it and the target must be relaunched. A one-line `TcpClient.Connect`
@@ -233,7 +224,7 @@ sighting was a rendering UI-thread stack.
   negatives before it was caught. `set_il_breakpoint` returns `cursor_event_id` for this.
 - **A dnSpy settings write does not take effect on the dispatcher hop that makes it.**
   `DbgCodeBreakpointImpl.Settings` does not assign — it calls `DbgCodeBreakpointsServiceImpl.Modify`,
-  which posts `ModifyCore` back to the dispatcher *even when the caller is already on it*. Describing
+  which posts `ModifyCore` back to the dispatcher _even when the caller is already on it_. Describing
   the breakpoint in the same callback therefore returns the previous settings, and the write looks like
   it silently did nothing. Write on one hop, read back on the next; dispatcher delivery is FIFO, so the
   queued work runs in between. The exception settings service behaves the same way. This produced six
@@ -280,7 +271,7 @@ sighting was a rendering UI-thread stack.
   `$list.Count` then reads 1 while the payload plainly contains several items, and a `Where-Object`
   filter over it matches nothing. Pipe through `ForEach-Object { $_ }` to flatten. This cost a full
   smoke cycle chasing a watch-evaluation "bug" whose JSON was correct all along. It bit a second time in
-  `list_modules`: a filter that matched the nested array passed the *whole* collection through, so two
+  `list_modules`: a filter that matched the nested array passed the _whole_ collection through, so two
   module assertions were green on some other module's flags until a module with a legitimately false
   `can_set_breakpoint` was added and one of them flipped. A passing check proves nothing if the filter
   never narrowed anything.
@@ -288,17 +279,6 @@ sighting was a rendering UI-thread stack.
   `Convert.ToHexString`; `-match` against a collection returns matches rather than a boolean; and
   `ConvertFrom-Json '[]'` does not survive `.Count` checks. All three cost debugging cycles in the test
   harness — the smoke script has comments where each bit.
-
-## Current next step
-
-Phases 0–8 are closed. The old session-order list was completed or superseded by the later evidence in
-this ledger. Follow [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md): first make the current checkout
-reproducible, then modernize the dnSpyEx-aligned decompiler, dnlib, debugger, and expression-compiler
-sources behind the recorded regression gates. Secure remote-host work follows the stable modernized
-baseline.
-
-The separate dnSpy-window shutdown warning remains in force: closing dnSpy with an attachment has been
-observed to terminate the target, so all automated and manual workflows must use `detach`.
 
 ## Local PowerShell scratchpads
 

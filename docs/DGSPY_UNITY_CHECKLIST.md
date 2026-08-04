@@ -274,15 +274,20 @@ rather than merely self-consistent.
 
 ### Re-run 2026-08-04: Phase 8 debugger completeness
 
-`tests\run-uch-phase8.ps1` passes **20/20 checks** against the headless Steam build. It attaches
+`tests\run-uch-phase8.ps1 -ReparseExportPath reparse\blocked.bin` passes **29/29 checks** against the
+headless Steam build. For the two host-export checks, dnSpy was started with `DGSPY_EXPORT_ROOT` pointing
+to a temporary directory whose `reparse` child was a junction to a directory outside that root. Without
+that optional argument the engine-only subset remains runnable without an export fixture. The pass attaches
 through the Mono endpoint, reaches a managed breakpoint in UltimateGlorpExplorer, and verifies:
 
 - C# Autos on a selected Mono frame;
-- object-ID create, survival across resume, evaluate, and release using `System.AppDomain.CurrentDomain`;
-- hashed scalar value export and bounded `analyze_symbol` execution;
-- module-breakpoint filter round-trip;
+- object-ID create, survival across resume, evaluate/release, and detach-driven disposal before reattach
+  using `System.AppDomain.CurrentDomain`;
+- hashed scalar value export, successful host write, reparse-point refusal, and bounded `analyze_symbol` execution;
+- module-breakpoint filter round-trip plus an actual unload stop from a temporary initialized AppDomain;
 - canonical breakpoint export plus merge dry-run;
-- exception flags, module conditions, and custom-policy removal;
+- exception flags, module conditions, custom-policy removal, and an actual first-chance
+  `System.FormatException` stop exposed through `get_exception`;
 - debugger output access separate from stop events;
 - clean detach without terminating UCH.
 
@@ -291,7 +296,6 @@ the known reconnect race on its first breakpoint: dnSpy returned "Can't set a br
 is paused." Twelve subsequently armed breakpoints bound and one hit, so this remains the documented initial
 binding race rather than a Phase 8 regression.
 
-Not yet exercised on UCH: an actual module-unload breakpoint stop, a categorized exception stop, host value
-export, object-ID disposal caused by runtime exit/detach, breakpoint `replace`, and multi-target behavior.
-These paths are exercised by the disposable CorDebug fixture where applicable; they remain Mono/UCH
-cross-engine verification boundaries rather than open Phase 8 implementation items.
+Not yet exercised on UCH: breakpoint `replace`, multi-target behavior, and runtime-exit-driven object-ID
+disposal (detach-driven disposal is verified). These paths are exercised by the disposable CorDebug fixture
+where applicable; they are fixture boundaries rather than open Phase 8 implementation items.
