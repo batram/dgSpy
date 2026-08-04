@@ -697,6 +697,72 @@ For the current scope, the automated target is x64 .NET Framework; the Mono/Unit
 10. Detach while leaving the target alive.
 11. Repeat through a VM tunnel.
 
+## Repository and dependency maintenance
+
+Not part of any phase, but both items block "a clean checkout can build this" and neither is a debugger
+concern. Recorded 2026-08-03; nothing has been done about either.
+
+### 1. `Mono.Debugger.Soft` has a local-only commit — decide where it lives
+
+All seven submodules come from `https://github.com/dnSpy/`. Six sit on commits that exist on those
+remotes and will clone forever. One does not:
+
+| Submodule | State |
+|---|---|
+| ICSharpCode.Decompiler, NRefactory, netcorefiles, ICSharpCode.TreeView, Roslyn.ExpressionCompiler, dnSpy.Images | on public commits |
+| **Mono.Debugger.Soft** | **`888ded0` "Bound Unity stack-frame fetch waits" is on no remote** |
+
+That commit is the fix that stopped dnSpy wedging when a Unity thread exits during frame retrieval —
+`ThreadMirror.GetFrames()` bounded to 3 s. The superproject records `888ded0` as its gitlink, so a fresh
+clone plus `git submodule update --init` cannot resolve it. **Phase 0's exit criterion "a clean checkout
+can build dnSpy, build dgSpy, and deploy the extension with two documented commands" is therefore
+currently false.**
+
+Options, in the order they were judged:
+
+1. **Fork `dnSpy/Mono.Debugger.Soft`** and push `888ded0` to it; change that one `.gitmodules` URL. Keeps
+   the repo's shape uniform and self-documents the change GPLv3 §5 asks to be stated. Needs a GitHub
+   account action.
+2. **Vendor it** — drop the submodule and commit its 87 `.cs` files. Self-contained, nothing external to
+   remember, loses an upstream merge path that is worth little because dnSpy is archived.
+3. A local `file://` mirror. Started and then abandoned: it bakes a machine-local absolute path into a
+   tracked file and protects against nothing but an accidental `git gc`.
+
+A local `dgspy` branch now pins `888ded0` inside the submodule so it cannot be pruned; before that it was
+reachable only from a detached HEAD and the gitlink. A bare mirror exists at
+`C:\Users\mjb\develop\UCH-dev\mirrors\Mono.Debugger.Soft.git` and is not referenced by anything tracked.
+
+Related, and required before publishing: the superproject's own `origin` is `github.com/dnspy/dnspy`,
+which cannot be pushed to, so **every dgSpy commit is local-only as well**. And
+[docs/DGSPY_BASELINE.md](docs/DGSPY_BASELINE.md) claims dgSpy makes exactly one edit to dnSpy sources;
+there are two — the `DbgMessageThreadExitedEventArgs` `ExitCode` fix and this frame-fetch bound. GPLv3 §5
+wants both stated.
+
+Licensing is not an obstacle to any option: dnSpy is GPLv3, `Mono.Debugger.Soft` is MIT X11 in origin
+(`dnSpy/dnSpy/LicenseInfo/OtherLicenses.txt:164`) and GPLv3 as dnSpy ships it, so vendoring or forking
+both work provided that notice is retained. Note that `dgSpy.Protocol` and `dgSpy.Gateway` reference no
+dnSpy assembly and talk over a socket, so only `Extensions/dgSpy.Extension` is unavoidably GPLv3; if the
+gateway and wire protocol should ever be reusable under permissive terms, split them before publishing.
+
+### 2. Check whether the upstream sources have moved on
+
+Every dependency here is pinned to a dnSpy fork made years ago, and dnSpy itself is archived. The
+*original* projects behind those forks have not all stopped. Worth an investigation pass:
+
+| dnSpy fork | Original project | Why it might matter |
+|---|---|---|
+| `Mono.Debugger.Soft` | Mono's soft-debugger client | The frame-fetch hang we patched by hand may be fixed upstream, better. Mono's debugger protocol also gained newer commands. |
+| `ILSpy` / `ICSharpCode.Decompiler` | ILSpy | Years of decompiler correctness work; directly improves `get_csharp`. |
+| `NRefactory` | NRefactory / Roslyn-era successors | Largely superseded; check whether it is still needed at all. |
+| `Roslyn.ExpressionCompiler` | Roslyn | Expression evaluation and func-eval quality — Phase 5 and Phase 7 depend on it. |
+| `dnlib` (not a submodule) | dnlib | Metadata reading; newer versions handle more edge cases in dynamic modules, which Phase 6 left open. |
+| dnSpy itself | dnSpyEx (active community fork) | The likeliest single win: dnSpyEx carries years of fixes to exactly the engine paths dgSpy drives. |
+
+Scope the investigation before doing any of it: for each, establish what changed, whether the fix is one
+dgSpy actually hits, and what the migration costs. **Do not start a wholesale rebase onto dnSpyEx as a
+side quest** — it would invalidate every live verification recorded in `docs/DGSPY_STATUS.md`, which is
+the project's main asset. Evaluate, write down the findings, then decide.
+
 ## Documentation deliverables
 
 - Architecture and trust-boundary document
