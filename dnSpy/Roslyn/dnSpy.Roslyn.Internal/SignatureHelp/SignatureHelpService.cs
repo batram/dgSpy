@@ -95,17 +95,17 @@ namespace dnSpy.Roslyn.Internal.SignatureHelp {
 		public static SignatureHelpService GetService(Document document) {
 			if (document == null)
 				throw new ArgumentNullException(nameof(document));
-			return document.Project.LanguageServices.GetService<SignatureHelpService>();
+			return document.Project.Services.GetService<SignatureHelpService>();
 		}
 
 		public async Task<SignatureHelpResult> GetItemsAsync(Document document, int position, SignatureHelpTriggerInfo triggerInfo, CancellationToken cancellationToken = default(CancellationToken)) {
-			var res = await ComputeItemsAsync(signatureHelpProviders, position, triggerInfo.ToSignatureHelpTriggerInfo(), document, cancellationToken).ConfigureAwait(false);
+			var res = await ComputeItemsAsync(signatureHelpProviders, position, triggerInfo.ToSignatureHelpTriggerInfo(), MemberDisplayOptions.Default, document, cancellationToken).ConfigureAwait(false);
 			return GetSignatureHelpResult(res, document);
 		}
 
 		public bool IsTriggerCharacter(char ch) {
 			foreach (var p in signatureHelpProviders) {
-				if (p.IsTriggerCharacter(ch))
+				if (p.TriggerCharacters.Contains(ch))
 					return true;
 			}
 			return false;
@@ -113,7 +113,7 @@ namespace dnSpy.Roslyn.Internal.SignatureHelp {
 
 		public bool IsRetriggerCharacter(char ch) {
 			foreach (var p in signatureHelpProviders) {
-				if (p.IsRetriggerCharacter(ch))
+				if (p.RetriggerCharacters.Contains(ch))
 					return true;
 			}
 			return false;

@@ -28,8 +28,25 @@ if ($locking.Count) {
 Push-Location $repoRoot
 try {
 	if (-not $SkipHostBuild) {
-		Invoke-Checked 'dnSpy net48 build' {
-			.\build.ps1 netframework -MSBuildPath 'C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
+		$msbuildCandidates = @(
+			'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe',
+			'C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
+		)
+		$msbuildPath = $msbuildCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+		if (-not $msbuildPath) { throw 'No supported Visual Studio MSBuild installation was found.' }
+		$previousSdksPath = $env:MSBuildSDKsPath
+		$previousWorkloadResolver = $env:MSBuildEnableWorkloadResolver
+		try {
+			if ($msbuildPath -like '*Visual Studio\18\*') {
+				$dotnetVersion = (& dotnet --version).Trim()
+				$env:MSBuildSDKsPath = Join-Path $env:ProgramFiles "dotnet\sdk\$dotnetVersion\Sdks"
+				$env:MSBuildEnableWorkloadResolver = 'false'
+			}
+			Invoke-Checked 'dnSpy net48 build' { .\build.ps1 netframework -MSBuildPath $msbuildPath }
+		}
+		finally {
+			$env:MSBuildSDKsPath = $previousSdksPath
+			$env:MSBuildEnableWorkloadResolver = $previousWorkloadResolver
 		}
 	}
 	Invoke-Checked 'dgSpy build and deploy' { .\build-dgspy.ps1 }

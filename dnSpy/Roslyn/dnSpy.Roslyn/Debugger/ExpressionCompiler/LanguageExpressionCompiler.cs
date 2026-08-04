@@ -20,7 +20,9 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using dnlib.DotNet;
 using dnSpy.Contracts.Debugger.CallStack;
@@ -33,6 +35,7 @@ using dnSpy.Contracts.Debugger.Evaluation;
 using dnSpy.Contracts.Debugger.Text;
 using dnSpy.Contracts.Debugger.Text.DnSpy;
 using dnSpy.Contracts.Decompiler;
+using dnSpy.Debugger.DotNet.Metadata;
 using dnSpy.Roslyn.Text;
 using dnSpy.Roslyn.Text.Classification;
 using Microsoft.CodeAnalysis;
@@ -180,6 +183,7 @@ namespace dnSpy.Roslyn.Debugger.ExpressionCompiler {
 			info.ParameterNames = GetParameterNames(langDebugInfo.MethodDebugInfo.Method, methodDebugInfo.Parameters);
 			info.LocalConstants = default;
 			info.ReuseSpan = RoslynExpressionCompilerMethods.GetReuseSpan(allScopes, langDebugInfo.ILOffset);
+			info.ContainingDocumentName = null;
 
 			return info;
 		}
@@ -263,7 +267,10 @@ namespace dnSpy.Roslyn.Debugger.ExpressionCompiler {
 				if (!p.IsNormalMethodParameter)
 					continue;
 				var name = TryGetSourceParameter(parameters, i).Name ?? p.Name;
-				if (GetParameterName(i, name) != name) {
+				// Compare the name used in the decompiled code again the name in the .NET metadata
+				// If they are equal, we do not need top provide parameter names to the EE as it will just grab them from the metadata.
+				// If they are different, we need to provide the names to the EE so the parameter names in the Watch window and Locals window are correct.
+				if (GetParameterName(i, name) != p.Name) {
 					valid = false;
 					break;
 				}
@@ -374,12 +381,15 @@ namespace dnSpy.Roslyn.Debugger.ExpressionCompiler {
 				default:
 					throw new InvalidOperationException();
 				}
-				builder.Add(new Alias(aliasKind, alias.Name, alias.Name, alias.Type, alias.CustomTypeInfoId, alias.CustomTypeInfo));
+				if (alias.CustomTypeInfo is null)
+					builder.Add(new Alias(aliasKind, alias.Name, alias.Name, alias.Type, Guid.Empty, null));
+				else
+					builder.Add(new Alias(aliasKind, alias.Name, alias.Name, alias.Type, alias.CustomTypeInfo.CustomTypeInfoId, alias.CustomTypeInfo.CustomTypeInfo));
 			}
 			return builder.ToImmutableArray();
 		}
 
-		protected DbgDotNetCompilationResult CreateCompilationResult(string expression, CompileResult compileResult, ResultProperties resultProperties, string? errorMessage, DbgDotNetText name) {
+		protected DbgDotNetCompilationResult CreateCompilationResult(string expression, CompileResult? compileResult, ResultProperties resultProperties, string? errorMessage, DbgDotNetText name) {
 			if (errorMessage is not null)
 				return new DbgDotNetCompilationResult(errorMessage);
 			Debug2.Assert(compileResult is not null);
@@ -525,9 +535,9 @@ namespace dnSpy.Roslyn.Debugger.ExpressionCompiler {
 				workspace.AddProject(projectInfo);
 
 				var doc = workspace.AddDocument(projectInfo.Id, "A", SourceText.From(documentText));
-				var syntaxRoot = doc.GetSyntaxRootAsync().GetAwaiter().GetResult();
-				var semanticModel = doc.GetSemanticModelAsync().GetAwaiter().GetResult();
-				var classifier = new RoslynClassifier(syntaxRoot, semanticModel, workspace, RoslynClassificationTypes.Default, null, cancellationToken);
+				var syntaxRoot = doc.GetSyntaxRootAsync(cancellationToken).GetAwaiter().GetResult();
+				var semanticModel = doc.GetSemanticModelAsync(cancellationToken).GetAwaiter().GetResult();
+				var classifier = new RoslynClassifier(syntaxRoot!, semanticModel!, workspace, RoslynClassificationTypes.Default, null, cancellationToken);
 				var textSpan = new Microsoft.CodeAnalysis.Text.TextSpan(documentTextExpressionOffset, expression.Length);
 
 				int pos = textSpan.Start;
@@ -544,8 +554,9 @@ namespace dnSpy.Roslyn.Debugger.ExpressionCompiler {
 			}
 		}
 
-		protected DbgDotNetCompilationResult CompileGetLocals(EvalContextState state, MethodDef method) {
-			var builder = new GetLocalsAssemblyBuilder(this, method, state.MethodDebugInfo.LocalVariableNames, state.MethodDebugInfo.ParameterNames);
+		protected DbgDotNetCompilationResult CompileGetLocals(EvalContextState state, MethodDef method, GetMethodDebugInfo getMethodDebugInfo) {
+			var methodDebugInfo = getMethodDebugInfo();
+			var builder = new GetLocalsAssemblyBuilder(this, method, methodDebugInfo.LocalVariableNames, methodDebugInfo.ParameterNames);
 			var asmBytes = builder.Compile(out var localsInfo, out var typeName, out var errorMessage);
 			return CreateCompilationResult(state, asmBytes, typeName, localsInfo, errorMessage);
 		}
@@ -555,6 +566,56 @@ namespace dnSpy.Roslyn.Debugger.ExpressionCompiler {
 		protected abstract bool IsCaseSensitive { get; }
 		public override bool TryGetAliasInfo(string aliasName, out DbgDotNetParsedAlias aliasInfo) =>
 			AliasConstants.TryGetAliasInfo(aliasName, IsCaseSensitive, out aliasInfo);
+
+		public override DbgDotNetCustomTypeInfo? CreateCustomTypeInfo(IDmdCustomAttributeProvider customAttributeProvider) {
+			var tupleAttr = customAttributeProvider.FindCustomAttribute("System.Runtime.CompilerServices.TupleElementNamesAttribute", false);
+			var dynamicAttr = customAttributeProvider.FindCustomAttribute("System.Runtime.CompilerServices.DynamicAttribute", false);
+
+			ReadOnlyCollection<string?>? tupleNames = null;
+			if (tupleAttr is not null && tupleAttr.ConstructorArguments.Count == 1 && tupleAttr.ConstructorArguments[0].Value is IList<DmdCustomAttributeTypedArgument> names) {
+				string?[]? array = new string?[names.Count];
+				for (var i = 0; i < names.Count; i++) {
+					var argValue = names[i].Value;
+					if (argValue is string str)
+						array[i] = str;
+					else if (argValue is null)
+						array[i] = null;
+					else {
+						array = null;
+						break;
+					}
+				}
+
+				if (array is not null)
+					tupleNames = new ReadOnlyCollection<string?>(array);
+			}
+
+			ReadOnlyCollection<byte>? dynamicFlags = null;
+			if (dynamicAttr is not null) {
+				if (dynamicAttr.ConstructorArguments.Count == 0)
+					dynamicFlags = new ReadOnlyCollection<byte>(new byte[] { 1 });
+				else if (dynamicAttr.ConstructorArguments.Count == 1 && dynamicAttr.ConstructorArguments[0].Value is IList<DmdCustomAttributeTypedArgument> flags) {
+					bool[]? array = new bool[flags.Count];
+					for (var i = 0; i < flags.Count; i++) {
+						var argValue = flags[i].Value;
+						if (argValue is bool b)
+							array[i] = b;
+						else {
+							array = null;
+							break;
+						}
+					}
+
+					if (array is not null)
+						dynamicFlags = DynamicFlagsCustomTypeInfo.ToBytes(array);
+				}
+			}
+
+			var encoded = CustomTypeInfo.Encode(dynamicFlags, tupleNames);
+			if (encoded is null)
+				return null;
+			return new DbgDotNetCustomTypeInfo(CustomTypeInfo.PayloadTypeId, encoded);
+		}
 
 		protected DbgDotNetText CreateText(DbgDotNetAliasKind kind, string expression) {
 			DbgTextColor color;
@@ -568,5 +629,9 @@ namespace dnSpy.Roslyn.Debugger.ExpressionCompiler {
 			}
 			return new DbgDotNetText(new DbgDotNetTextPart(color, expression));
 		}
+
+		protected ModuleId GetModuleId(ModuleDef module) => new ModuleId(module.Mvid ?? Guid.Empty, module.Location ?? module.Name);
+
+		protected ModuleId GetModuleId(DmdModule module) => new ModuleId(module.ModuleVersionId, module.FullyQualifiedName);
 	}
 }

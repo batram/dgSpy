@@ -137,7 +137,7 @@ dependency revisions were included. The full net48 build, all three sequential u
 368-check CorDebug smoke, and the strengthened 15-check isolated Unity smoke passed. Exact commands
 and coverage are recorded in the [modernization gate](MODERNIZATION_GATE.md).
 
-### 2.5 Update debugger and expression-compiler sources as a coordinated slice
+### 2.5 Update debugger and expression-compiler sources as a coordinated slice — complete
 
 Use dnSpyEx's aligned host, `Mono.Debugger.Soft`, Roslyn.ExpressionCompiler, and Roslyn package revisions as
 the reference. Do not drop a current Roslyn expression compiler into the old host by itself.
@@ -160,6 +160,15 @@ Exit criteria:
   unbounded frame wait.
 - Capability advertisement accurately reports any engine behavior that changed.
 - The migration documents which dnSpyEx commits were adopted, adapted, or intentionally omitted.
+
+Completed 2026-08-04 as a bounded Roslyn/evaluator slice. Roslyn 5.6.0 and
+`Roslyn.ExpressionCompiler` `e127e791` were adopted with the required dnSpyEx host integration and
+custom-type-information contracts. The existing `net48;net5.0-windows` targets remain supported; the
+dnSpyEx .NET 10 host move is deferred to 2.6. The newer `Mono.Debugger.Soft` `d12451c` trial was
+intentionally rejected: two live attempts hung Unity's temporary AppDomain unload and lost the module
+unload stop, while the retained bounded fork `888ded0f` passed the full 45-check Unity gate. Shared,
+CorDebug, isolated Unity, and full Unity evidence and exact adopted/adapted/omitted revisions are
+recorded in the [modernization gate](MODERNIZATION_GATE.md).
 
 ### 2.6 Decide whether to adopt the dnSpyEx host
 

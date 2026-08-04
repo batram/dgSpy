@@ -83,3 +83,51 @@ result. Acceptance commands and results:
 The live Unity fixture exposed both the required file-backed path and a file-less module. The latter
 retained its Mono in-memory/dynamic identity and serialized to a hashed PE raw-module image. All
 required checks passed with no accepted behavior changes and unchanged capability/tool snapshots.
+
+## Roslyn 5.6 evaluator slice accepted 2026-08-04
+
+The accepted source baseline is dnSpyEx `3f4caa4f`, with dependency update `1ee406cbd`,
+`Roslyn.ExpressionCompiler` `e127e791` (5.6 source import `6e759dc` from Roslyn `c0573ed0`), and the
+debugger custom-type-information contract from `f92d13a19`. The full `dnSpy/Roslyn` integration was
+adopted as one coordinated source slice so the expression compiler, formatter/value-node layer, and
+Roslyn editor assemblies all use package version 5.6.0.
+
+The integration was adapted only where this fork's supported host boundary differs:
+
+- `DnSpyRoslyn.props` retains `net48;net5.0-windows`, because this build passes the target framework
+  globally and both the extension and current host remain supported;
+- custom type information is propagated through aliases, expression results, and value-node creation
+  without importing unrelated debugger-host changes;
+- the new target-type-match glyph uses the existing `Reference` image, and the text-element call passes
+  the existing string content-type contract; and
+- the current MSBuild gate selects Visual Studio 18 when installed, supplies the installed dotnet SDK
+  resolver path for that VS instance, and retains the VS 2019 fallback.
+
+The dnSpyEx .NET 10 host target is intentionally omitted and deferred to section 2.6. The aligned
+`Mono.Debugger.Soft` `d12451c` branch was also trialed and intentionally omitted. Its source still
+required reapplying the three-second `GetFrames()` bound, and two live Unity Phase 8 attempts failed at
+the temporary AppDomain unload: no `module_unloaded` event or module-breakpoint stop arrived, and the
+unload did not complete. Restoring the durable bounded fork at `888ded0f` immediately restored all 45
+checks, so no capability downgrade or Unity behavior regression was accepted.
+
+Accepted evidence:
+
+```powershell
+.\tests\run-modernization-gate.ps1 -Stage Shared
+# full net48 host plus dgSpy build/deploy; Protocol 29, Gateway 184, Extension 18
+
+.\tests\run-modernization-gate.ps1 -Stage CorDebug -SkipHostBuild
+# 368 checks, including watches, assignment, invocation/construction, compiler errors,
+# func-eval timeout/recovery, object IDs, frame selection, and endpoint reattach
+
+.\tests\run-modernization-gate.ps1 -Stage Unity -SkipHostBuild
+# 15 checks: bounded attach, metadata/IL/C#/raw module, safe detach, target liveness
+
+.\tests\run-uch-phase8.ps1  # with an isolated dgSpy host on port 7351
+# 45 checks: managed stop/frames, conditions, stepping, assignment, watches, invocation,
+# construction, object IDs, exception/module breakpoints, continue, reattach, safe detach
+```
+
+Capability and MCP tool snapshots remained unchanged. The accepted slice therefore changes evaluator
+implementation and type-information fidelity without changing advertised engine behavior or wire
+contracts.

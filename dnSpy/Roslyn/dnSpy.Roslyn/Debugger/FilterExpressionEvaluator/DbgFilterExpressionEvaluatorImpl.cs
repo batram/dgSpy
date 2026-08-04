@@ -134,7 +134,7 @@ namespace dnSpy.Roslyn.Debugger.FilterExpressionEvaluator {
 
 				var syntaxRoot = doc.GetSyntaxRootAsync().GetAwaiter().GetResult();
 				var semanticModel = doc.GetSemanticModelAsync().GetAwaiter().GetResult();
-				var classifier = new RoslynClassifier(syntaxRoot, semanticModel, workspace, RoslynClassificationTypes.Default, null, CancellationToken.None);
+				var classifier = new RoslynClassifier(syntaxRoot!, semanticModel!, workspace, RoslynClassificationTypes.Default, null, CancellationToken.None);
 				var textSpan = new TextSpan(exprOffset, expr.Length);
 
 				int pos = textSpan.Start;
@@ -188,9 +188,17 @@ namespace System {
 	public abstract class ValueType { }
 	public struct Void { }
 	public struct Boolean { }
+	public struct Char { }
+	public struct Byte { }
+	public struct SByte { }
+	public struct Int16 { }
+	public struct UInt16 { }
 	public struct Int32 { }
 	public struct UInt32 { }
+	public struct Int64 { }
 	public struct UInt64 { }
+	public struct Single { }
+	public struct Double { }
 	public sealed class String {
 		public static bool operator ==(String left, String right) => false;
 		public static bool operator !=(String left, String right) => false;
