@@ -101,6 +101,11 @@ namespace dgSpy.Extension {
 			case "search_symbols": return RpcResponse.Success(req.RequestId,await SearchSymbolsAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_il": return RpcResponse.Success(req.RequestId,await GetIlAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_csharp": return RpcResponse.Success(req.RequestId,await GetCSharpAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "search_text": return RpcResponse.Success(req.RequestId,await SearchTextAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "find_references": return RpcResponse.Success(req.RequestId,await FindReferencesAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "find_implementations": return RpcResponse.Success(req.RequestId,await FindImplementationsAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_metadata": return RpcResponse.Success(req.RequestId,await GetMetadataAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_raw_module": return RpcResponse.Success(req.RequestId,await GetRawModuleAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "set_breakpoint": return RpcResponse.Success(req.RequestId,await SetNamedBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			default: return RpcResponse.Failure(req.RequestId,"unsupported","Unknown operation: "+req.Operation);
 			}

@@ -179,7 +179,7 @@ try {
 
 	Write-Host "== discovery ==" -ForegroundColor Cyan
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
-	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame','update_breakpoint','set_exception_breakpoint','list_exception_breakpoints','step_into','step_over','step_out','evaluate','get_members','set_value','get_exception','add_watch','list_watches','remove_watch','list_modules','list_documents','list_types','list_members','search_symbols','get_il','get_csharp','set_breakpoint') {
+	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame','update_breakpoint','set_exception_breakpoint','list_exception_breakpoints','step_into','step_over','step_out','evaluate','get_members','set_value','get_exception','add_watch','list_watches','remove_watch','list_modules','list_documents','list_types','list_members','search_symbols','get_il','get_csharp','search_text','find_references','find_implementations','get_metadata','get_raw_module','set_breakpoint') {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
 	}
 
@@ -493,6 +493,28 @@ try {
 	$csharp = Invoke-Tool -Name 'get_csharp' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken }
 	Assert-That 'get_csharp decompiles the method body' ($csharp.code -match 'Tick' -and $csharp.code -match 'Sleep') "(len=$($csharp.code.Length))"
 	Assert-That 'get_csharp names the language it used' ($csharp.language -match 'C#')
+
+	$text = Invoke-Tool -Name 'search_text' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target'; pattern = 'phase-six-text-search-fixture'; count = 10 }
+	Assert-That 'search_text finds decompiled method text with token identity' (@($text.hits | Where-Object { $_.method -match 'UseWorker' -and $_.method_token -gt 0 }).Count -eq 1) "(total=$($text.total))"
+
+	$workerMembers = Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.IWorker'; name_pattern = 'Run' }
+	$runToken = @($workerMembers.symbols | Where-Object { $_.kind -eq 'method' })[0].method_token
+	$refs = Invoke-Tool -Name 'find_references' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $runToken; search_module = 'Milestone1Target'; count = 10 }
+	Assert-That 'find_references identifies the containing method by token' (@($refs.symbols | Where-Object { $_.name -eq 'UseWorker' }).Count -eq 1) "(total=$($refs.total))"
+
+	$ifaceTypes = Invoke-Tool -Name 'list_types' -Arguments @{ session_id = $sessionId; module = $targetExe; name_pattern = 'IWorker' }
+	$ifaceToken = @($ifaceTypes.symbols | Where-Object { $_.full_name -eq 'Milestone1Target.IWorker' })[0].method_token
+	$impls = Invoke-Tool -Name 'find_implementations' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $ifaceToken; count = 10 }
+	Assert-That 'find_implementations finds a direct interface implementer' (@($impls.symbols | Where-Object { $_.full_name -eq 'Milestone1Target.Worker' }).Count -eq 1) "(total=$($impls.total))"
+
+	$metadata = Invoke-Tool -Name 'get_metadata' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $methodToken }
+	Assert-That 'get_metadata reports table counts and resolves a token' ($metadata.table_row_counts.TypeDef -ge 4 -and $metadata.table_row_counts.MethodDef -gt 0 -and $metadata.token_full_name -match 'Tick')
+
+	$raw = Invoke-Tool -Name 'get_raw_module' -Arguments @{ session_id = $sessionId; module = $targetExe; offset = 0; count = 64 }
+	$rawBytes = [Convert]::FromBase64String($raw.data_base64)
+	$fileHash = (Get-FileHash -Algorithm SHA256 $targetExe).Hash.ToLowerInvariant()
+	Assert-That 'get_raw_module returns a bounded PE chunk' ($rawBytes.Length -eq 64 -and $rawBytes[0] -eq 0x4D -and $rawBytes[1] -eq 0x5A -and $raw.truncated)
+	Assert-That 'get_raw_module hashes the complete image' ($raw.sha256 -eq $fileHash) "(rpc=$($raw.sha256) file=$fileHash)"
 
 	# set_breakpoint by name must be the same breakpoint set_il_breakpoint produces, not a parallel path.
 	Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null

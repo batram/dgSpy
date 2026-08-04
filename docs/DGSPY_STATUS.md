@@ -82,37 +82,31 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | `set_value` — assigns in the target, reads back, reports `compiler_error` | ✅ automated live |
 | `add_watch` / `list_watches` / `remove_watch`; a failing watch does not fail the call | ✅ automated live |
 | `list_modules` — `can_set_breakpoint` false for path-less modules | ✅ automated live |
-| **Phase 6 symbol layer closed out** — search is partial, see Remaining gaps | ✅ 2026-08-03 (CorDebug) |
+| **Phase 6 closed out** — symbols, decompilation, text search, analysis, metadata, raw modules | ✅ 2026-08-04 (CorDebug) |
 | `list_documents` / `list_types` / `list_members` — paged, tokens included | ✅ automated live |
 | `search_symbols` — name to module + token, bounded | ✅ automated live |
 | `get_il` — offsets, operands, and `is_sequence_point` per instruction | ✅ automated live |
 | `get_csharp` — method and whole-type decompilation | ✅ automated live |
+| `search_text` / `find_references` / `find_implementations` — bounded analysis with symbol identities | ✅ automated live |
+| `get_metadata` / `get_raw_module` — token facts and paged image with SHA-256 | ✅ automated live |
 | `set_breakpoint` by type + method name, same path as `set_il_breakpoint` | ✅ automated live |
 
 Test suites, all green:
 
 ```powershell
-dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 24 checks, wire + capability contract
-dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 105 checks, access control + deadline bounds
+dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 25 checks, wire + capability contract
+dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 115 checks, access control + deadline bounds
 dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 222 checks, end to end
+.\tests\run-milestone1-smoke.ps1                                       # 233 checks, end to end
 ```
 
-All four suites are green as of the Phase 6 symbol-layer close-out on 2026-08-03: 24 / 105 / 15 unit
-checks and 222 live smoke checks. The event-vocabulary work was additionally verified against live UCH — see
+All four suites are green as of the Phase 6 close-out on 2026-08-04: 25 / 115 / 15 unit
+checks and 233 live smoke checks. The event-vocabulary work was additionally verified against live UCH — see
 [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). **Phases 4 and 5 are verified on CorDebug only.**
 Stepping, conditions and evaluation have not been exercised against Mono/Unity, and Mono differs enough
 elsewhere (sequence points, asynchronous frame fetch) that this is a real gap rather than a formality.
 
 ## Remaining gaps
-
-### Phase 6 shortfall — search and analysis tools not built
-
-`search_text`, `find_references`, `find_implementations`, `get_metadata` (raw metadata tables) and
-`get_raw_module` are **not implemented**. The symbol layer they would sit on now exists, and none of
-them blocks the debugger workflow, but the phase is not finished until they are — or until they are
-consciously dropped. Reference analysis in particular should reuse dnSpy's analyzer services rather
-than a hand-rolled metadata scan. `get_method_body` is subsumed by `get_il`.
 
 ### Partly addressed: frames can name a module that has no file
 
@@ -256,11 +250,9 @@ observed to terminate the target, so callers must use `detach`.
 
 0. **Exercise Phase 4 against UCH.** Stepping, conditions and hit counts are verified on CorDebug only.
    Mono's stepping is a different implementation and its sequence-point rule already bit breakpoints.
-1. **Finish Phase 6**: `search_text`, `find_references`, `find_implementations`, `get_metadata`,
-   `get_raw_module` — or decide to drop them explicitly. See the shortfall note above.
-2. **Verify the file-less module path against UCH**, which is the only place a real one has been seen.
+1. **Verify the file-less module path against UCH**, which is the only place a real one has been seen.
    Metadata should now resolve for it; `set_breakpoint` should refuse it with `module_has_no_path`.
-3. Phase 7 or Phase 9, whichever the workflow needs first.
+2. Phase 7 or Phase 9, whichever the workflow needs first.
 
 ## Local PowerShell scratchpads
 

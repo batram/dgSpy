@@ -218,6 +218,11 @@ namespace dgSpy.Protocol {
 			Op("search_symbols",60000),
 			Op("get_il",30000),
 			Op("get_csharp",60000),
+			Op("search_text",120000),
+			Op("find_references",60000),
+			Op("find_implementations",60000),
+			Op("get_metadata",30000),
+			Op("get_raw_module",60000),
 			Op("set_breakpoint",30000,mutates:true),
 		};
 		public static readonly EngineCapabilities[] Engines = {

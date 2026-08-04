@@ -287,6 +287,17 @@ public class CapabilityContractTests {
 	}
 
 	[Fact]
+	public void Phase6_operations_are_bounded_read_only_and_round_trip() {
+		foreach (var name in new[] { "search_text", "find_references", "find_implementations", "get_metadata", "get_raw_module" }) {
+			Assert.True(CapabilityCatalog.BoundMs(name) > 0, $"{name} has no bound");
+			Assert.False(CapabilityCatalog.Operations.Single(o => o.Operation == name).MutatesSession, $"{name} claims to mutate");
+		}
+		var chunk=JObject.Parse(JsonConvert.SerializeObject(new RawModuleChunk { Module="a.dll",Offset=4,Count=2,TotalSize=10,Truncated=true,Sha256="abc",DataBase64="AAE=" }));
+		Assert.Equal(10,(int?)chunk["total_size"]);
+		Assert.Equal("AAE=",(string?)chunk["data_base64"]);
+	}
+
+	[Fact]
 	public void A_step_result_round_trips_with_snake_case_wire_names() {
 		var step = JObject.Parse(JsonConvert.SerializeObject(new StepResult {
 			SessionId = "s", ThreadId = "100:200", StepKind = StepKinds.Over, CursorEventId = 42, Completed = false,

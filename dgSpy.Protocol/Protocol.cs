@@ -337,6 +337,42 @@ namespace dgSpy.Protocol {
 		[JsonProperty("language")] public string Language { get; set; }="";
 		[JsonProperty("code")] public string Code { get; set; }="";
 	}
+	public sealed class TextSearchHit {
+		[JsonProperty("module")] public string Module { get; set; }="";
+		[JsonProperty("type")] public string Type { get; set; }="";
+		[JsonProperty("method_token")] public uint MethodToken { get; set; }
+		[JsonProperty("method")] public string Method { get; set; }="";
+		[JsonProperty("line")] public int Line { get; set; }
+		[JsonProperty("text")] public string Text { get; set; }="";
+	}
+	public sealed class TextSearchResult {
+		[JsonProperty("hits")] public TextSearchHit[] Hits { get; set; }=Array.Empty<TextSearchHit>();
+		[JsonProperty("total")] public int Total { get; set; }
+		[JsonProperty("truncated")] public bool Truncated { get; set; }
+	}
+	public sealed class MetadataInfo {
+		[JsonProperty("module")] public string Module { get; set; }="";
+		[JsonProperty("assembly_full_name", NullValueHandling=NullValueHandling.Ignore)] public string? AssemblyFullName { get; set; }
+		[JsonProperty("mvid")] public string Mvid { get; set; }="";
+		[JsonProperty("runtime_version")] public string RuntimeVersion { get; set; }="";
+		[JsonProperty("type_count")] public int TypeCount { get; set; }
+		[JsonProperty("method_count")] public int MethodCount { get; set; }
+		[JsonProperty("field_count")] public int FieldCount { get; set; }
+		[JsonProperty("assembly_reference_count")] public int AssemblyReferenceCount { get; set; }
+		[JsonProperty("table_row_counts")] public Dictionary<string,int> TableRowCounts { get; set; }=new Dictionary<string,int>();
+		[JsonProperty("token", NullValueHandling=NullValueHandling.Ignore)] public uint? Token { get; set; }
+		[JsonProperty("token_kind", NullValueHandling=NullValueHandling.Ignore)] public string? TokenKind { get; set; }
+		[JsonProperty("token_full_name", NullValueHandling=NullValueHandling.Ignore)] public string? TokenFullName { get; set; }
+	}
+	public sealed class RawModuleChunk {
+		[JsonProperty("module")] public string Module { get; set; }="";
+		[JsonProperty("offset")] public int Offset { get; set; }
+		[JsonProperty("count")] public int Count { get; set; }
+		[JsonProperty("total_size")] public int TotalSize { get; set; }
+		[JsonProperty("truncated")] public bool Truncated { get; set; }
+		[JsonProperty("sha256")] public string Sha256 { get; set; }="";
+		[JsonProperty("data_base64")] public string DataBase64 { get; set; }="";
+	}
 	/// <summary>Bounded listing of exception stop settings. Bounded on purpose: dnSpy stops on second
 	/// chance for essentially every .NET exception it knows, so an unfiltered listing is thousands of
 	/// entries that are identical on every machine.</summary>

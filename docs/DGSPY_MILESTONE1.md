@@ -164,9 +164,15 @@ ship without being filterable and advertised in the same edit.
   returns the candidates. A breakpoint silently placed in the wrong overload is undetectable from the
   caller's side.
 - **Metadata is reachable for in-memory and dynamic modules; breakpoints on them are not.**
-  `get_csharp`, `get_il`, `list_types` and `list_members` resolve them through dnSpy's metadata service.
+  `get_csharp`, `get_il`, `list_types`, `list_members`, `get_metadata` and `get_raw_module` resolve them
+  through dnSpy's metadata service. `get_raw_module` returns paged base64 with a whole-image SHA-256;
+  for a file-less module the image is reconstructed from runtime metadata.
   `set_breakpoint` refuses with `module_has_no_path`, and `list_modules` flags them
   `can_set_breakpoint: false`, because dnSpy addresses breakpoint locations by file path.
+- **Analysis results remain debugger-addressable.** `search_text` returns the containing method's module
+  and token, `find_references` returns methods whose IL names the target member, and
+  `find_implementations` returns loaded direct subclasses or interface implementers. All are bounded;
+  module filters avoid scanning every Unity framework assembly when the caller already knows the scope.
 - **`value` and `display` are separate on purpose.** `value` is the raw scalar, `display` is dnSpy's
   formatted text. An agent comparing numbers wants the first; one showing something wants the second.
   Collapsing them would force every caller to parse display text back into a value.

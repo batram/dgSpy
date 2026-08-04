@@ -421,7 +421,7 @@ Three tools from the original list are deliberately gone:
 - `list_threads` (implemented)
 - `get_callstack` (implemented with caller-selected `thread_id`)
 - `get_frame` (implemented; `include: ["locals","this"]` returns objects too, in `values`)
-- `list_modules` (implemented; `can_set_breakpoint` flags modules Phase 6 still owes identity for)
+- `list_modules` (implemented; `can_set_breakpoint` distinguishes path-less modules)
 - `get_exception` (implemented)
 - `get_members` (implemented, paged, one level)
 - `evaluate` (implemented; func-eval opt-in)
@@ -438,17 +438,12 @@ Three tools from the original list are deliberately gone:
 - ⏭️ `stale_handle` is still reasoned about rather than provoked — see work item 7. The check exists and
   runs on every evaluation; what is missing is an evaluation slow enough to lose the race deliberately.
 
-## Phase 6: Decompiled C#, IL, metadata, and search — **symbol layer complete, search partial**
+## Phase 6: Decompiled C#, IL, metadata, and search — **complete**
 
-Closed out 2026-08-03 for everything that unblocks a caller who does not already know a metadata token:
-`list_documents`, `list_types`, `list_members`, `search_symbols`, `get_il`, `get_csharp`, and
-`set_breakpoint` by type and method name. Verified by the live CorDebug smoke.
-
-**Deliberately not built, and still open:** `search_text`, `find_references`, `find_implementations`,
-`get_metadata` (raw metadata tables), and `get_raw_module`. `get_method_body` is subsumed by `get_il`,
-which returns the body with offsets, operands and sequence points. The five that remain are analysis
-conveniences over metadata that is now reachable; none of them blocks the debugger workflow, and
-reference analysis in particular wants dnSpy's analyzer services rather than a hand-rolled scan.
+Closed out 2026-08-04. The complete surface is covered by the live CorDebug smoke, including bounded
+decompiled-text search, IL reference and type-implementation analysis, module/token metadata, and paged
+raw module images with a whole-image SHA-256. `get_method_body` is subsumed by `get_il`, which returns
+the body with offsets, operands and sequence points.
 
 **Consider taking this before the rest of Phase 5.** Today a breakpoint requires the caller to already
 know a metadata token, which for the UCH workflow is the single largest gap between "the debugger works"
@@ -481,7 +476,12 @@ below is what closes it. Evaluation is more capability; this is more reach.
 - `search_symbols` (implemented, bounded)
 - `get_il` (implemented, with `is_sequence_point` per instruction)
 - `get_csharp` (implemented, method or whole type)
-- `search_text`, `find_references`, `find_implementations`, `get_metadata`, `get_raw_module` — **open**
+- `search_text` (implemented; searches decompiled C# and returns containing method identities)
+- `find_references` (implemented; scans loaded method IL for the target module+token identity)
+- `find_implementations` (implemented; finds loaded direct subclasses and interface implementers)
+- `get_metadata` (implemented; module/table counts plus optional token resolution)
+- `get_raw_module` (implemented; bounded base64 chunks, total size and whole-image SHA-256; file-less
+  runtime metadata is serialized to a module image)
 - `get_method_body` — subsumed by `get_il`
 
 Original list, retained for reference:

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using dgSpy.Protocol;
@@ -228,6 +230,123 @@ namespace dgSpy.Extension {
 			},cancellationToken).ConfigureAwait(false);
 		}
 
+		async Task<TextSearchResult> SearchTextAsync(RpcRequest req,CancellationToken cancellationToken) {
+			CheckSession(req);
+			var pattern=(string?)req.Arguments["pattern"];
+			if (string.IsNullOrWhiteSpace(pattern)) throw new RpcException("invalid_arguments","pattern is required.");
+			var moduleFilter=(string?)req.Arguments["module"];
+			var count=Math.Min(200,Math.Max(1,(int?)req.Arguments["count"] ?? 100));
+			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules)
+				.Where(m=>string.IsNullOrEmpty(moduleFilter) || Matches(m.Name,moduleFilter) || Matches(m.Filename,moduleFilter)).ToArray(),cancellationToken).ConfigureAwait(false);
+			return await evaluations.RunAsync(()=>{
+				var decompiler=decompilers.AllDecompilers.FirstOrDefault(d=>d.GenericNameUI=="C#") ?? decompilers.Decompiler;
+				var hits=new List<TextSearchHit>(); var total=0;
+				foreach (var dbgModule in modules) {
+					cancellationToken.ThrowIfCancellationRequested();
+					ModuleDef? metadata=null; try { metadata=metadataService.TryGetMetadata(dbgModule); } catch (Exception) { }
+					if (metadata is null) continue;
+					foreach (var method in metadata.GetTypes().SelectMany(t=>t.Methods).Where(m=>m.HasBody)) {
+						cancellationToken.ThrowIfCancellationRequested();
+						var output=new StringBuilderDecompilerOutput();
+						try { decompiler.Decompile(method,output,new DecompilationContext { CancellationToken=cancellationToken }); } catch (Exception) { continue; }
+						var lines=output.ToString().Replace("\r\n","\n").Split('\n');
+						for (var i=0;i<lines.Length;i++) if (Matches(lines[i],pattern)) {
+							total++; if (hits.Count<count) hits.Add(new TextSearchHit { Module=metadata.Name?.ToString() ?? dbgModule.Name,Type=method.DeclaringType?.FullName ?? "",MethodToken=method.MDToken.ToUInt32(),Method=method.FullName,Line=i+1,Text=lines[i].Trim() });
+						}
+					}
+				}
+				return new TextSearchResult { Hits=hits.ToArray(),Total=total,Truncated=total>hits.Count };
+			},cancellationToken).ConfigureAwait(false);
+		}
+
+		async Task<SymbolList> FindReferencesAsync(RpcRequest req,CancellationToken cancellationToken) {
+			CheckSession(req);
+			var target=await WithMetadataAsync(req,"module",metadata=>{
+				var token=(uint?)req.Arguments["token"] ?? (uint?)req.Arguments["method_token"];
+				if (!token.HasValue || token.Value==0) throw new RpcException("invalid_arguments","token is required.");
+				return metadata.ResolveToken(token.Value) as IMemberRef ?? throw new RpcException("token_not_found",$"Token 0x{token.Value:X8} is not a member in this module.");
+			},cancellationToken).ConfigureAwait(false);
+			var moduleFilter=(string?)req.Arguments["search_module"];
+			var count=Math.Min(MaxSymbolResults,Math.Max(1,(int?)req.Arguments["count"] ?? 100));
+			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules)
+				.Where(m=>string.IsNullOrEmpty(moduleFilter) || Matches(m.Name,moduleFilter) || Matches(m.Filename,moduleFilter)).ToArray(),cancellationToken).ConfigureAwait(false);
+			return await evaluations.RunAsync(()=>{
+				var results=new List<SymbolInfo>(); var total=0;
+				foreach (var dbgModule in modules) {
+					ModuleDef? metadata=null; try { metadata=metadataService.TryGetMetadata(dbgModule); } catch (Exception) { }
+					if (metadata is null) continue;
+					var moduleName=metadata.Name?.ToString() ?? dbgModule.Name;
+					foreach (var method in metadata.GetTypes().SelectMany(t=>t.Methods).Where(m=>m.HasBody)) {
+						cancellationToken.ThrowIfCancellationRequested();
+						if (!method.Body.Instructions.Any(i=>i.Operand is IMemberRef mr && mr.FullName==target.FullName)) continue;
+						total++; if (results.Count<count) results.Add(Symbol("method",moduleName,method,method.DeclaringType));
+					}
+				}
+				return new SymbolList { Symbols=results.ToArray(),Total=total,Offset=0,Truncated=total>results.Count };
+			},cancellationToken).ConfigureAwait(false);
+		}
+
+		async Task<SymbolList> FindImplementationsAsync(RpcRequest req,CancellationToken cancellationToken) {
+			CheckSession(req);
+			var target=await WithMetadataAsync(req,"module",metadata=>{
+				var token=(uint?)req.Arguments["token"];
+				if (token.HasValue && token.Value!=0) return metadata.ResolveToken(token.Value) as TypeDef ?? throw new RpcException("type_not_found",$"Token 0x{token.Value:X8} is not a type.");
+				var typeName=(string?)req.Arguments["type"] ?? throw new RpcException("invalid_arguments","Pass token or type.");
+				return FindType(metadata,typeName);
+			},cancellationToken).ConfigureAwait(false);
+			var count=Math.Min(MaxSymbolResults,Math.Max(1,(int?)req.Arguments["count"] ?? 100));
+			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules).ToArray(),cancellationToken).ConfigureAwait(false);
+			return await evaluations.RunAsync(()=>{
+				var results=new List<SymbolInfo>(); var total=0;
+				foreach (var dbgModule in modules) {
+					ModuleDef? metadata=null; try { metadata=metadataService.TryGetMetadata(dbgModule); } catch (Exception) { }
+					if (metadata is null) continue;
+					var moduleName=metadata.Name?.ToString() ?? dbgModule.Name;
+					foreach (var type in metadata.GetTypes()) {
+						cancellationToken.ThrowIfCancellationRequested();
+						var implements=type.BaseType?.FullName==target.FullName || type.Interfaces.Any(i=>i.Interface?.FullName==target.FullName);
+						if (!implements) continue;
+						total++; if (results.Count<count) results.Add(Symbol("type",moduleName,type,null));
+					}
+				}
+				return new SymbolList { Symbols=results.ToArray(),Total=total,Offset=0,Truncated=total>results.Count };
+			},cancellationToken).ConfigureAwait(false);
+		}
+
+		async Task<MetadataInfo> GetMetadataAsync(RpcRequest req,CancellationToken cancellationToken) {
+			CheckSession(req);
+			return await WithMetadataAsync(req,"module",metadata=>{
+				var types=metadata.GetTypes().ToArray();
+				var token=(uint?)req.Arguments["token"];
+				IMDTokenProvider? resolved=null;
+				if (token.HasValue) resolved=metadata.ResolveToken(token.Value) ?? throw new RpcException("token_not_found",$"Token 0x{token.Value:X8} does not exist in this module.");
+				var methods=types.Sum(t=>t.Methods.Count); var fields=types.Sum(t=>t.Fields.Count); var assemblyRefs=metadata.GetAssemblyRefs().Count();
+				return new MetadataInfo { Module=metadata.Name?.ToString() ?? "",AssemblyFullName=metadata.Assembly?.FullName,Mvid=metadata.Mvid.ToString(),RuntimeVersion=metadata.RuntimeVersion ?? "",TypeCount=types.Length,MethodCount=methods,FieldCount=fields,AssemblyReferenceCount=assemblyRefs,TableRowCounts=new Dictionary<string,int> { ["TypeDef"]=types.Length,["MethodDef"]=methods,["Field"]=fields,["Property"]=types.Sum(t=>t.Properties.Count),["Event"]=types.Sum(t=>t.Events.Count),["AssemblyRef"]=assemblyRefs },Token=token,TokenKind=resolved?.GetType().Name,TokenFullName=(resolved as IMemberRef)?.FullName };
+			},cancellationToken).ConfigureAwait(false);
+		}
+
+		async Task<RawModuleChunk> GetRawModuleAsync(RpcRequest req,CancellationToken cancellationToken) {
+			CheckSession(req);
+			var module=(string?)req.Arguments["module"];
+			if (string.IsNullOrWhiteSpace(module)) throw new RpcException("invalid_arguments","module is required.");
+			var offset=Math.Max(0,(int?)req.Arguments["offset"] ?? 0);
+			var count=Math.Min(1024*1024,Math.Max(1,(int?)req.Arguments["count"] ?? 256*1024));
+			var dbgModule=await OnDebuggerAsync(()=>FindModule(module!),cancellationToken).ConfigureAwait(false);
+			var filename=await OnDebuggerAsync(()=>dbgModule.Filename,cancellationToken).ConfigureAwait(false);
+			return await evaluations.RunAsync(()=>{
+				byte[] bytes;
+				if (!string.IsNullOrEmpty(filename) && File.Exists(filename)) bytes=File.ReadAllBytes(filename);
+				else {
+					var metadata=metadataService.TryGetMetadata(dbgModule) ?? throw new RpcException("metadata_unavailable",$"dnSpy could not load metadata for '{module}'.");
+					using (var stream=new MemoryStream()) { metadata.Write(stream); bytes=stream.ToArray(); }
+				}
+				if (offset>bytes.Length) throw new RpcException("invalid_arguments",$"offset {offset} exceeds module size {bytes.Length}.");
+				var length=Math.Min(count,bytes.Length-offset); var chunk=new byte[length]; Buffer.BlockCopy(bytes,offset,chunk,0,length);
+				string hash; using (var sha=SHA256.Create()) hash=BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-","").ToLowerInvariant();
+				return new RawModuleChunk { Module=module!,Offset=offset,Count=length,TotalSize=bytes.Length,Truncated=offset+length<bytes.Length,Sha256=hash,DataBase64=Convert.ToBase64String(chunk) };
+			},cancellationToken).ConfigureAwait(false);
+		}
+
 		// Breakpoint by name. This is the tool that removes the "you must already know a metadata token"
 		// wall: it resolves the token here and then delegates to the exact same IL-offset path, so
 		// binding behaviour, sequence-point snapping and cursor_event_id are identical.
@@ -237,7 +356,7 @@ namespace dgSpy.Extension {
 				var method=FindMethod(metadata,req);
 				return method.MDToken.ToUInt32();
 			},cancellationToken).ConfigureAwait(false);
-			var module=(string?)req.Arguments["module"]!;
+			var module=req.Arguments.Value<string>("module")!;
 			var dbgModule=await OnDebuggerAsync(()=>FindModule(module),cancellationToken).ConfigureAwait(false);
 			var path=await OnDebuggerAsync(()=>dbgModule.Filename,cancellationToken).ConfigureAwait(false);
 			if (string.IsNullOrEmpty(path))

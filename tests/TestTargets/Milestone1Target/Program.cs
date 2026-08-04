@@ -3,6 +3,10 @@ using System.Reflection;
 using System.Threading;
 
 namespace Milestone1Target {
+	interface IWorker { int Run(int value); }
+	class BaseWorker { public virtual int Run(int value) => value; }
+	sealed class Worker : BaseWorker, IWorker { public override int Run(int value) => value + 7; }
+
 	static class Program {
 		static volatile bool keepRunning = true;
 
@@ -26,8 +30,14 @@ namespace Milestone1Target {
 		static int Tick(int input) {
 			int answer = input + 1;
 			string label = "dgSpy-milestone-1";
+			answer = UseWorker(new Worker(),answer);
 			Thread.Sleep(100);
 			return answer + label.Length;
+		}
+
+		static int UseWorker(IWorker worker,int value) {
+			string searchableText = "phase-six-text-search-fixture";
+			return worker.Run(value) + searchableText.Length;
 		}
 	}
 }
