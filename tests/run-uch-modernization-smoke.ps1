@@ -29,6 +29,7 @@ try {
 	$modules = @(Invoke-DgSpyRpc -OperationName 'list_modules' -OperationArguments @{ session_id = $sessionId } | ForEach-Object { $_ })
 	$plugin = $modules | Where-Object { $_.filename -like '*UltimateGlorpExplorer*' } | Select-Object -First 1
 	Assert-That 'the file-backed UGE module is present' ($null -ne $plugin -and $plugin.can_set_breakpoint -and -not [string]::IsNullOrWhiteSpace($plugin.filename))
+	Assert-That 'the selected module retains Unity engine identity' ($plugin.runtime_guid -eq 'ce8a11ee-73ef-4a51-b5d0-bda2e665a2b4') "(was '$($plugin.runtime_guid)')"
 
 	$search = Invoke-DgSpyRpc -OperationName 'search_symbols' -OperationArguments @{
 		session_id = $sessionId; pattern = 'Update'; module = $plugin.filename; kinds = @('method'); count = 40
@@ -40,6 +41,18 @@ try {
 		session_id = $sessionId; module = $plugin.filename; token = $method.method_token
 	} -DeadlineSeconds 40
 	Assert-That 'metadata resolves the selected method' ($metadata.token -eq $method.method_token)
+
+	$raw = Invoke-DgSpyRpc -OperationName 'get_raw_module' -OperationArguments @{
+		session_id = $sessionId; module = $plugin.filename; offset = 0; count = 64
+	} -DeadlineSeconds 40
+	$rawBytes = [Convert]::FromBase64String($raw.data_base64)
+	$fileHash = (Get-FileHash -LiteralPath $plugin.filename -Algorithm SHA256).Hash.ToLowerInvariant()
+	Assert-That 'raw-module paging returns a bounded PE prefix' ($rawBytes.Length -eq 64 -and $rawBytes[0] -eq 0x4D -and $rawBytes[1] -eq 0x5A -and $raw.truncated)
+	Assert-That 'raw-module SHA-256 covers the complete Unity image' ($raw.sha256 -eq $fileHash) "(rpc=$($raw.sha256) file=$fileHash)"
+	$rawPage = Invoke-DgSpyRpc -OperationName 'get_raw_module' -OperationArguments @{
+		session_id = $sessionId; module = $plugin.filename; offset = 64; count = 32
+	} -DeadlineSeconds 40
+	Assert-That 'raw-module paging preserves total size and hash' ($rawPage.offset -eq 64 -and $rawPage.total_size -eq $raw.total_size -and $rawPage.sha256 -eq $raw.sha256 -and $rawPage.truncated)
 
 	$il = Invoke-DgSpyRpc -OperationName 'get_il' -OperationArguments @{
 		session_id = $sessionId; module = $plugin.filename; method_token = $method.method_token
@@ -55,6 +68,19 @@ try {
 		session_id = $sessionId; pattern = $method.name; module = $plugin.filename; count = 20; max_methods = 200
 	} -DeadlineSeconds 140
 	Assert-That 'bounded decompiled-text search completes' ($text.scanned_methods -le 200)
+
+	$fileless = @($modules | Where-Object { $_.is_dynamic -or $_.is_in_memory }) | Select-Object -First 1
+	if ($fileless) {
+		$filelessRaw = Invoke-DgSpyRpc -OperationName 'get_raw_module' -OperationArguments @{
+			session_id = $sessionId; module = $fileless.name; offset = 0; count = 64
+		} -DeadlineSeconds 40
+		$filelessBytes = [Convert]::FromBase64String($filelessRaw.data_base64)
+		Assert-That 'a file-less Unity module retains in-memory/dynamic identity' (($fileless.is_dynamic -or $fileless.is_in_memory) -and -not [IO.Path]::IsPathRooted($fileless.filename))
+		Assert-That 'a file-less Unity raw module is serialized and hashed' ($filelessBytes.Length -eq 64 -and $filelessBytes[0] -eq 0x4D -and $filelessBytes[1] -eq 0x5A -and $filelessRaw.sha256 -match '^[0-9a-f]{64}$')
+	}
+	else {
+		Write-Host '  OBSERVE  UCH exposed no file-less Mono module in this run' -ForegroundColor DarkYellow
+	}
 }
 finally {
 	if ($sessionId) {

@@ -128,6 +128,15 @@ Exit criteria:
 - No regression is hidden by returning an empty result where the old contract returned a structured error.
 - The upgrade stays independently revertible.
 
+Completed 2026-08-04. The central package pin and dnSpy binding redirect now select dnlib 4.5.0.
+The only source adaptations are the resource API changes introduced on dnlib's 4.1+ line: serialized
+resource blobs explicitly retain `BinaryFormatter` format identity, new resource sets inherit the
+reader format, and edited resource sets clone the original format metadata. These are the bounded
+dnSpyEx `f9ab0e16c` compatibility changes; no Roslyn, target-framework, debugger-engine, or unrelated
+dependency revisions were included. The full net48 build, all three sequential unit suites, the
+368-check CorDebug smoke, and the strengthened 15-check isolated Unity smoke passed. Exact commands
+and coverage are recorded in the [modernization gate](MODERNIZATION_GATE.md).
+
 ### 2.5 Update debugger and expression-compiler sources as a coordinated slice
 
 Use dnSpyEx's aligned host, `Mono.Debugger.Soft`, Roslyn.ExpressionCompiler, and Roslyn package revisions as

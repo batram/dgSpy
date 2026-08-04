@@ -51,3 +51,35 @@ require intervening prerequisites, so they were not silently mixed into this bat
 
 Accepted evidence: full net48 build; dgSpy build/deploy; Protocol 29, Gateway 184, Extension 18; CorDebug
 368 checks; Unity read-only modernization subset 9 checks; unchanged capability and MCP tool snapshots.
+
+## dnlib 4.5.0 accepted 2026-08-04
+
+`DnSpyCommon.props` now selects dnlib 4.5.0 and `dnSpy/dnSpy/app.config` redirects compatible 3.x-4.5
+loads to assembly version 4.5.0. The deployed DLL reported file version 4.5.0.0. The isolated source
+adaptations are the resource compatibility changes from dnSpyEx `f9ab0e16c`:
+
+- binary serialized resources now pass `SerializationFormat.BinaryFormatter` explicitly;
+- empty resource sets use `ResourceElementSet.CreateForResourceReader(module)` so their reader format
+  is defined; and
+- regenerated edited sets clone the original `ResourceElementSet`, preserving its format metadata.
+
+No Roslyn, target-framework, debugger-engine, or other dependency version changed. The initial compile
+was intentionally used to enumerate the old API call sites; no behavior was accepted as a silent empty
+result. Acceptance commands and results:
+
+```powershell
+.\tests\run-modernization-gate.ps1 -Stage Shared
+# full net48 host plus dgSpy build/deploy; Protocol 29, Gateway 184, Extension 18
+
+.\tests\run-modernization-gate.ps1 -Stage CorDebug -SkipHostBuild
+# 368 checks: raw file/in-memory/dynamic modules, metadata, IL, C#, analyzer, export,
+# SHA-256, paging, truncation, malformed requests, and engine/module identity
+
+.\tests\run-modernization-gate.ps1 -Stage Unity -SkipHostBuild
+# 15 checks: attach, Unity identity, file-backed metadata/IL/C#/search/raw-module,
+# SHA-256, paging/truncation, file-less identity/raw-module, safe detach, target liveness
+```
+
+The live Unity fixture exposed both the required file-backed path and a file-less module. The latter
+retained its Mono in-memory/dynamic identity and serialized to a hashed PE raw-module image. All
+required checks passed with no accepted behavior changes and unchanged capability/tool snapshots.
