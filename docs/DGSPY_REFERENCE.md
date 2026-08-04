@@ -23,6 +23,9 @@ dotnet run --project .\dgSpy.Gateway\dgSpy.Gateway.csproj -c Release
 The MCP endpoint is `http://127.0.0.1:7350/mcp`; `GET /health` is unauthenticated for process checks.
 `DGSPY_URL` overrides the address.
 
+For central-Gateway host registration and SSH tunnel setup, see
+[remote hosts](REMOTE_HOSTS.md).
+
 ## Authentication
 
 Every `/mcp` request must carry `X-dgSpy-Token`. Set `DGSPY_TOKEN` to choose the value, otherwise the
@@ -41,9 +44,12 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 
 ## Tools
 
-- Host, discovery, and lifecycle: `get_host_info`, `get_capabilities`, `list_programs`, `attach`,
+- Host, discovery, and lifecycle: `list_hosts`, `get_host_info`, `get_capabilities`, `list_programs`, `attach`,
   `attach_endpoint`, `launch`, `list_sessions`, `get_session_state`, `pause`, `continue`, `detach`,
   `terminate`, `restart`.
+
+Every tool in these extension-backed families accepts `host_id`. It may be omitted only when the Gateway
+registry contains exactly one host. `list_hosts` is Gateway-local and needs no host selection.
 - Events and output: `get_events`, `wait_for_event`, `wait_for_stop`, `get_stop_reason`, `get_output`,
   `wait_for_output`.
 - Threads and values: `list_threads`, `get_callstack`, `get_frame`, `evaluate`, `get_members`, `set_value`,

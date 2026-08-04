@@ -1,5 +1,8 @@
+using System;
 using System.Net;
 using System.IO;
+using System.Linq;
+using Newtonsoft.Json;
 using dgSpy.Gateway;
 using Xunit;
 
@@ -77,4 +80,54 @@ public class RpcClientSettingsTests {
 		Assert.Throws<IOException>(()=>RpcClientSettings.EnsureExpectedHost(null,""));
 		Assert.Throws<IOException>(()=>RpcClientSettings.EnsureExpectedHost("host-a","host-b"));
 	}
+}
+
+public class HostRegistryTests {
+	[Fact]
+	public void One_registered_host_is_the_implicit_route() {
+		var directory=CreateRegistryDirectory();
+		try {
+			var registry=HostRegistry.FromJson(RegistryJson(("host-a",7451,"a.token")),directory);
+
+			Assert.Equal("host-a",registry.Select(null).HostId);
+			Assert.Equal("host-a",registry.Select("host-a").HostId);
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	[Fact]
+	public void Multiple_hosts_require_an_explicit_known_host_id() {
+		var directory=CreateRegistryDirectory();
+		try {
+			var registry=HostRegistry.FromJson(RegistryJson(("host-a",7451,"a.token"),("host-b",7452,"b.token")),directory);
+
+			Assert.Equal("host-b",registry.Select("host-b").HostId);
+			Assert.Equal("host_required",Assert.Throws<HostRoutingException>(()=>registry.Select(null)).Code);
+			Assert.Equal("unknown_host",Assert.Throws<HostRoutingException>(()=>registry.Select("host-c")).Code);
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	[Fact]
+	public void Registry_rejects_duplicate_hosts_and_non_loopback_endpoints() {
+		var directory=CreateRegistryDirectory();
+		try {
+			Assert.Throws<InvalidOperationException>(()=>HostRegistry.FromJson(RegistryJson(("host-a",7451,"a.token"),("host-a",7452,"b.token")),directory));
+			var json=JsonConvert.SerializeObject(new { hosts=new[]{new { host_id="host-a",address="10.0.0.5",port=7451,token_file="a.token" }} });
+			Assert.Throws<InvalidOperationException>(()=>HostRegistry.FromJson(json,directory));
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	static string CreateRegistryDirectory() {
+		var directory=Path.Combine(Path.GetTempPath(),"dgspy-host-registry-"+Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(directory);
+		File.WriteAllText(Path.Combine(directory,"a.token"),"token-a");
+		File.WriteAllText(Path.Combine(directory,"b.token"),"token-b");
+		return directory;
+	}
+
+	static string RegistryJson(params (string HostId,int Port,string TokenFile)[] hosts) => JsonConvert.SerializeObject(new {
+		hosts=hosts.Select(host=>new { host_id=host.HostId,display_name=host.HostId,address="127.0.0.1",port=host.Port,token_file=host.TokenFile }),
+	});
 }

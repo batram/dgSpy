@@ -9,6 +9,7 @@
   handles, evaluation, and engine behavior.
 - [dnSpyEx synchronization](DNSPYEX_SYNC.md) — maintaining the integration branch and contributing
   focused fixes upstream.
+- [Remote hosts](REMOTE_HOSTS.md) — central-Gateway registry and SSH tunnel configuration.
 
 ## Future capability design
 

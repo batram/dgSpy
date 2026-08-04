@@ -5,7 +5,7 @@ using Newtonsoft.Json.Linq;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls(builder.Configuration["DGSPY_URL"] ?? "http://127.0.0.1:7350");
-builder.Services.AddSingleton<LocalRpcClient>();
+builder.Services.AddSingleton<HostRouter>();
 var app = builder.Build();
 
 // Clients authenticate with a local secret. Take it from the environment when set, otherwise mint
@@ -24,7 +24,7 @@ app.MapGet("/health", () => Results.Json(new { status="ok", protocol_version=Pro
 // dgSpy has no server-initiated MCP messages. Streamable HTTP requires GET to exist, but explicitly
 // permits 405 when a server offers no SSE stream.
 app.MapGet("/mcp", () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed));
-app.MapPost("/mcp", async (HttpContext http, LocalRpcClient rpc, CancellationToken cancellationToken) => {
+app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, CancellationToken cancellationToken) => {
 	var rejection = RequestGuard.Reject(http.Request.Headers.Origin, http.Request.Headers[RequestGuard.TokenHeader], token, http.Connection.RemoteIpAddress);
 	if (rejection is not null) return Results.Json(new { jsonrpc="2.0", id=(JToken?)null, error=new { code=-32600, message=rejection } }, statusCode: StatusCodes.Status403Forbidden);
 	using var reader = new StreamReader(http.Request.Body);
@@ -43,6 +43,10 @@ app.MapPost("/mcp", async (HttpContext http, LocalRpcClient rpc, CancellationTok
 		if (method == "tools/list") return Results.Json(new { jsonrpc="2.0", id, result=new { tools=ToolCatalog.All } });
 		if (method != "tools/call") return McpError(id, -32601, "Method not found");
 		var name=(string?)root["params"]?["name"] ?? ""; var args=(JObject?)root["params"]?["arguments"] ?? new JObject();
+		if (name=="list_hosts") {
+			var hosts=await rpc.ListHostsAsync(cancellationToken);
+			return Results.Json(new { jsonrpc="2.0",id,result=new { structuredContent=new { hosts },content=new[] { new { type="text",text=JsonConvert.SerializeObject(hosts) } } } });
+		}
 		var response=await rpc.CallAsync(new RpcRequest { Operation=name, Arguments=args, DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds(name)) }, cancellationToken);
 		if (response.Error is not null) return Results.Json(new { jsonrpc="2.0", id, result=new { isError=true, structuredContent=new { error=response.Error }, content=new[] { new { type="text", text=response.Error.Message } } } });
 		// ASP.NET uses System.Text.Json for the HTTP envelope, while the local protocol uses Newtonsoft.
@@ -56,7 +60,12 @@ app.Run();
 static IResult McpError(JToken? id, int code, string message) => Results.Json(new { jsonrpc="2.0", id, error=new { code, message } });
 
 public static class ToolCatalog {
-	static object Tool(string name, string description, object properties, string[]? required=null) => new { name, description, inputSchema=new { type="object", properties, required=required ?? Array.Empty<string>() } };
+	static object Tool(string name,string description,object properties,string[]? required=null,bool routed=true) {
+		var routedProperties=new Dictionary<string,object>();
+		if (routed) routedProperties["host_id"]=new { type="string",description="Registered debugger host. Optional only when exactly one host is configured." };
+		foreach (var property in properties.GetType().GetProperties()) routedProperties[property.Name]=property.GetValue(properties)!;
+		return new { name,description,inputSchema=new { type="object",properties=routedProperties,required=required ?? Array.Empty<string>() } };
+	}
 	static object EvalMutationSchema() => new { session_id=new { type="string" },expression=new { type="string",description="Complete call or new-expression." },thread_id=new { type="string" },frame_index=new { type="integer",minimum=0 },timeout_ms=new { type="integer",minimum=1,maximum=10000,description="Hard engine func-eval timeout; default 1000." } };
 	/// <summary>Margin between the extension's own bound for an operation and the gateway's deadline for
 	/// it. The gateway deadline must outlast the inner bound, or the gateway abandons work that was about
@@ -69,6 +78,7 @@ public static class ToolCatalog {
 		return bound<=0 ? 8 : (int)Math.Ceiling(bound/1000.0)+MarginSeconds;
 	}
 	public static readonly object[] All = {
+		Tool("list_hosts", "List registered debugger hosts and their current connection state.", new {},routed:false),
 		Tool("get_host_info", "Identify the dnSpy host this gateway talks to: versions, machine, architecture, supported engines, and whether a session is live.", new {}),
 		Tool("get_capabilities", "Report what this host supports before relying on it: per-operation time bounds, per-engine behavior (notably that Mono/Unity binds breakpoints only at sequence points), limits, and the complete event_kinds and stop_reasons vocabularies. Engine differences are advertised here rather than assumed.", new {}),
 		Tool("list_programs", "List dnSpy-attachable managed runtimes. Unfiltered enumeration probes every process on the machine and takes seconds; pass process_ids or process_names when the target is known. Each call replaces the set of valid program_id values.", new { process_ids=new { type="array", items=new { type="integer" }, description="Only these PIDs." }, process_names=new { type="array", items=new { type="string" }, description="Process names, wildcards * and ? allowed, eg. UltimateChickenHorse*." }, provider_names=new { type="array", items=new { type="string" }, description="dnSpy attach providers to consult: DotNetFramework, DotNet, UnityEditor, UnityPlayer. Naming providers skips the rest. UnityPlayer runs a multicast scan and is skipped entirely unless named." } }),

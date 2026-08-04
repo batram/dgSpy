@@ -1,11 +1,25 @@
 {
   "tools": [
     {
+      "name": "list_hosts",
+      "description": "List registered debugger hosts and their current connection state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
       "name": "get_host_info",
       "description": "Identify the dnSpy host this gateway talks to: versions, machine, architecture, supported engines, and whether a session is live.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          }
+        },
         "required": []
       }
     },
@@ -14,7 +28,12 @@
       "description": "Report what this host supports before relying on it: per-operation time bounds, per-engine behavior (notably that Mono/Unity binds breakpoints only at sequence points), limits, and the complete event_kinds and stop_reasons vocabularies. Engine differences are advertised here rather than assumed.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          }
+        },
         "required": []
       }
     },
@@ -24,6 +43,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "process_ids": {
             "type": "array",
             "items": {
@@ -55,6 +78,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "program_id": {
             "type": "string"
           }
@@ -70,6 +97,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "address": {
             "type": "string",
             "description": "Default 127.0.0.1."
@@ -107,6 +138,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "filename": {
             "type": "string"
           },
@@ -155,6 +190,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           }
@@ -169,7 +208,12 @@
       "description": "List active debugger sessions. Use this to recover a session_id.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          }
+        },
         "required": []
       }
     },
@@ -179,6 +223,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -201,6 +249,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -219,6 +271,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           }
@@ -234,6 +290,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -255,6 +315,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -276,6 +340,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -306,7 +374,12 @@
       "description": "List all dnSpy breakpoints with their binding state. Breakpoints are global and outlive a session.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          }
+        },
         "required": []
       }
     },
@@ -316,6 +389,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "breakpoint_id": {
             "type": "integer"
           }
@@ -330,7 +407,12 @@
       "description": "Remove every dnSpy breakpoint, including any set by hand in the dnSpy UI. Breakpoints outlive a detach and rebind on the next attach, so clear them before reattaching if a fresh session should not stop on old ones.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          }
+        },
         "required": []
       }
     },
@@ -340,6 +422,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -364,6 +450,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -421,6 +511,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -472,6 +566,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -490,6 +588,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           }
@@ -505,6 +607,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -528,6 +634,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -568,6 +678,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "breakpoint_id": {
             "type": "integer"
           },
@@ -619,6 +733,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "category": {
             "type": "string",
             "description": "Default DotNet."
@@ -645,6 +763,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "include_second_chance": {
             "type": "boolean",
             "description": "Default false. True adds dnSpy's stock second-chance defaults — expect thousands of entries."
@@ -665,6 +787,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -687,6 +813,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -708,6 +838,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -729,6 +863,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -765,6 +903,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -798,6 +940,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -831,6 +977,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -860,6 +1010,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -887,6 +1041,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -924,6 +1082,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -942,6 +1104,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -977,6 +1143,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1018,6 +1188,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1054,6 +1228,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1079,6 +1257,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1098,6 +1280,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1123,6 +1309,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1142,6 +1332,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           }
@@ -1157,6 +1351,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           }
@@ -1172,6 +1370,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1206,6 +1408,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1243,6 +1449,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1285,6 +1495,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1317,6 +1531,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1352,6 +1570,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1391,6 +1613,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1428,6 +1654,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1459,6 +1689,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1492,6 +1726,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1514,6 +1752,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1549,6 +1791,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1570,6 +1816,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1606,6 +1856,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1632,6 +1886,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1663,6 +1921,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1682,6 +1944,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1706,6 +1972,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1749,6 +2019,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           }
@@ -1764,6 +2038,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1808,6 +2086,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1827,6 +2109,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1847,6 +2133,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1876,6 +2166,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           }
@@ -1891,6 +2185,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1911,6 +2209,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1944,6 +2246,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -1965,6 +2271,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           }
@@ -1980,6 +2290,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -2021,6 +2335,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -2060,6 +2378,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },
@@ -2096,6 +2418,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
           "session_id": {
             "type": "string"
           },

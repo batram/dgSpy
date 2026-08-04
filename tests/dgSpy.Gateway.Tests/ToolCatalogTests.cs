@@ -1,5 +1,6 @@
 using System.Reflection;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using dgSpy.Protocol;
 using Xunit;
@@ -13,9 +14,9 @@ namespace dgSpy.Gateway.Tests;
 public sealed class ToolCatalogTests {
 	static string Name(object tool) => (string)tool.GetType().GetProperty("name", BindingFlags.Public | BindingFlags.Instance)!.GetValue(tool)!;
 	static string Description(object tool) => (string)tool.GetType().GetProperty("description", BindingFlags.Public | BindingFlags.Instance)!.GetValue(tool)!;
-	static object InputProperties(object tool) {
+	static IReadOnlyDictionary<string,object> InputProperties(object tool) {
 		var schema=tool.GetType().GetProperty("inputSchema",BindingFlags.Public|BindingFlags.Instance)!.GetValue(tool)!;
-		return schema.GetType().GetProperty("properties",BindingFlags.Public|BindingFlags.Instance)!.GetValue(schema)!;
+		return (IReadOnlyDictionary<string,object>)schema.GetType().GetProperty("properties",BindingFlags.Public|BindingFlags.Instance)!.GetValue(schema)!;
 	}
 	public static TheoryData<string> ToolNames {
 		get { var data=new TheoryData<string>(); foreach (var tool in ToolCatalog.All) data.Add(Name(tool)); return data; }
@@ -24,11 +25,12 @@ public sealed class ToolCatalogTests {
 	[Theory]
 	[MemberData(nameof(ToolNames))]
 	public void Every_advertised_tool_is_an_operation_the_extension_implements(string tool) =>
-		Assert.True(CapabilityCatalog.IsKnownOperation(tool), $"tools/list advertises '{tool}', which is not in CapabilityCatalog.Operations.");
+		Assert.True(tool=="list_hosts" || CapabilityCatalog.IsKnownOperation(tool), $"tools/list advertises '{tool}', which is neither a Gateway operation nor in CapabilityCatalog.Operations.");
 
 	[Theory]
 	[MemberData(nameof(ToolNames))]
 	public void Every_gateway_deadline_outlasts_the_extension_bound(string tool) {
+		if (tool=="list_hosts") return;
 		var bound=CapabilityCatalog.BoundMs(tool);
 
 		Assert.True(ToolCatalog.DeadlineSeconds(tool)*1000 > bound, $"'{tool}' deadline {ToolCatalog.DeadlineSeconds(tool)}s does not outlast its {bound}ms bound.");
@@ -62,7 +64,32 @@ public sealed class ToolCatalogTests {
 	public void Multi_target_lifecycle_tools_expose_process_selectors() {
 		foreach(var name in new[]{"pause","continue","detach","terminate"}) {
 			var properties=InputProperties(ToolCatalog.All.Single(t=>Name(t)==name));
-			Assert.NotNull(properties.GetType().GetProperty("process_id",BindingFlags.Public|BindingFlags.Instance));
+			Assert.True(properties.ContainsKey("process_id"));
 		}
+	}
+
+	[Fact]
+	public void Every_extension_tool_accepts_host_routing_and_list_hosts_does_not() {
+		foreach (var tool in ToolCatalog.All) {
+			var name=Name(tool);
+			var properties=InputProperties(tool);
+			if (name=="list_hosts") Assert.False(properties.ContainsKey("host_id"));
+			else {
+				Assert.True(properties.TryGetValue("host_id",out var host));
+				Assert.Equal("string",host.GetType().GetProperty("type")!.GetValue(host));
+			}
+		}
+	}
+
+	[Fact]
+	public void Tool_schemas_survive_the_actual_http_serializer() {
+		var json=System.Text.Json.JsonSerializer.Serialize(new { tools=ToolCatalog.All });
+		using var document=System.Text.Json.JsonDocument.Parse(json);
+		var tools=document.RootElement.GetProperty("tools").EnumerateArray().ToArray();
+		var hostInfo=tools.Single(tool=>tool.GetProperty("name").GetString()=="get_host_info");
+		var listHosts=tools.Single(tool=>tool.GetProperty("name").GetString()=="list_hosts");
+
+		Assert.Equal("string",hostInfo.GetProperty("inputSchema").GetProperty("properties").GetProperty("host_id").GetProperty("type").GetString());
+		Assert.False(listHosts.GetProperty("inputSchema").GetProperty("properties").TryGetProperty("host_id",out _));
 	}
 }

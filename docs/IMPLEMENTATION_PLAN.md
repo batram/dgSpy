@@ -40,13 +40,13 @@ This is the next product expansion. Do not expose the current extension RPC dire
 
 Progress:
 
-- **Complete:** stable per-installation extension `host_id` and authenticated gateway-to-extension RPC.
-  Requests fail closed on a missing or invalid credential and on mismatched host identity; the listener
-  remains loopback-only.
-- **Open:** multi-host registration/routing, MCP client identity, leases, permissions, disconnect policy,
-  audit records, tunnel guidance, and any direct encrypted listener.
+- **Complete:** stable extension `host_id`, authenticated gateway-to-extension RPC, and central-Gateway
+  registration/discovery/routing through loopback tunnel endpoints. Requests fail closed on missing or
+  invalid credentials, ambiguous/unknown hosts, mismatched identity, and non-loopback registry addresses.
+- **Open:** live SSH-tunnel acceptance, MCP client identity, leases, permissions, disconnect policy, audit
+  records, client-to-Gateway HTTPS, and any direct encrypted listener.
 
-1. Add multi-host registration, discovery, and routing around the delivered stable `host_id` contract.
+1. Verify multi-host registration, discovery, and routing over live SSH tunnels.
 2. Retain authenticated extension RPC and loopback binding as the default endpoint boundary.
 3. Complete MCP Streamable HTTP session behavior required by strict clients.
 4. Define session ownership or leases before supporting competing clients or independent sessions.
