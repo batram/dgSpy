@@ -2,6 +2,15 @@ using System;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Threading;
+using System.Threading.Tasks;
+
+namespace Modernization.Nested {
+	sealed class Outer {
+		public sealed class Inner {
+			public int Read() => 42;
+		}
+	}
+}
 
 namespace Milestone1Target {
 	[AttributeUsage(AttributeTargets.Class)] sealed class Phase8MarkerAttribute : Attribute { }
@@ -20,6 +29,10 @@ namespace Milestone1Target {
 	class BaseWorker { public virtual int Run(int value) => value; }
 	[Phase8Marker]
 	sealed class Worker : BaseWorker, IWorker { public override int Run(int value) => value + 7; }
+	sealed class GenericBox<T> { public T Value; }
+	static class GenericExtensions {
+		public static T Unwrap<T>(this GenericBox<T> box) => box.Value;
+	}
 
 	static class Program {
 		static volatile bool keepRunning = true;
@@ -120,6 +133,16 @@ namespace Milestone1Target {
 			string searchableText = "phase-six-text-search-fixture";
 			return worker.Run(value) + searchableText.Length;
 		}
+
+		// Modernization fixtures intentionally use compiler-generated async state-machine metadata and a
+		// parameterless generic extension method. Both shapes have dedicated dnSpyEx ILSpy-v2 fixes.
+		static async Task<int> RuntimeAsyncFixture(int value) {
+			await Task.Yield();
+			try { return value + 1; }
+			finally { observedWorkerValue = value; }
+		}
+
+		static int GenericExtensionFixture() => new GenericBox<int> { Value = 42 }.Unwrap();
 
 		static int ExercisePhase8Relationships() {
 			Action handler=()=>observedWorkerValue++;

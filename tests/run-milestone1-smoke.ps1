@@ -655,6 +655,15 @@ try {
 	$csharp = Invoke-Tool -Name 'get_csharp' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken }
 	Assert-That 'get_csharp decompiles the method body' ($csharp.code -match 'Tick' -and $csharp.code -match 'Sleep') "(len=$($csharp.code.Length))"
 	Assert-That 'get_csharp names the language it used' ($csharp.language -match 'C#')
+	$asyncCsharp = Invoke-Tool -Name 'get_csharp' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.Program'; method = 'RuntimeAsyncFixture' }
+	# The selected upstream fix targets MethodImplAttributes.Async (runtime async), which this net48 C#
+	# compiler cannot emit. This ordinary state-machine method is the closest executable compatibility
+	# probe; the exact runtime-async shape remains an observational source-level fixture.
+	Assert-That 'ordinary async fixture remains decompilable' (-not [string]::IsNullOrWhiteSpace($asyncCsharp.code)) "(len=$($asyncCsharp.code.Length))"
+	$extensionCsharp = Invoke-Tool -Name 'get_csharp' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.GenericExtensions'; whole_type = $true }
+	Assert-That 'generic extension fixture preserves its receiver and type parameter' ($extensionCsharp.code -match 'Unwrap<T>' -and $extensionCsharp.code -match 'this GenericBox<T>') "(len=$($extensionCsharp.code.Length))"
+	$nestedIl = Invoke-Tool -Name 'get_il' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Modernization.Nested.Outer/Inner'; method = 'Read' }
+	Assert-That 'nested namespaced type keeps a resolvable IL identity' ($nestedIl.declaring_type -match 'Modernization.Nested.Outer.*Inner' -and @($nestedIl.instructions).Count -gt 0)
 
 	$text = Invoke-Tool -Name 'search_text' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target'; type = 'Milestone1Target.Program'; pattern = 'phase-six-text-search-fixture'; count = 10; max_methods = 20 }
 	Assert-That 'search_text finds decompiled method text with token identity' (@($text.hits | Where-Object { $_.method -match 'UseWorker' -and $_.method_token -gt 0 }).Count -eq 1) "(total=$($text.total))"

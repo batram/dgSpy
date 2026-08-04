@@ -12,4 +12,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\dgSpy.Gateway\dgSpy.Gateway.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="Snapshots\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -55,7 +55,7 @@ seven gitlinks, including `888ded0f`, without a local object database. From that
 VS 2019 net48 build and `build-dgspy.ps1` build/deploy succeeded; the Protocol, Gateway, and Extension
 suites then passed sequentially with 29, 182, and 18 tests respectively (229 total).
 
-### 2.2 Establish a modernization regression gate
+### 2.2 Establish a modernization regression gate — complete
 
 1. Convert the existing phase evidence into a compact required gate list: build/deploy, the three unit
    suites, the CorDebug smoke, and the safe Unity checklist subset.
@@ -73,7 +73,12 @@ Exit criteria:
 - Live checks remain bounded and use safe `detach`; test processes are checked before builds to avoid
   locked output artifacts.
 
-### 2.3 Update the decompiler compatibility line
+Completed 2026-08-04. [`MODERNIZATION_GATE.md`](MODERNIZATION_GATE.md) records the stage matrix and
+commands. `tests/run-modernization-gate.ps1` separates shared, CorDebug, and Unity failures; committed
+capability and MCP tool-schema snapshots distinguish wire-contract drift from behavior drift. The
+read-only Unity subset starts an isolated host and verifies safe detach and game liveness.
+
+### 2.3 Update the decompiler compatibility line — bounded compatibility batch complete
 
 Start with dnSpyEx's maintained `ilspyv2` and NRefactory forks, not original ILSpy 10. Port or advance in
 small, reviewable batches. Prioritize runtime-async crash protection, stack-overflow/malformed-input
@@ -95,6 +100,15 @@ Exit criteria:
   not regress on either engine.
 - NRefactory remains until the ILSpy-v2/VB AST dependencies are actually removed; it is not replaced by
   Roslyn as an unrelated cleanup.
+
+Completed 2026-08-04 for the first bounded correctness batch. The public
+`batram/ILSpy:dgspy-modernization` branch at `8f6c0812` ports dnSpyEx runtime-async return handling
+(`0b052bb5`, adapted without newer dnlib), parameterless generic extension decompilation (`a5dd6d5b`),
+and malformed-property NRE protection (`68b487ee`). NRefactory remains at `79d99d6f` on the durable
+`batram/NRefactory:dgspy-modernization` branch. The maintained heads were not accepted wholesale:
+NRefactory alone broke the old VB visitor contract, and current ILSpy-v2 requires dnlib APIs reserved
+for 2.4. Exact fixture classifications, deferred ports, commands, and results are in the
+[modernization gate](MODERNIZATION_GATE.md).
 
 ### 2.4 Trial dnlib 4.5.0 independently
 
