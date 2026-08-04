@@ -51,6 +51,83 @@ try {
 		$frame=$stack[0]
 		Assert-That 'the Phase 8 stop has a managed frame identity' ($frame.method_token -gt 0 -and -not [string]::IsNullOrWhiteSpace($frame.module))
 
+		# Close the remaining Phase 4 Mono gaps on a breakpoint in a method that has just proved live.
+		# The settings checks are deterministic; the false-condition timeout followed by a conditioned
+		# hit proves the engine evaluates the condition and hit count rather than merely storing them.
+		Invoke-DgSpyRpc -OperationName 'clear_breakpoints'|Out-Null
+		$liveBreakpoint=Invoke-DgSpyRpc -OperationName 'set_il_breakpoint' -OperationArguments @{session_id=$sessionId;module=$frame.module;method_token=$frame.method_token;il_offset=$frame.il_offset}
+		$conditioned=Invoke-DgSpyRpc -OperationName 'update_breakpoint' -OperationArguments @{breakpoint_id=$liveBreakpoint.breakpoint_id;condition='false';condition_kind='is_true';hit_count=2;hit_count_kind='at_least'}
+		Assert-That 'Mono stores a non-empty breakpoint condition and hit count' ($conditioned.condition -eq 'false' -and $conditioned.hit_count -eq 2 -and $conditioned.hit_count_kind -eq 'at_least')
+		$tracepoint=Invoke-DgSpyRpc -OperationName 'update_breakpoint' -OperationArguments @{breakpoint_id=$liveBreakpoint.breakpoint_id;trace_message='dgspy-mono-trace';trace_continue=$true}
+		Assert-That 'Mono stores a continuing tracepoint and warns that it produces no stop' ($tracepoint.trace_continue -and $tracepoint.warning -match 'no stopped event|wait_for_stop')
+		Invoke-DgSpyRpc -OperationName 'update_breakpoint' -OperationArguments @{breakpoint_id=$liveBreakpoint.breakpoint_id;trace_message='';trace_continue=$false}|Out-Null
+		$conditionCursor=(Invoke-DgSpyRpc -OperationName 'get_session_state' -OperationArguments @{session_id=$sessionId}).last_event_id
+		Resume-IfPaused -SessionId $sessionId
+		$falseWait=Invoke-DgSpyRpc -OperationName 'wait_for_stop' -OperationArguments @{session_id=$sessionId;after_event_id=$conditionCursor;timeout_ms=750} -DeadlineSeconds 10
+		Assert-That 'a false Mono breakpoint condition suppresses the stop' ($falseWait.timed_out)
+		$armed=Invoke-DgSpyRpc -OperationName 'update_breakpoint' -OperationArguments @{breakpoint_id=$liveBreakpoint.breakpoint_id;condition='true';condition_kind='is_true';hit_count=2;hit_count_kind='at_least'}
+		$hitWait=Invoke-DgSpyRpc -OperationName 'wait_for_stop' -OperationArguments @{session_id=$sessionId;after_event_id=$falseWait.last_event_id;timeout_ms=12000} -DeadlineSeconds 30
+		$hitStop=if(-not $hitWait.timed_out){@($hitWait.events)[0]}else{$null}
+		Assert-That 'a true conditioned Mono breakpoint with a hit count actually stops' ($armed.bound -and $hitStop.stop_reason -eq 'breakpoint') "(timed_out=$($hitWait.timed_out))"
+		if($hitStop){$thread=$hitStop.thread_id}
+
+		# Exercise all three Mono step kinds. Disable the hot breakpoint so only step completion can stop.
+		Invoke-DgSpyRpc -OperationName 'update_breakpoint' -OperationArguments @{breakpoint_id=$liveBreakpoint.breakpoint_id;enabled=$false}|Out-Null
+		foreach($stepName in @('step_into','step_over','step_out')){
+			$step=Try-Rpc $stepName @{session_id=$sessionId;thread_id=$thread} 30
+			$stepWait=if(-not $step.dgspy_error){Invoke-DgSpyRpc -OperationName 'wait_for_stop' -OperationArguments @{session_id=$sessionId;after_event_id=$step.cursor_event_id;timeout_ms=12000} -DeadlineSeconds 30}else{$null}
+			$stepStop=if($null -ne $stepWait -and -not $stepWait.timed_out){@($stepWait.events)[0]}else{$null}
+			Assert-That "$stepName completes on Mono with stop reason step" ($null -eq $step.dgspy_error -and $stepStop.stop_reason -eq 'step') "(error=$($step.dgspy_error) timed_out=$($stepWait.timed_out))"
+			if($stepStop){$thread=$stepStop.thread_id}
+		}
+		$stack=@(Invoke-DgSpyRpc -OperationName 'get_callstack' -OperationArguments @{session_id=$sessionId;thread_id=$thread;max_frames=10} -DeadlineSeconds 40|ForEach-Object{$_})
+		$frame=$stack[0]
+
+		# Close the remaining Phase 5 Mono gaps with a reversible process-global scalar and watches.
+		$mutableExpression='UnityExplorer.InspectorManager.PanelWidth'
+		$oldPanelWidth=Try-Rpc 'evaluate' @{session_id=$sessionId;expression=$mutableExpression;thread_id=$thread;frame_index=0} 40
+		$expectedPanelWidth=([double]$oldPanelWidth.value)+1
+		$newPanelWidth=([Convert]::ToString($expectedPanelWidth,[Globalization.CultureInfo]::InvariantCulture)+'F')
+		$assigned=Try-Rpc 'set_value' @{session_id=$sessionId;expression=$mutableExpression;value=$newPanelWidth;thread_id=$thread;frame_index=0} 40
+		$assignedRead=Try-Rpc 'evaluate' @{session_id=$sessionId;expression=$mutableExpression;thread_id=$thread;frame_index=0} 40
+		Assert-That 'set_value assigns and reads back a Mono value' ($assigned.assigned -and [double]$assignedRead.value -eq $expectedPanelWidth) "(rpc_error=$($assigned.dgspy_error) assignment_error=$($assigned.error))"
+		$restoreValue=([Convert]::ToString([double]$oldPanelWidth.value,[Globalization.CultureInfo]::InvariantCulture)+'F')
+		Try-Rpc 'set_value' @{session_id=$sessionId;expression=$mutableExpression;value=$restoreValue;thread_id=$thread;frame_index=0} 40|Out-Null
+		$watch=Invoke-DgSpyRpc -OperationName 'add_watch' -OperationArguments @{session_id=$sessionId;expression=$mutableExpression}
+		$brokenWatch=Invoke-DgSpyRpc -OperationName 'add_watch' -OperationArguments @{session_id=$sessionId;expression='dgspy_no_such_symbol'}
+		$watches=@(Invoke-DgSpyRpc -OperationName 'list_watches' -OperationArguments @{session_id=$sessionId;thread_id=$thread;frame_index=0}|ForEach-Object{$_})
+		$goodWatch=$watches|Where-Object{$_.watch_id -eq $watch.watch_id}|Select-Object -First 1
+		$failedWatch=$watches|Where-Object{$_.watch_id -eq $brokenWatch.watch_id}|Select-Object -First 1
+		Assert-That 'Mono watches evaluate valid entries without failing the invalid entry' ($null -eq $goodWatch.value.error -and -not [string]::IsNullOrWhiteSpace($failedWatch.value.error)) "(good=$($goodWatch.value.error) bad=$($failedWatch.value.error))"
+		$removedWatch=Invoke-DgSpyRpc -OperationName 'remove_watch' -OperationArguments @{session_id=$sessionId;watch_id=$watch.watch_id}
+		Invoke-DgSpyRpc -OperationName 'remove_watch' -OperationArguments @{session_id=$sessionId;watch_id=$brokenWatch.watch_id}|Out-Null
+		Assert-That 'remove_watch removes the selected Mono watch' ($removedWatch.watch_id -eq $watch.watch_id)
+
+		# Phase 7 advertises these capabilities for Mono. Use an idempotent memory write and the current
+		# instruction pointer so the validation does not deliberately alter game behavior.
+		$invoked=Try-Rpc 'invoke_method' @{session_id=$sessionId;expression='System.Math.Abs(-7)';thread_id=$thread;frame_index=0;timeout_ms=3000} 40
+		Assert-That 'invoke_method performs audited Mono func-eval' ($invoked.completed -and $invoked.value.value -eq 7 -and -not [string]::IsNullOrWhiteSpace($invoked.audit_id)) "($($invoked.dgspy_error))"
+		$created=Try-Rpc 'create_object' @{session_id=$sessionId;expression='new System.Text.StringBuilder()';thread_id=$thread;frame_index=0;timeout_ms=3000} 40
+		Assert-That 'create_object performs audited Mono construction' ($created.completed -and $created.capability -eq 'object_construction' -and -not [string]::IsNullOrWhiteSpace($created.audit_id)) "($($created.dgspy_error))"
+		$moduleAddress=[uint64](Get-Process -Id $plugin.process_id).MainModule.BaseAddress.ToInt64()
+		$memory=Try-Rpc 'read_memory' @{session_id=$sessionId;process_id=$plugin.process_id;address=$moduleAddress;length=2}
+		$memoryBytes=if($memory.data_base64){[Convert]::FromBase64String($memory.data_base64)}else{@()}
+		Assert-That 'read_memory reads bounded Mono process bytes' ($memoryBytes.Count -eq 2 -and $memoryBytes[0] -eq 0x4D -and $memoryBytes[1] -eq 0x5A) "($($memory.dgspy_error))"
+		$written=Try-Rpc 'write_memory' @{session_id=$sessionId;process_id=$plugin.process_id;address=$moduleAddress;data_base64=$memory.data_base64}
+		Assert-That 'write_memory reports an idempotent Mono write as side effecting' ($written.written -and $written.causes_side_effects) "($($written.dgspy_error))"
+		$managedDisassembly=Try-Rpc 'get_disassembly' @{session_id=$sessionId;mode='managed';module=$frame.module;method_token=$frame.method_token} 40
+		Assert-That 'get_disassembly exposes managed IL on Mono' ($managedDisassembly.capability -eq 'managed_il' -and @($managedDisassembly.body.instructions).Count -gt 0) "($($managedDisassembly.dgspy_error))"
+		$nativeDisassembly=Try-Rpc 'get_disassembly' @{session_id=$sessionId;mode='native';thread_id=$thread;frame_index=0} 40
+		Assert-That 'Mono native disassembly returns the advertised capability failure' ($nativeDisassembly.dgspy_error -match 'capability_unsupported|not supported') "($($nativeDisassembly.dgspy_error))"
+		$registers=Try-Rpc 'get_registers' @{session_id=$sessionId;thread_id=$thread}
+		Assert-That 'get_registers returns the host-wide capability failure on Mono' ($registers.dgspy_error -match 'capability_unsupported|not exposed') "($($registers.dgspy_error))"
+		$currentFrame=Try-Rpc 'get_frame' @{session_id=$sessionId;thread_id=$thread;frame_index=0} 40
+		$setIp=Try-Rpc 'set_instruction_pointer' @{session_id=$sessionId;thread_id=$thread;frame_index=0;module=$currentFrame.module;method_token=$currentFrame.method_token;il_offset=$currentFrame.il_offset} 40
+		Assert-That 'set_instruction_pointer validates and audits the current Mono location' ($setIp.completed -and $setIp.capability -eq 'set_instruction_pointer' -and -not [string]::IsNullOrWhiteSpace($setIp.audit_id)) "($($setIp.dgspy_error))"
+		# The original Phase 8 object-ID check resumes and waits for the next hot-method stop. Restore the
+		# breakpoint that the Phase 4 step checks deliberately disabled before entering that existing path.
+		Invoke-DgSpyRpc -OperationName 'update_breakpoint' -OperationArguments @{breakpoint_id=$liveBreakpoint.breakpoint_id;enabled=$true;condition='';hit_count=1;hit_count_kind='at_least'}|Out-Null
+
 		$autos=Try-Rpc 'get_autos' @{session_id=$sessionId;process_id=$plugin.process_id;runtime_id=$plugin.runtime_guid;thread_id=$thread;frame_index=0} 40
 		Assert-That 'get_autos reaches the Mono C# provider' ($null -eq $autos.dgspy_error -and @($autos).Count -gt 0) "($($autos.dgspy_error))"
 		$object=Try-Rpc 'create_object_id' @{session_id=$sessionId;expression='System.AppDomain.CurrentDomain';allow_func_eval=$true;process_id=$plugin.process_id;runtime_id=$plugin.runtime_guid;thread_id=$thread;frame_index=0} 40

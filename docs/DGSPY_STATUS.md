@@ -66,17 +66,17 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | Event-kind and stop-reason vocabularies advertised in `get_capabilities`                                                      | ✅ verified both engines                                                                |
 | Every kind the Mono engine actually emits is in the advertised vocabulary                                                     | ✅ cross-checked against a live UCH session                                             |
 | An unknown `kinds` value is rejected rather than silently matching nothing                                                    | ✅ verified both engines                                                                |
-| **Phase 4 closed out** — conditions, hit counts, tracepoints, exception breakpoints, stepping                                 | ✅ CorDebug complete + live Mono breakpoint/step coverage                               |
-| `update_breakpoint` — enabled, condition, hit count, trace; empty string clears                                               | ✅ automated CorDebug + live Mono settings round-trip                                   |
-| A continuing tracepoint warns that it produces no stop                                                                        | ✅ automated CorDebug                                                                   |
-| `set_exception_breakpoint` / `list_exception_breakpoints`, first-chance by default and bounded                                | ✅ automated CorDebug; newer policy path live on Mono                                   |
-| `step_into` / `step_over` / `step_out`, completion through `wait_for_stop` with `stop_reason: "step"`                         | ✅ automated CorDebug + live Mono `step_over`                                           |
-| **Phase 5 closed out** — evaluation, member expansion, assignment, watches, modules                                           | ✅ CorDebug complete + live Mono evaluation/member coverage                             |
+| **Phase 4 closed out** — conditions, hit counts, tracepoints, exception breakpoints, stepping                                 | ✅ automated CorDebug + live Mono                                                       |
+| `update_breakpoint` — enabled, condition, hit count, trace; empty string clears                                               | ✅ automated CorDebug + live Mono behavior                                              |
+| A continuing tracepoint warns that it produces no stop                                                                        | ✅ automated CorDebug + live Mono                                                       |
+| `set_exception_breakpoint` / `list_exception_breakpoints`, first-chance by default and bounded                                | ✅ automated CorDebug + equivalent policy lifecycle/live stop on Mono                   |
+| `step_into` / `step_over` / `step_out`, completion through `wait_for_stop` with `stop_reason: "step"`                         | ✅ automated CorDebug + live Mono                                                       |
+| **Phase 5 closed out** — evaluation, member expansion, assignment, watches, modules                                           | ✅ automated CorDebug + live Mono                                                       |
 | `evaluate` — raw scalar and display text separate; arithmetic, not just lookup                                                | ✅ automated CorDebug + live Mono                                                       |
 | `has_raw_value` separates `null` from optimized-away/unavailable                                                              | ✅ unit-tested + live (`this` in a static method)                                       |
 | `get_members` — one level, paged, `total` / `truncated`, member expressions round-trip                                        | ✅ automated CorDebug + live Mono                                                       |
-| `set_value` — assigns in the target, reads back, reports `compiler_error`                                                     | ✅ automated CorDebug                                                                   |
-| `add_watch` / `list_watches` / `remove_watch`; a failing watch does not fail the call                                         | ✅ automated CorDebug                                                                   |
+| `set_value` — assigns in the target, reads back, reports `compiler_error`                                                     | ✅ automated CorDebug + live Mono reversible assignment                                |
+| `add_watch` / `list_watches` / `remove_watch`; a failing watch does not fail the call                                         | ✅ automated CorDebug + live Mono                                                       |
 | `list_modules` — `can_set_breakpoint` follows the engine's published module identity                                         | ✅ automated CorDebug + live Mono                                                       |
 | Dynamic and in-memory modules — metadata, IL, C#, raw image, breakpoints, and a frame naming one                              | ✅ automated CorDebug + live Mono binding                                                |
 | **Phase 6 closed out** — symbols, decompilation, text search, analysis, metadata, raw modules                                 | ✅ 2026-08-04 (CorDebug + UCH)                                                          |
@@ -87,13 +87,13 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | `search_text` / `find_references` / `find_implementations` — bounded analysis with symbol identities                          | ✅ automated CorDebug + live UCH                                                        |
 | `get_metadata` / `get_raw_module` — token facts and paged image with SHA-256                                                  | ✅ automated CorDebug + live UCH                                                        |
 | `set_breakpoint` by type + method name, same path as `set_il_breakpoint`                                                      | ✅ automated live                                                                       |
-| **Phase 7 closed out** — explicit invocation, memory, disassembly, capabilities, set-IP, hard func-eval timeout               | ✅ 2026-08-04 (CorDebug)                                                                |
-| `invoke_method` / `create_object` — separate side-effecting tools with audit ids                                              | ✅ automated live                                                                       |
-| `read_memory` / `write_memory` — bounded target access; writes visibly side-effecting                                         | ✅ automated live                                                                       |
-| `get_disassembly` — managed IL and CorDebug JIT-native blocks                                                                 | ✅ automated live                                                                       |
-| `get_registers` — explicit `capability_unsupported` on this dnSpy contract                                                    | ✅ automated live failure contract                                                      |
-| `set_instruction_pointer` — current-frame/method and engine validation, audited                                               | ✅ automated live                                                                       |
-| **Phase 8 complete** — debugger completeness                                                                                  | ✅ CorDebug end to end + safe Mono subset verified                                      |
+| **Phase 7 closed out** — explicit invocation, memory, disassembly, capabilities, set-IP, hard func-eval timeout               | ✅ automated CorDebug + live Mono                                                       |
+| `invoke_method` / `create_object` — separate side-effecting tools with audit ids                                              | ✅ automated CorDebug + live Mono                                                       |
+| `read_memory` / `write_memory` — bounded target access; writes visibly side-effecting                                         | ✅ automated CorDebug + live Mono idempotent write                                      |
+| `get_disassembly` — managed IL and capability-gated native blocks                                                             | ✅ CorDebug managed/native + Mono managed/unsupported-native contract                   |
+| `get_registers` — explicit `capability_unsupported` on this dnSpy contract                                                    | ✅ verified both engines                                                               |
+| `set_instruction_pointer` — current-frame/method and engine validation, audited                                               | ✅ automated CorDebug + live Mono same-location mutation                                |
+| **Phase 8 complete** — debugger completeness                                                                                  | ✅ CorDebug end to end + applicable Mono surface verified                              |
 | Object IDs across resume/release/detach and structured C# Autos                                                               | ✅ automated CorDebug + live Mono                                                       |
 | Bounded cursor-based debugger output, separate from stop events                                                               | ✅ unit + automated live                                                                |
 | Module load/unload breakpoint filters                                                                                         | ✅ automated CorDebug load + unload stops; live Mono unload stop                        |
@@ -114,15 +114,13 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 18 chec
 All four suites are green as of 2026-08-04: 29 / 182 / 18 unit
 checks and 365 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
 verified against live UCH — see
-[DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). The live Phase 4–6 synchronization pass also verified
-Mono breakpoint binding and updates, managed evaluation/member expansion, and a completed `step_over`.
-The remaining Mono-specific coverage gaps are non-empty breakpoint conditions, continuing tracepoints,
-hit-count triggering, `step_into` / `step_out`, assignment, and watches.
-Phase 8 has a dedicated 29-check UCH pass, including an actual module-unload breakpoint stop, an actual
+[DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). The durable UCH pass now verifies the remaining
+applicable Phase 4, 5, and 7 behavior as well: conditioned and hit-counted stops, tracepoint semantics,
+all step kinds, assignment, watches, invocation/construction, memory, disassembly capability behavior,
+register failure, and set-IP.
+Phase 8 has a dedicated 45-check UCH pass, including an actual module-unload breakpoint stop, an actual
 categorized first-chance exception stop, successful host value export and reparse-point refusal, and
-detach-driven object-ID cleanup. Phase 7 mutation and low-level operations have not been exercised against
-Mono/Unity; Mono differs enough elsewhere (sequence points, asynchronous frame fetch) that those remain real
-gaps rather than formalities.
+detach-driven object-ID cleanup.
 
 ## Closed gaps and explicit boundaries
 

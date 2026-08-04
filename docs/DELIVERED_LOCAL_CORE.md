@@ -28,9 +28,10 @@ This is the permanent completion record for the first implementation section, fo
 ## Verified completion
 
 - CorDebug is the complete automated reference path for the delivered local surface.
-- Mono/Unity has live verification for attach, lifecycle, stacks/locals, breakpoints, decompilation,
-  metadata, analysis, object IDs, Autos, exports, policies, output, module-unload and categorized-exception
-  stops, detach cleanup, reparse refusal, and safe detach.
+- Mono/Unity has live verification for attach, lifecycle, stacks/locals, breakpoints and all step kinds,
+  evaluation/assignment/watches, invocation/construction, memory, disassembly capability behavior, set-IP,
+  decompilation, metadata, analysis, object IDs, Autos, exports, policies, output, module-unload and
+  categorized-exception stops, detach cleanup, reparse refusal, and safe detach.
 - The completed deployment is the documented local x64, single-host debugger core.
 - Unsupported engine features return explicit capability results rather than empty successful responses.
 

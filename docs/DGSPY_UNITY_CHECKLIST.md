@@ -276,8 +276,10 @@ rather than merely self-consistent.
 
 ### Re-run 2026-08-04: Phase 8 debugger completeness
 
-`tests\run-uch-phase8.ps1 -ReparseExportPath reparse\blocked.bin` passes **29/29 checks** against the
-headless Steam build. For the two host-export checks, dnSpy was started with `DGSPY_EXPORT_ROOT` pointing
+`tests\run-uch-phase8.ps1 -ReparseExportPath reparse\blocked.bin` originally passed **29/29 checks**
+against the headless Steam build. After absorbing the remaining applicable Phase 4, 5, and 7 Mono
+coverage, the default engine pass is **45/45**; supplying the optional export fixture adds two checks for
+**47/47**. For those host-export checks, dnSpy was started with `DGSPY_EXPORT_ROOT` pointing
 to a temporary directory whose `reparse` child was a junction to a directory outside that root. Without
 that optional argument the engine-only subset remains runnable without an export fixture. The pass attaches
 through the Mono endpoint, reaches a managed breakpoint in UltimateGlorpExplorer, and verifies:
@@ -293,7 +295,17 @@ through the Mono endpoint, reaches a managed breakpoint in UltimateGlorpExplorer
 - debugger output access separate from stop events;
 - clean detach without terminating UCH.
 
-The preceding Phase 4–6 synchronization pass also completed managed evaluation and stepping, but reproduced
+The expanded pass additionally verifies:
+
+- a false condition suppresses a hot breakpoint, then a true condition plus hit count produces a real stop;
+- continuing-tracepoint warning semantics and `step_into`, `step_over`, and `step_out` completion;
+- reversible `set_value` assignment plus valid and failing watches in one list;
+- audited method invocation and object construction;
+- bounded process-memory read and idempotent write;
+- managed disassembly, the Mono unsupported-native contract, and the host-wide unsupported-register contract;
+- audited same-location instruction-pointer mutation.
+
+The earlier Phase 4–6 synchronization pass also completed managed evaluation and stepping, but reproduced
 the known reconnect race on its first breakpoint: dnSpy returned "Can't set a breakpoint when the process
 is paused." Twelve subsequently armed breakpoints bound and one hit, so this remains the documented initial
 binding race rather than a Phase 8 regression.
