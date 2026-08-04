@@ -235,17 +235,21 @@ namespace dgSpy.Extension {
 			var pattern=(string?)req.Arguments["pattern"];
 			if (string.IsNullOrWhiteSpace(pattern)) throw new RpcException("invalid_arguments","pattern is required.");
 			var moduleFilter=(string?)req.Arguments["module"];
+			var typeFilter=(string?)req.Arguments["type"];
 			var count=Math.Min(200,Math.Max(1,(int?)req.Arguments["count"] ?? 100));
+			var maxMethods=Math.Min(1000,Math.Max(1,(int?)req.Arguments["max_methods"] ?? 200));
 			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules)
 				.Where(m=>string.IsNullOrEmpty(moduleFilter) || Matches(m.Name,moduleFilter) || Matches(m.Filename,moduleFilter)).ToArray(),cancellationToken).ConfigureAwait(false);
 			return await evaluations.RunAsync(()=>{
 				var decompiler=decompilers.AllDecompilers.FirstOrDefault(d=>d.GenericNameUI=="C#") ?? decompilers.Decompiler;
-				var hits=new List<TextSearchHit>(); var total=0;
+				var hits=new List<TextSearchHit>(); var total=0; var scanned=0; var scanTruncated=false;
 				foreach (var dbgModule in modules) {
 					cancellationToken.ThrowIfCancellationRequested();
 					ModuleDef? metadata=null; try { metadata=metadataService.TryGetMetadata(dbgModule); } catch (Exception) { }
 					if (metadata is null) continue;
-					foreach (var method in metadata.GetTypes().SelectMany(t=>t.Methods).Where(m=>m.HasBody)) {
+					foreach (var method in metadata.GetTypes().Where(t=>string.IsNullOrEmpty(typeFilter) || Matches(t.FullName,typeFilter)).SelectMany(t=>t.Methods).Where(m=>m.HasBody)) {
+						if (scanned>=maxMethods) { scanTruncated=true; break; }
+						scanned++;
 						cancellationToken.ThrowIfCancellationRequested();
 						var output=new StringBuilderDecompilerOutput();
 						try { decompiler.Decompile(method,output,new DecompilationContext { CancellationToken=cancellationToken }); } catch (Exception) { continue; }
@@ -254,8 +258,9 @@ namespace dgSpy.Extension {
 							total++; if (hits.Count<count) hits.Add(new TextSearchHit { Module=metadata.Name?.ToString() ?? dbgModule.Name,Type=method.DeclaringType?.FullName ?? "",MethodToken=method.MDToken.ToUInt32(),Method=method.FullName,Line=i+1,Text=lines[i].Trim() });
 						}
 					}
+					if (scanTruncated) break;
 				}
-				return new TextSearchResult { Hits=hits.ToArray(),Total=total,Truncated=total>hits.Count };
+				return new TextSearchResult { Hits=hits.ToArray(),Total=total,Truncated=total>hits.Count,ScannedMethods=scanned,ScanTruncated=scanTruncated };
 			},cancellationToken).ConfigureAwait(false);
 		}
 
@@ -295,7 +300,9 @@ namespace dgSpy.Extension {
 				return FindType(metadata,typeName);
 			},cancellationToken).ConfigureAwait(false);
 			var count=Math.Min(MaxSymbolResults,Math.Max(1,(int?)req.Arguments["count"] ?? 100));
-			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules).ToArray(),cancellationToken).ConfigureAwait(false);
+			var moduleFilter=(string?)req.Arguments["search_module"];
+			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules)
+				.Where(m=>string.IsNullOrEmpty(moduleFilter) || Matches(m.Name,moduleFilter) || Matches(m.Filename,moduleFilter)).ToArray(),cancellationToken).ConfigureAwait(false);
 			return await evaluations.RunAsync(()=>{
 				var results=new List<SymbolInfo>(); var total=0;
 				foreach (var dbgModule in modules) {

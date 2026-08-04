@@ -349,6 +349,8 @@ namespace dgSpy.Protocol {
 		[JsonProperty("hits")] public TextSearchHit[] Hits { get; set; }=Array.Empty<TextSearchHit>();
 		[JsonProperty("total")] public int Total { get; set; }
 		[JsonProperty("truncated")] public bool Truncated { get; set; }
+		[JsonProperty("scanned_methods")] public int ScannedMethods { get; set; }
+		[JsonProperty("scan_truncated")] public bool ScanTruncated { get; set; }
 	}
 	public sealed class MetadataInfo {
 		[JsonProperty("module")] public string Module { get; set; }="";

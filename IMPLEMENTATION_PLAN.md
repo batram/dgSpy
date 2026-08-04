@@ -445,6 +445,11 @@ decompiled-text search, IL reference and type-implementation analysis, module/to
 raw module images with a whole-image SHA-256. `get_method_body` is subsumed by `get_il`, which returns
 the body with offsets, operands and sequence points.
 
+Reverified against live UCH on 2026-08-04. Analysis operations must bound work as well as output:
+`search_text` caps scanned methods and accepts a type scope, while `find_implementations` accepts a
+module scope. The live pass exercised all five tools, a real Mono breakpoint stop, lifecycle
+responsiveness after every operation, clean detach, and game survival.
+
 **Consider taking this before the rest of Phase 5.** Today a breakpoint requires the caller to already
 know a metadata token, which for the UCH workflow is the single largest gap between "the debugger works"
 and "an agent can use it unaided". That is a symbol-search problem, not an evaluation problem, and item 8

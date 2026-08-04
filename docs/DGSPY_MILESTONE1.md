@@ -173,6 +173,9 @@ ship without being filterable and advertised in the same edit.
   and token, `find_references` returns methods whose IL names the target member, and
   `find_implementations` returns loaded direct subclasses or interface implementers. All are bounded;
   module filters avoid scanning every Unity framework assembly when the caller already knows the scope.
+  `search_text` also caps the number of methods it decompiles (`max_methods`, default 200) and reports
+  `scanned_methods` / `scan_truncated`; `find_implementations.search_module` provides the equivalent
+  Unity-safe scope. These are work bounds, not merely output caps.
 - **`value` and `display` are separate on purpose.** `value` is the raw scalar, `display` is dnSpy's
   formatted text. An agent comparing numbers wants the first; one showing something wants the second.
   Collapsing them would force every caller to parse display text back into a value.

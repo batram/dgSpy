@@ -295,6 +295,9 @@ public class CapabilityContractTests {
 		var chunk=JObject.Parse(JsonConvert.SerializeObject(new RawModuleChunk { Module="a.dll",Offset=4,Count=2,TotalSize=10,Truncated=true,Sha256="abc",DataBase64="AAE=" }));
 		Assert.Equal(10,(int?)chunk["total_size"]);
 		Assert.Equal("AAE=",(string?)chunk["data_base64"]);
+		var search=JObject.Parse(JsonConvert.SerializeObject(new TextSearchResult { ScannedMethods=200,ScanTruncated=true }));
+		Assert.Equal(200,(int?)search["scanned_methods"]);
+		Assert.True((bool?)search["scan_truncated"]);
 	}
 
 	[Fact]

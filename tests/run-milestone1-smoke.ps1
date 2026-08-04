@@ -494,8 +494,10 @@ try {
 	Assert-That 'get_csharp decompiles the method body' ($csharp.code -match 'Tick' -and $csharp.code -match 'Sleep') "(len=$($csharp.code.Length))"
 	Assert-That 'get_csharp names the language it used' ($csharp.language -match 'C#')
 
-	$text = Invoke-Tool -Name 'search_text' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target'; pattern = 'phase-six-text-search-fixture'; count = 10 }
+	$text = Invoke-Tool -Name 'search_text' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target'; type = 'Milestone1Target.Program'; pattern = 'phase-six-text-search-fixture'; count = 10; max_methods = 20 }
 	Assert-That 'search_text finds decompiled method text with token identity' (@($text.hits | Where-Object { $_.method -match 'UseWorker' -and $_.method_token -gt 0 }).Count -eq 1) "(total=$($text.total))"
+	$boundedText = Invoke-Tool -Name 'search_text' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target'; pattern = 'not-present'; max_methods = 1 }
+	Assert-That 'search_text bounds work as well as output' ($boundedText.scanned_methods -eq 1 -and $boundedText.scan_truncated)
 
 	$workerMembers = Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.IWorker'; name_pattern = 'Run' }
 	$runToken = @($workerMembers.symbols | Where-Object { $_.kind -eq 'method' })[0].method_token
@@ -504,7 +506,7 @@ try {
 
 	$ifaceTypes = Invoke-Tool -Name 'list_types' -Arguments @{ session_id = $sessionId; module = $targetExe; name_pattern = 'IWorker' }
 	$ifaceToken = @($ifaceTypes.symbols | Where-Object { $_.full_name -eq 'Milestone1Target.IWorker' })[0].method_token
-	$impls = Invoke-Tool -Name 'find_implementations' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $ifaceToken; count = 10 }
+	$impls = Invoke-Tool -Name 'find_implementations' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $ifaceToken; search_module = 'Milestone1Target'; count = 10 }
 	Assert-That 'find_implementations finds a direct interface implementer' (@($impls.symbols | Where-Object { $_.full_name -eq 'Milestone1Target.Worker' }).Count -eq 1) "(total=$($impls.total))"
 
 	$metadata = Invoke-Tool -Name 'get_metadata' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $methodToken }

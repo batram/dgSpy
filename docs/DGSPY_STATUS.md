@@ -82,13 +82,13 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | `set_value` — assigns in the target, reads back, reports `compiler_error` | ✅ automated live |
 | `add_watch` / `list_watches` / `remove_watch`; a failing watch does not fail the call | ✅ automated live |
 | `list_modules` — `can_set_breakpoint` false for path-less modules | ✅ automated live |
-| **Phase 6 closed out** — symbols, decompilation, text search, analysis, metadata, raw modules | ✅ 2026-08-04 (CorDebug) |
+| **Phase 6 closed out** — symbols, decompilation, text search, analysis, metadata, raw modules | ✅ 2026-08-04 (CorDebug + UCH) |
 | `list_documents` / `list_types` / `list_members` — paged, tokens included | ✅ automated live |
 | `search_symbols` — name to module + token, bounded | ✅ automated live |
 | `get_il` — offsets, operands, and `is_sequence_point` per instruction | ✅ automated live |
 | `get_csharp` — method and whole-type decompilation | ✅ automated live |
-| `search_text` / `find_references` / `find_implementations` — bounded analysis with symbol identities | ✅ automated live |
-| `get_metadata` / `get_raw_module` — token facts and paged image with SHA-256 | ✅ automated live |
+| `search_text` / `find_references` / `find_implementations` — bounded analysis with symbol identities | ✅ automated CorDebug + live UCH |
+| `get_metadata` / `get_raw_module` — token facts and paged image with SHA-256 | ✅ automated CorDebug + live UCH |
 | `set_breakpoint` by type + method name, same path as `set_il_breakpoint` | ✅ automated live |
 
 Test suites, all green:
@@ -97,11 +97,12 @@ Test suites, all green:
 dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 25 checks, wire + capability contract
 dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 115 checks, access control + deadline bounds
 dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 233 checks, end to end
+.\tests\run-milestone1-smoke.ps1                                       # 234 checks, end to end
 ```
 
 All four suites are green as of the Phase 6 close-out on 2026-08-04: 25 / 115 / 15 unit
-checks and 233 live smoke checks. The event-vocabulary work was additionally verified against live UCH — see
+checks and 234 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
+verified against live UCH — see
 [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). **Phases 4 and 5 are verified on CorDebug only.**
 Stepping, conditions and evaluation have not been exercised against Mono/Unity, and Mono differs enough
 elsewhere (sequence points, asynchronous frame fetch) that this is a real gap rather than a formality.
