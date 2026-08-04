@@ -26,19 +26,35 @@
 | `tests/TestTargets/Milestone1Target` | `net48`, x64 | CorDebug smoke target; the project pins `PlatformTarget=x64` and the smoke test verifies dnSpy reports `X64`. |
 
 The dgSpy projects are intentionally **not** in `dnSpy.sln`, and dgSpy builds through `build-dgspy.ps1`.
-The deliberate upstream edits are recorded below because each is a modernization/rebase obligation.
+The two deliberate upstream patch sets are recorded below because each is a modernization/rebase
+obligation. The dgSpy superproject is distributed under GPLv3, matching the inherited dnSpy license.
+The patched `Mono.Debugger.Soft` sources retain their permissive MIT-style source notices; for example,
+see `Locale.cs` and `Properties/AssemblyInfo.cs` in that fork.
 
 ### Edits to upstream dnSpy sources
 
 Keep this list small: every line is a merge conflict with upstream and a behavior difference that must
 survive or be proven obsolete during modernization.
 
-| File | Change | Why |
-|---|---|---|
-| `dnSpy/dnSpy.Contracts.Debugger/DbgMessageEventArgs.cs` | `DbgMessageThreadExitedEventArgs` now assigns `ExitCode` in its constructor | Upstream accepts `exitCode` and drops it, so the property was always `null`. dgSpy reports thread exit codes in the `thread_exited` event and cannot synthesize what the ctor discarded. A one-line fix and a clean upstream PR candidate. |
-| `Extensions/dnSpy.Debugger/Mono.Debugger.Soft` gitlink | Local commit `888ded0f` bounds `ThreadMirror.GetFrames()` to three seconds | A Unity thread can disappear while frames are requested and some runtimes never reply, wedging dnSpy's Mono debugger thread. Neither checked Mono nor dnSpyEx contains an equivalent bound. The commit must be pushed to a durable fork or reapplied during modernization. |
-| `Extensions/dnSpy.Debugger/.../DbgUI/DgSpyWindowActivation.cs` | Adds the `--dgspy-no-window-activation` switch | Automated stops must not steal foreground focus from the user. |
-| `Extensions/dnSpy.Debugger/.../DbgUI/DebuggerImpl.cs` and `WpfCurrentStatementUpdater.cs` | Honor the no-activation switch | Suppresses only foreground activation; dnSpy remains visible and interactive. |
+| Patch set | Files | Change and reason | License |
+|---|---|---|---|
+| dgSpy changes to dnSpy | `dnSpy/dnSpy.Contracts.Debugger/DbgMessageEventArgs.cs`; `Extensions/dnSpy.Debugger/.../DbgUI/DgSpyWindowActivation.cs`; `DebuggerImpl.cs`; `WpfCurrentStatementUpdater.cs` | Preserve process/thread exit codes for lifecycle events and add the opt-in `--dgspy-no-window-activation` behavior needed by a headless debugger host. | GPLv3; see `dnSpy/dnSpy/LicenseInfo/GPLv3.txt`. |
+| Bounded Mono frame fetch | `Extensions/dnSpy.Debugger/Mono.Debugger.Soft` gitlink at `888ded0f` | Bounds `ThreadMirror.GetFrames()` to three seconds. A Unity thread can disappear while frames are requested and some runtimes never reply, wedging dnSpy's Mono debugger thread. Neither checked Mono nor dnSpyEx contains an equivalent bound. | MIT-style Mono source notices retained in the fork; see `Locale.cs` and `Properties/AssemblyInfo.cs`. |
+
+## Reproducible source baseline
+
+- Superproject: `https://github.com/batram/dgSpy.git`.
+- Patched submodule: `https://github.com/batram/Mono.Debugger.Soft.git`, branch `dgspy`, commit
+  `888ded0f0284500b32c94abc5595410342c28810`.
+- Last known-good pre-modernization tag: `pre-modernization-2026-08-04`.
+- Acceptance evidence: [status and handoff](DGSPY_STATUS.md), [Unity checklist](DGSPY_UNITY_CHECKLIST.md),
+  and the build/test commands in this document.
+
+A fresh checkout must not borrow objects from an existing clone:
+
+```powershell
+git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/batram/dgSpy.git
+```
 
 ## Build and deploy
 
