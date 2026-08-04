@@ -182,8 +182,10 @@ A second full pass, on a fresh UCH launch:
 | `list_breakpoints` / `clear_breakpoints` | ✅ |
 | `detach` | ✅ `detached: true, terminated: false`, game alive |
 
-Note the first frame's module: `data-000001BE153D3040`, an in-memory module with no file path.
-`set_il_breakpoint` takes a module path, so frames like that cannot currently carry a breakpoint.
+Historical note: the first frame's module was displayed as `data-000001BE153D3040`, which initially
+looked like an in-memory module with no usable breakpoint identity. The later file-less-module pass below
+superseded that path-only assumption: metadata-backed modules now bind through the Mono engine's full
+module identity.
 
 ### Re-run 2026-08-04: dynamic and in-memory modules
 

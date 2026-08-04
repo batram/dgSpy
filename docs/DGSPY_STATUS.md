@@ -66,17 +66,17 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | Event-kind and stop-reason vocabularies advertised in `get_capabilities`                                                      | ✅ verified both engines                                                                |
 | Every kind the Mono engine actually emits is in the advertised vocabulary                                                     | ✅ cross-checked against a live UCH session                                             |
 | An unknown `kinds` value is rejected rather than silently matching nothing                                                    | ✅ verified both engines                                                                |
-| **Phase 4 closed out** — conditions, hit counts, tracepoints, exception breakpoints, stepping                                 | ✅ 2026-08-03                                                                           |
-| `update_breakpoint` — enabled, condition, hit count, trace; empty string clears                                               | ✅ automated live                                                                       |
-| A continuing tracepoint warns that it produces no stop                                                                        | ✅ automated live                                                                       |
-| `set_exception_breakpoint` / `list_exception_breakpoints`, first-chance by default and bounded                                | ✅ automated live                                                                       |
-| `step_into` / `step_over` / `step_out`, completion through `wait_for_stop` with `stop_reason: "step"`                         | ✅ automated live                                                                       |
-| **Phase 5 closed out** — evaluation, member expansion, assignment, watches, modules                                           | ✅ 2026-08-03 (CorDebug)                                                                |
-| `evaluate` — raw scalar and display text separate; arithmetic, not just lookup                                                | ✅ automated live                                                                       |
+| **Phase 4 closed out** — conditions, hit counts, tracepoints, exception breakpoints, stepping                                 | ✅ CorDebug complete + live Mono breakpoint/step coverage                               |
+| `update_breakpoint` — enabled, condition, hit count, trace; empty string clears                                               | ✅ automated CorDebug + live Mono settings round-trip                                   |
+| A continuing tracepoint warns that it produces no stop                                                                        | ✅ automated CorDebug                                                                   |
+| `set_exception_breakpoint` / `list_exception_breakpoints`, first-chance by default and bounded                                | ✅ automated CorDebug; newer policy path live on Mono                                   |
+| `step_into` / `step_over` / `step_out`, completion through `wait_for_stop` with `stop_reason: "step"`                         | ✅ automated CorDebug + live Mono `step_over`                                           |
+| **Phase 5 closed out** — evaluation, member expansion, assignment, watches, modules                                           | ✅ CorDebug complete + live Mono evaluation/member coverage                             |
+| `evaluate` — raw scalar and display text separate; arithmetic, not just lookup                                                | ✅ automated CorDebug + live Mono                                                       |
 | `has_raw_value` separates `null` from optimized-away/unavailable                                                              | ✅ unit-tested + live (`this` in a static method)                                       |
-| `get_members` — one level, paged, `total` / `truncated`, member expressions round-trip                                        | ✅ automated live                                                                       |
-| `set_value` — assigns in the target, reads back, reports `compiler_error`                                                     | ✅ automated live                                                                       |
-| `add_watch` / `list_watches` / `remove_watch`; a failing watch does not fail the call                                         | ✅ automated live                                                                       |
+| `get_members` — one level, paged, `total` / `truncated`, member expressions round-trip                                        | ✅ automated CorDebug + live Mono                                                       |
+| `set_value` — assigns in the target, reads back, reports `compiler_error`                                                     | ✅ automated CorDebug                                                                   |
+| `add_watch` / `list_watches` / `remove_watch`; a failing watch does not fail the call                                         | ✅ automated CorDebug                                                                   |
 | `list_modules` — `can_set_breakpoint` follows the engine's published module identity                                         | ✅ automated CorDebug + live Mono                                                       |
 | Dynamic and in-memory modules — metadata, IL, C#, raw image, breakpoints, and a frame naming one                              | ✅ automated CorDebug + live Mono binding                                                |
 | **Phase 6 closed out** — symbols, decompilation, text search, analysis, metadata, raw modules                                 | ✅ 2026-08-04 (CorDebug + UCH)                                                          |
@@ -114,7 +114,10 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 18 chec
 All four suites are green as of 2026-08-04: 29 / 182 / 18 unit
 checks and 365 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
 verified against live UCH — see
-[DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). **Phases 4 and 5 are verified on CorDebug only.**
+[DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). The live Phase 4–6 synchronization pass also verified
+Mono breakpoint binding and updates, managed evaluation/member expansion, and a completed `step_over`.
+The remaining Mono-specific coverage gaps are non-empty breakpoint conditions, continuing tracepoints,
+hit-count triggering, `step_into` / `step_out`, assignment, and watches.
 Phase 8 has a dedicated 29-check UCH pass, including an actual module-unload breakpoint stop, an actual
 categorized first-chance exception stop, successful host value export and reparse-point refusal, and
 detach-driven object-ID cleanup. Phase 7 mutation and low-level operations have not been exercised against

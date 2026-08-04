@@ -36,13 +36,12 @@ This is the permanent completion record for the first implementation section, fo
 
 ## Evidence baseline
 
-The completion run recorded 29 Protocol checks, 174 Gateway checks, 16 Extension checks, and 363
+The current baseline records 29 Protocol checks, 182 Gateway checks, 18 Extension checks, and 365
 CorDebug live-smoke checks. Mono/Unity evidence is recorded separately because it uses a live game
 fixture and engine behavior differs materially.
 
-The documentation-reorganization sanity check passed on 2026-08-04: Protocol 29/29, Gateway 174/174,
-and Extension 16/16. It does not replace the archived 363-check live evidence; dnSpy and UCH were not
-relaunched solely for a documentation edit.
+The completion evidence has subsequently been refreshed as the contracts gained coverage; the current
+counts above supersede the earlier 29 / 174 / 16 / 363 documentation-reorganization snapshot.
 
 ## Retained compatibility patches
 
