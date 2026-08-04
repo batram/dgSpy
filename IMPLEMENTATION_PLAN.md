@@ -5,7 +5,7 @@ verified, what is still open, and the handoff notes. This document is the target
 
 ## Objective
 
-Expose dnSpy's debugger, decompiler, metadata, search, and scripting capabilities to AI agents through MCP. Agents must be able to discover programs, attach or launch, control execution, set breakpoints, wait for stops, inspect complete debugger state, evaluate expressions, and navigate decompiled C# and IL.
+Expose dnSpy's debugger, decompiler, metadata, and search capabilities to AI agents through MCP. Agents must be able to discover programs, attach or launch, control execution, set breakpoints, wait for stops, inspect complete debugger state, evaluate expressions, and navigate decompiled C# and IL.
 
 The system must also support targets running on another Windows host or inside a VM without directly exposing an unauthenticated debugger endpoint.
 
@@ -39,6 +39,7 @@ The plan describes the full target. Active development is deliberately narrower:
 - **Engines**: .NET Framework CorDebug (`CLR v4.0.30319`, covering 4.0 through 4.8) and the Mono/Unity attach path used for UCH.
 - **CoreCLR**: not a current target. Keep the capability model engine-agnostic so it can be added, but do not gate milestones on it.
 - **Deployment**: one local host, one gateway, one dnSpy instance, one debug session at a time.
+- **Agent-facing language**: C# only. Visual Basic parity is out of scope even where dnSpy exposes it.
 
 Anything below marked "full target" stays in the plan for direction; the exit criteria for Phases 0 and 1 apply only to the scope above.
 
@@ -49,8 +50,9 @@ Anything below marked "full target" stays in the plan for direction; the exit cr
 - Bind the extension transport exclusively to loopback TCP by default.
 - Keep Milestone 1 local-only and unauthenticated while the transport and debugger lifecycle are stabilized. Add authentication before any non-loopback or multi-user deployment.
 - Reach remote hosts through SSH, WireGuard, or a mutually authenticated TLS gateway.
-- Model debugger actions as typed operations instead of exposing C# scripting as the primary API.
-- Separate target expression evaluation from scripts executed inside dnSpy.
+- Model debugger actions as typed operations. Optional target-code execution and dnSpy-host scripting
+  are separate high-risk tracks, documented in [TARGET_CODE_EXECUTION_PLAN.md](TARGET_CODE_EXECUTION_PLAN.md)
+  and [DNSPY_SCRIPTING_PLAN.md](DNSPY_SCRIPTING_PLAN.md).
 - Treat all object, frame, value, and location handles as session-scoped and invalid after resume unless explicitly documented otherwise.
 - Preserve debugger events in a bounded sequence so agents cannot miss a stop between MCP calls.
 - Return structured errors such as `not_paused`, `stale_handle`, `optimized_away`, `unsupported`, and `evaluation_timed_out`.
@@ -573,33 +575,62 @@ described, but have not yet been exercised against UCH.
 - ✅ Engine-level func-eval timeouts abort where supported and surface dnSpy's recovery failure rather than
   silently leaving the session unusable.
 
-## Phase 8: dnSpy scripting — direction only, not scheduled
+## Phase 8: Debugger completeness
 
-**Deliberately unscheduled.** This grants host-level code execution as the dnSpy user and adds a separate
-authorization axis, and nothing in the UCH workflow has wanted it once. It stays in the plan as direction.
-Pull it forward only against a concrete need that the typed operations genuinely cannot serve.
-
-dnSpy C# Interactive code runs inside dnSpy, not inside the paused target. It can access dnSpy services and therefore has control equivalent to code running as the dnSpy user.
+This phase collects debugger-native follow-ons to the completed lifecycle, event, breakpoint, evaluation,
+analysis, and low-level phases. It does not reopen Phases 0–7 or weaken their verified contracts. Multiple
+active targets means multiple processes and runtimes owned by dnSpy's default debugger manager, not
+isolated debugger managers inside one dnSpy process.
 
 ### Work
 
-1. Extract or wrap the Roslyn scripting engine behind a non-UI service.
-2. Capture standard output, return value, diagnostics, duration, and cancellation state.
-3. Use a separate authorization capability from debugger expression evaluation.
-4. Disable scripting by default for remote clients.
-5. Add configurable assembly/reference allowlists if practical, while documenting that in-process scripting is not a security sandbox.
+1. Support explicit `process_id` and `runtime_id` selection on every operation whose target can be
+   ambiguous. Preserve the current implicit target only when exactly one candidate is valid; otherwise
+   return `ambiguous_target` without acting. Report aggregate session state as `mixed` when targets differ.
+2. Expose dnSpy object IDs as runtime-scoped persistent references. Create, list, evaluate, and release
+   them; advertise engine support and release them on request, runtime exit, detach, or session teardown.
+3. Add `get_autos` through the active C# language's Autos provider. Add a separate bounded, cursor-based
+   debugger/output stream carrying process and runtime identity, sequence IDs, timestamps, truncation,
+   and message category; stop events remain in their existing event stream.
+4. Add module-load and module-unload breakpoints through `DbgModuleBreakpointsService`, including dnSpy's
+   module-name wildcard, dynamic, in-memory, load order, process-name, and app-domain filters.
+5. Define one versioned canonical JSON format for code, trace, module, and exception breakpoints. Import
+   validates and supports dry-run, deduplicates by stable breakpoint identity, defaults to `merge`, and
+   requires explicit `replace` before removing existing breakpoints.
+6. Expose exception categories, definitions, flags, and conditions through `DbgExceptionSettingsService`.
+   Support list, add, modify, remove, and restore-default operations; thrown, user-unhandled, and unhandled
+   modes are capability-gated rather than normalized across engines.
+7. Export supported evaluated values as bounded byte chunks with total length and whole-value SHA-256.
+   Optionally write on the debug host behind a separate permission, configured export roots, canonical
+   path validation, and no-overwrite by default; return the final path and hash.
+8. Expand analysis with typed edges for callers, callees, field reads and writes, construction, overrides,
+   interface implementation, attributes, and event add/remove access. Preserve module/type scopes, paging,
+   stable symbol identities, scan bounds, and truncation reporting from Phase 6.
 
 ### MCP tools
 
-- `execute_dnspy_script`
-- `reset_dnspy_script_context`
+- `create_object_id` / `list_object_ids` / `evaluate_object_id` / `release_object_id`
+- `get_autos`
+- `get_output` / `wait_for_output`
+- `set_module_breakpoint` / `list_module_breakpoints` / `update_module_breakpoint` / `remove_module_breakpoint`
+- `export_breakpoints` / `import_breakpoints`
+- `list_exception_categories` / `list_exception_policies` / `set_exception_policy` / `remove_exception_policy` / `restore_exception_defaults`
+- `get_value_export` / `write_value_export`
+- `analyze_symbol`
 
 ### Exit criteria
 
-- Scripting works without opening or driving the C# Interactive tool window.
-- Requests are serialized or isolated so concurrent agents cannot corrupt shared script state.
-- The audit log contains caller identity and a digest of executed code.
-- Documentation states clearly that enabling this tool grants host-level code execution as the dnSpy user.
+- Every ambiguous multi-target request fails without changing debugger or target state, and every result
+  identifies the process and runtime that produced it.
+- Object IDs survive resume when the active engine supports them and are deterministically disposed at all
+  documented lifetime boundaries.
+- Autos and output are accessible without UI automation; output cursors report gaps after truncation.
+- Module breakpoints cover load and unload, and breakpoint JSON round-trips without semantic loss.
+- Breakpoint import dry-run performs no mutation; `merge` never deletes, and only explicit `replace` does.
+- Exception modes and object-ID support are advertised per engine and return structured unsupported errors.
+- Value transfer and host export are bounded and hashed; host export rejects traversal, disallowed roots,
+  and overwrite unless explicitly authorized.
+- Analyzer results identify the relationship kind and both endpoint symbols without parsing display text.
 
 ## Phase 9: Remote hosts and secure transport
 
@@ -615,11 +646,14 @@ Run one gateway and dnSpy extension on each debug host. Connect from the agent h
 4. For direct network exposure, require TLS, mutual client authentication, request-size limits, rate limits, and explicit capability policies.
 5. Add per-client permissions:
    - discover
-   - inspect
-   - control execution
+   - inspect a selected target
+   - control execution of a selected target
    - mutate target state
    - terminate processes
-   - execute dnSpy scripts
+   - export values on the debug host
+   - execute target code (see [TARGET_CODE_EXECUTION_PLAN.md](TARGET_CODE_EXECUTION_PLAN.md))
+   - edit assembly artifacts and replace live method bodies (see [ASSEMBLY_EDITING_PLAN.md](ASSEMBLY_EDITING_PLAN.md))
+   - execute dnSpy-host scripts (see [DNSPY_SCRIPTING_PLAN.md](DNSPY_SCRIPTING_PLAN.md))
 6. Add structured audit records with secrets and inspected values redacted by policy.
 7. Add connection-loss behavior that does not automatically resume, detach, or terminate a paused target unless configured.
 
@@ -628,7 +662,8 @@ Run one gateway and dnSpy extension on each debug host. Connect from the agent h
 - An MCP client on another host can securely discover and debug a target inside a VM.
 - The debugger is not reachable from the VM network without the selected tunnel or authenticated listener.
 - Reconnection preserves session state and event cursors where the dnSpy process survived.
-- Authorization tests prove that inspection-only clients cannot resume, mutate, terminate, or script.
+- Authorization tests prove that inspection-only clients cannot resume, mutate, terminate, export to the
+  host, execute target code, edit artifacts, replace live methods, or execute dnSpy-host scripts.
 
 ## MCP behavior requirements
 
@@ -670,12 +705,19 @@ Loopback binding is not by itself a trust boundary for the HTTP gateway. A brows
 - No anonymous remote listener.
 - Add authenticated extension RPC connections and protect their credentials as part of Phase 9 hardening.
 - Mutual authentication for network transports.
-- Separate read, control, mutation, termination, and scripting permissions.
-- Request, response, expression, script, and decompilation size limits.
+- Separate read, per-target control, mutation, termination, host-export, target-code, artifact-edit,
+  live-patch, and dnSpy-host scripting permissions.
+- Request, response, expression, value-export, script, artifact, and decompilation size limits.
 - No secrets in ordinary logs.
 - Audit side-effecting operations.
-- Explicit opt-in for memory writes, function calls, target termination, and dnSpy scripting.
-- Never claim Roslyn scripting or debugger function evaluation is sandboxed.
+- Explicit opt-in for memory writes, function calls, target termination, host exports, target-code
+  execution, artifact editing, live method replacement, and dnSpy-host scripting.
+- Never claim debugger function evaluation, target-code execution, or Roslyn scripting is sandboxed.
+
+Optional execution and editing tracks are deliberately kept outside this debugger roadmap:
+[TARGET_CODE_EXECUTION_PLAN.md](TARGET_CODE_EXECUTION_PLAN.md),
+[ASSEMBLY_EDITING_PLAN.md](ASSEMBLY_EDITING_PLAN.md), and
+[DNSPY_SCRIPTING_PLAN.md](DNSPY_SCRIPTING_PLAN.md).
 
 ## Testing strategy
 
@@ -688,6 +730,9 @@ Loopback binding is not by itself a trust boundary for the HTTP gateway. A brows
 - Capability and authorization policy
 - MCP argument validation and structured errors
 - Paging and output bounds
+- Multi-target selection and `ambiguous_target` no-op behavior
+- Breakpoint interchange validation, dry-run, deduplication, and merge/replace semantics
+- Value-export hashing, path containment, and overwrite policy
 
 ### Integration test targets
 
@@ -696,10 +741,12 @@ Create deterministic programs containing:
 - nested calls with known locals and arguments
 - async and iterator state machines
 - multiple threads
+- multiple processes and runtimes with independently changing state
 - thrown and caught exceptions
 - overloaded and generic methods
 - properties with side effects
 - dynamically loaded assemblies
+- categorized exceptions, debugger output, and values suitable for object IDs and byte export
 - optimized and unoptimized builds
 - a long-running method for pause and stepping tests
 
@@ -716,8 +763,13 @@ For the current scope, the automated target is x64 .NET Framework; the Mono/Unit
 7. Modify a value with permission enabled.
 8. Step and observe the next stop event.
 9. Resume and verify old handles are rejected.
-10. Detach while leaving the target alive.
-11. Repeat through a VM tunnel.
+10. Create an object ID, resume, pause again, and evaluate or explicitly release it according to capability.
+11. Stop on a matching module load and read the corresponding cursor-based output.
+12. Export and dry-run import a mixed breakpoint set, then merge it without duplicates.
+13. Export a byte value through chunks and verify its SHA-256; reject an unauthorized host path.
+14. Select between multiple active targets and prove an omitted ambiguous selector performs no action.
+15. Detach while leaving the target alive.
+16. Repeat through a VM tunnel.
 
 ## Repository and dependency maintenance
 
@@ -794,6 +846,7 @@ the project's main asset. Evaluate, write down the findings, then decide.
 - Tool reference with state and handle semantics
 - Runtime capability matrix
 - Security and authorization guide
+- Optional capability plans for target-code execution, assembly editing, and dnSpy-host scripting
 - Troubleshooting guide for attach permissions, architecture mismatch, unavailable locals, and stuck evaluations
 
 ## Definition of done
@@ -809,9 +862,11 @@ dgSpy is complete when an authorized remote AI agent can, without UI automation:
 7. Evaluate expressions and deliberately mutate target state where supported and authorized.
 8. Navigate and search assemblies as decompiled C#, IL, and metadata.
 9. Use advanced memory, disassembly, register, and instruction-pointer operations when supported by the active engine.
-10. Optionally execute dnSpy-host C# scripts under a distinct high-risk permission.
-11. Recover cleanly from disconnects, exits, stale handles, timeouts, and unsupported runtime features.
-12. Perform all remote communication through an authenticated, encrypted, auditable transport.
+10. Select and control multiple active processes and runtimes without ambiguous implicit targeting.
+11. Use persistent object IDs, Autos, module breakpoints, breakpoint interchange, richer exception policies,
+   value export, typed analyzer relationships, and bounded debugger output when supported.
+12. Recover cleanly from disconnects, exits, stale handles, timeouts, and unsupported runtime features.
+13. Perform all remote communication through an authenticated, encrypted, auditable transport.
 
 ## First implementation milestone — delivered
 
