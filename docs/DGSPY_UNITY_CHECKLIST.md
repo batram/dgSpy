@@ -293,3 +293,5 @@ binding race rather than a Phase 8 regression.
 
 Not yet exercised on UCH: an actual module-unload breakpoint stop, a categorized exception stop, host value
 export, object-ID disposal caused by runtime exit/detach, breakpoint `replace`, and multi-target behavior.
+These paths are exercised by the disposable CorDebug fixture where applicable; they remain Mono/UCH
+cross-engine verification boundaries rather than open Phase 8 implementation items.

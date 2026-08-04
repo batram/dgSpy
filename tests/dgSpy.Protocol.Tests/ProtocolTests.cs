@@ -138,11 +138,13 @@ public class IdentityContractTests {
 	}
 
 	[Fact]
-	public void Detach_result_distinguishes_detached_from_terminated() {
-		var wire = JObject.Parse(JsonConvert.SerializeObject(new DetachResult { Detached = false, Terminated = true }));
+	public void Detach_result_distinguishes_detached_from_terminated_and_reports_remaining_session() {
+		var wire = JObject.Parse(JsonConvert.SerializeObject(new DetachResult { Detached = false, Terminated = true, ProcessId = 42, SessionActive = true }));
 
 		Assert.False((bool?)wire["detached"]);
 		Assert.True((bool?)wire["terminated"]);
+		Assert.Equal(42,(int?)wire["process_id"]);
+		Assert.True((bool?)wire["session_active"]);
 	}
 
 	[Fact]

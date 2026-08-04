@@ -46,6 +46,43 @@ namespace dgSpy.Extension {
 				?? throw new RpcException(processId is null ? "ambiguous_target" : "process_not_found",processId is null ? "More than one process is active; pass process_id." : $"Process {processId} is not active.");
 		}
 
+		async Task<SessionState> PauseProcessAsync(RpcRequest req,CancellationToken token) {
+			CheckSession(req);
+			await targetControl.WaitAsync(token).ConfigureAwait(false);
+			dnSpy.Contracts.Debugger.DbgProcess? process=null;
+			var restoreBreakAll=false;
+			try {
+				await OnDebuggerAsync(()=>{
+					CheckVersion(req);
+					process=SelectProcess(req);
+					// dnSpy's UI default intentionally cascades a break to every process. An explicit
+					// process_id has the opposite contract, so suppress that setting for this request.
+					if (manager.Processes.Length>1 && debuggerSettings.BreakAllProcesses) {
+						restoreBreakAll=true;
+						debuggerSettings.BreakAllProcesses=false;
+					}
+					process.Break();
+					return true;
+				},token).ConfigureAwait(false);
+				await WaitForDebuggerAsync(()=>!manager.IsDebugging || process is null || !process.IsRunning,token).ConfigureAwait(false);
+				return await OnDebuggerAsync(State,token).ConfigureAwait(false);
+			}
+			finally {
+				try {
+					if (restoreBreakAll) await OnDebuggerAsync(()=>{ debuggerSettings.BreakAllProcesses=true; return true; }).ConfigureAwait(false);
+				}
+				finally { targetControl.Release(); }
+			}
+		}
+
+		async Task<SessionState> ContinueProcessAsync(RpcRequest req,CancellationToken token) {
+			CheckSession(req);
+			dnSpy.Contracts.Debugger.DbgProcess? process=null;
+			await OnDebuggerAsync(()=>{ CheckVersion(req); process=SelectProcess(req); process.Run(); return true; },token).ConfigureAwait(false);
+			await WaitForDebuggerAsync(()=>!manager.IsDebugging || process is null || process.IsRunning,token).ConfigureAwait(false);
+			return await OnDebuggerAsync(State,token).ConfigureAwait(false);
+		}
+
 		static ulong UInt64Argument(RpcRequest req,string name) {
 			var token=req.Arguments[name] ?? throw new RpcException("invalid_arguments",name+" is required.");
 			try { return Convert.ToUInt64(((JValue)token).Value,CultureInfo.InvariantCulture); }

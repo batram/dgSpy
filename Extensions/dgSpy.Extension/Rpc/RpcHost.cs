@@ -27,14 +27,14 @@ using Newtonsoft.Json.Linq;
 
 namespace dgSpy.Extension {
 	sealed partial class RpcHost : IDisposable {
-		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DbgCodeBreakpointsService breakpoints; readonly DbgModuleBreakpointsService moduleBreakpoints; readonly DbgObjectIdService objectIds; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions; readonly DbgMetadataService metadataService; readonly IDecompilerService decompilers;
-		readonly EvaluationQueue evaluations=new EvaluationQueue();
-		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>();
+		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DebuggerSettings debuggerSettings; readonly DbgCodeBreakpointsService breakpoints; readonly DbgModuleBreakpointsService moduleBreakpoints; readonly DbgObjectIdService objectIds; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions; readonly DbgMetadataService metadataService; readonly IDecompilerService decompilers;
+		readonly EvaluationQueue evaluations=new EvaluationQueue(); readonly SemaphoreSlim targetControl=new SemaphoreSlim(1,1);
+		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>();
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		TcpListener? tcpListener;
 		Task? listener; string? sessionId; string? attachedProgramId; string? sessionKind; string? lifecycleAction; long stateVersion; bool attaching; bool faulted; string? faultMessage; string? lastUserMessage; int? terminalExitCode; string? terminalReason;
-		public RpcHost(AttachableProcessesService programs, DbgManager manager, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDecompilerService decompilers) {
-			this.programs=programs; this.manager=manager; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.decompilers=decompilers;
+		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDecompilerService decompilers) {
+			this.programs=programs; this.manager=manager; this.debuggerSettings=debuggerSettings; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.decompilers=decompilers;
 			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { if (manager.IsRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded);
 			// An engine that fails to connect reports it here rather than through DbgManager.Start, which
 			// only rejects options it cannot build an engine from. Recording it turns "faulted" from a
@@ -70,8 +70,8 @@ namespace dgSpy.Extension {
 			case "detach": return RpcResponse.Success(req.RequestId,await DetachAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "terminate": return RpcResponse.Success(req.RequestId,await TerminateAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "restart": return RpcResponse.Success(req.RequestId,await RestartAsync(req,requestCancellation.Token).ConfigureAwait(false));
-			case "pause": CheckSession(req); await OnDebuggerAsync(()=>{ CheckVersion(req); SelectProcess(req).Break(); return true; }).ConfigureAwait(false); await WaitForDebuggerAsync(()=>!manager.IsDebugging || manager.IsRunning!=true,requestCancellation.Token).ConfigureAwait(false); return RpcResponse.Success(req.RequestId,await OnDebuggerAsync(State,requestCancellation.Token).ConfigureAwait(false));
-			case "continue": CheckSession(req); await OnDebuggerAsync(()=>{ CheckVersion(req); SelectProcess(req).Run(); return true; }).ConfigureAwait(false); await WaitForDebuggerAsync(()=>!manager.IsDebugging || manager.IsRunning!=false,requestCancellation.Token).ConfigureAwait(false); return RpcResponse.Success(req.RequestId,await OnDebuggerAsync(State,requestCancellation.Token).ConfigureAwait(false));
+			case "pause": return RpcResponse.Success(req.RequestId,await PauseProcessAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "continue": return RpcResponse.Success(req.RequestId,await ContinueProcessAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "set_il_breakpoint": return RpcResponse.Success(req.RequestId,await SetBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "list_breakpoints": return RpcResponse.Success(req.RequestId,await ListBreakpointsAsync(requestCancellation.Token).ConfigureAwait(false));
 			case "remove_breakpoint": return RpcResponse.Success(req.RequestId,await RemoveBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
@@ -202,12 +202,13 @@ namespace dgSpy.Extension {
 			return await StartSessionAsync($"endpoint:{engine}:{address}:{port}","attach",()=>manager.Start(options),connect,cancellationToken).ConfigureAwait(false);
 		}
 		async Task<SessionState> StartSessionAsync(string programId,string kind,Func<string?> start,TimeSpan connectWait,CancellationToken cancellationToken) {
-			if (sessionId is not null && await OnDebuggerAsync(()=>manager.IsDebugging).ConfigureAwait(false)) throw new RpcException("session_already_active","Detach the current session before attaching to another program.");
+			var adding=sessionId is not null && await OnDebuggerAsync(()=>manager.IsDebugging).ConfigureAwait(false);
+			var oldProcessIds=adding ? await OnDebuggerAsync(()=>manager.Processes.Select(p=>p.Id).ToArray(),cancellationToken).ConfigureAwait(false) : Array.Empty<int>();
 			var rejected=await OnDebuggerAsync(()=>{
-				lock(sync) { events.Reset(); output.Reset(); stateVersion=0; attaching=true; faulted=false; faultMessage=null; lastUserMessage=null; terminalExitCode=null; terminalReason=null; sessionKind=kind; lifecycleAction=null; }
+				lock(sync) { if(!adding) { events.Reset(); output.Reset(); stateVersion=0; attaching=true; faulted=false; faultMessage=null; terminalExitCode=null; terminalReason=null; sessionKind=kind; lifecycleAction=null; processLifecycleActions.Clear(); } lastUserMessage=null; }
 				var failure=start();
-				if (failure is null) { sessionId=Guid.NewGuid().ToString("N"); stateVersion++; }
-				else lock(sync) attaching=false;
+				if (failure is null) { if(!adding) sessionId=Guid.NewGuid().ToString("N"); stateVersion++; }
+				else if(!adding) lock(sync) attaching=false;
 				return failure;
 			}).ConfigureAwait(false);
 			// DbgManager.Start rejects options it cannot build an engine from synchronously. That is a
@@ -219,13 +220,15 @@ namespace dgSpy.Extension {
 			// stop with no current thread and no call stack, and the session does not recover until it
 			// runs again. A connect failure arrives as a user message and ends the wait early, so a dead
 			// endpoint costs the connection timeout rather than the connection timeout plus this one.
-			await WaitForDebuggerAsync(()=>UserMessage() is not null || (manager.IsDebugging && manager.Processes.SelectMany(process=>process.Threads).Any()),cancellationToken,connectWait).ConfigureAwait(false);
+			await WaitForDebuggerAsync(()=>UserMessage() is not null || (manager.IsDebugging && manager.Processes.Where(process=>!adding||!oldProcessIds.Contains(process.Id)).SelectMany(process=>process.Threads).Any()),cancellationToken,connectWait).ConfigureAwait(false);
 			// The engine never came up. Report it rather than leaving the caller polling "attaching".
-			if (!await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false)) {
+			var connected=await OnDebuggerAsync(()=>manager.IsDebugging && (!adding || manager.Processes.Any(p=>!oldProcessIds.Contains(p.Id))),cancellationToken).ConfigureAwait(false);
+			if (!connected && !adding) {
 				lock(sync) { faulted=true; attaching=false; faultMessage=lastUserMessage ?? "The debug engine did not connect before the attach deadline."; }
 				Record(EventKinds.AttachFailed);
 			}
-			else lock(sync) { attachedProgramId=programId; faultMessage=null; }
+			else if(!connected) throw new RpcException("attach_failed",lastUserMessage ?? "The additional debug target did not connect before the attach deadline.");
+			else lock(sync) { attachedProgramId=adding ? (attachedProgramId+";"+programId) : programId; faultMessage=null; }
 			return await OnDebuggerAsync(State,cancellationToken).ConfigureAwait(false);
 		}
 		string? UserMessage() { lock(sync) return lastUserMessage; }
@@ -234,6 +237,18 @@ namespace dgSpy.Extension {
 		async Task<DetachResult> DetachAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
 			bool allowTerminate=(bool?)req.Arguments["allow_terminate"] ?? false;
+			if(req.Arguments["process_id"] is not null) {
+				var process=await OnDebuggerAsync(()=>SelectProcess(req),cancellationToken).ConfigureAwait(false);
+				var selectedCanDetach=process.ShouldDetach;
+				if(!selectedCanDetach&&!allowTerminate) throw new RpcException("detach_would_terminate","dnSpy cannot detach from this target without terminating it. Pass allow_terminate=true to stop debugging anyway.");
+				lock(sync) processLifecycleActions[process.Id]=selectedCanDetach?"detach":"terminate";
+				await OnDebuggerAsync(()=>{ if(selectedCanDetach) process.Detach(); else process.Terminate(); return true; },cancellationToken).ConfigureAwait(false);
+				await WaitForDebuggerAsync(()=>manager.Processes.All(p=>p.Id!=process.Id),cancellationToken).ConfigureAwait(false);
+				var active=await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false);
+				var selectedSessionId=sessionId!;
+				if(!active) lock(sync) { sessionId=null; attachedProgramId=null; sessionKind=null; lifecycleAction=null; attaching=false; faulted=false; faultMessage=null; lastUserMessage=null; terminalExitCode=null; terminalReason=null; }
+				return new DetachResult { SessionId=selectedSessionId,ProcessId=process.Id,Detached=selectedCanDetach,Terminated=!selectedCanDetach,SessionActive=active,StateVersion=stateVersion };
+			}
 			var canDetach=await OnDebuggerAsync(()=>!manager.IsDebugging || manager.CanDetachWithoutTerminating,cancellationToken).ConfigureAwait(false);
 			if (!canDetach && !allowTerminate) throw new RpcException("detach_would_terminate","dnSpy cannot detach from this target without terminating it. Pass allow_terminate=true to stop debugging anyway.");
 			if (!canDetach) lock(sync) lifecycleAction="terminate";
@@ -242,7 +257,7 @@ namespace dgSpy.Extension {
 			var stillDebugging=await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false);
 			string id; lock(sync) { id=sessionId!; if (!stillDebugging) { sessionId=null; attachedProgramId=null; sessionKind=null; lifecycleAction=null; attaching=false; faulted=false; faultMessage=null; lastUserMessage=null; terminalExitCode=null; terminalReason=null; } }
 			Record(EventKinds.Detached);
-			return new DetachResult { SessionId=id,Detached=!stillDebugging && canDetach,Terminated=!stillDebugging && !canDetach,StateVersion=stateVersion };
+			return new DetachResult { SessionId=id,Detached=!stillDebugging && canDetach,Terminated=!stillDebugging && !canDetach,SessionActive=stillDebugging,StateVersion=stateVersion };
 		}
 		async Task<SessionSummary[]> ListSessionsAsync(CancellationToken cancellationToken) => await OnDebuggerAsync(()=>{
 			if (sessionId is null) return Array.Empty<SessionSummary>();
@@ -465,7 +480,7 @@ namespace dgSpy.Extension {
 		// stalls event delivery for every session. See docs/DGSPY_BASELINE.md.
 		// The token abandons the *wait*, not the queued work; dnSpy gives us no way to cancel a
 		// dispatcher callback, so the callback still runs and its result is dropped.
-		public void Dispose() { shutdown.Cancel(); tcpListener?.Stop(); evaluations.Dispose(); shutdown.Dispose(); }
+		public void Dispose() { shutdown.Cancel(); tcpListener?.Stop(); evaluations.Dispose(); targetControl.Dispose(); shutdown.Dispose(); }
 	}
 
 	/// <summary>

@@ -48,6 +48,8 @@ namespace dgSpy.Protocol {
 	public sealed class DetachResult {
 		[JsonProperty("session_id")] public string SessionId { get; set; }=""; [JsonProperty("detached")] public bool Detached { get; set; }
 		[JsonProperty("terminated")] public bool Terminated { get; set; } [JsonProperty("state_version")] public long StateVersion { get; set; }
+		[JsonProperty("process_id", NullValueHandling=NullValueHandling.Ignore)] public int? ProcessId { get; set; }
+		[JsonProperty("session_active")] public bool SessionActive { get; set; }
 	}
 	public sealed class SessionState {
 		[JsonProperty("session_id")] public string SessionId { get; set; }=""; [JsonProperty("state")] public string State { get; set; }="running";

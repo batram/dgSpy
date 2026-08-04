@@ -18,8 +18,8 @@ namespace dgSpy.Extension {
 		readonly RpcHost host;
 
 		[ImportingConstructor]
-		ExtensionEntryPoint(AttachableProcessesService programs, DbgManager manager, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDecompilerService decompilers) =>
-			host=new RpcHost(programs,manager,breakpoints,moduleBreakpoints,objectIds,locations,callStack,languages,exceptions,metadataService,decompilers);
+		ExtensionEntryPoint(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDecompilerService decompilers) =>
+			host=new RpcHost(programs,manager,debuggerSettings,breakpoints,moduleBreakpoints,objectIds,locations,callStack,languages,exceptions,metadataService,decompilers);
 
 		public IEnumerable<string> MergedResourceDictionaries { get { yield break; } }
 		public ExtensionInfo ExtensionInfo => new ExtensionInfo { ShortDescription="dgSpy MCP debugger bridge 0.1.0" };

@@ -5,6 +5,17 @@ using System.Threading;
 
 namespace Milestone1Target {
 	[AttributeUsage(AttributeTargets.Class)] sealed class Phase8MarkerAttribute : Attribute { }
+	sealed class Phase8FixtureException : Exception { }
+	sealed class DeferredDomainLoader : MarshalByRefObject {
+		public void Load() {
+			byte[] image;
+			using (var stream=typeof(DeferredDomainLoader).Assembly.GetManifestResourceStream("DeferredPayload.dll")) {
+				image=new byte[stream.Length];
+				for (var read=0;read<image.Length;) read+=stream.Read(image,read,image.Length-read);
+			}
+			Assembly.Load(image);
+		}
+	}
 	interface IWorker { int Run(int value); }
 	class BaseWorker { public virtual int Run(int value) => value; }
 	[Phase8Marker]
@@ -13,6 +24,8 @@ namespace Milestone1Target {
 	static class Program {
 		static volatile bool keepRunning = true;
 		static volatile bool loadDeferredModule;
+		static volatile bool unloadDeferredModule;
+		static volatile bool throwPhase8Exception;
 		static int observedWorkerValue;
 		static event Action Phase8Event;
 
@@ -32,6 +45,8 @@ namespace Milestone1Target {
 			ExercisePhase8Relationships();
 			while (keepRunning) {
 				if (loadDeferredModule) { LoadDeferredPayload(); loadDeferredModule=false; }
+				if (unloadDeferredModule) { CycleDeferredPayload(); unloadDeferredModule=false; }
+				if (throwPhase8Exception) { throwPhase8Exception=false; try { throw new Phase8FixtureException(); } catch (Phase8FixtureException) { } }
 				Tick(41);
 				// Both round trips are microseconds against Tick's 100ms sleep, so a bare pause still
 				// lands in Tick essentially always; the other checks select their frame with a breakpoint.
@@ -60,6 +75,12 @@ namespace Milestone1Target {
 				for (var read=0;read<image.Length;) read+=stream.Read(image,read,image.Length-read);
 			}
 			Assembly.Load(image);
+		}
+
+		static void CycleDeferredPayload() {
+			var domain=AppDomain.CreateDomain("dgSpy Phase 8 unload fixture");
+			try { ((DeferredDomainLoader)domain.CreateInstanceAndUnwrap(typeof(DeferredDomainLoader).Assembly.FullName,typeof(DeferredDomainLoader).FullName)).Load(); }
+			finally { AppDomain.Unload(domain); }
 		}
 
 		/// <summary>A genuinely dynamic module: Reflection.Emit with AssemblyBuilderAccess.Run, whose

@@ -25,7 +25,7 @@ New-Item -ItemType Directory -Path $runDirectory | Out-Null
 
 # Windows PowerShell 5.1 is .NET Framework: no RandomNumberGenerator.GetBytes(int), no Convert.ToHexString.
 $token = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
-$dnSpyProcess = $null; $gatewayProcess = $null; $targetProcess = $null
+$dnSpyProcess = $null; $gatewayProcess = $null; $targetProcess = $null; $detachTargetProcess = $null
 $script:requestId = 0
 $script:failures = @()
 $script:checks = 0
@@ -217,8 +217,46 @@ try {
 	Assert-That 'list_sessions reports the attached program' ($sessions[0].program_id -eq $program.program_id)
 	Assert-That 'list_sessions says detaching is safe' ($sessions[0].can_detach_without_terminating)
 
-	$err = Invoke-Tool -Name 'attach' -Arguments @{ program_id = $program.program_id } -ExpectError
-	Assert-That 'a second attach is refused while a session is live' ($err -match 'Detach')
+	Write-Host "== multiple active targets ==" -ForegroundColor Cyan
+	$second = Invoke-Tool -Name 'launch' -Arguments @{ filename = $targetExe; engine = 'cordebug' }
+	$secondPid = [int](@($second.process_ids | Where-Object { $_ -ne $targetId }) | Select-Object -First 1)
+	Assert-That 'launch adds a second process to the same logical session' ($second.session_id -eq $sessionId -and @($second.process_ids).Count -eq 2 -and $secondPid -gt 0) "(ids=$($second.process_ids -join ','))"
+	$beforeAmbiguous = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
+	$ambiguousPause = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId } -ExpectError
+	$afterAmbiguous = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
+	Assert-That 'an unselected multi-target pause returns ambiguous_target' ($ambiguousPause -match 'More than one process|process_id') "(error='$ambiguousPause')"
+	Assert-That 'an ambiguous pause performs no debugger action' ($beforeAmbiguous.state -eq 'running' -and $afterAmbiguous.state -eq 'running') "(before=$($beforeAmbiguous.state) after=$($afterAmbiguous.state))"
+	$selectedPause = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId; process_id = $secondPid }
+	Assert-That 'a selected process can pause independently' ($selectedPause.state -eq 'mixed' -and @($selectedPause.process_ids).Count -eq 2) "(state=$($selectedPause.state))"
+	$selectedContinue = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId; process_id = $secondPid }
+	Assert-That 'a selected process can continue independently' ($selectedContinue.state -eq 'running') "(state=$($selectedContinue.state))"
+	$multiRestart = Invoke-Tool -Name 'restart' -Arguments @{ session_id = $sessionId } -ExpectError
+	Assert-That 'restart is refused while multiple targets are active' ($multiRestart -match 'restart|launched through dgSpy')
+	$afterSelectedTerminate = Invoke-Tool -Name 'terminate' -Arguments @{ session_id = $sessionId; process_id = $secondPid }
+	Assert-That 'terminating one selected process leaves its sibling session active' ($afterSelectedTerminate.state -in @('running','paused') -and @($afterSelectedTerminate.process_ids).Count -eq 1 -and $afterSelectedTerminate.process_ids[0] -eq $targetId)
+	Start-Sleep -Milliseconds 500
+	Assert-That 'selected termination kills only the selected target' ($null -eq (Get-Process -Id $secondPid -ErrorAction SilentlyContinue) -and $null -ne (Get-Process -Id $targetId -ErrorAction SilentlyContinue))
+	$selectedExit = @((Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $sessionId; after_event_id = $beforeAmbiguous.last_event_id }).events | Where-Object { $_.process_id -eq $secondPid -and $_.kind -eq 'terminated' } | Select-Object -Last 1)
+	Assert-That 'a selected target exit is non-terminal while a sibling remains' ($selectedExit.Count -eq 1 -and -not $selectedExit[0].terminal)
+
+	$detachTargetOut = Join-Path $runDirectory 'detach-target.out'
+	$detachTargetProcess = Start-Process -FilePath $targetExe -WindowStyle Hidden -PassThru `
+		-RedirectStandardOutput $detachTargetOut -RedirectStandardError (Join-Path $runDirectory 'detach-target.err')
+	if (-not (Wait-Until { @(Get-Content $detachTargetOut -ErrorAction SilentlyContinue).Count -ge 2 } 15)) {
+		throw 'The selected-detach target did not publish its PID and method token.'
+	}
+	$detachPid = $detachTargetProcess.Id
+	$detachProgram = @(Invoke-Tool -Name 'list_programs' -Arguments @{ process_ids = @($detachPid) })[0]
+	$attachedSibling = Invoke-Tool -Name 'attach' -Arguments @{ program_id = $detachProgram.program_id }
+	Assert-That 'attach adds an independently started process to the active session' (@($attachedSibling.process_ids).Count -eq 2 -and @($attachedSibling.process_ids) -contains $detachPid)
+	$beforeSelectedDetach = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
+	$selectedDetach = Invoke-Tool -Name 'detach' -Arguments @{ session_id = $sessionId; process_id = $detachPid }
+	Assert-That 'selected detach removes only the attached process' ($selectedDetach.detached -and -not $selectedDetach.terminated -and $selectedDetach.process_id -eq $detachPid -and $selectedDetach.session_active)
+	Start-Sleep -Milliseconds 500
+	Assert-That 'selected detach leaves both external process and sibling alive' ($null -ne (Get-Process -Id $detachPid -ErrorAction SilentlyContinue) -and $null -ne (Get-Process -Id $targetId -ErrorAction SilentlyContinue))
+	$selectedDetachEvent = @((Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $sessionId; after_event_id = $beforeSelectedDetach.last_event_id }).events | Where-Object { $_.process_id -eq $detachPid -and $_.kind -eq 'detached' } | Select-Object -Last 1)
+	Assert-That 'selected detach records a non-terminal detached event' ($selectedDetachEvent.Count -eq 1 -and -not $selectedDetachEvent[0].terminal -and $selectedDetachEvent[0].reason -eq 'detached_by_client')
+	Stop-Process -Id $detachPid -Force
 
 	$err = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = 'not-a-session' } -ExpectError
 	Assert-That 'an unknown session_id is refused' ($err -match 'not active|No active')
@@ -440,6 +478,26 @@ try {
 	Assert-That 'write_value_export rejects traversal outside the configured root' ($pathEscape -match 'outside DGSPY_EXPORT_ROOT')
 	$overwrite = Invoke-Tool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = 'input.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } -ExpectError
 	Assert-That 'write_value_export rejects overwrite by default' ($overwrite -match 'already exists')
+	$liveExceptionPolicy = Invoke-Tool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true; conditions = @(@{ kind = 'module_equals'; module = 'Milestone1Target.exe' }) }
+	$null = Invoke-Tool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'throwPhase8Exception'; value = 'true'; thread_id = $stepThread; frame_index = 0 }
+	$exceptionCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
+	$null = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId }
+	$liveExceptionStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $exceptionCursor; timeout_ms = 8000 }
+	$exceptionEvent = @($liveExceptionStop.events)[0]
+	Assert-That 'a categorized thrown-exception policy causes an actual stop' (-not $liveExceptionStop.timed_out -and $exceptionEvent.stop_reason -eq 'exception') "(reason=$($exceptionEvent.stop_reason))"
+	$exceptionValues = Invoke-Tool -Name 'get_exception' -Arguments @{ session_id = $sessionId; thread_id = $exceptionEvent.thread_id; frame_index = 0 }
+	Assert-That 'get_exception exposes the stopped Phase 8 fixture exception' (@($exceptionValues).Count -gt 0 -and (($exceptionValues | ConvertTo-Json -Compress -Depth 5) -match 'Phase8FixtureException'))
+	$null = Invoke-Tool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' }
+	# The earlier settings checks intentionally left a hit-count rule on this breakpoint. Recreate it
+	# here so this recovery assertion tests exception-policy removal, not residual breakpoint settings.
+	$null = Invoke-Tool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id }
+	$breakpoint = Invoke-Tool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
+	$returnCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
+	$null = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId }
+	$returnStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $returnCursor; timeout_ms = 8000 }
+	Assert-That 'the target resumes from the exception into the normal fixture breakpoint' (-not $returnStop.timed_out)
+	$stepThread = @($returnStop.events)[0].thread_id
+	$null = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
 
 	$frameValues = Invoke-Tool -Name 'get_frame' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0; include = @('locals') }
 	Assert-That 'get_frame include returns the full value list, objects included' (@($frameValues.values).Count -ge 1) "(got $(@($frameValues.values).Count))"
@@ -755,6 +813,18 @@ try {
 	Assert-That 'the session returns to a stop inside the fixture loop' (-not $flSettled.timed_out)
 	Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
 
+	# Exercise unload only after inspecting the long-lived dynamic module. CorDebug invalidates metadata
+	# for Reflection.Emit modules when an unrelated AppDomain unloads; that engine behavior should not
+	# make the independent file-less-module checks order-dependent.
+	$stepThread = @($flSettled.events)[0].thread_id
+	$moduleUnload = Invoke-Tool -Name 'set_module_breakpoint' -Arguments @{ session_id = $sessionId; module_name = 'DeferredPayload*'; is_loaded = $false }
+	$unloadCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
+	$null = Invoke-Tool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'unloadDeferredModule'; value = 'true'; thread_id = $stepThread; frame_index = 0 }
+	$null = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId }
+	$unloadStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $unloadCursor; timeout_ms = 8000 }
+	Assert-That 'a module-unload breakpoint stops on AppDomain unload' (-not $unloadStop.timed_out -and @($unloadStop.events).Count -gt 0)
+	$null = Invoke-Tool -Name 'remove_module_breakpoint' -Arguments @{ session_id = $sessionId; breakpoint_id = $moduleUnload.breakpoint_id }
+
 	$breakpoint = Invoke-Tool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
 
 	$reenabled = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true }
@@ -776,10 +846,21 @@ try {
 	Assert-That 'no breakpoints remain' ($after -eq '[]') "(payload $after)"
 
 	Write-Host "== detach leaves the target alive ==" -ForegroundColor Cyan
+	$cleanupStopPoint = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = 'Tick' }
+	$cleanupStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $cleanupStopPoint.cursor_event_id; timeout_ms = 8000 }
+	Assert-That 'the object-ID teardown probe stops at a frame with a stable Main argument' (-not $cleanupStop.timed_out)
+	$stepThread = @($cleanupStop.events)[0].thread_id
+	$cleanupObject = Invoke-Tool -Name 'create_object_id' -Arguments @{ session_id = $sessionId; expression = 'commandLine'; process_id = $targetId; runtime_id = $program.runtime_guid; thread_id = $stepThread; frame_index = 1 }
+	$null = Invoke-Tool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = $cleanupStopPoint.breakpoint_id }
 	$detach = Invoke-Tool -Name 'detach' -Arguments @{ session_id = $sessionId }
 	Assert-That 'detach reports detached, not terminated' ($detach.detached -and -not $detach.terminated)
 	Start-Sleep -Milliseconds 750
 	Assert-That 'the target survives detach' ($null -ne (Get-Process -Id $targetId -ErrorAction SilentlyContinue))
+	$reattachProgram = @(Invoke-Tool -Name 'list_programs' -Arguments @{ process_ids = @($targetId) })[0]
+	$reattached = Invoke-Tool -Name 'attach' -Arguments @{ program_id = $reattachProgram.program_id }
+	$idsAfterDetach = @(Invoke-Tool -Name 'list_object_ids' -Arguments @{ session_id = $reattached.session_id; process_id = $targetId; runtime_id = $reattachProgram.runtime_guid } | ForEach-Object { $_ })
+	Assert-That 'detach disposes runtime-scoped object IDs before reattach' (@($idsAfterDetach | Where-Object { $_.object_id -eq $cleanupObject.object_id }).Count -eq 0)
+	$null = Invoke-Tool -Name 'detach' -Arguments @{ session_id = $reattached.session_id }
 	$remaining = Invoke-Tool -Name 'list_sessions' -Arguments @{} -AsText
 	Assert-That 'no sessions remain' (-not $remaining.Contains($sessionId)) "(payload $remaining)"
 	$err = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId } -ExpectError
@@ -868,7 +949,7 @@ catch {
 	exit 1
 }
 finally {
-	foreach ($owned in @($gatewayProcess, $dnSpyProcess, $targetProcess)) {
+	foreach ($owned in @($gatewayProcess, $dnSpyProcess, $targetProcess, $detachTargetProcess)) {
 		if ($null -ne $owned -and -not $owned.HasExited) { Stop-Process -Id $owned.Id -Force -ErrorAction SilentlyContinue }
 	}
 	Remove-Item Env:\DGSPY_TOKEN -ErrorAction SilentlyContinue

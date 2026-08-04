@@ -13,6 +13,10 @@ namespace dgSpy.Gateway.Tests;
 public sealed class ToolCatalogTests {
 	static string Name(object tool) => (string)tool.GetType().GetProperty("name", BindingFlags.Public | BindingFlags.Instance)!.GetValue(tool)!;
 	static string Description(object tool) => (string)tool.GetType().GetProperty("description", BindingFlags.Public | BindingFlags.Instance)!.GetValue(tool)!;
+	static object InputProperties(object tool) {
+		var schema=tool.GetType().GetProperty("inputSchema",BindingFlags.Public|BindingFlags.Instance)!.GetValue(tool)!;
+		return schema.GetType().GetProperty("properties",BindingFlags.Public|BindingFlags.Instance)!.GetValue(schema)!;
+	}
 	public static TheoryData<string> ToolNames {
 		get { var data=new TheoryData<string>(); foreach (var tool in ToolCatalog.All) data.Add(Name(tool)); return data; }
 	}
@@ -52,5 +56,13 @@ public sealed class ToolCatalogTests {
 		var names=ToolCatalog.All.Select(Name).ToHashSet(StringComparer.Ordinal);
 		foreach(var name in new[]{"create_object_id","list_object_ids","evaluate_object_id","release_object_id","get_autos","get_output","wait_for_output","set_module_breakpoint","list_module_breakpoints","update_module_breakpoint","remove_module_breakpoint","export_breakpoints","import_breakpoints","list_exception_categories","list_exception_policies","set_exception_policy","remove_exception_policy","restore_exception_defaults","get_value_export","write_value_export","analyze_symbol"}) Assert.Contains(name,names);
 		Assert.Contains("SIDE EFFECTING",Description(ToolCatalog.All.Single(t=>Name(t)=="write_value_export")));
+	}
+
+	[Fact]
+	public void Multi_target_lifecycle_tools_expose_process_selectors() {
+		foreach(var name in new[]{"pause","continue","detach","terminate"}) {
+			var properties=InputProperties(ToolCatalog.All.Single(t=>Name(t)==name));
+			Assert.NotNull(properties.GetType().GetProperty("process_id",BindingFlags.Public|BindingFlags.Instance));
+		}
 	}
 }

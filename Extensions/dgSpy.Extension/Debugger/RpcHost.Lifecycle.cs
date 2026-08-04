@@ -67,6 +67,13 @@ namespace dgSpy.Extension {
 		async Task<SessionState> TerminateAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
 			if (!await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false)) throw new RpcException("session_not_running","The session has already ended.");
+			if(req.Arguments["process_id"] is not null) {
+				var process=await OnDebuggerAsync(()=>SelectProcess(req),cancellationToken).ConfigureAwait(false);
+				lock(sync) processLifecycleActions[process.Id]="terminate";
+				await OnDebuggerAsync(()=>{ process.Terminate(); return true; },cancellationToken).ConfigureAwait(false);
+				await WaitForDebuggerAsync(()=>manager.Processes.All(p=>p.Id!=process.Id),cancellationToken).ConfigureAwait(false);
+				return await OnDebuggerAsync(State,cancellationToken).ConfigureAwait(false);
+			}
 			lock(sync) lifecycleAction="terminate";
 			try {
 				await OnDebuggerAsync(()=>{ CloseStepper(); manager.TerminateAll(); return true; },cancellationToken).ConfigureAwait(false);
@@ -81,7 +88,7 @@ namespace dgSpy.Extension {
 		async Task<SessionState> RestartAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
 			var oldProcessIds=await OnDebuggerAsync(()=>manager.Processes.Select(process=>process.Id).ToArray(),cancellationToken).ConfigureAwait(false);
-			var canRestart=await OnDebuggerAsync(()=>sessionKind=="launch" && manager.CanRestart,cancellationToken).ConfigureAwait(false);
+			var canRestart=await OnDebuggerAsync(()=>sessionKind=="launch" && manager.Processes.Length==1 && manager.CanRestart,cancellationToken).ConfigureAwait(false);
 			if (!canRestart) throw new RpcException("restart_unsupported","Only a target launched through dgSpy can be restarted, and the active engine must advertise restart support.");
 			lock(sync) lifecycleAction="restart";
 			try {
@@ -100,15 +107,15 @@ namespace dgSpy.Extension {
 			string? action;
 			lock(sync) {
 				if (sessionId is null) return;
-				action=lifecycleAction;
+				if(!processLifecycleActions.TryGetValue(e.Process.Id,out action)) action=lifecycleAction; else processLifecycleActions.Remove(e.Process.Id);
 			}
-			var reason=action=="terminate" ? "terminated_by_client" : action=="restart" ? "restart" : "target_exited";
-			var terminal=action!="restart";
+			var reason=action=="terminate" ? "terminated_by_client" : action=="restart" ? "restart" : action=="detach" ? "detached_by_client" : "target_exited";
+			var terminal=action!="restart" && !manager.Processes.Any(p=>p.Id!=e.Process.Id);
 			// Raised on the debugger dispatcher, so this is the right thread to release a stepper the
 			// target just took with it. A step in flight when the process dies never raises StepComplete.
 			CloseStepper();
 			if (terminal) lock(sync) { terminalExitCode=e.ExitCode; terminalReason=reason; requestedOffsets.Clear(); }
-			Record(action=="terminate" ? EventKinds.Terminated : action=="restart" ? EventKinds.RestartProcessExited : EventKinds.SessionExited,terminal,e.Process.Id,e.ExitCode,reason);
+			Record(action=="terminate" ? EventKinds.Terminated : action=="restart" ? EventKinds.RestartProcessExited : action=="detach" ? EventKinds.Detached : EventKinds.SessionExited,terminal,e.Process.Id,e.ExitCode,reason);
 		}
 	}
 }

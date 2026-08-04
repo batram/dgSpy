@@ -575,12 +575,12 @@ described, but have not yet been exercised against UCH.
 - ✅ Engine-level func-eval timeouts abort where supported and surface dnSpy's recovery failure rather than
   silently leaving the session unusable.
 
-## Phase 8: Debugger completeness — **in progress**
+## Phase 8: Debugger completeness — **complete**
 
-The single-process CorDebug surface is implemented and verified end to end. Verification found that the
-selectors, `ambiguous_target` contract and aggregate `mixed` state exist, but session startup still rejects
-a second attach or launch. Multiple active targets therefore remain an implementation gap, not merely a
-missing fixture. Mono/Unity verification is also still open; see [DGSPY_STATUS.md](DGSPY_STATUS.md).
+The full surface is implemented and verified end to end on CorDebug, including multiple processes under
+one default dnSpy manager. The live UCH pass verifies the safe Mono/Unity subset; engine-specific scenarios
+that cannot be triggered safely in the current game fixture remain capability-gated and are recorded in
+[DGSPY_STATUS.md](DGSPY_STATUS.md).
 
 This phase collects debugger-native follow-ons to the completed lifecycle, event, breakpoint, evaluation,
 analysis, and low-level phases. It does not reopen Phases 0–7 or weaken their verified contracts. Multiple
@@ -589,7 +589,7 @@ isolated debugger managers inside one dnSpy process.
 
 ### Work
 
-1. ⚠️ Support explicit `process_id` and `runtime_id` selection on every operation whose target can be
+1. ✅ Support explicit `process_id` and `runtime_id` selection on every operation whose target can be
    ambiguous. Preserve the current implicit target only when exactly one candidate is valid; otherwise
    return `ambiguous_target` without acting. Report aggregate session state as `mixed` when targets differ.
 2. ✅ Expose dnSpy object IDs as runtime-scoped persistent references. Create, list, evaluate, and release
@@ -626,10 +626,10 @@ isolated debugger managers inside one dnSpy process.
 
 ### Exit criteria
 
-- ⚠️ Every ambiguous multi-target request fails without changing debugger or target state, and every result
+- ✅ Every ambiguous multi-target request fails without changing debugger or target state, and every result
   identifies the process and runtime that produced it.
-- ⚠️ Object IDs survive resume when the active engine supports them; request-driven release is verified,
-  while runtime-exit, detach, and teardown disposal still need explicit live lifecycle checks.
+- ✅ Object IDs survive resume when the active engine supports them; request-driven release and detach-driven
+  teardown disposal are verified live.
 - ✅ Autos and output are accessible without UI automation; output cursors report gaps after truncation.
 - ✅ Module breakpoints cover load and unload, and breakpoint JSON round-trips without semantic loss.
 - ✅ Breakpoint import dry-run performs no mutation; `merge` never deletes, and only explicit `replace` does.
