@@ -15,20 +15,18 @@ The host follows the bounded dnSpyEx 6.6 baseline and targets `net48` and `net10
 its headless activation patch, bounded `Mono.Debugger.Soft` frame retrieval, proven Mono/shared-debugger
 orchestration, and engine-specific running-state behavior.
 
-## 1. Keep pace with dnSpyEx
+## Ongoing maintenance
 
-Treat upstream synchronization as maintenance, not as another one-time migration.
+dnSpyEx synchronization is routine repository maintenance, not a product milestone. Follow
+[dnSpyEx synchronization](DNSPYEX_SYNC.md) when updating the baseline: inventory conflicts against the
+retained patch set, keep unrelated MCP behavior out of synchronization commits, run the complete
+regression gate, and record adopted, adapted, rejected, and still-local patches.
 
-1. Bring `upstream/master` into a short-lived synchronization branch as described in
-   [dnSpyEx synchronization](DNSPYEX_SYNC.md).
-2. Inventory conflicts and upstream changes against dgSpy's retained patch set before adapting code.
-3. Keep dependency changes and new MCP behavior out of synchronization commits unless an upstream
-   contract requires the change.
-4. Run the shared, CorDebug, and Unity regression gates before merging into `dgspy`.
-5. Record adopted, adapted, rejected, and still-local patches with commit-level evidence.
-6. Upstream generally useful fixes from a branch based on `upstream/master`, never from `dgspy`.
+Upstream generally useful fixes from a branch based on `upstream/master`, never from `dgspy`. Add a
+numbered roadmap item only when a specific upstream release or incompatibility creates a bounded change
+set with concrete acceptance criteria.
 
-Exit criteria for each synchronization:
+Every accepted synchronization must still satisfy these maintenance gates:
 
 - Both supported host targets and the dgSpy extension build and deploy.
 - Protocol, Gateway, and Extension suites pass sequentially.
@@ -36,7 +34,7 @@ Exit criteria for each synchronization:
 - CorDebug and bounded Unity gates pass, including safe detach and target liveness.
 - The build baseline and retained-patch notes match the merged source.
 
-## 2. Add secure remote hosts and ownership
+## 1. Add secure remote hosts and ownership
 
 This is the next product expansion. Do not expose the current extension RPC directly to a VM or LAN.
 
@@ -60,7 +58,7 @@ Exit criteria:
   execute, edit, patch, or script.
 - Ownership tests cover contention, disconnect, expiry, and recovery without implicit target control.
 
-## 3. Close compatibility and quality gaps
+## 2. Close compatibility and quality gaps
 
 Take these as independent, fixture-led projects rather than one compatibility phase:
 
@@ -79,7 +77,7 @@ Take these as independent, fixture-led projects rather than one compatibility ph
 Each item needs explicit capability changes, engine-specific fixtures, bounded live checks where
 applicable, and documentation updates. None should be bundled into routine dnSpyEx synchronization.
 
-## 4. Optional high-risk capabilities
+## 3. Optional high-risk capabilities
 
 Target-code execution, artifact editing/project export/live patching, and dnSpy-host scripting remain
 unscheduled. Their trust boundaries, prerequisites, and exit criteria are consolidated in
