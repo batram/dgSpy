@@ -31,6 +31,7 @@ namespace dgSpy.Extension {
 		readonly EvaluationQueue evaluations=new EvaluationQueue(); readonly SemaphoreSlim targetControl=new SemaphoreSlim(1,1);
 		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>();
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
+		readonly RpcSecuritySettings rpcSecurity=RpcSecuritySettings.Load();
 		TcpListener? tcpListener;
 		Task? listener; string? sessionId; string? attachedProgramId; string? sessionKind; string? lifecycleAction; long stateVersion; bool attaching; bool faulted; string? faultMessage; string? lastUserMessage; int? terminalExitCode; string? terminalReason;
 		bool IsMonoEndpoint => attachedProgramId?.StartsWith("endpoint:unity:",StringComparison.Ordinal)==true ||
@@ -58,7 +59,7 @@ namespace dgSpy.Extension {
 			manager.MessageUserMessage += (_,e) => { lock(sync) lastUserMessage=e.Message; };
 			manager.DbgManagerMessage += (_,e) => output.Add(e.MessageKind,e.Message);
 		}
-		public void Start() { if (listener is not null) return; manager.WriteMessage($"dgSpy {Version} listening on 127.0.0.1:{rpcPort}"); listener=Task.Run(ListenAsync); }
+		public void Start() { if (listener is not null) return; manager.WriteMessage($"dgSpy {Version} host {rpcSecurity.HostId} listening on authenticated RPC 127.0.0.1:{rpcPort}"); listener=Task.Run(ListenAsync); }
 		async Task ListenAsync() { try { tcpListener=new TcpListener(IPAddress.Loopback,rpcPort); tcpListener.Start(8); while(!shutdown.IsCancellationRequested) { var client=await tcpListener.AcceptTcpClientAsync().ConfigureAwait(false); _=HandleClientAsync(client); } } catch(ObjectDisposedException) when(shutdown.IsCancellationRequested) { } catch(Exception ex) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.ErrorUser,"dgSpy TCP listener: "+ex.Message); } }
 		async Task HandleClientAsync(TcpClient client) { using(client) try { using var stream=client.GetStream(); using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); using var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true}; string? line; while ((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null) { var req=JsonConvert.DeserializeObject<RpcRequest>(line); var response=req is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(req).ConfigureAwait(false); await writer.WriteLineAsync(JsonConvert.SerializeObject(response)).ConfigureAwait(false); } } 		// A client going away is routine, not an error: the gateway opens a fresh connection per request
 		// and drops it whenever a request is cancelled or hits its deadline. Reporting those through
@@ -68,13 +69,15 @@ namespace dgSpy.Extension {
 		catch(Exception ex) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.Output,"dgSpy TCP client: "+ex.Message); } }
 		async Task<RpcResponse> DispatchAsync(RpcRequest req) { try {
 			if (req.Version!=ProtocolVersion.Current) return RpcResponse.Failure(req.RequestId,"incompatible_protocol",$"Protocol {req.Version} is unsupported; expected {ProtocolVersion.Current}.");
+			var authenticationError=RpcRequestAuthenticator.Reject(req.Operation,req.HostId,req.AuthenticationToken,rpcSecurity.HostId,rpcSecurity.Token);
+			if (authenticationError is not null) return RpcResponse.Failure(req.RequestId,"unauthorized",authenticationError);
 			if (req.DeadlineUtc is DateTime deadline && deadline<=DateTime.UtcNow) return RpcResponse.Failure(req.RequestId,"deadline_exceeded","Request deadline has expired.");
 			using var requestCancellation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
 			if (req.DeadlineUtc is DateTime requestDeadline) requestCancellation.CancelAfter(requestDeadline-DateTime.UtcNow > TimeSpan.Zero ? requestDeadline-DateTime.UtcNow : TimeSpan.FromMilliseconds(1));
 			switch (req.Operation) {
-			case "ping": return RpcResponse.Success(req.RequestId,new Handshake { ExtensionVersion=Version });
+			case "ping": return RpcResponse.Success(req.RequestId,new Handshake { ExtensionVersion=Version,HostId=rpcSecurity.HostId });
 			case "get_host_info": return RpcResponse.Success(req.RequestId,Host());
-			case "get_capabilities": return RpcResponse.Success(req.RequestId,CapabilityCatalog.Describe(Version));
+			case "get_capabilities": return RpcResponse.Success(req.RequestId,CapabilityCatalog.Describe(Version,rpcSecurity.HostId));
 			case "list_programs": return RpcResponse.Success(req.RequestId,await ListProgramsAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "attach": return RpcResponse.Success(req.RequestId,await AttachAsync((string?)req.Arguments["program_id"] ?? "",requestCancellation.Token).ConfigureAwait(false));
 			case "attach_endpoint": return RpcResponse.Success(req.RequestId,await AttachEndpointAsync(req,requestCancellation.Token).ConfigureAwait(false));

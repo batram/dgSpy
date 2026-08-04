@@ -1,6 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
-using System.Text;
 using dgSpy.Gateway;
 using dgSpy.Protocol;
 using Newtonsoft.Json;
@@ -58,28 +55,6 @@ app.MapPost("/mcp", async (HttpContext http, LocalRpcClient rpc, CancellationTok
 app.Run();
 static IResult McpError(JToken? id, int code, string message) => Results.Json(new { jsonrpc="2.0", id, error=new { code, message } });
 
-sealed class LocalRpcClient {
-	readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
-	public async Task<RpcResponse> CallAsync(RpcRequest request, CancellationToken cancellationToken) {
-		using var deadline=new CancellationTokenSource();
-		if (request.DeadlineUtc is DateTime deadlineUtc) deadline.CancelAfter(deadlineUtc-DateTime.UtcNow > TimeSpan.Zero ? deadlineUtc-DateTime.UtcNow : TimeSpan.FromMilliseconds(1));
-		using var linked=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,deadline.Token);
-		cancellationToken=linked.Token;
-		using var client=new TcpClient();
-		await client.ConnectAsync(IPAddress.Loopback,rpcPort,cancellationToken);
-		using var stream=client.GetStream();
-		using var writer=new StreamWriter(stream, new UTF8Encoding(false), 4096, true) { AutoFlush=true };
-		using var reader=new StreamReader(stream, Encoding.UTF8, false, 4096, true);
-		var handshake=new RpcRequest { Operation="ping", DeadlineUtc=DateTime.UtcNow.AddSeconds(3) };
-		await writer.WriteLineAsync(JsonConvert.SerializeObject(handshake));
-		var handshakeLine=await reader.ReadLineAsync(cancellationToken) ?? throw new IOException("The dgSpy extension closed the pipe during handshake.");
-		var handshakeResponse=JsonConvert.DeserializeObject<RpcResponse>(handshakeLine) ?? throw new IOException("Invalid dgSpy handshake response.");
-		if (handshakeResponse.Version!=ProtocolVersion.Current || handshakeResponse.Error is not null) throw new IOException(handshakeResponse.Error?.Message ?? $"dgSpy protocol mismatch: expected {ProtocolVersion.Current}, received {handshakeResponse.Version}.");
-		await writer.WriteLineAsync(JsonConvert.SerializeObject(request));
-		var line=await reader.ReadLineAsync(cancellationToken) ?? throw new IOException("The dgSpy extension closed the pipe.");
-		return JsonConvert.DeserializeObject<RpcResponse>(line) ?? throw new IOException("Invalid RPC response.");
-	}
-}
 public static class ToolCatalog {
 	static object Tool(string name, string description, object properties, string[]? required=null) => new { name, description, inputSchema=new { type="object", properties, required=required ?? Array.Empty<string>() } };
 	static object EvalMutationSchema() => new { session_id=new { type="string" },expression=new { type="string",description="Complete call or new-expression." },thread_id=new { type="string" },frame_index=new { type="integer",minimum=0 },timeout_ms=new { type="integer",minimum=1,maximum=10000,description="Hard engine func-eval timeout; default 1000." } };

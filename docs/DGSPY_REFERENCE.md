@@ -28,6 +28,13 @@ The MCP endpoint is `http://127.0.0.1:7350/mcp`; `GET /health` is unauthenticate
 Every `/mcp` request must carry `X-dgSpy-Token`. Set `DGSPY_TOKEN` to choose the value, otherwise the
 gateway generates one at startup and writes it to `%LOCALAPPDATA%\dgSpy\gateway.token`.
 
+The gateway-to-extension RPC hop uses a separate credential. The extension reads `DGSPY_RPC_TOKEN` or
+generates `%LOCALAPPDATA%\dgSpy\rpc.token`; the gateway reads the same source. The extension also reads
+`DGSPY_HOST_ID` or persists a generated identity in `%LOCALAPPDATA%\dgSpy\host.id`. Every non-handshake
+RPC request must carry both values, and the gateway refuses a handshake that differs from a configured
+`DGSPY_HOST_ID`. These values authenticate the local RPC hop; they do not make the loopback listener a
+remotely supported transport.
+
 Requests are also rejected when they arrive from a non-loopback address, or carry an `Origin` that is
 not loopback. This is not optional hardening: a web page the user visits can POST to `127.0.0.1`
 without a preflight, so loopback binding alone would leave the debugger open to any site.

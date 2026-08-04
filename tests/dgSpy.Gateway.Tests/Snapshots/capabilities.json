@@ -1,6 +1,6 @@
 {
   "host_id": "local",
-  "protocol_version": 1,
+  "protocol_version": 2,
   "extension_version": "snapshot",
   "operations": [
     {

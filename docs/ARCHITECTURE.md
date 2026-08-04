@@ -39,8 +39,9 @@ dgSpy dnSpy Extension
   shared capability catalog, and talks to the extension over loopback TCP.
 - `Extensions/dgSpy.Extension` is a net48 MEF extension deployed as `dgSpy.Extension.x.dll`. It owns dnSpy
   services, session state, handles, events, evaluation queues, and transport lifetime.
-- The extension binds RPC to `127.0.0.1`. Browser-facing security belongs at the gateway; remote transport
-  and authenticated extension RPC remain roadmap work.
+- The extension binds RPC to `127.0.0.1` and authenticates every request with a generated or explicitly
+  configured shared credential. The gateway verifies the extension's stable `host_id` during handshake.
+  Multi-host routing and remote encrypted transport remain roadmap work.
 
 Keep tool families in focused `RpcHost.<Family>.cs` partials under `Debugger/`, `Decompiler/`,
 `Evaluation/`, `Events/`, `Handles/`, or `Identity/`. Keep shared dnSpy objects and shutdown ownership in
@@ -49,8 +50,9 @@ project can exercise it.
 
 ## State and identity model
 
-A future host identity represents one reachable extension endpoint. The delivered local implementation
-has one implicit host. A session represents one logical attachment or launch and reports `attaching`,
+A host identity represents one reachable extension endpoint. The delivered implementation persists one
+stable local identity; the gateway does not yet register or route multiple hosts. A session represents one
+logical attachment or launch and reports `attaching`,
 `running`, `paused`, `mixed`, `detaching`, `exited`, or `faulted`, plus a monotonic `state_version` and
 event cursor.
 
@@ -79,8 +81,8 @@ The delivered local boundary therefore requires loopback listeners, gateway `Ori
 local shared secret. It does not claim that loopback alone is authentication or that function evaluation
 is sandboxed.
 
-Before remote or multi-client use, add authenticated extension RPC, stable host identities, encrypted
-transport, per-client/per-target permissions, request and response limits, side-effect audit records,
+Before remote or multi-client use, add multi-host routing, encrypted transport, per-client/per-target
+permissions, request and response limits, side-effect audit records,
 and defined disconnect behavior. Keep inspect, execution control, mutation, termination, host export,
 target-code execution, artifact editing, live patching, and dnSpy-host scripting as separate permissions.
 

@@ -3,8 +3,8 @@ using System.Reflection;
 using dgSpy.Protocol;
 
 namespace dgSpy.Extension {
-	// Host identity and capability advertisement. Milestone 1 serves a single implicit host, so host_id
-	// is a constant; it is reported from the start so callers never have to learn it later.
+	// Host identity and capability advertisement. The identity is stable across restarts and may be
+	// explicitly configured when this endpoint is registered behind a tunnel.
 	// The static half of the capability contract lives in dgSpy.Protocol.CapabilityCatalog, because the
 	// gateway derives its per-tool deadlines from the same table. Anything dynamic — versions, machine,
 	// whether a session is live — is filled in here.
@@ -13,7 +13,7 @@ namespace dgSpy.Extension {
 		HostInfo Host() {
 			string? session; lock(sync) session=sessionId;
 			return new HostInfo {
-				HostId=CapabilityCatalog.HostId,
+				HostId=rpcSecurity.HostId,
 				DisplayName=$"dgSpy on {Environment.MachineName}",
 				MachineName=Environment.MachineName,
 				DnSpyVersion=DnSpyVersion(),
@@ -23,9 +23,7 @@ namespace dgSpy.Extension {
 				DnSpyProcessId=System.Diagnostics.Process.GetCurrentProcess().Id,
 				ConnectionState="connected",
 				Engines=Array.ConvertAll(CapabilityCatalog.Engines,engine=>engine.Engine),
-				// Stated rather than implied: the extension RPC endpoint is unauthenticated and only
-				// loopback binding keeps it private. The HTTP gateway in front of it does authenticate.
-				Authentication="none (loopback-only)",
+				Authentication="shared-token (loopback-only transport)",
 				SessionId=session,
 			};
 		}

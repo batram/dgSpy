@@ -4,10 +4,12 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace dgSpy.Protocol {
-	public static class ProtocolVersion { public const int Current = 1; }
+	public static class ProtocolVersion { public const int Current = 2; }
 	public sealed class RpcRequest {
 		[JsonProperty("version")] public int Version { get; set; } = ProtocolVersion.Current;
 		[JsonProperty("request_id")] public string RequestId { get; set; } = Guid.NewGuid().ToString("N");
+		[JsonProperty("host_id", NullValueHandling=NullValueHandling.Ignore)] public string? HostId { get; set; }
+		[JsonProperty("authentication_token", NullValueHandling=NullValueHandling.Ignore)] public string? AuthenticationToken { get; set; }
 		[JsonProperty("operation")] public string Operation { get; set; } = "";
 		[JsonProperty("deadline_utc")] public DateTime? DeadlineUtc { get; set; }
 		[JsonProperty("arguments")] public JObject Arguments { get; set; } = new JObject();
@@ -21,7 +23,11 @@ namespace dgSpy.Protocol {
 		public static RpcResponse Failure(string id, string code, string message) => new RpcResponse { RequestId=id, Error=new RpcError { Code=code, Message=message } };
 	}
 	public sealed class RpcError { [JsonProperty("code")] public string Code { get; set; }="internal_error"; [JsonProperty("message")] public string Message { get; set; }=""; }
-	public sealed class Handshake { [JsonProperty("protocol_version")] public int ProtocolVersion { get; set; }=Protocol.ProtocolVersion.Current; [JsonProperty("extension_version")] public string ExtensionVersion { get; set; }="0.1.0"; }
+	public sealed class Handshake {
+		[JsonProperty("protocol_version")] public int ProtocolVersion { get; set; }=Protocol.ProtocolVersion.Current;
+		[JsonProperty("extension_version")] public string ExtensionVersion { get; set; }="0.1.0";
+		[JsonProperty("host_id")] public string HostId { get; set; }="";
+	}
 	public sealed class ProgramInfo {
 		[JsonProperty("program_id")] public string ProgramId { get; set; }=""; [JsonProperty("pid")] public int ProcessId { get; set; }
 		[JsonProperty("executable")] public string Executable { get; set; }=""; [JsonProperty("title")] public string Title { get; set; }="";

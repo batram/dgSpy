@@ -2,7 +2,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
-. (Join-Path (Split-Path $PSScriptRoot) 'ps_scratch\Invoke-DgSpyRpc.ps1')
+. (Join-Path $PSScriptRoot 'TestSupport\Invoke-DgSpyRpc.ps1')
 
 $script:checks = 0
 $script:failures = @()

@@ -58,6 +58,11 @@ git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com
 
 ## Build and deploy
 
+By default the extension persists its stable identity and RPC credential in
+`%LOCALAPPDATA%\dgSpy\host.id` and `%LOCALAPPDATA%\dgSpy\rpc.token`. Managed hosts may set
+`DGSPY_HOST_ID` and `DGSPY_RPC_TOKEN` for both dnSpy and the gateway. `DGSPY_TOKEN` remains the separate
+client-to-gateway MCP credential.
+
 ```powershell
 .\build.ps1 netframework
 ```

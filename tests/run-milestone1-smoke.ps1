@@ -145,6 +145,7 @@ try {
 	# must be invisible to the next tool call. Do this before attaching: closing dnSpy with a session
 	# attached terminates the target.
 	Write-Host "== gateway survives a dnSpy restart ==" -ForegroundColor Cyan
+	$hostBeforeRestart = Invoke-Tool -Name 'get_host_info' -Arguments @{}
 	Stop-Process -Id $dnSpyProcess.Id -Force
 	$dnSpyProcess.WaitForExit(10000) | Out-Null
 	$failedWhileDown = $false
@@ -156,7 +157,7 @@ try {
 		throw "Extension RPC endpoint did not come back after the dnSpy restart."
 	}
 	$reconnected = Invoke-Tool -Name 'get_host_info' -Arguments @{}
-	Assert-That 'the gateway reconnects after a dnSpy restart without being restarted itself' ($reconnected.host_id -eq 'local')
+	Assert-That 'the gateway reconnects to the same stable host after a dnSpy restart' ($reconnected.host_id -eq $hostBeforeRestart.host_id -and -not [string]::IsNullOrWhiteSpace($reconnected.host_id))
 
 	Write-Host "== host info and capabilities ==" -ForegroundColor Cyan
 	Assert-That 'get_host_info reports this machine and a live connection' ($reconnected.machine_name -eq $env:COMPUTERNAME -and $reconnected.connection_state -eq 'connected')

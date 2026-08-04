@@ -6,6 +6,19 @@ namespace dgSpy.Extension.Tests;
 
 public sealed class ExtensionCoreTests {
 	[Fact]
+	public void Rpc_authentication_requires_token_and_exact_host_identity() {
+		Assert.Null(RpcRequestAuthenticator.Reject("get_host_info","host-a","secret","host-a","secret"));
+		Assert.NotNull(RpcRequestAuthenticator.Reject("get_host_info","host-a",null,"host-a","secret"));
+		Assert.NotNull(RpcRequestAuthenticator.Reject("get_host_info","host-a","guess","host-a","secret"));
+		Assert.NotNull(RpcRequestAuthenticator.Reject("get_host_info","host-b","secret","host-a","secret"));
+		Assert.NotNull(RpcRequestAuthenticator.Reject("get_host_info",null,"secret","host-a","secret"));
+	}
+
+	[Fact]
+	public void Authenticated_ping_may_discover_the_stable_host_identity() =>
+		Assert.Null(RpcRequestAuthenticator.Reject("ping",null,"secret","host-a","secret"));
+
+	[Fact]
 	public void ProgramIdentityUsesTypedRuntimeFields() {
 		var runtimeGuid=Guid.Parse("3B476D35-A401-11D2-AAD4-00C04F990171");
 

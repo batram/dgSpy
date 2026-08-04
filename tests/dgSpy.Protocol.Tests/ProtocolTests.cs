@@ -10,7 +10,7 @@ namespace dgSpy.Protocol.Tests;
 public class RpcContractTests {
 	[Fact]
 	public void Request_round_trips_with_snake_case_wire_names() {
-		var request = new RpcRequest { Operation = "attach", RequestId = "abc" };
+		var request = new RpcRequest { Operation = "attach", RequestId = "abc", HostId="host-a", AuthenticationToken="secret" };
 		request.Arguments["program_id"] = "1234:guid:CLR v4.0.30319";
 
 		var wire = JObject.Parse(JsonConvert.SerializeObject(request));
@@ -18,6 +18,8 @@ public class RpcContractTests {
 		Assert.Equal("attach", (string?)wire["operation"]);
 		Assert.Equal("abc", (string?)wire["request_id"]);
 		Assert.Equal(ProtocolVersion.Current, (int?)wire["version"]);
+		Assert.Equal("host-a",(string?)wire["host_id"]);
+		Assert.Equal("secret",(string?)wire["authentication_token"]);
 		Assert.Equal("1234:guid:CLR v4.0.30319", (string?)wire["arguments"]!["program_id"]);
 	}
 
@@ -209,6 +211,13 @@ public class CapabilityContractTests {
 		Assert.Equal("attach_endpoint", (string?)capabilities["engines"]![1]!["acquisition"]![0]);
 		Assert.Equal("TESTBOX", (string?)host["machine_name"]);
 		Assert.Equal("connected", (string?)host["connection_state"]);
+	}
+
+	[Fact]
+	public void Runtime_capabilities_report_the_endpoint_host_identity() {
+		var capabilities=CapabilityCatalog.Describe("0.1.0","host-a");
+
+		Assert.Equal("host-a",capabilities.HostId);
 	}
 
 	[Fact]

@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
-. (Join-Path (Split-Path $PSScriptRoot) 'ps_scratch\Invoke-DgSpyRpc.ps1')
+. (Join-Path $PSScriptRoot 'TestSupport\Invoke-DgSpyRpc.ps1')
 
 $script:checks=0; $script:failures=@()
 function Assert-That { param([string]$What,$Condition,[string]$Detail='') $script:checks++; if(@($Condition).Count -gt 0 -and [bool](@($Condition)|Select-Object -Last 1)){ Write-Host "  PASS  $What" -ForegroundColor DarkGreen } else { Write-Host "  FAIL  $What $Detail" -ForegroundColor Red; $script:failures += "$What $Detail" } }

@@ -1,4 +1,5 @@
 using System.Net;
+using System.IO;
 using dgSpy.Gateway;
 using Xunit;
 
@@ -61,5 +62,19 @@ public class RequestGuardTests {
 
 		Assert.NotNull(rejection);
 		Assert.Contains("10.0.0.5", rejection);
+	}
+}
+
+public class RpcClientSettingsTests {
+	[Fact]
+	public void Matching_or_unconfigured_host_identity_is_accepted() {
+		RpcClientSettings.EnsureExpectedHost(null,"host-a");
+		RpcClientSettings.EnsureExpectedHost("host-a","host-a");
+	}
+
+	[Fact]
+	public void Missing_or_mismatched_host_identity_is_rejected() {
+		Assert.Throws<IOException>(()=>RpcClientSettings.EnsureExpectedHost(null,""));
+		Assert.Throws<IOException>(()=>RpcClientSettings.EnsureExpectedHost("host-a","host-b"));
 	}
 }

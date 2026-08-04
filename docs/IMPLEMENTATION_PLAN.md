@@ -38,8 +38,16 @@ Every accepted synchronization must still satisfy these maintenance gates:
 
 This is the next product expansion. Do not expose the current extension RPC directly to a VM or LAN.
 
-1. Add stable `host_id` registration, discovery, and routing.
-2. Authenticate extension RPC while retaining loopback binding by default.
+Progress:
+
+- **Complete:** stable per-installation extension `host_id` and authenticated gateway-to-extension RPC.
+  Requests fail closed on a missing or invalid credential and on mismatched host identity; the listener
+  remains loopback-only.
+- **Open:** multi-host registration/routing, MCP client identity, leases, permissions, disconnect policy,
+  audit records, tunnel guidance, and any direct encrypted listener.
+
+1. Add multi-host registration, discovery, and routing around the delivered stable `host_id` contract.
+2. Retain authenticated extension RPC and loopback binding as the default endpoint boundary.
 3. Complete MCP Streamable HTTP session behavior required by strict clients.
 4. Define session ownership or leases before supporting competing clients or independent sessions.
 5. Add per-client and per-target permissions for discovery, inspection, execution control, mutation,

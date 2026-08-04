@@ -66,8 +66,8 @@ namespace dgSpy.Protocol {
 		[JsonProperty("hit_count_kinds")] public string[] HitCountKinds { get; set; }=Array.Empty<string>();
 	}
 	public sealed class HostInfo {
-		/// <summary>Milestone 1 exposes a single implicit host. host_id routing arrives with Phase 9; the
-		/// field exists now so callers can carry it from the start.</summary>
+		/// <summary>Stable identity of the extension endpoint. It is generated once per installation or
+		/// supplied explicitly for a managed host.</summary>
 		[JsonProperty("host_id")] public string HostId { get; set; }="";
 		[JsonProperty("display_name")] public string DisplayName { get; set; }="";
 		[JsonProperty("machine_name")] public string MachineName { get; set; }="";
@@ -79,7 +79,7 @@ namespace dgSpy.Protocol {
 		[JsonProperty("dnspy_process_id")] public int DnSpyProcessId { get; set; }
 		[JsonProperty("connection_state")] public string ConnectionState { get; set; }="connected";
 		[JsonProperty("engines")] public string[] Engines { get; set; }=Array.Empty<string>();
-		/// <summary>How this endpoint authenticates callers. Milestone 1: none, loopback-only.</summary>
+		/// <summary>How this endpoint authenticates gateway RPC callers.</summary>
 		[JsonProperty("authentication")] public string Authentication { get; set; }="";
 		[JsonProperty("session_id", NullValueHandling=NullValueHandling.Ignore)] public string? SessionId { get; set; }
 	}
@@ -275,8 +275,8 @@ namespace dgSpy.Protocol {
 		public static bool IsKnownOperation(string operation) => Operations.Any(o=>o.Operation==operation);
 		/// <summary>The extension's upper bound for an operation, or 0 when it is not a known operation.</summary>
 		public static int BoundMs(string operation) => Operations.FirstOrDefault(o=>o.Operation==operation)?.MaxDurationMs ?? 0;
-		public static CapabilityInfo Describe(string extensionVersion) => new CapabilityInfo {
-			HostId=HostId, ExtensionVersion=extensionVersion, Operations=Operations, Engines=Engines, Limits=Limits,
+		public static CapabilityInfo Describe(string extensionVersion,string? hostId=null) => new CapabilityInfo {
+			HostId=hostId ?? HostId, ExtensionVersion=extensionVersion, Operations=Operations, Engines=Engines, Limits=Limits,
 			EventKinds=dgSpy.Protocol.EventKinds.All, StopReasons=dgSpy.Protocol.StopReasons.All,
 			StepKinds=dgSpy.Protocol.StepKinds.All, ConditionKinds=dgSpy.Protocol.BreakpointConditionKinds.All,
 			HitCountKinds=dgSpy.Protocol.HitCountKinds.All,
