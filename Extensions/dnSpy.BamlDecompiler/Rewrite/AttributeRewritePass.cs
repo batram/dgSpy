@@ -20,15 +20,17 @@
 	THE SOFTWARE.
 */
 
+using System.Collections.Generic;
 using System.Xml.Linq;
+using dnlib.DotNet;
 using dnSpy.BamlDecompiler.Xaml;
 
 namespace dnSpy.BamlDecompiler.Rewrite {
-	internal class AttributeRewritePass : IRewritePass {
+	sealed class AttributeRewritePass : IRewritePass {
 		XName key;
 
 		public void Run(XamlContext ctx, XDocument document) {
-			key = ctx.GetXamlNsName("Key");
+			key = ctx.GetKnownNamespace("Key", XamlContext.KnownNamespace_Xaml);
 
 			bool doWork;
 			do {
@@ -49,21 +51,31 @@ namespace dnSpy.BamlDecompiler.Rewrite {
 		}
 
 		bool RewriteElement(XamlContext ctx, XElement parent, XElement elem) {
-			var property = elem.Annotation<XamlProperty>();
-			if (property is null && elem.Name != key)
-				return false;
-
 			if (elem.HasAttributes || elem.HasElements)
 				return false;
 
+			var attrName = elem.Name;
+			if (attrName != key) {
+				var property = elem.Annotation<XamlProperty>();
+				if (property is null)
+					return false;
+
+				if (property.ResolvedMember is PropertyDef propertyDef && propertyDef.SetMethod is null)
+					return false;
+
+				attrName = property.ToXName(ctx, parent, property.IsAttachedTo(parent.Annotation<XamlType>()));
+			}
+
 			ctx.CancellationToken.ThrowIfCancellationRequested();
 
-			var value = elem.Value;
-			var attrName = elem.Name;
-			if (attrName != key)
-				attrName = property.ToXName(ctx, parent, property.IsAttachedTo(parent.Annotation<XamlType>()));
-			var attr = new XAttribute(attrName, value);
-			parent.Add(attr);
+			var attr = new XAttribute(attrName, elem.Value);
+			var list = new List<XAttribute>(parent.Attributes());
+			if (attrName == key)
+				list.Insert(0, attr);
+			else
+				list.Add(attr);
+			parent.RemoveAttributes();
+			parent.ReplaceAttributes(list);
 			elem.Remove();
 
 			return true;

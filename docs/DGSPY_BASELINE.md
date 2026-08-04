@@ -5,23 +5,23 @@
 | | Current scope |
 |---|---|
 | Architecture | x64 only |
-| dnSpy build | `net48`, Release |
+| dnSpy build | `net48` and `net10.0-windows`, Release |
 | Debug engines | .NET Framework CorDebug (`CLR v4.0.30319`, covering 4.0–4.8) and Mono/Unity (UCH) |
 | Out of scope for now | x86, CoreCLR, remote hosts, multi-session |
 
 ## Toolchain
 
 - Windows 10 or later, x64.
-- .NET SDK 7.0 or later (builds the gateway; also drives `dotnet build` for the other projects).
+- .NET SDK 10 (builds the modern host, gateway, and other SDK projects).
 - .NET Framework 4.8 developer pack (extension and test target).
-- MSBuild from a **full Visual Studio 2019** installation for the dnSpy baseline build — `build.ps1` uses MSBuild rather than `dotnet build` because dnSpy has COM references. Newer MSBuilds on this machine do not work; see [Build and deploy](#build-and-deploy) for the exact path and why picking your own fails.
+- MSBuild from a full Visual Studio installation for the net48 host, whose COM references are not supported by `dotnet build`.
 
 ## Projects
 
 | Project | TFM | Notes |
 |---|---|---|
 | `dgSpy.Protocol` | `netstandard2.0` | DTOs only. Referenced by both sides, so it must stay loadable from net48 and net7.0. |
-| `Extensions/dgSpy.Extension` | `net48` | Pinned; does not inherit `net5.0-windows` from `DnSpyCommon.props`. Output is `dgSpy.Extension.x.dll` — dnSpy's scanner only loads `*.x.dll`. |
+| `Extensions/dgSpy.Extension` | `net48` | Pinned; does not inherit the host's `net10.0-windows` target. Output is `dgSpy.Extension.x.dll` — dnSpy's scanner only loads `*.x.dll`. |
 | `dgSpy.Gateway` | `net7.0` | Standalone process, not loaded into dnSpy. |
 | `tests/TestTargets/Milestone1Target` | `net48`, x64 | CorDebug smoke target; the project pins `PlatformTarget=x64` and the smoke test verifies dnSpy reports `X64`. |
 
@@ -68,33 +68,25 @@ If MSBuild is installed but not on PATH, pass its resolved executable explicitly
 .\build.ps1 netframework -MSBuildPath 'C:\path\to\MSBuild.exe'
 ```
 
-### Use this MSBuild. Nothing else on this machine works.
+### Verified net48 build
 
 ```powershell
-.\build.ps1 netframework -MSBuildPath 'C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
+.\build.ps1 netframework -MSBuildPath 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
 ```
 
-**Copy that line. Do not go looking for an MSBuild yourself** — this has now cost several sessions,
-each one rediscovering the same dead end. Four MSBuild installations are present and only that one
-builds this solution:
-
-| MSBuild | Result |
-|---|---|
-| VS 2019 Community, `Bin\amd64` | ✅ the only verified one |
-| VS 2022 BuildTools | ❌ `MSB4236` |
-| VS 18 Community | ❌ `MSB4236` |
-| bare `msbuild` on PATH | ❌ usually absent — `CommandNotFoundException` from `build.ps1`'s `Get-Command` |
-
-The failure is always the same and always *before* any source compiles: `MSB4236` / `MSB4276`,
-"The SDK 'Microsoft.NET.Sdk' specified could not be found", repeated for every project in the
-solution. Those installations start fine but lack the .NET SDK resolver payload. **`MSB4236` here is a
-toolchain-installation mismatch, never a dgSpy source failure** — do not start reading project files.
-
-`vswhere -latest` is actively misleading: it returns the newest VS, which is one of the broken ones.
-If the path above ever stops existing, enumerate and try each, rather than trusting a "latest" pick:
+`build.ps1` supplies Visual Studio 18 with the installed SDK resolver path. If that installation path
+changes, discover the full Visual Studio installations and pass the appropriate `MSBuild.exe`:
 
 ```powershell
 & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -products * -format value -property installationPath
+```
+
+Build the self-contained modern x64 host through the SDK-native driver. Full-framework MSBuild 18
+cannot load the SDK 10 `Microsoft.Deployment.DotNet.Releases` task dependency during this publish;
+that is a build-driver limitation, not a source failure.
+
+```powershell
+.\build.ps1 net-x64 -NoMsbuild
 ```
 
 ### Do not substitute `dotnet build` for the dnSpy baseline

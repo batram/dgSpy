@@ -21,11 +21,12 @@
 */
 
 using System.Xml.Linq;
+using dnlib.DotNet;
 using dnSpy.BamlDecompiler.Baml;
 using dnSpy.BamlDecompiler.Xaml;
 
 namespace dnSpy.BamlDecompiler.Handlers {
-	internal class PropertyHandler : IHandler {
+	class PropertyHandler : IHandler {
 		public virtual BamlRecordType Type => BamlRecordType.Property;
 
 		public BamlElement Translate(XamlContext ctx, BamlNode node, BamlElement parent) {
@@ -34,11 +35,30 @@ namespace dnSpy.BamlDecompiler.Handlers {
 			var elemType = parent.Xaml.Element.Annotation<XamlType>();
 			var xamlProp = ctx.ResolveProperty(record.AttributeId);
 			var value = XamlUtils.Escape(record.Value);
+			xamlProp.DeclaringType.ResolveNamespace(parent.Xaml, ctx);
 
-			var attr = new XAttribute(xamlProp.ToXName(ctx, parent.Xaml, xamlProp.IsAttachedTo(elemType)), value);
-			parent.Xaml.Element.Add(attr);
+			parent.Xaml.Element.Add(ConstructXAttribute());
 
 			return null;
+
+			XAttribute ConstructXAttribute() {
+				switch (xamlProp.PropertyKind) {
+				case XamlPropertyKind.XmlSpace:
+					return new XAttribute(XNamespace.Xml + "space", value);
+				case XamlPropertyKind.XmlLang:
+					return new XAttribute(XNamespace.Xml + "lang", value);
+				case XamlPropertyKind.RuntimeName:
+					return new XAttribute(ctx.GetKnownNamespace("Name", XamlContext.KnownNamespace_Xaml), value);
+				}
+
+				if (xamlProp.IsAttachedTo(elemType))
+					return new XAttribute(xamlProp.ToXName(ctx, parent.Xaml), value);
+
+				if (xamlProp.PropertyName == "Name" && elemType?.ResolvedType.ResolveTypeDef()?.Scope == ctx.Module)
+					return new XAttribute(ctx.GetKnownNamespace("Name", XamlContext.KnownNamespace_Xaml), value);
+
+				return new XAttribute(xamlProp.ToXName(ctx, parent.Xaml, false), value);
+			}
 		}
 	}
 }

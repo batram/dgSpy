@@ -30,7 +30,7 @@ namespace dnSpy.AsmEditor.Compiler {
 	/// <c>System.Runtime.InteropServices.TypeIdentifierAttribute</c> helper code used by <see cref="SigComparer"/>
 	/// </summary>
 	static class TIAHelper {
-		struct Info : IEquatable<Info> {
+		readonly struct Info : IEquatable<Info> {
 			public readonly UTF8String? Scope;
 			public readonly UTF8String? Identifier;
 
@@ -121,7 +121,7 @@ namespace dnSpy.AsmEditor.Compiler {
 			}
 			return new Info(scope, identifier);
 		}
-		static readonly byte[] empty = new byte[0];
+		static readonly byte[] empty = Array.Empty<byte>();
 
 		static byte[] Concat(byte[] a, byte b, byte[] c) {
 			var data = new byte[a.Length + 1 + c.Length];

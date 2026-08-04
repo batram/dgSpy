@@ -269,7 +269,7 @@ namespace dnSpy.Decompiler.MSBuild {
 			if ((Options.Module.Characteristics & Characteristics.Dll) != 0)
 				return;
 
-			var file = Files.OfType<TypeProjectFile>().Where(a => DotNetUtils.IsSystemWindowsApplication(a.Type)).FirstOrDefault();
+			var file = Files.OfType<TypeProjectFile>().FirstOrDefault(a => DotNetUtils.IsSystemWindowsApplication(a.Type));
 			Debug2.Assert(file is not null);
 			if (file is null)
 				return;
@@ -376,13 +376,9 @@ namespace dnSpy.Decompiler.MSBuild {
 		}
 
 		List<ProjectFile>? TryCreateResourceFiles(ModuleDef module, ResourceNameCreator resourceNameCreator, EmbeddedResource er) {
-			ResourceElementSet set;
-			try {
-				set = ResourceReader.Read(module, er.CreateReader());
-			}
-			catch {
+			var set = TryCreateResourceElementSet(module, er);
+			if (set is null)
 				return null;
-			}
 			if (IsXamlResource(module, er.Name, set))
 				return CreateXamlResourceFiles(module, resourceNameCreator, set).ToList();
 			if (Options.CreateResX) {
@@ -420,7 +416,8 @@ namespace dnSpy.Decompiler.MSBuild {
 
 				var rsrcName = Uri.UnescapeDataString(e.Name);
 				if (decompileBaml && rsrcName.EndsWith(".baml", StringComparison.OrdinalIgnoreCase)) {
-					var filename = resourceNameCreator.GetBamlResourceName(rsrcName, out string typeFullName);
+					var bamlTypeName = Options.DecompileBamlTypeName?.Invoke(module, data, Options.DecompilationContext.CancellationToken);
+					var filename = resourceNameCreator.GetBamlResourceName(rsrcName, bamlTypeName, out string typeFullName);
 					yield return new BamlResourceProjectFile(filename, data, typeFullName, (bamlData, stream) => Options.DecompileBaml!(module, bamlData, Options.DecompilationContext.CancellationToken, stream));
 				}
 				else if (StringComparer.InvariantCultureIgnoreCase.Equals(splashScreenImageName, e.Name)) {
@@ -439,7 +436,7 @@ namespace dnSpy.Decompiler.MSBuild {
 			if (!Options.CreateResX)
 				throw new InvalidOperationException();
 
-			return new ResXProjectFile(module, filename, typeFullName, er) {
+			return new ResXProjectFile(module, filename, typeFullName, set) {
 				IsSatelliteFile = isSatellite,
 			};
 		}
@@ -458,8 +455,27 @@ namespace dnSpy.Decompiler.MSBuild {
 			if (type.Namespace == "XamlGeneratedNamespace" && type.Name == "GeneratedInternalTypeHelper")
 				return false;
 
+			// Don't include attribute types added by the compiler.
+			// if (type.BaseType is not null && type.BaseType.Name == "Attribute" && type.CustomAttributes.IsDefined("Microsoft.CodeAnalysis.EmbeddedAttribute")) {
+			// 	if (type.Namespace == "Microsoft.CodeAnalysis" && type.Name == "EmbeddedAttribute")
+			// 		return false;
+			// 	if (type.Namespace == "System.Runtime.CompilerServices" && attributeNames.Contains(type.Name))
+			// 		return false;
+			// }
+
 			return true;
 		}
+
+		static readonly HashSet<string> attributeNames = new HashSet<string> {
+			"IsReadOnlyAttribute",
+			"IsByRefLikeAttribute",
+			"IsUnmanagedAttribute",
+			"NullableAttribute",
+			"NullableContextAttribute",
+			"NativeIntegerAttribute",
+			"RefSafetyRulesAttribute",
+			"ScopedRefAttribute",
+		};
 
 		IEnumerable<ProjectFile> CreateSatelliteFiles(string rsrcName, FilenameCreator filenameCreator, ProjectFile nonSatFile) {
 			foreach (var satMod in satelliteAssemblyFinder.GetSatelliteAssemblies(Options.Module)) {

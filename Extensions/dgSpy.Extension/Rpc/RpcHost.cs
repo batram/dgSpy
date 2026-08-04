@@ -33,9 +33,23 @@ namespace dgSpy.Extension {
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		TcpListener? tcpListener;
 		Task? listener; string? sessionId; string? attachedProgramId; string? sessionKind; string? lifecycleAction; long stateVersion; bool attaching; bool faulted; string? faultMessage; string? lastUserMessage; int? terminalExitCode; string? terminalReason;
+		bool IsMonoEndpoint => attachedProgramId?.StartsWith("endpoint:unity:",StringComparison.Ordinal)==true ||
+			attachedProgramId?.StartsWith("endpoint:mono:",StringComparison.Ordinal)==true;
+		bool? IsTargetRunning => IsMonoEndpoint ? manager.IsRunning :
+			manager.CurrentProcess.Current is DbgProcess current ? current.IsRunning :
+			manager.Processes.Any(process => process.IsRunning) ? true : manager.IsRunning;
+		bool? AggregateRunningState {
+			get {
+				if (IsMonoEndpoint) return manager.IsRunning;
+				var processes = manager.Processes;
+				if (processes.Length == 0) return manager.IsRunning;
+				var running = processes.Count(process => process.IsRunning);
+				return running == 0 ? false : running == processes.Length ? true : null;
+			}
+		}
 		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers) {
 			this.programs=programs; this.manager=manager; this.debuggerSettings=debuggerSettings; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.moduleIdProviders=moduleIdProviders.ToArray(); this.decompilers=decompilers;
-			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { if (manager.IsRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded);
+			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { if (IsTargetRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded);
 			// An engine that fails to connect reports it here rather than through DbgManager.Start, which
 			// only rejects options it cannot build an engine from. Recording it turns "faulted" from a
 			// timeout guess into dnSpy's own reason. dnSpy's UI subscribes to the same event and shows a
@@ -270,7 +284,7 @@ namespace dgSpy.Extension {
 			var state=State();
 			return new[] { new SessionSummary { SessionId=state.SessionId,State=state.State,ProgramId=attachedProgramId ?? "",StateVersion=state.StateVersion,LastEventId=state.LastEventId,ProcessIds=state.ProcessIds,CanDetachWithoutTerminating=manager.IsDebugging && manager.CanDetachWithoutTerminating } };
 		},cancellationToken).ConfigureAwait(false);
-		SessionState State() { if (sessionId is null) throw new RpcException("session_not_found","No active dgSpy session."); if (attaching && manager.IsDebugging && manager.Processes.Length!=0) attaching=false; return new SessionState { SessionId=sessionId,State=SessionStateCalculator.Get(faulted,attaching,manager.IsDebugging,manager.IsRunning),StateVersion=stateVersion,LastEventId=events.LastEventId,ProcessIds=manager.Processes.Select(p=>p.Id).ToArray(),FaultMessage=faulted ? faultMessage : null,ExitCode=terminalExitCode,TerminalReason=terminalReason }; }
+		SessionState State() { if (sessionId is null) throw new RpcException("session_not_found","No active dgSpy session."); if (attaching && manager.IsDebugging && manager.Processes.Length!=0) attaching=false; return new SessionState { SessionId=sessionId,State=SessionStateCalculator.Get(faulted,attaching,manager.IsDebugging,AggregateRunningState),StateVersion=stateVersion,LastEventId=events.LastEventId,ProcessIds=manager.Processes.Select(p=>p.Id).ToArray(),FaultMessage=faulted ? faultMessage : null,ExitCode=terminalExitCode,TerminalReason=terminalReason }; }
 		// Polls on the dispatcher so callers observe the state the operation actually produced. Bounded
 		// by the request deadline; a timeout returns the current state rather than throwing, so the
 		// caller still learns where the session got to.
@@ -383,7 +397,7 @@ namespace dgSpy.Extension {
 		async Task<ThreadInfo[]> ListThreadsAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
 			return await OnDebuggerAsync(()=>{
-				if (manager.IsRunning!=false) throw new RpcException("not_paused","Pause the session before listing threads so managed-frame availability is stable.");
+				if (IsTargetRunning!=false) throw new RpcException("not_paused","Pause the session before listing threads so managed-frame availability is stable.");
 				return manager.Processes.SelectMany(process=>process.Threads).Select(thread=>{
 					return new ThreadInfo { ThreadId=ThreadId(thread),ProcessId=thread.Process.Id,OsThreadId=thread.Id,ManagedThreadId=thread.ManagedId,
 						Name=thread.Name,Kind=thread.Kind,IsMain=thread.IsMain,IsCurrent=thread==manager.CurrentThread.Current,
@@ -399,9 +413,9 @@ namespace dgSpy.Extension {
 			// from a stop that carries a thread. A pause issued right after attach has neither, and
 			// the engine may not have enumerated any threads yet either. So: wait for a thread to
 			// exist, then select one if nothing is current.
-			await WaitForDebuggerAsync(()=>manager.IsRunning!=false || manager.Processes.SelectMany(p=>p.Threads).Any(),cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+			await WaitForDebuggerAsync(()=>IsTargetRunning!=false || manager.Processes.SelectMany(p=>p.Threads).Any(),cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
 			var selectedThreadId=await OnDebuggerAsync(()=>{
-				if (manager.IsRunning!=false) throw new RpcException("not_paused","Pause the session before requesting its call stack.");
+				if (IsTargetRunning!=false) throw new RpcException("not_paused","Pause the session before requesting its call stack.");
 				var all=manager.Processes.SelectMany(p=>p.Threads).ToArray();
 				if (!string.IsNullOrEmpty(requestedThreadId)) {
 					var requested=all.FirstOrDefault(thread=>ThreadId(thread)==requestedThreadId);
@@ -419,7 +433,7 @@ namespace dgSpy.Extension {
 			// frames. The walker and its frames are ours to close; the frames the call stack service
 			// then produces are not, which is why this only probes and does not return them.
 			await OnDebuggerAsync(()=>{
-				if (!string.IsNullOrEmpty(requestedThreadId) || manager.IsRunning!=false || callStack.Frames.Frames.Count!=0) return true;
+				if (!string.IsNullOrEmpty(requestedThreadId) || IsTargetRunning!=false || callStack.Frames.Frames.Count!=0) return true;
 				foreach (var thread in manager.Processes.SelectMany(process=>process.Threads)) {
 					var walker=thread.CreateStackWalker();
 					try {
@@ -435,11 +449,11 @@ namespace dgSpy.Extension {
 			},cancellationToken).ConfigureAwait(false);
 			// DbgCallStackService then refreshes its frames on the dispatcher, so wait for them rather
 			// than racing. A stack still empty after the wait is reported as empty, not as an error.
-			await WaitForDebuggerAsync(()=>manager.IsRunning!=false || (callStack.Frames.Frames.Count!=0 && ThreadId(callStack.Frames.Frames[0].Thread)==selectedThreadId),cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+			await WaitForDebuggerAsync(()=>IsTargetRunning!=false || (callStack.Frames.Frames.Count!=0 && ThreadId(callStack.Frames.Frames[0].Thread)==selectedThreadId),cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
 			// Identity is read on the dispatcher, where DbgObject access belongs. Evaluation of names
 			// and locals then happens on the evaluation thread so it cannot stall event delivery.
 			var captured=await OnDebuggerAsync(()=>{
-				if(manager.IsRunning!=false) throw new RpcException("not_paused","Pause the session before requesting its call stack.");
+				if(IsTargetRunning!=false) throw new RpcException("not_paused","Pause the session before requesting its call stack.");
 				return callStack.Frames.Frames.Where(frame=>ThreadId(frame.Thread)==selectedThreadId).Take(max).Select((frame,index)=>new CapturedFrame(frame,languages.GetCurrentLanguage(frame.Runtime.RuntimeKindGuid),new FrameInfo {
 					FrameId=$"{sessionId}:{stateVersion}:{selectedThreadId}:{index}",ThreadId=selectedThreadId,FrameIndex=index,Module=frame.Module?.Filename ?? "",ModuleName=frame.Module?.Name ?? "",
 					MethodToken=frame.FunctionToken,IlOffset=frame.FunctionOffset,Name=$"0x{frame.FunctionToken:X8}+0x{frame.FunctionOffset:X}",

@@ -25,7 +25,7 @@ using dnSpy.BamlDecompiler.Baml;
 using dnSpy.BamlDecompiler.Xaml;
 
 namespace dnSpy.BamlDecompiler.Handlers {
-	internal class KeyElementStartHandler : ElementHandler, IHandler, IDeferHandler {
+	sealed class KeyElementStartHandler : ElementHandler, IHandler, IDeferHandler {
 		BamlRecordType IHandler.Type => BamlRecordType.KeyElementStart;
 
 		BamlElement IHandler.Translate(XamlContext ctx, BamlNode node, BamlElement parent) {
@@ -38,7 +38,7 @@ namespace dnSpy.BamlDecompiler.Handlers {
 			var key = (XamlResourceKey)node.Annotation;
 
 			var bamlElem = new BamlElement(node);
-			bamlElem.Xaml = new XElement(ctx.GetXamlNsName("Key", parent.Xaml));
+			bamlElem.Xaml = new XElement(ctx.GetKnownNamespace("Key", XamlContext.KnownNamespace_Xaml, parent.Xaml));
 			parent.Xaml.Element.Add(bamlElem.Xaml.Element);
 			key.KeyElement = bamlElem;
 			base.Translate(ctx, node, bamlElem);

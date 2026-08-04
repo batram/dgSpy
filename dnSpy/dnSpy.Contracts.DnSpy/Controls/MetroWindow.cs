@@ -19,16 +19,19 @@
 
 using System;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Shell;
 using dnSpy.Contracts.Images;
 using dnSpy.Contracts.MVVM;
+using dnSpy.Contracts.Utilities;
 
 namespace dnSpy.Contracts.Controls {
 	/// <summary>
@@ -103,19 +106,33 @@ namespace dnSpy.Contracts.Controls {
 			return new Size(dpiX, dpiY);
 		}
 
-		struct RECT {
-			public int left, top, right, bottom;
-			RECT(bool dummy) => left = top = right = bottom = 0;// disable compiler warning
-		}
-
 		[DllImport("user32", SetLastError = true)]
 		static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
 		[DllImport("shcore", SetLastError = true)]
 		static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out int dpiX, out int dpiY);
 
+		static readonly DependencyPropertyKey uiElementIsMouseOverPropertyKey =
+			(DependencyPropertyKey)typeof(UIElement).GetField("IsMouseOverPropertyKey", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
+		static readonly DependencyPropertyKey buttonIsPressedPropertyKey =
+			(DependencyPropertyKey)typeof(ButtonBase).GetField("IsPressedPropertyKey", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
+
+		private Visual? minimizeButton;
+		private Visual? maximizeButton;
+		private Visual? closeButton;
+
 		int WM_DPICHANGED_counter = 0;
 		IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled) {
 			const int WM_DPICHANGED = 0x02E0;
+			const int WM_MOUSEHWHEEL = 0x020E;
+			const int WM_NCHITTEST = 0x0084;
+			const int WM_NCMOUSELEAVE = 0x02A2;
+			const int WM_NCLBUTTONDOWN = 0x00A1;
+			const int WM_NCLBUTTONUP = 0x00A2;
+			const int WM_MOUSELEAVE = 0x02A3;
+
+			const nint HTCLOSE = 20;
+			const nint HTMAXBUTTON = 9;
+			const nint HTMINBUTTON = 8;
 
 			if (msg == WM_DPICHANGED) {
 				if (WM_DPICHANGED_counter != 0)
@@ -134,7 +151,207 @@ namespace dnSpy.Contracts.Controls {
 				}
 			}
 
+			if (msg == WM_MOUSEHWHEEL) {
+				short delta = (short)unchecked((uint)(long)wParam >> 16);
+				if (delta == 0)
+					return IntPtr.Zero;
+
+				var element = Mouse.DirectlyOver;
+				if (element is null)
+					return IntPtr.Zero;
+
+				handled = HandleHorizontalScroll(element, delta);
+
+				return IntPtr.Zero;
+			}
+
+			if (msg == WM_NCHITTEST) {
+				if (IntPtr.Size == 8) {
+					// Workaround for a potential OverflowException in WindowChromeWorker._HandleNCHitTest
+					// See: https://developercommunity.visualstudio.com/t/overflow-exception-in-windowchrome/167357
+					long int64 = lParam.ToInt64();
+					if (int64 > int.MaxValue || int64 < int.MinValue) {
+						handled = true;
+						return IntPtr.Zero;
+					}
+				}
+
+				var hitPoint = new Point((short)lParam, (short)((uint)lParam >> 16));
+
+				var result = IntPtr.Zero;
+				if (minimizeButton is not null) {
+					var hitResult = VisualTreeHelper.HitTest(minimizeButton, minimizeButton.PointFromScreen(hitPoint));
+					if (hitResult is not null) {
+						minimizeButton.SetValue(uiElementIsMouseOverPropertyKey, true);
+						handled = true;
+						result = HTMINBUTTON;
+					}
+					else {
+						minimizeButton.SetValue(uiElementIsMouseOverPropertyKey, false);
+						if (minimizeButton is ButtonBase button)
+							button.SetValue(buttonIsPressedPropertyKey, false);
+					}
+				}
+				if (maximizeButton is not null) {
+					var hitResult = VisualTreeHelper.HitTest(maximizeButton, maximizeButton.PointFromScreen(hitPoint));
+					if (hitResult is not null) {
+						maximizeButton.SetValue(uiElementIsMouseOverPropertyKey, true);
+						handled = true;
+						result = HTMAXBUTTON;
+					}
+					else {
+						maximizeButton.SetValue(uiElementIsMouseOverPropertyKey, false);
+						if (maximizeButton is ButtonBase button)
+							button.SetValue(buttonIsPressedPropertyKey, false);
+					}
+				}
+				if (closeButton is not null) {
+					var hitResult = VisualTreeHelper.HitTest(closeButton, closeButton.PointFromScreen(hitPoint));
+					if (hitResult is not null) {
+						closeButton.SetValue(uiElementIsMouseOverPropertyKey, true);
+						handled = true;
+						result = HTCLOSE;
+					}
+					else {
+						closeButton.SetValue(uiElementIsMouseOverPropertyKey, false);
+						if (closeButton is ButtonBase button)
+							button.SetValue(buttonIsPressedPropertyKey, false);
+					}
+
+				}
+				return result;
+			}
+
+			if (msg == WM_NCLBUTTONDOWN) {
+				var hitPoint = new Point((short)lParam, (short)((uint)lParam >> 16));
+
+				if (minimizeButton is not null) {
+					var hitResult = VisualTreeHelper.HitTest(minimizeButton, minimizeButton.PointFromScreen(hitPoint));
+					if (hitResult is not null) {
+						if (minimizeButton is ButtonBase button)
+							button.SetValue(buttonIsPressedPropertyKey, true);
+						handled = true;
+						return IntPtr.Zero;
+					}
+				}
+				if (maximizeButton is not null) {
+					var hitResult = VisualTreeHelper.HitTest(maximizeButton, maximizeButton.PointFromScreen(hitPoint));
+					if (hitResult is not null) {
+						if (maximizeButton is ButtonBase button)
+							button.SetValue(buttonIsPressedPropertyKey, true);
+						handled = true;
+						return IntPtr.Zero;
+					}
+				}
+				if (closeButton is not null) {
+					var hitResult = VisualTreeHelper.HitTest(closeButton, closeButton.PointFromScreen(hitPoint));
+					if (hitResult is not null) {
+						if (closeButton is ButtonBase button)
+							button.SetValue(buttonIsPressedPropertyKey, true);
+						handled = true;
+						return IntPtr.Zero;
+					}
+				}
+				return IntPtr.Zero;
+			}
+
+			if (msg == WM_NCLBUTTONUP) {
+				if (minimizeButton is ButtonBase minBtn) {
+					bool shouldClick = (bool)minBtn.GetValue(buttonIsPressedPropertyKey.DependencyProperty);
+					minBtn.SetValue(buttonIsPressedPropertyKey, false);
+					if (shouldClick) {
+						minBtn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, minBtn));
+						ExecuteCommand(minBtn);
+					}
+
+					handled = true;
+				}
+				if (maximizeButton is ButtonBase maxBtn) {
+					bool shouldClick = (bool)maxBtn.GetValue(buttonIsPressedPropertyKey.DependencyProperty);
+					maxBtn.SetValue(buttonIsPressedPropertyKey, false);
+					if (shouldClick) {
+						maxBtn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, maxBtn));
+						ExecuteCommand(maxBtn);
+					}
+
+					handled = true;
+				}
+				if (closeButton is ButtonBase closeBtn) {
+					bool shouldClick = (bool)closeBtn.GetValue(buttonIsPressedPropertyKey.DependencyProperty);
+					closeBtn.SetValue(buttonIsPressedPropertyKey, false);
+					if (shouldClick) {
+						closeBtn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, closeBtn));
+						ExecuteCommand(closeBtn);
+					}
+
+					handled = true;
+				}
+
+				return IntPtr.Zero;
+			}
+
+			if (msg == WM_NCMOUSELEAVE || msg == WM_MOUSELEAVE) {
+				if (minimizeButton is not null) {
+					minimizeButton.SetValue(uiElementIsMouseOverPropertyKey, false);
+					if (minimizeButton is ButtonBase button)
+						button.SetValue(buttonIsPressedPropertyKey, false);
+				}
+
+				if (maximizeButton is not null) {
+					maximizeButton.SetValue(uiElementIsMouseOverPropertyKey, false);
+					if (maximizeButton is ButtonBase button)
+						button.SetValue(buttonIsPressedPropertyKey, false);
+				}
+
+				if (closeButton is not null) {
+					closeButton.SetValue(uiElementIsMouseOverPropertyKey, false);
+					if (closeButton is ButtonBase button)
+						button.SetValue(buttonIsPressedPropertyKey, false);
+				}
+
+				return IntPtr.Zero;
+			}
+
 			return IntPtr.Zero;
+		}
+
+		private protected virtual bool HandleHorizontalScroll(IInputElement element, short delta) {
+			ScrollViewer? scrollViewer = null;
+			if (element is ScrollViewer scViewer) {
+				scrollViewer = scViewer;
+			}
+			else if (element is DependencyObject dependencyObject) {
+				var current = UIUtilities.GetParent(dependencyObject);
+
+				while (current is not null) {
+					if (current is ScrollViewer newScrollViewer) {
+						scrollViewer = newScrollViewer;
+						break;
+					}
+					current = UIUtilities.GetParent(current);
+				}
+			}
+
+			if (scrollViewer is not null) {
+				scrollViewer.ScrollToHorizontalOffset(scrollViewer.HorizontalOffset + delta / 10.0);
+				return true;
+			}
+
+			return false;
+		}
+
+		private static void ExecuteCommand(ICommandSource commandSource) {
+			var command = commandSource.Command;
+			if (command is null)
+				return;
+			object commandParameter = commandSource.CommandParameter;
+			if (command is RoutedCommand routedCommand) {
+				var target = commandSource.CommandTarget ?? commandSource as IInputElement;
+				if (routedCommand.CanExecute(commandParameter, target))
+					routedCommand.Execute(commandParameter, target);
+			}
+			else if (command.CanExecute(commandParameter))
+				command.Execute(commandParameter);
 		}
 
 		/// <summary>
@@ -208,6 +425,90 @@ namespace dnSpy.Contracts.Controls {
 		public ImageReference SystemMenuImage {
 			get => (ImageReference)GetValue(SystemMenuImageProperty);
 			set => SetValue(SystemMenuImageProperty, value);
+		}
+
+		/// <summary>
+		/// The DependencyProperty of IsMinimumButton property
+		/// </summary>
+		public static readonly DependencyProperty IsMinimizeButtonProperty =
+			DependencyProperty.RegisterAttached("IsMinimizeButton", typeof(bool), typeof(MetroWindow), new FrameworkPropertyMetadata(false, OnIsMinimizeButtonChanged));
+
+		/// <summary>
+		/// Get value of IsMinimumButton property
+		/// </summary>
+		/// <param name="obj"></param>
+		/// <returns></returns>
+		public static bool GetIsMinimizeButton(DependencyObject obj) => (bool)obj.GetValue(IsMinimizeButtonProperty);
+
+		/// <summary>
+		/// Set value of IsMinimumButton property
+		/// </summary>
+		/// <param name="obj"></param>
+		/// <param name="value"></param>
+		public static void SetIsMinimizeButton(DependencyObject obj, bool value) => obj.SetValue(IsMinimizeButtonProperty, value);
+
+		static void OnIsMinimizeButtonChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) {
+			if (d is not Visual v)
+				return;
+			if (GetWindow(d) is not MetroWindow win)
+				return;
+			win.minimizeButton = v;
+		}
+
+		/// <summary>
+		/// The DependencyProperty of IsMaximumButton property
+		/// </summary>
+		public static readonly DependencyProperty IsMaximizeButtonProperty =
+			DependencyProperty.RegisterAttached("IsMaximizeButton", typeof(bool), typeof(MetroWindow), new FrameworkPropertyMetadata(false, OnIsMaximizeButtonChanged));
+
+		/// <summary>
+		/// Get value of IsMaximumButton property
+		/// </summary>
+		/// <param name="obj"></param>
+		/// <returns></returns>
+		public static bool GetIsMaximizeButton(DependencyObject obj) => (bool)obj.GetValue(IsMaximizeButtonProperty);
+
+		/// <summary>
+		/// Set value of IsMaximumButton property
+		/// </summary>
+		/// <param name="obj"></param>
+		/// <param name="value"></param>
+		public static void SetIsMaximizeButton(DependencyObject obj, bool value) => obj.SetValue(IsMaximizeButtonProperty, value);
+
+		static void OnIsMaximizeButtonChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) {
+			if (d is not Visual v)
+				return;
+			if (GetWindow(d) is not MetroWindow win)
+				return;
+			win.maximizeButton = v;
+		}
+
+		/// <summary>
+		/// The DependencyProperty of IsCloseButton property
+		/// </summary>
+		public static readonly DependencyProperty IsCloseButtonProperty =
+			DependencyProperty.RegisterAttached("IsCloseButton", typeof(bool), typeof(MetroWindow), new FrameworkPropertyMetadata(false, OnIsCloseButtonChanged));
+
+		/// <summary>
+		/// Get value of IsCloseButton property
+		/// </summary>
+		/// <param name="obj"></param>
+		/// <returns></returns>
+		public static bool GetIsCloseButton(DependencyObject obj) => (bool)obj.GetValue(IsCloseButtonProperty);
+
+		/// <summary>
+		/// Set value of IsCloseButton property
+		/// </summary>
+		/// <param name="obj"></param>
+		/// <param name="value"></param>
+		public static void SetIsCloseButton(DependencyObject obj, bool value) => obj.SetValue(IsCloseButtonProperty, value);
+
+		static void OnIsCloseButtonChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) {
+			if (d is not Visual v)
+				return;
+			if (GetWindow(d) is not MetroWindow win)
+				return;
+			win.closeButton = v;
 		}
 
 		/// <summary>
@@ -725,9 +1026,11 @@ namespace dnSpy.Contracts.Controls {
 		[DllImport("user32")]
 		static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 		[DllImport("user32")]
-		extern static int GetWindowLong(IntPtr hWnd, int nIndex);
+		static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 		[DllImport("user32")]
-		extern static int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+		static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+		[DllImport("user32")]
+		static extern int EnableMenuItem(IntPtr hMenu, uint uIDEnableItem, uint uEnable);
 
 		internal static void UpdateWin32Style(MetroWindow window) {
 			const int GWL_STYLE = -16;
@@ -740,6 +1043,20 @@ namespace dnSpy.Contracts.Controls {
 			SetWindowLong(hWnd, GWL_STYLE, GetWindowLong(hWnd, GWL_STYLE) & ~WS_SYSMENU);
 		}
 
+		const int SC_SIZE = 61440;
+		const int SC_MOVE = 61456;
+		const int SC_MINIMIZE = 61472;
+		const int SC_MAXIMIZE = 61488;
+		const int SC_RESTORE = 61728;
+
+		const uint MF_ENABLED = 0;
+		const uint MF_GRAYED = 1;
+		const uint MF_DISABLED = 2;
+
+		const int WM_SYSCOMMAND = 274;
+
+		static uint ToMenuFlags(bool enabled) => enabled ? MF_ENABLED : MF_DISABLED | MF_GRAYED;
+
 		internal static void ShowSystemMenu(Window window, Point p) {
 			var hWnd = new WindowInteropHelper(window).Handle;
 			if (hWnd == IntPtr.Zero)
@@ -748,9 +1065,16 @@ namespace dnSpy.Contracts.Controls {
 				return;
 
 			var hMenu = GetSystemMenu(hWnd, false);
+
+			EnableMenuItem(hMenu, SC_RESTORE, ToMenuFlags(window.WindowState != WindowState.Normal));
+			EnableMenuItem(hMenu, SC_MOVE, ToMenuFlags(window.WindowState == WindowState.Normal));
+			EnableMenuItem(hMenu, SC_SIZE, ToMenuFlags(window.WindowState == WindowState.Normal && (window.ResizeMode == ResizeMode.CanResize || window.ResizeMode == ResizeMode.CanResizeWithGrip)));
+			EnableMenuItem(hMenu, SC_MINIMIZE, ToMenuFlags(window.WindowState != WindowState.Minimized && window.ResizeMode != ResizeMode.NoResize));
+			EnableMenuItem(hMenu, SC_MAXIMIZE, ToMenuFlags(window.WindowState != WindowState.Maximized && window.ResizeMode != ResizeMode.NoResize));
+
 			uint res = TrackPopupMenuEx(hMenu, 0x100, (int)p.X, (int)p.Y, hWnd, IntPtr.Zero);
 			if (res != 0)
-				PostMessage(hWnd, 0x112, IntPtr.Size == 4 ? new IntPtr((int)res) : new IntPtr(res), IntPtr.Zero);
+				PostMessage(hWnd, WM_SYSCOMMAND, IntPtr.Size == 4 ? new IntPtr((int)res) : new IntPtr(res), IntPtr.Zero);
 		}
 
 		internal static void SetState(Window window, WindowState state) {

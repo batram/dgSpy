@@ -22,6 +22,7 @@
 
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Xml.Linq;
 using dnlib.DotNet;
@@ -30,16 +31,16 @@ using dnSpy.BamlDecompiler.Xaml;
 using dnSpy.Contracts.Decompiler;
 
 namespace dnSpy.BamlDecompiler {
-	internal class XamlContext {
+	sealed class XamlContext {
 		XamlContext(ModuleDef module) {
 			Module = module;
 			NodeMap = new Dictionary<BamlRecord, BamlBlockNode>();
 			XmlNs = new XmlnsDictionary();
 		}
 
-		Dictionary<ushort, XamlType> typeMap = new Dictionary<ushort, XamlType>();
-		Dictionary<ushort, XamlProperty> propertyMap = new Dictionary<ushort, XamlProperty>();
-		Dictionary<string, XNamespace> xmlnsMap = new Dictionary<string, XNamespace>();
+		readonly Dictionary<ushort, XamlType> typeMap = new Dictionary<ushort, XamlType>();
+		readonly Dictionary<ushort, XamlProperty> propertyMap = new Dictionary<ushort, XamlProperty>();
+		readonly Dictionary<string, XNamespace> xmlnsMap = new Dictionary<string, XNamespace>();
 
 		public ModuleDef Module { get; }
 		public CancellationToken CancellationToken { get; private set; }
@@ -81,20 +82,11 @@ namespace dnSpy.BamlDecompiler {
 
 		void BuildPIMappings(BamlDocument document) {
 			foreach (var record in document) {
-				var piMap = record as PIMappingRecord;
-				if (piMap is null)
+				if (record is not PIMappingRecord piMap)
 					continue;
 
 				XmlNs.SetPIMapping(piMap.XmlNamespace, piMap.ClrNamespace, Baml.ResolveAssembly(piMap.AssemblyId));
 			}
-		}
-
-		class DummyAssemblyRefFinder : IAssemblyRefFinder {
-			readonly IAssembly assemblyDef;
-
-			public DummyAssemblyRefFinder(IAssembly assemblyDef) => this.assemblyDef = assemblyDef;
-
-			public AssemblyRef FindAssemblyRef(TypeRef nonNestedTypeRef) => assemblyDef.ToAssemblyRef();
 		}
 
 		public XamlType ResolveType(ushort id) {
@@ -105,7 +97,7 @@ namespace dnSpy.BamlDecompiler {
 			IAssembly assembly;
 
 			if (id > 0x7fff) {
-				type = Baml.KnownThings.Types((KnownTypes)(-id));
+				type = Baml.KnownThings.Types((KnownTypes)(-id)).TypeDef;
 				assembly = type.DefinitionAssembly;
 			}
 			else {
@@ -114,10 +106,10 @@ namespace dnSpy.BamlDecompiler {
 				type = TypeNameParser.ParseReflectionThrow(Module, typeRec.TypeFullName, new DummyAssemblyRefFinder(assembly));
 			}
 
-			var clrNs = type.ReflectionNamespace;
+			var name = XamlTypeName.From(type, out string clrNs);
 			var xmlNs = XmlNs.LookupXmlns(assembly, clrNs);
 
-			typeMap[id] = xamlType = new XamlType(assembly, clrNs, type.ReflectionName, GetXmlNamespace(xmlNs)) {
+			typeMap[id] = xamlType = new XamlType(assembly, clrNs, name, GetXmlNamespace(xmlNs)) {
 				ResolvedType = type
 			};
 
@@ -131,23 +123,27 @@ namespace dnSpy.BamlDecompiler {
 			XamlType type;
 			string name;
 			IMemberDef member;
+			XamlPropertyKind propertyKind;
 
 			if (id > 0x7fff) {
-				var knownProp = Baml.KnownThings.Members((KnownMembers)(-id));
-				type = ResolveType((ushort)-(short)knownProp.Parent);
+				var knownProp = Baml.KnownThings.Members((KnownMembers)unchecked((short)-(short)id));
+				type = ResolveType(unchecked((ushort)(short)-(short)knownProp.Parent));
 				name = knownProp.Name;
 				member = knownProp.Property;
+				propertyKind = XamlPropertyKind.Default;
 			}
 			else {
 				var attrRec = Baml.AttributeIdMap[id];
 				type = ResolveType(attrRec.OwnerTypeId);
 				name = attrRec.Name;
+				propertyKind = (XamlPropertyKind)attrRec.AttributeUsage;
 
 				member = null;
 			}
 
 			propertyMap[id] = xamlProp = new XamlProperty(type, name) {
-				ResolvedMember = member
+				ResolvedMember = member,
+				PropertyKind = propertyKind
 			};
 			xamlProp.TryResolve();
 
@@ -156,10 +152,9 @@ namespace dnSpy.BamlDecompiler {
 
 		public string ResolveString(ushort id) {
 			if (id > 0x7fff)
-				return Baml.KnownThings.Strings((short)-id);
-			else if (Baml.StringIdMap.ContainsKey(id))
-				return Baml.StringIdMap[id].Value;
-
+				return Baml.KnownThings.Strings(unchecked((short)-id));
+			if (Baml.StringIdMap.TryGetValue(id, out var stringInfo))
+				return stringInfo.Value;
 			return null;
 		}
 
@@ -167,43 +162,56 @@ namespace dnSpy.BamlDecompiler {
 			if (xmlns is null)
 				return null;
 
+			xmlns = IdentifierEscaper.Escape(xmlns);
+
 			if (!xmlnsMap.TryGetValue(xmlns, out var ns))
 				xmlnsMap[xmlns] = ns = XNamespace.Get(xmlns);
 			return ns;
 		}
+
+		public const string KnownNamespace_Xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+		public const string KnownNamespace_Presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+		public const string KnownNamespace_PresentationOptions = "http://schemas.microsoft.com/winfx/2006/xaml/presentation/options";
 
 		public string TryGetXmlNamespace(IAssembly assembly, string typeNamespace) {
 			var asm = assembly as AssemblyDef;
 			if (asm is null)
 				return null;
 
+			var possibleXmlNs = new HashSet<string>();
+
 			foreach (var attr in asm.CustomAttributes.FindAll("System.Windows.Markup.XmlnsDefinitionAttribute")) {
 				Debug.Assert(attr.ConstructorArguments.Count == 2);
 				if (attr.ConstructorArguments.Count != 2)
 					continue;
-				var xmlNs = attr.ConstructorArguments[0].Value as UTF8String;
-				var typeNs = attr.ConstructorArguments[1].Value as UTF8String;
+				var xmlNsValue = attr.ConstructorArguments[0].Value;
+				var typeNsValue = attr.ConstructorArguments[1].Value;
+				var xmlNs = (xmlNsValue as UTF8String)?.String ?? xmlNsValue as string;
+				var typeNs = (typeNsValue as UTF8String)?.String ?? typeNsValue as string;
 				Debug2.Assert(xmlNs is not null && typeNs is not null);
 				if (xmlNs is null || typeNs is null)
 					continue;
 
-				if (typeNamespace == typeNs.String)
-					return xmlNs;
+				if (typeNamespace == typeNs)
+					possibleXmlNs.Add(xmlNs);
 			}
 
-			return null;
+			if (possibleXmlNs.Contains(KnownNamespace_Presentation))
+				return KnownNamespace_Presentation;
+
+			return possibleXmlNs.FirstOrDefault();
 		}
 
-		public XName GetXamlNsName(string name, XElement elem = null) {
-			var xNs = GetXmlNamespace("http://schemas.microsoft.com/winfx/2006/xaml");
+		public XName GetKnownNamespace(string name, string xmlNamespace, XElement context = null) {
+			var xNs = GetXmlNamespace(xmlNamespace);
 			XName xName;
-			if (elem is not null && xNs == elem.GetDefaultNamespace())
+			if (context != null && xNs == context.GetDefaultNamespace())
 				xName = name;
 			else
 				xName = xNs + name;
 			return xName;
 		}
 
-		public XName GetPseudoName(string name) => XNamespace.Get("https://github.com/dnSpy/dnSpy").GetName(name);
+		public XName GetPseudoName(string name) => XNamespace.Get("https://github.com/dnSpyEx/dnSpy").GetName(name);
 	}
 }

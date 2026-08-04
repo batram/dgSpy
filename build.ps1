@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $netframework_tfm = 'net48'
-$net_tfm = 'net5.0-windows'
+$net_tfm = 'net10.0-windows'
 $configuration = 'Release'
 $net_baseoutput = "dnSpy\dnSpy\bin\$configuration"
 $apphostpatcher_dir = "Build\AppHostPatcher"
@@ -17,6 +17,11 @@ $msbuildExe = $null
 if (-not $NoMsbuild) {
 	$msbuildCommand = Get-Command -Name $MSBuildPath -CommandType Application -ErrorAction Stop
 	$msbuildExe = $msbuildCommand.Source
+	if ($msbuildExe -like '*Visual Studio\18\*') {
+		$dotnetVersion = (& dotnet --version).Trim()
+		$env:MSBuildSDKsPath = Join-Path $env:ProgramFiles "dotnet\sdk\$dotnetVersion\Sdks"
+		$env:MSBuildEnableWorkloadResolver = 'false'
+	}
 }
 
 #

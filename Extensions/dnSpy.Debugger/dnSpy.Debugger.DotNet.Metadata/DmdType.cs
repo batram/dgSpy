@@ -165,6 +165,7 @@ namespace dnSpy.Debugger.DotNet.Metadata {
 		public bool IsAutoLayout => (Attributes & DmdTypeAttributes.LayoutMask) == DmdTypeAttributes.AutoLayout;
 		public bool IsLayoutSequential => (Attributes & DmdTypeAttributes.LayoutMask) == DmdTypeAttributes.SequentialLayout;
 		public bool IsExplicitLayout => (Attributes & DmdTypeAttributes.LayoutMask) == DmdTypeAttributes.ExplicitLayout;
+		public bool IsExtendedLayout => (Attributes & DmdTypeAttributes.LayoutMask) == DmdTypeAttributes.ExtendedLayout;
 		public bool IsClass => (Attributes & DmdTypeAttributes.ClassSemanticsMask) == DmdTypeAttributes.Class && !IsValueType;
 		public bool IsInterface => (Attributes & DmdTypeAttributes.ClassSemanticsMask) == DmdTypeAttributes.Interface;
 		public bool IsValueType => BaseType is DmdType baseType && (baseType == AppDomain.System_ValueType ? this != AppDomain.System_Enum : baseType == AppDomain.System_Enum);
@@ -1326,6 +1327,21 @@ namespace dnSpy.Debugger.DotNet.Metadata {
 		/// <param name="target">Target type</param>
 		/// <returns></returns>
 		public bool CanCastTo(Type target) => CanCastTo(DmdTypeUtilities.ToDmdType(target, AppDomain));
+
+		/// <summary>
+		/// Tries to compute the size of the type in bytes
+		/// </summary>
+		/// <param name="size">The size of the type in bytes</param>
+		/// <returns>true if the size was computed successfully, otherwise false</returns>
+		public bool TryGetSize(out int size) {
+			var result = __ComputeTypeSize(this, new GenericArgsStack());
+			if (result is not null) {
+				size = result.Value;
+				return true;
+			}
+			size = 0;
+			return false;
+		}
 
 		internal static HashSet<DmdType> GetAllInterfaces(DmdType type) {
 			DmdType? currentType = type;

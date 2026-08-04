@@ -54,7 +54,15 @@ namespace dnSpy.Contracts.Decompiler {
 		/// </summary>
 		/// <param name="id">Identifier</param>
 		/// <returns></returns>
-		public static string Escape(string? id) => Escape(id, MAX_IDENTIFIER_LENGTH, allowSpaces: false);
+		public static string Escape(string? id) => Escape(id, false);
+
+		/// <summary>
+		/// Escapes an identifier
+		/// </summary>
+		/// <param name="id">Identifier</param>
+		/// <param name="allowSpaces">true to allow spaces</param>
+		/// <returns></returns>
+		public static string Escape(string? id, bool allowSpaces) => Escape(id, MAX_IDENTIFIER_LENGTH, allowSpaces);
 
 		/// <summary>
 		/// Escapes an identifier
@@ -112,9 +120,12 @@ namespace dnSpy.Contracts.Decompiler {
 			switch (char.GetUnicodeCategory(c)) {
 			case UnicodeCategory.UppercaseLetter:
 			case UnicodeCategory.LowercaseLetter:
-			case UnicodeCategory.OtherLetter:
 			case UnicodeCategory.DecimalDigitNumber:
 				return true;
+
+			case UnicodeCategory.OtherLetter:
+				// Don't allow Hangul Filler characters
+				return c != 0x115F && c != 0x1160 && c != 0x3164 && c != 0xFFA0;
 
 			case UnicodeCategory.TitlecaseLetter:
 			case UnicodeCategory.ModifierLetter:

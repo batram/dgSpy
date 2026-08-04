@@ -36,9 +36,9 @@ namespace dgSpy.Extension {
 		async Task<CapturedFrame> CaptureFrameAsync(RpcRequest req,CancellationToken cancellationToken) {
 			var requestedThreadId=(string?)req.Arguments["thread_id"];
 			var frameIndex=Math.Max(0,(int?)req.Arguments["frame_index"] ?? 0);
-			await WaitForDebuggerAsync(()=>manager.IsRunning!=false || manager.Processes.SelectMany(p=>p.Threads).Any(),cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+			await WaitForDebuggerAsync(()=>IsTargetRunning!=false || manager.Processes.SelectMany(p=>p.Threads).Any(),cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
 			var selectedThreadId=await OnDebuggerAsync(()=>{
-				if (manager.IsRunning!=false) throw new RpcException("not_paused","Pause the session before evaluating.");
+				if (IsTargetRunning!=false) throw new RpcException("not_paused","Pause the session before evaluating.");
 				if (!string.IsNullOrEmpty(requestedThreadId)) {
 					var requested=manager.Processes.SelectMany(p=>p.Threads).FirstOrDefault(t=>ThreadId(t)==requestedThreadId)
 						?? throw new RpcException("thread_not_found",$"Thread {requestedThreadId} is not active. Refresh list_threads and use an exact thread_id.");
@@ -47,9 +47,9 @@ namespace dgSpy.Extension {
 				return manager.CurrentThread.Current is null ? "" : ThreadId(manager.CurrentThread.Current);
 			},cancellationToken).ConfigureAwait(false);
 			if (selectedThreadId.Length==0) throw new RpcException("invalid_arguments","No thread is current. Pass thread_id from list_threads.");
-			await WaitForDebuggerAsync(()=>manager.IsRunning!=false || (callStack.Frames.Frames.Count!=0 && ThreadId(callStack.Frames.Frames[0].Thread)==selectedThreadId),cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+			await WaitForDebuggerAsync(()=>IsTargetRunning!=false || (callStack.Frames.Frames.Count!=0 && ThreadId(callStack.Frames.Frames[0].Thread)==selectedThreadId),cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
 			return await OnDebuggerAsync(()=>{
-				if (manager.IsRunning!=false) throw new RpcException("not_paused","Pause the session before evaluating.");
+				if (IsTargetRunning!=false) throw new RpcException("not_paused","Pause the session before evaluating.");
 				var frames=callStack.Frames.Frames.Where(f=>ThreadId(f.Thread)==selectedThreadId).ToArray();
 				if (frameIndex>=frames.Length) throw new RpcException("frame_not_found",$"Thread {selectedThreadId} has no frame at index {frameIndex}. Refresh get_callstack and use an available frame_index.");
 				var frame=frames[frameIndex];

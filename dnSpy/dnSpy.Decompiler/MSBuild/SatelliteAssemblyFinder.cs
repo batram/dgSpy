@@ -22,6 +22,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Xml;
 using dnlib.DotNet;
 
 namespace dnSpy.Decompiler.MSBuild {
@@ -58,7 +59,11 @@ namespace dnSpy.Decompiler.MSBuild {
 				yield break;
 			var baseDirs = new List<string>();
 			baseDirs.Add(baseDir);
-			//TODO: Add all privatePath dirs found in app.config
+
+			string configName = mod.Location + ".config";
+			if (File.Exists(configName))
+				baseDirs.AddRange(GetPrivatePaths(configName));
+
 			foreach (var bd in baseDirs) {
 				foreach (var dir in GetDirectories(bd)) {
 					var name = Path.GetFileName(dir);
@@ -68,6 +73,42 @@ namespace dnSpy.Decompiler.MSBuild {
 					yield return Path.Combine(dir, asm.Name, asm.Name + ".resources.dll");
 				}
 			}
+		}
+
+		static List<string> GetPrivatePaths(string configFileName) {
+			var searchPaths = new List<string>();
+
+			try {
+				string? dirName = Path.GetDirectoryName(Path.GetFullPath(configFileName));
+				if (dirName is null)
+					return searchPaths;
+
+				using (var xmlStream = File.OpenRead(configFileName)) {
+					var doc = new XmlDocument();
+					doc.Load(XmlReader.Create(xmlStream, new XmlReaderSettings { XmlResolver = null }));
+					foreach (object tmp in doc.GetElementsByTagName("probing")) {
+						if (tmp is not XmlElement probingElem)
+							continue;
+						string privatePath = probingElem.GetAttribute("privatePath");
+						if (string.IsNullOrEmpty(privatePath))
+							continue;
+						string[] paths = privatePath.Split(';');
+						for (int i = 0; i < paths.Length; i++) {
+							string path = paths[i].Trim();
+							if (string.IsNullOrEmpty(path))
+								continue;
+							string newPath = Path.GetFullPath(Path.Combine(dirName, path.Replace('\\', Path.DirectorySeparatorChar)));
+							if (Directory.Exists(newPath) && newPath.StartsWith(dirName + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+								searchPaths.Add(newPath);
+						}
+					}
+				}
+			}
+			catch (ArgumentException) { }
+			catch (IOException) { }
+			catch (XmlException) { }
+
+			return searchPaths;
 		}
 
 		string? GetBaseDirectory(AssemblyDef asm, ModuleDef mod) {

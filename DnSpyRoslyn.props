@@ -3,8 +3,7 @@
   <Import Project="DnSpyCommon.props" />
 
   <PropertyGroup>
-    <!-- This fork's build passes TargetFramework globally, so retain both supported host targets. -->
-    <TargetFrameworks>net48;net5.0-windows</TargetFrameworks>
+    <TargetFrameworks>net48;net10.0-windows</TargetFrameworks>
   </PropertyGroup>
 
 </Project>

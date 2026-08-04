@@ -22,6 +22,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Xml;
 using dnlib.DotNet;
 using dnlib.PE;
 using dnSpy.Contracts.DnSpy.Metadata;
@@ -151,6 +152,7 @@ namespace dnSpy.Documents {
 			SelfContainedDotNet,
 			Unity,
 			WindowsUniversal,
+			DotNetStandard,
 		}
 
 		sealed class FrameworkPathInfo {
@@ -183,10 +185,11 @@ namespace dnSpy.Documents {
 		}
 		internal void OnAssembliesCleared() => frameworkInfos = Array.Empty<FrameworkPathInfo>();
 
-		FrameworkKind GetFrameworkKind(ModuleDef? module, out Version? netVersion, out string? sourceModuleDirectoryHint) {
+		FrameworkKind GetFrameworkKind(ModuleDef? module, out Version? netVersion, out string? sourceModuleDirectoryHint, out RuntimeConfigFile? rtConfig) {
 			if (module is null) {
 				netVersion = null;
 				sourceModuleDirectoryHint = null;
+				rtConfig = null;
 				return FrameworkKind.Unknown;
 			}
 
@@ -207,12 +210,18 @@ namespace dnSpy.Documents {
 								info.FrameworkKind = Best(info.FrameworkKind, newFwkKind);
 								if (info.FrameworkKind == FrameworkKind.DotNet && newFwkKind == FrameworkKind.DotNet)
 									info.FrameworkVersion = fwkVersion;
+								if (info.FrameworkKind == FrameworkKind.DotNetStandard && newFwkKind == FrameworkKind.DotNetStandard)
+									info.FrameworkVersion = fwkVersion;
 							}
 						}
-						if (info.FrameworkKind == FrameworkKind.DotNet)
+						if (info.FrameworkKind == FrameworkKind.DotNet || info.FrameworkKind == FrameworkKind.DotNetStandard) {
 							netVersion = info.FrameworkVersion;
-						else
+							rtConfig = RuntimeConfigFile.Read(Path.ChangeExtension(sourceFilename, ".runtimeconfig.json"));
+						}
+						else {
 							netVersion = null;
+							rtConfig = null;
+						}
 						sourceModuleDirectoryHint = info.Directory;
 						return info.FrameworkKind;
 					}
@@ -220,30 +229,35 @@ namespace dnSpy.Documents {
 
 				var fwkKind = GetRuntimeFrameworkKind(sourceFilename, out var frameworkVersion);
 				if (fwkKind != FrameworkKind.Unknown) {
-					if (fwkKind == FrameworkKind.DotNet)
+					if (fwkKind == FrameworkKind.DotNet || fwkKind == FrameworkKind.DotNetStandard)
 						netVersion = frameworkVersion;
 					else
 						netVersion = null;
 					sourceModuleDirectoryHint = null;
+					rtConfig = null;
 					return fwkKind;
 				}
 
 				var fwkInfo = new FrameworkPathInfo(Path.GetDirectoryName(sourceFilename)!);
-				fwkInfo.FrameworkKind = GetFrameworkKind_Directory(fwkInfo.Directory, out fwkVersion);
+				fwkInfo.FrameworkKind = GetFrameworkKind_RuntimeConfig(module, out rtConfig, out fwkVersion);
 				fwkInfo.FrameworkVersion = fwkVersion;
 				if (fwkInfo.FrameworkKind == FrameworkKind.Unknown) {
-					fwkInfo.FrameworkKind = GetFrameworkKind_TargetFrameworkAttribute(module, out var frameworkName, out fwkVersion);
+					fwkInfo.FrameworkKind = GetFrameworkKind_Directory(fwkInfo.Directory, out fwkVersion);
 					fwkInfo.FrameworkVersion = fwkVersion;
 					if (fwkInfo.FrameworkKind == FrameworkKind.Unknown) {
-						fwkInfo.FrameworkKind = GetFrameworkKind_AssemblyRefs(module, frameworkName, out fwkVersion);
+						fwkInfo.FrameworkKind = GetFrameworkKind_TargetFrameworkAttribute(module, out var frameworkName, out fwkVersion);
 						fwkInfo.FrameworkVersion = fwkVersion;
+						if (fwkInfo.FrameworkKind == FrameworkKind.Unknown) {
+							fwkInfo.FrameworkKind = GetFrameworkKind_AssemblyRefs(module, frameworkName, out fwkVersion);
+							fwkInfo.FrameworkVersion = fwkVersion;
+						}
 					}
 				}
 				if (fwkInfo.FrameworkKind == FrameworkKind.Unknown)
 					fwkInfo.FrameworkVersion = null;
 				fwkInfo.Frozen = isExe;
 				fwkInfo = Add(fwkInfo);
-				if (fwkInfo.FrameworkKind == FrameworkKind.DotNet)
+				if (fwkInfo.FrameworkKind == FrameworkKind.DotNet || fwkInfo.FrameworkKind == FrameworkKind.DotNetStandard)
 					netVersion = fwkInfo.FrameworkVersion;
 				else
 					netVersion = null;
@@ -253,6 +267,7 @@ namespace dnSpy.Documents {
 
 			netVersion = null;
 			sourceModuleDirectoryHint = null;
+			rtConfig = null;
 			return FrameworkKind.Unknown;
 		}
 
@@ -269,6 +284,8 @@ namespace dnSpy.Documents {
 				return FrameworkKind.DotNetFramework4;
 			if (a == FrameworkKind.DotNetFramework2 || b == FrameworkKind.DotNetFramework2)
 				return FrameworkKind.DotNetFramework2;
+			if (a == FrameworkKind.DotNetStandard || b == FrameworkKind.DotNetStandard)
+				return FrameworkKind.DotNetStandard;
 			Debug.Assert(a == FrameworkKind.Unknown && b == FrameworkKind.Unknown);
 			return FrameworkKind.Unknown;
 		}
@@ -290,6 +307,36 @@ namespace dnSpy.Documents {
 			return FrameworkKind.Unknown;
 		}
 
+		static FrameworkKind GetFrameworkKind_RuntimeConfig(ModuleDef module, out RuntimeConfigFile? rtConfig, out Version? version) {
+			rtConfig = RuntimeConfigFile.Read(Path.ChangeExtension(module.Location, ".runtimeconfig.json"));
+			if (rtConfig is null) {
+				version = null;
+				return FrameworkKind.Unknown;
+			}
+
+			// If no frameworks are mentioned, this is a self-contained application.
+			if (rtConfig.Frameworks.Count == 0) {
+				version = null;
+				return FrameworkKind.SelfContainedDotNet;
+			}
+
+			if (rtConfig.TargetFrameworkMoniker is not null) {
+				var fwkKind = ParseTargetFrameworkMoniker(rtConfig.TargetFrameworkMoniker, out var fwkVersion);
+				if (fwkKind != FrameworkKind.Unknown) {
+					version = fwkVersion;
+					return fwkKind;
+				}
+			}
+
+			if (rtConfig.IncludedFrameworks.Count > 0) {
+				version = null;
+				return FrameworkKind.SelfContainedDotNet;
+			}
+
+			version = null;
+			return FrameworkKind.Unknown;
+		}
+
 		static FrameworkKind GetFrameworkKind_Directory(string directory, out Version? version) {
 			if (File.Exists(Path.Combine(directory, UnityEngineFilename))) {
 				version = null;
@@ -303,12 +350,19 @@ namespace dnSpy.Documents {
 			// Could be a runtime sub dir, eg. "<basedir>\runtimes\unix\lib\netcoreapp2.0". These assemblies
 			// don't always have a TFM attribute.
 			// Could also be the compilation output directory.
-			var dirName = Path.GetFileName(directory);
-			if (TryParseVersion("netcoreapp", dirName, out var fwkVersion)) {
+			return ParseTargetFrameworkMoniker(Path.GetFileName(directory), out version);
+		}
+
+		static FrameworkKind ParseTargetFrameworkMoniker(string tfm, out Version? version) {
+			if (TryParseVersion("netcoreapp", tfm, out var fwkVersion) || TryParseVersion("net", tfm, out fwkVersion)) {
 				version = fwkVersion;
 				return FrameworkKind.DotNet;
 			}
-			else if (TryParseNetFrameworkVersion("net", dirName, out fwkVersion)) {
+			if (TryParseVersion("netstandard", tfm, out fwkVersion)) {
+				version = fwkVersion;
+				return FrameworkKind.DotNetStandard;
+			}
+			if (TryParseNetFrameworkVersion("net", tfm, out fwkVersion)) {
 				version = fwkVersion;
 				return version.Major < 4 ? FrameworkKind.DotNetFramework2 : FrameworkKind.DotNetFramework4;
 			}
@@ -318,12 +372,15 @@ namespace dnSpy.Documents {
 		}
 
 		static bool TryParseVersion(string prefix, string tfm, [NotNullWhen(true)] out Version? version) {
-			if (!tfm.StartsWith(prefix)) {
+			if (!tfm.StartsWith(prefix, StringComparison.Ordinal)) {
 				version = null;
 				return false;
 			}
 
-			var verStr = tfm.Substring(prefix.Length);
+			// Strip prefix and platform name, e.g. 'net10.0-windows' => '10.0'
+			int dashIndex = tfm.IndexOf('-');
+			var verStr = dashIndex == -1 ? tfm.Substring(prefix.Length) : tfm.Substring(prefix.Length, dashIndex - prefix.Length);
+
 			if (Version.TryParse(verStr, out var v)) {
 				version = new Version(v.Major, v.Minor, v.Build < 0 ? 0 : v.Build, v.Revision < 0 ? 0 : v.Revision);
 				return true;
@@ -334,7 +391,7 @@ namespace dnSpy.Documents {
 		}
 
 		static bool TryParseNetFrameworkVersion(string prefix, string tfm, [NotNullWhen(true)] out Version? version) {
-			if (!tfm.StartsWith(prefix)) {
+			if (!tfm.StartsWith(prefix, StringComparison.Ordinal)) {
 				version = null;
 				return false;
 			}
@@ -359,7 +416,7 @@ namespace dnSpy.Documents {
 			return false;
 		}
 
-		FrameworkKind GetFrameworkKind_TargetFrameworkAttribute(ModuleDef module, out string? frameworkName, out Version? version) {
+		static FrameworkKind GetFrameworkKind_TargetFrameworkAttribute(ModuleDef module, out string? frameworkName, out Version? version) {
 			var asm = module.Assembly;
 			if (asm is not null && asm.TryGetOriginalTargetFrameworkAttribute(out frameworkName, out version, out _)) {
 				if (frameworkName == TFM_netframework)
@@ -368,8 +425,8 @@ namespace dnSpy.Documents {
 					return FrameworkKind.DotNet;
 				if (frameworkName == TFM_uwp)
 					return FrameworkKind.WindowsUniversal;
-				if (!dotNetPathProvider.HasDotNet && frameworkName == TFM_netstandard)
-					return FrameworkKind.DotNetFramework4;
+				if (frameworkName == TFM_netstandard)
+					return FrameworkKind.DotNetStandard;
 				return FrameworkKind.Unknown;
 			}
 
@@ -378,7 +435,7 @@ namespace dnSpy.Documents {
 			return FrameworkKind.Unknown;
 		}
 
-		FrameworkKind GetFrameworkKind_AssemblyRefs(ModuleDef module, string? frameworkName, out Version? version) {
+		static FrameworkKind GetFrameworkKind_AssemblyRefs(ModuleDef module, string? frameworkName, out Version? version) {
 			AssemblyRef? mscorlibRef = null;
 			AssemblyRef? systemRuntimeRef = null;
 			// ASP.NET Core *.Views assemblies don't have a TFM attribute, so grab the .NET version from an ASP.NET Core asm ref
@@ -396,12 +453,8 @@ namespace dnSpy.Documents {
 						systemRuntimeRef = asmRef;
 				}
 				else if (name == netstandardName) {
-					if (!dotNetPathProvider.HasDotNet) {
-						version = null;
-						return FrameworkKind.DotNetFramework4;
-					}
-					version = null;
-					return FrameworkKind.Unknown;
+					version = asmRef.Version;
+					return FrameworkKind.DotNetStandard;
 				}
 				else if (StartsWith(name, aspNetCoreName)) {
 					if (aspNetCoreRef is null || asmRef.Version > aspNetCoreRef.Version)
@@ -417,6 +470,7 @@ namespace dnSpy.Documents {
 				//		2.1: System.Runtime, Version=4.2.1.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
 				//		2.2: System.Runtime, Version=4.2.1.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
 				//		3.0: System.Runtime, Version=4.2.1.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
+				//		3.1: System.Runtime, Version=4.2.2.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
 				// - .NET Standard:
 				//		1.0: System.Runtime, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
 				//		1.1: System.Runtime, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
@@ -425,19 +479,33 @@ namespace dnSpy.Documents {
 				//		1.4: System.Runtime, Version=4.0.20.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
 				//		1.5: System.Runtime, Version=4.1.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
 				//		2.0: <it has no System.Runtime ref, just a netstandard.dll ref>
+				//		2.1: <it has no System.Runtime ref, just a netstandard.dll ref>
+				// - .NET:
+				//		5.0: System.Runtime, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
+				//		6.0: System.Runtime, Version=6.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
+				//		7.0: System.Runtime, Version=7.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
+				//		...
 				if (frameworkName != TFM_netstandard) {
-					if (module.IsClr40Exactly && systemRuntimeRef.Version >= minSystemRuntimeNetCoreVersion) {
+					var systemRuntimeVersion = systemRuntimeRef.Version;
+					if (module.IsClr40Exactly && systemRuntimeVersion >= minSystemRuntimeNetCoreVersion) {
 						version = aspNetCoreRef?.Version;
 						if (version is null) {
 							// .NET Core 1.0 or 1.1
-							if (systemRuntimeRef.Version == version_4_1_0_0)
-								version = new Version(1, 0, 0, 0);
+							if (systemRuntimeVersion == version_4_1_0_0)
+								version = version_1_0_0_0;
 							// .NET Core 2.0
-							else if (systemRuntimeRef.Version == version_4_2_0_0)
-								version = new Version(2, 0, 0, 0);
+							else if (systemRuntimeVersion== version_4_2_0_0)
+								version = version_2_0_0_0;
 							// .NET Core 2.1, 2.2 or 3.0
-							else if (systemRuntimeRef.Version == version_4_2_1_0)
-								version = new Version(2, 1, 0, 0);
+							else if (systemRuntimeVersion == version_4_2_1_0)
+								version = version_2_1_0_0;
+							// .NET Core 3.1
+							else if (systemRuntimeVersion == version_4_2_2_0)
+								version = version_3_1_0_0;
+							// .NET 5+
+							else if (systemRuntimeVersion.Major >= 5 && systemRuntimeVersion.Minor == 0 &&
+									 systemRuntimeVersion.Build == 0 && systemRuntimeVersion.Revision == 0)
+								version = systemRuntimeRef.Version;
 							else
 								Debug.Fail("Unknown .NET Core version");
 						}
@@ -464,14 +532,21 @@ namespace dnSpy.Documents {
 
 			return FrameworkKind.Unknown;
 		}
+
+		// Cached version instances to prevent allocations
+		static readonly Version version_1_0_0_0 = new Version(1, 0, 0, 0);
+		static readonly Version version_2_0_0_0 = new Version(2, 0, 0, 0);
+		static readonly Version version_2_1_0_0 = new Version(2, 1, 0, 0);
+		static readonly Version version_3_1_0_0 = new Version(3, 1, 0, 0);
 		static readonly Version version_4_1_0_0 = new Version(4, 1, 0, 0);
 		static readonly Version version_4_2_0_0 = new Version(4, 2, 0, 0);
 		static readonly Version version_4_2_1_0 = new Version(4, 2, 1, 0);
+		static readonly Version version_4_2_2_0 = new Version(4, 2, 2, 0);
 
 		// Silverlight uses 5.0.5.0
-		static bool IsValidMscorlibVersion(Version version) => version is not null && (uint)version.Major <= 5;
+		static bool IsValidMscorlibVersion(Version? version) => version is not null && (uint)version.Major <= 5;
 
-		static bool StartsWith(UTF8String s, UTF8String value) {
+		static bool StartsWith(UTF8String? s, UTF8String? value) {
 			var d = s?.Data;
 			var vd = value?.Data;
 			if (d is null || vd is null)
@@ -485,20 +560,33 @@ namespace dnSpy.Documents {
 			return true;
 		}
 
+		static readonly char[] invalidFileNameChars = Path.GetInvalidFileNameChars();
+
 		IDsDocument? ResolveNormal(IAssembly assembly, ModuleDef? sourceModule) {
-			var fwkKind = GetFrameworkKind(sourceModule, out var netVersion, out var sourceModuleDirectoryHint);
-			if (fwkKind == FrameworkKind.DotNet && !dotNetPathProvider.HasDotNet)
+			var fwkKind = GetFrameworkKind(sourceModule, out var netVersion, out var sourceModuleDirectoryHint, out var rtConfig);
+			if ((fwkKind == FrameworkKind.DotNet || fwkKind == FrameworkKind.DotNetStandard) && !dotNetPathProvider.HasDotNet)
 				fwkKind = FrameworkKind.DotNetFramework4;
+			if (fwkKind == FrameworkKind.DotNetStandard) {
+				if (netVersion is not null &&
+					dotNetPathProvider.TryGetClosestNetStandardCompatibleVersion(netVersion, out var coreVersion))
+					netVersion = coreVersion;
+				else {
+					fwkKind = FrameworkKind.DotNetFramework4;
+					netVersion = null;
+				}
+			}
 			bool loaded;
 			IDsDocument? document;
 			IDsDocument? existingDocument;
 			FindAssemblyOptions options;
+			bool isValidFilename;
 			switch (fwkKind) {
 			case FrameworkKind.Unknown:
 			case FrameworkKind.DotNetFramework2:
 			case FrameworkKind.DotNetFramework4:
+			case FrameworkKind.DotNetStandard:
 				int gacVersion;
-				if (!GacInfo.HasGAC2)
+				if (fwkKind == FrameworkKind.DotNetFramework2 && !GacInfo.HasGAC2)
 					fwkKind = FrameworkKind.DotNetFramework4;
 				bool redirected;
 				IAssembly tempAsm;
@@ -515,7 +603,7 @@ namespace dnSpy.Documents {
 					gacVersion = 2;
 				}
 				else {
-					Debug.Assert(fwkKind == FrameworkKind.Unknown);
+					Debug.Assert(fwkKind == FrameworkKind.Unknown || fwkKind == FrameworkKind.DotNetStandard);
 					redirected = FrameworkRedirect.TryApplyFrameworkRedirect(assembly, sourceModule, out tempAsm);
 					// OK : System.Runtime 4.0.20.0 => 4.0.0.0
 					// KO : System 4.0.0.0 => 2.0.0.0
@@ -539,27 +627,30 @@ namespace dnSpy.Documents {
 				if (existingDocument is not null)
 					return existingDocument;
 
-				(document, loaded) = LookupFromSearchPaths(assembly, sourceModule, sourceModuleDirectoryHint, netVersion);
-				if (document is not null)
-					return documentService.GetOrAddCanDispose(document, assembly, loaded);
-
-				var gacFile = GacInfo.FindInGac(assembly, gacVersion);
-				if (gacFile is not null)
-					return documentService.TryGetOrCreateInternal(DsDocumentInfo.CreateDocument(gacFile), true, true);
-				foreach (var gacPath in GacInfo.OtherGacPaths) {
-					if (gacVersion == 4) {
-						if (gacPath.Version != GacVersion.V4)
-							continue;
-					}
-					else if (gacVersion == 2) {
-						if (gacPath.Version != GacVersion.V2)
-							continue;
-					}
-					else
-						Debug.Assert(gacVersion == -1);
-					document = TryLoadFromDir(assembly, checkVersion: true, checkPublicKeyToken: true, gacPath.Path);
+				isValidFilename = assembly.Name.String?.IndexOfAny(invalidFileNameChars) < 0;
+				if (isValidFilename) {
+					(document, loaded) = LookupFromSearchPaths(assembly, sourceModule, sourceModuleDirectoryHint, netVersion, rtConfig);
 					if (document is not null)
-						return documentService.GetOrAddCanDispose(document, assembly, isAutoLoaded: true);
+						return documentService.GetOrAddCanDispose(document, assembly, loaded);
+
+					var gacFile = GacInfo.FindInGac(assembly, gacVersion);
+					if (gacFile is not null)
+						return documentService.TryGetOrCreateInternal(DsDocumentInfo.CreateDocument(gacFile), true, true);
+					foreach (var gacPath in GacInfo.OtherGacPaths) {
+						if (gacVersion == 4) {
+							if (gacPath.Version != GacVersion.V4)
+								continue;
+						}
+						else if (gacVersion == 2) {
+							if (gacPath.Version != GacVersion.V2)
+								continue;
+						}
+						else
+							Debug.Assert(gacVersion == -1);
+						document = TryLoadFromDir(assembly, checkVersion: true, checkPublicKeyToken: true, gacPath.Path);
+						if (document is not null)
+							return documentService.GetOrAddCanDispose(document, assembly, isAutoLoaded: true);
+					}
 				}
 				break;
 
@@ -571,12 +662,15 @@ namespace dnSpy.Documents {
 				if (document is not null)
 					return document;
 
-				// If it's a self-contained .NET app, we don't need the version since we must only search
-				// the current directory.
-				Debug2.Assert(fwkKind == FrameworkKind.DotNet || netVersion is null);
-				(document, loaded) = LookupFromSearchPaths(assembly, sourceModule, sourceModuleDirectoryHint, netVersion);
-				if (document is not null)
-					return documentService.GetOrAddCanDispose(document, assembly, loaded);
+				isValidFilename = assembly.Name.String?.IndexOfAny(invalidFileNameChars) < 0;
+				if (isValidFilename) {
+					// If it's a self-contained .NET app, we don't need the version since we must only search
+					// the current directory.
+					Debug2.Assert(fwkKind == FrameworkKind.DotNet || netVersion is null);
+					(document, loaded) = LookupFromSearchPaths(assembly, sourceModule, sourceModuleDirectoryHint, netVersion, rtConfig);
+					if (document is not null)
+						return documentService.GetOrAddCanDispose(document, assembly, loaded);
+				}
 
 				// If it already exists in assembly explorer, use it
 				options = DsDocumentService.DefaultOptions;
@@ -600,6 +694,7 @@ namespace dnSpy.Documents {
 			case FrameworkKind.Unknown:
 			case FrameworkKind.DotNetFramework2:
 			case FrameworkKind.DotNetFramework4:
+			case FrameworkKind.DotNetStandard:
 				return false;
 
 			case FrameworkKind.DotNet:
@@ -613,7 +708,7 @@ namespace dnSpy.Documents {
 			}
 		}
 
-		(IDsDocument? document, bool loaded) LookupFromSearchPaths(IAssembly asmName, ModuleDef? sourceModule, string? sourceModuleDir, Version? dotNetCoreAppVersion) {
+		(IDsDocument? document, bool loaded) LookupFromSearchPaths(IAssembly asmName, ModuleDef? sourceModule, string? sourceModuleDir, Version? dotNetCoreAppVersion, RuntimeConfigFile? rtConfig) {
 			IDsDocument? document;
 			if (sourceModuleDir is null && sourceModule is not null && !string2.IsNullOrEmpty(sourceModule.Location)) {
 				try {
@@ -632,12 +727,25 @@ namespace dnSpy.Documents {
 			}
 
 			string[]? dotNetPaths;
+			List<string>? configProbePaths;
 			if (dotNetCoreAppVersion is not null) {
 				int bitness = (sourceModule?.GetPointerSize(IntPtr.Size) ?? IntPtr.Size) * 8;
-				dotNetPaths = dotNetPathProvider.TryGetDotNetPaths(dotNetCoreAppVersion, bitness);
+				dotNetPaths = dotNetPathProvider.TryGetSharedDotNetPaths(dotNetCoreAppVersion, bitness);
+				configProbePaths = rtConfig?.AdditionalProbingPaths;
 			}
-			else
+			else {
 				dotNetPaths = null;
+				configProbePaths = GetAppConfigProbePaths(sourceModule, sourceModuleDir);
+			}
+
+			if (configProbePaths is not null) {
+				foreach (var path in configProbePaths) {
+					document = TryFindFromDir(asmName, dirPath: path);
+					if (document is not null)
+						return (document, false);
+				}
+			}
+
 			if (dotNetPaths is not null) {
 				foreach (var path in dotNetPaths) {
 					document = TryFindFromDir(asmName, dirPath: path);
@@ -651,6 +759,7 @@ namespace dnSpy.Documents {
 				if (document is not null)
 					return (document, true);
 			}
+
 			if (dotNetPaths is not null) {
 				foreach (var path in dotNetPaths) {
 					document = TryLoadFromDir(asmName, checkVersion: false, checkPublicKeyToken: false, dirPath: path);
@@ -660,6 +769,52 @@ namespace dnSpy.Documents {
 			}
 
 			return default;
+		}
+
+		static List<string>? GetAppConfigProbePaths(ModuleDef? module, string? sourceModuleDir) {
+			var imageName = module?.Assembly?.ManifestModule?.Location;
+			if (string2.IsNullOrEmpty(imageName) || string2.IsNullOrEmpty(sourceModuleDir))
+				return null;
+
+			var configName = imageName + ".config";
+			if (!File.Exists(configName))
+				return null;
+
+			try {
+				using (var xmlStream = File.OpenRead(configName)) {
+					var doc = new XmlDocument();
+					doc.Load(XmlReader.Create(xmlStream, new XmlReaderSettings { XmlResolver = null }));
+
+					var searchPaths = new List<string>();
+
+					foreach (var tmp in doc.GetElementsByTagName("probing")) {
+						if (tmp is not XmlElement probingElem)
+							continue;
+						var privatePath = probingElem.GetAttribute("privatePath");
+						if (string2.IsNullOrEmpty(privatePath))
+							continue;
+						string[] paths = privatePath.Split(';');
+						for (int i = 0; i < paths.Length; i++) {
+							var path = paths[i].Trim();
+							if (string2.IsNullOrEmpty(path))
+								continue;
+							var newPath = Path.GetFullPath(Path.Combine(sourceModuleDir, path));
+							if (Directory.Exists(newPath) && FileUtils.IsFileInDir(sourceModuleDir, newPath))
+								searchPaths.Add(newPath);
+						}
+					}
+
+					return searchPaths;
+				}
+			}
+			catch (ArgumentException) {
+			}
+			catch (IOException) {
+			}
+			catch (XmlException) {
+			}
+
+			return null;
 		}
 
 		IDsDocument? TryFindFromDir(IAssembly asmName, string dirPath) {
@@ -716,16 +871,14 @@ namespace dnSpy.Documents {
 			}
 			finally {
 				if (error) {
-					if (document is IDisposable)
-						((IDisposable)document).Dispose();
+					if (document is IDisposable disposable)
+						disposable.Dispose();
 				}
 			}
 		}
 
 		IDsDocument? ResolveWinMD(IAssembly assembly, ModuleDef? sourceModule) {
-			IDsDocument? document;
-
-			document = TryRuntimeAssemblyResolvers(assembly, sourceModule);
+			var document = TryRuntimeAssemblyResolvers(assembly, sourceModule);
 			if (document is not null)
 				return document;
 

@@ -35,7 +35,7 @@ namespace dgSpy.Extension {
 			var completion=new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
 			var threadId=await OnDebuggerAsync(()=>{
 				CheckVersion(req);
-				if (manager.IsRunning!=false) throw new RpcException("not_paused","Pause the session before stepping.");
+				if (IsTargetRunning!=false) throw new RpcException("not_paused","Pause the session before stepping.");
 				var all=manager.Processes.SelectMany(p=>p.Threads).ToArray();
 				DbgThread? thread;
 				if (!string.IsNullOrEmpty(requestedThreadId)) {

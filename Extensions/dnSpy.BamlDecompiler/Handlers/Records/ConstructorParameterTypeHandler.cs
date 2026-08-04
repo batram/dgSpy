@@ -25,13 +25,13 @@ using dnSpy.BamlDecompiler.Baml;
 using dnSpy.BamlDecompiler.Xaml;
 
 namespace dnSpy.BamlDecompiler.Handlers {
-	internal class ConstructorParameterTypeHandler : IHandler {
+	sealed class ConstructorParameterTypeHandler : IHandler {
 		public BamlRecordType Type => BamlRecordType.ConstructorParameterType;
 
 		public BamlElement Translate(XamlContext ctx, BamlNode node, BamlElement parent) {
 			var record = (ConstructorParameterTypeRecord)((BamlRecordNode)node).Record;
 
-			var elem = new XElement(ctx.GetXamlNsName("TypeExtension", parent.Xaml));
+			var elem = new XElement(ctx.GetKnownNamespace("TypeExtension", XamlContext.KnownNamespace_Xaml, parent.Xaml));
 			elem.AddAnnotation(ctx.ResolveType(0xfd4d)); // Known type - TypeExtension
 
 			var bamlElem = new BamlElement(node);
@@ -39,8 +39,8 @@ namespace dnSpy.BamlDecompiler.Handlers {
 			parent.Xaml.Element.Add(elem);
 
 			var type = ctx.ResolveType(record.TypeId);
-			var typeName = ctx.ToString(parent.Xaml, type);
-			elem.Add(new XElement(ctx.GetPseudoName("Ctor"), typeName));
+			var typeName = type.ToMarkupExtensionName(ctx, parent.Xaml);
+			elem.Add(new XElement(ctx.GetPseudoName("Ctor"), new XText(typeName).WithAnnotation(IsMemberNameAnnotation.Instance)));
 
 			return bamlElem;
 		}

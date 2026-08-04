@@ -1277,6 +1277,8 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl.Evaluation {
 			return false;
 		}
 
+		public DbgDotNetValue? GetObjectValueAtAddress(DbgEvaluationInfo evalInfo, ulong address) => null;
+
 		protected override void CloseCore(DbgDispatcher dispatcher) { }
 	}
 }

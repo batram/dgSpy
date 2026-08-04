@@ -86,6 +86,8 @@ required checks passed with no accepted behavior changes and unchanged capabilit
 
 ## Roslyn 5.6 evaluator slice accepted 2026-08-04
 
+This records the section 2.5 boundary before the later section 2.6 host adoption below.
+
 The accepted source baseline is dnSpyEx `3f4caa4f`, with dependency update `1ee406cbd`,
 `Roslyn.ExpressionCompiler` `e127e791` (5.6 source import `6e759dc` from Roslyn `c0573ed0`), and the
 debugger custom-type-information contract from `f92d13a19`. The full `dnSpy/Roslyn` integration was
@@ -131,3 +133,43 @@ Accepted evidence:
 Capability and MCP tool snapshots remained unchanged. The accepted slice therefore changes evaluator
 implementation and type-information fidelity without changing advertised engine behavior or wire
 contracts.
+
+## dnSpyEx 6.6 host adopted 2026-08-04
+
+The permanent host baseline is dnSpyEx snapshot `3f4caa4f`. Its coordinated host, contracts, UI,
+decompiler, CorDebug, package, and submodule updates are adopted together, with `net48` and
+`net10.0-windows` as supported host targets. The net48 build preserves dgSpy extension compatibility;
+the self-contained net10 x64 publish proves the modern host target.
+
+The following proven fork boundaries remain intentional:
+
+- dgSpy's headless window-activation integration and extension sources;
+- `Mono.Debugger.Soft` `888ded0f`, including bounded three-second frame retrieval;
+- the pre-adoption Mono engine and shared-debugger orchestration, with only required dnSpyEx contract
+  and API adaptations; and
+- engine-specific dgSpy running-state handling: CorDebug uses selected/per-process state, while
+  endpoint Mono retains manager aggregate state because its process flag can lag after a stop.
+
+The aligned Mono library `d12451c` failed two 45-check Unity attempts at AppDomain unload. A later trial
+of newer Mono engine/shared-debugger internals reproducibly failed seven Phase 8 checks after resume.
+A generic per-process running-state adaptation reproduced those seven failures; making it CorDebug-only
+restored Unity without losing CorDebug's running-target safety check.
+
+Accepted evidence:
+
+```powershell
+.\tests\run-modernization-gate.ps1 -Stage Shared
+# net48 host; Protocol 29, Gateway 184, Extension 18
+
+.\build.ps1 net-x64 -NoMsbuild
+# self-contained net10.0-windows x64 publish
+
+.\tests\run-modernization-gate.ps1 -Stage CorDebug -SkipHostBuild
+# 368 checks
+
+.\tests\run-modernization-gate.ps1 -Stage Unity -SkipHostBuild
+# 15 checks
+
+.\tests\run-uch-phase8.ps1  # isolated host on port 7351
+# 45 checks
+```

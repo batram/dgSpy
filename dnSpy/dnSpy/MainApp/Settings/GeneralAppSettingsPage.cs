@@ -43,9 +43,10 @@ namespace dnSpy.MainApp.Settings {
 		readonly IDsDocumentServiceSettings documentServiceSettings;
 		readonly AppSettingsImpl appSettings;
 		readonly MessageBoxService messageBoxService;
+		readonly IUpdateService updateService;
 
 		[ImportingConstructor]
-		GeneralAppSettingsPageProvider(IThemeServiceImpl themeService, IWindowsExplorerIntegrationService windowsExplorerIntegrationService, IDocumentTabServiceSettings documentTabServiceSettings, DocumentTreeViewSettingsImpl documentTreeViewSettings, IDsDocumentServiceSettings documentServiceSettings, AppSettingsImpl appSettings, MessageBoxService messageBoxService) {
+		GeneralAppSettingsPageProvider(IThemeServiceImpl themeService, IWindowsExplorerIntegrationService windowsExplorerIntegrationService, IDocumentTabServiceSettings documentTabServiceSettings, DocumentTreeViewSettingsImpl documentTreeViewSettings, IDsDocumentServiceSettings documentServiceSettings, AppSettingsImpl appSettings, MessageBoxService messageBoxService, IUpdateService updateService) {
 			this.themeService = themeService;
 			this.windowsExplorerIntegrationService = windowsExplorerIntegrationService;
 			this.documentTabServiceSettings = documentTabServiceSettings;
@@ -53,10 +54,11 @@ namespace dnSpy.MainApp.Settings {
 			this.documentServiceSettings = documentServiceSettings;
 			this.appSettings = appSettings;
 			this.messageBoxService = messageBoxService;
+			this.updateService = updateService;
 		}
 
 		public IEnumerable<AppSettingsPage> Create() {
-			yield return new GeneralAppSettingsPage(themeService, windowsExplorerIntegrationService, documentTabServiceSettings, documentTreeViewSettings, documentServiceSettings, appSettings, messageBoxService);
+			yield return new GeneralAppSettingsPage(themeService, windowsExplorerIntegrationService, documentTabServiceSettings, documentTreeViewSettings, documentServiceSettings, appSettings, messageBoxService, updateService);
 		}
 	}
 
@@ -74,8 +76,10 @@ namespace dnSpy.MainApp.Settings {
 		readonly IDsDocumentServiceSettings documentServiceSettings;
 		readonly AppSettingsImpl appSettings;
 		readonly MessageBoxService messageBoxService;
+		readonly IUpdateService updateService;
 
 		public ICommand ClearAllWarningsCommand => new RelayCommand(a => messageBoxService.EnableAllWarnings(), a => messageBoxService.CanEnableAllWarnings);
+		public ICommand ResetIgnoredUpdatesCommand => new RelayCommand(a => updateService.ResetIgnoredUpdates(), a => updateService.CanResetIgnoredUpdates);
 
 		public ObservableCollection<ThemeVM> ThemesVM { get; }
 
@@ -134,17 +138,6 @@ namespace dnSpy.MainApp.Settings {
 		}
 		bool restoreTabs;
 
-		public bool DeserializeResources {
-			get => deserializeResources;
-			set {
-				if (deserializeResources != value) {
-					deserializeResources = value;
-					OnPropertyChanged(nameof(DeserializeResources));
-				}
-			}
-		}
-		bool deserializeResources;
-
 		public bool UseMemoryMappedIO {
 			get => useMemoryMappedIO;
 			set {
@@ -156,7 +149,18 @@ namespace dnSpy.MainApp.Settings {
 		}
 		bool useMemoryMappedIO;
 
-		public GeneralAppSettingsPage(IThemeServiceImpl themeService, IWindowsExplorerIntegrationService windowsExplorerIntegrationService, IDocumentTabServiceSettings documentTabServiceSettings, DocumentTreeViewSettingsImpl documentTreeViewSettings, IDsDocumentServiceSettings documentServiceSettings, AppSettingsImpl appSettings, MessageBoxService messageBoxService) {
+		public bool CheckForUpdateOnStartup {
+			get => checkForUpdateOnStartup;
+			set {
+				if (checkForUpdateOnStartup != value) {
+					checkForUpdateOnStartup = value;
+					OnPropertyChanged(nameof(CheckForUpdateOnStartup));
+				}
+			}
+		}
+		bool checkForUpdateOnStartup;
+
+		public GeneralAppSettingsPage(IThemeServiceImpl themeService, IWindowsExplorerIntegrationService windowsExplorerIntegrationService, IDocumentTabServiceSettings documentTabServiceSettings, DocumentTreeViewSettingsImpl documentTreeViewSettings, IDsDocumentServiceSettings documentServiceSettings, AppSettingsImpl appSettings, MessageBoxService messageBoxService, IUpdateService updateService) {
 			this.themeService = themeService ?? throw new ArgumentNullException(nameof(themeService));
 			this.windowsExplorerIntegrationService = windowsExplorerIntegrationService ?? throw new ArgumentNullException(nameof(windowsExplorerIntegrationService));
 			this.documentTabServiceSettings = documentTabServiceSettings ?? throw new ArgumentNullException(nameof(documentTabServiceSettings));
@@ -164,6 +168,7 @@ namespace dnSpy.MainApp.Settings {
 			this.documentServiceSettings = documentServiceSettings ?? throw new ArgumentNullException(nameof(documentServiceSettings));
 			this.appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
 			this.messageBoxService = messageBoxService ?? throw new ArgumentNullException(nameof(messageBoxService));
+			this.updateService = updateService ?? throw new ArgumentNullException(nameof(updateService));
 
 			ThemesVM = new ObservableCollection<ThemeVM>(themeService.VisibleThemes.Select(a => new ThemeVM(a)));
 			if (!ThemesVM.Any(a => a.Theme == themeService.Theme))
@@ -175,8 +180,8 @@ namespace dnSpy.MainApp.Settings {
 			AllowMoreThanOneInstance = appSettings.AllowMoreThanOneInstance;
 			DecompileFullType = documentTabServiceSettings.DecompileFullType;
 			RestoreTabs = documentTabServiceSettings.RestoreTabs;
-			DeserializeResources = documentTreeViewSettings.DeserializeResources;
 			UseMemoryMappedIO = documentServiceSettings.UseMemoryMappedIO;
+			CheckForUpdateOnStartup = updateService.CheckForUpdatesOnStartup;
 		}
 
 		public override string[]? GetSearchStrings() => ThemesVM.Select(a => a.Name).ToArray();
@@ -189,7 +194,6 @@ namespace dnSpy.MainApp.Settings {
 			appSettings.AllowMoreThanOneInstance = AllowMoreThanOneInstance;
 			documentTabServiceSettings.DecompileFullType = DecompileFullType;
 			documentTabServiceSettings.RestoreTabs = RestoreTabs;
-			documentTreeViewSettings.DeserializeResources = DeserializeResources;
 
 			if (documentServiceSettings.UseMemoryMappedIO != UseMemoryMappedIO) {
 				documentServiceSettings.UseMemoryMappedIO = UseMemoryMappedIO;
@@ -197,6 +201,7 @@ namespace dnSpy.MainApp.Settings {
 					appRefreshSettings.Add(AppSettingsConstants.DISABLE_MEMORY_MAPPED_IO);
 			}
 
+			updateService.CheckForUpdatesOnStartup = CheckForUpdateOnStartup;
 		}
 	}
 

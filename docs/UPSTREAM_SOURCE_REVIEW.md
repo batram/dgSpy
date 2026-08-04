@@ -3,6 +3,10 @@
 Checked 2026-08-04 against the current repository pins and the live upstream repositories. This is an
 investigation record, not an upgrade proposal. No source, package, or submodule revision was changed.
 
+> Historical review: section 2.6 subsequently adopted the bounded dnSpyEx 6.6 host baseline. See
+> [MODERNIZATION_GATE.md](MODERNIZATION_GATE.md#dnspyex-66-host-adopted-2026-08-04) for the current
+> decision, retained Mono/debugger boundaries, and regression evidence.
+
 ## Result
 
 The sources have moved on substantially, but they did not move independently. The practical upstream

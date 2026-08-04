@@ -85,7 +85,11 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 						return false;
 					stream.Position = stream.Length - bundleSig.Length;
 					var sig = new byte[bundleSig.Length];
-					stream.Read(sig, 0, sig.Length);
+
+					int sizeRead = stream.Read(sig, 0, sig.Length);
+					if (sizeRead != sig.Length)
+						return false;
+
 					for (int i = 0; i < sig.Length; i++) {
 						if (bundleSig[i] != sig[i])
 							return false;
@@ -205,7 +209,7 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 				return null;
 			if (data[(int)(offset + size - 1)] != lastByte)
 				return null;
-			using (var sha1 = new SHA1Managed())
+			using (var sha1 = SHA1.Create())
 				return sha1.ComputeHash(data, (int)offset, (int)size);
 		}
 

@@ -172,6 +172,18 @@ recorded in the [modernization gate](MODERNIZATION_GATE.md).
 
 ### 2.6 Decide whether to adopt the dnSpyEx host
 
+**Decision: adopted on 2026-08-04.** The host now follows dnSpyEx 6.6 source snapshot `3f4caa4f`
+and targets both `net48` and `net10.0-windows`. The adoption is intentionally bounded: dgSpy's
+headless activation patch, the bounded `Mono.Debugger.Soft` fork at `888ded0f`, and the proven
+Mono/shared-debugger orchestration are retained. Newer Mono and shared-debugger implementations were
+rejected after repeatable Unity regressions. Engine-specific running-state handling adapts newer
+CorDebug without changing Mono's reliable aggregate state.
+
+Exit criteria are complete: net48 and self-contained net10 x64 hosts build; Protocol 29, Gateway 184,
+Extension 18, CorDebug 368, isolated Unity 15, and full Unity Phase 8 45 checks pass. Exact boundaries,
+commands, and rejected trials are recorded in the [modernization gate](MODERNIZATION_GATE.md), and the
+[build baseline](DGSPY_BASELINE.md) contains the current dual-target workflow.
+
 After the bounded dependency stages, compare the resulting fork with dnSpyEx 6.6.x. A full host adoption
 is justified only if the remaining host fixes outweigh the regression and maintenance cost.
 

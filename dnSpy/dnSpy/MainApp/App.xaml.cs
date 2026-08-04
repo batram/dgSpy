@@ -95,6 +95,8 @@ namespace dnSpy.MainApp {
 		Task<ExportProvider> initializeMEFTask;
 		Stopwatch? startupStopwatch;
 		public App(bool readSettings, Stopwatch startupStopwatch) {
+			WineFixes.Initialize();
+
 			resourceManagerTokenCacheImpl = new ResourceManagerTokenCacheImpl();
 			args = new AppCommandLineArgs();
 
@@ -190,6 +192,7 @@ namespace dnSpy.MainApp {
 		}
 
 		IExportProviderFactory CreateExportProviderFactorySlow(Resolver resolver) {
+			Debug2.Assert(mefAssemblies is not null);
 			var discovery = new AttributedPartDiscoveryV1(resolver);
 			var parts = discovery.CreatePartsAsync(mefAssemblies).Result;
 			Debug.Assert(parts.ThrowOnErrors() == parts);

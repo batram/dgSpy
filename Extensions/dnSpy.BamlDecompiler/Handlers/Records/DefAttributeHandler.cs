@@ -24,14 +24,14 @@ using System.Xml.Linq;
 using dnSpy.BamlDecompiler.Baml;
 
 namespace dnSpy.BamlDecompiler.Handlers {
-	internal class DefAttributeHandler : IHandler {
+	sealed class DefAttributeHandler : IHandler {
 		public BamlRecordType Type => BamlRecordType.DefAttribute;
 
 		public BamlElement Translate(XamlContext ctx, BamlNode node, BamlElement parent) {
 			var record = (DefAttributeRecord)((BamlRecordNode)node).Record;
 
 			var attrName = ctx.ResolveString(record.NameId);
-			parent.Xaml.Element.Add(new XAttribute(ctx.GetXamlNsName(attrName), record.Value));
+			parent.Xaml.Element.Add(new XAttribute(ctx.GetKnownNamespace(attrName, XamlContext.KnownNamespace_Xaml), record.Value));
 
 			return null;
 		}
