@@ -508,11 +508,21 @@ Original list, retained for reference:
 
 - ✅ The agent can navigate from a paused frame to its method's C# and IL: the frame reports module and
   token, and both `get_il` and `get_csharp` take exactly those.
-- ⚠️ Dynamic and in-memory modules resolve *metadata* through `DbgMetadataService`, so `get_csharp` and
+- ✅ Dynamic and in-memory modules resolve *metadata* through `DbgMetadataService`, so `get_csharp` and
   `get_il` reach them. `set_breakpoint` still cannot: dnSpy's code-location factory addresses modules by
-  path. That is now an explicit `module_has_no_path` error plus a `can_set_breakpoint: false` flag on
-  `list_modules`, rather than a breakpoint that never binds. Not verified against a real file-less
-  module — the CorDebug fixture has none, and the known one is a UCH stack.
+  path. That is an explicit `module_has_no_path` error plus a `can_set_breakpoint: false` flag on
+  `list_modules`, rather than a breakpoint that never binds. Verified on CorDebug: the fixture carries
+  an assembly loaded from bytes and a Reflection.Emit dynamic assembly, each reached only through a
+  callback, so a breakpoint in the callee leaves the file-less module's frame on the stack. The live run
+  found that an in-memory module reports a *bare assembly name* as its filename rather than nothing, and
+  that the refusal keyed off emptiness while `can_set_breakpoint` did not — so the guard accepted a
+  module the flag called unusable. Both now share one predicate. `set_il_breakpoint` still has no guard
+  (it takes a path and gets a name); it does not claim to be bound, and that is asserted rather than
+  fixed. **Verified on Mono too**, against live UCH, which carries 16 file-less modules — MonoMod,
+  Harmony's `HarmonyDTFAssembly*`, an in-memory `UnityEngine.CoreModule`, and `eval-*` func-eval
+  assemblies that publish no metadata and refuse with `metadata_unavailable`. Only one thing is still
+  observed-once rather than reproducible: a *frame* whose module has no file. On Mono, Harmony patch
+  frames report the original file-backed module, so that route does not produce one.
 - ✅ Search results include enough identity to set breakpoints without parsing display text: module plus
   metadata token, verified by feeding a `list_members` token straight into the breakpoint tools.
 - ✅ A breakpoint can be set from a type and method name alone, with no token supplied by the caller.

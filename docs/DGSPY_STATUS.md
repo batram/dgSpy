@@ -81,7 +81,8 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | `get_members` — one level, paged, `total` / `truncated`, member expressions round-trip | ✅ automated live |
 | `set_value` — assigns in the target, reads back, reports `compiler_error` | ✅ automated live |
 | `add_watch` / `list_watches` / `remove_watch`; a failing watch does not fail the call | ✅ automated live |
-| `list_modules` — `can_set_breakpoint` false for path-less modules | ✅ automated live |
+| `list_modules` — `can_set_breakpoint` false for file-less modules | ✅ automated live |
+| Dynamic and in-memory modules — metadata, IL, C#, raw image, refusal, and a frame naming one | ✅ automated live (CorDebug); Mono open |
 | **Phase 6 closed out** — symbols, decompilation, text search, analysis, metadata, raw modules | ✅ 2026-08-04 (CorDebug + UCH) |
 | `list_documents` / `list_types` / `list_members` — paged, tokens included | ✅ automated live |
 | `search_symbols` — name to module + token, bounded | ✅ automated live |
@@ -103,11 +104,11 @@ Test suites, all green:
 dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 27 checks, wire + capability contract
 dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 130 checks, access control + deadline bounds
 dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 249 checks, end to end
+.\tests\run-milestone1-smoke.ps1                                       # 291 checks, end to end
 ```
 
-All four suites are green as of the Phase 7 close-out on 2026-08-04: 27 / 130 / 15 unit
-checks and 249 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
+All four suites are green as of 2026-08-04: 27 / 130 / 15 unit
+checks and 291 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
 verified against live UCH — see
 [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). **Phases 4 and 5 are verified on CorDebug only.**
 Stepping, conditions, evaluation, and Phase 7 mutation/low-level operations have not been exercised against Mono/Unity, and Mono differs enough
@@ -122,8 +123,27 @@ module is now reachable**: `DbgMetadataService` resolves it, so `get_csharp`, `g
 `list_members` all work against it. **Breakpoints still cannot be set on one**, because dnSpy's code
 location factory addresses modules by path. That is now an explicit `module_has_no_path` error and a
 `can_set_breakpoint: false` flag on `list_modules` rather than a breakpoint that silently never binds.
-Neither behaviour has been verified against a real file-less module — the CorDebug fixture has none, and
-the only known instance is on a UCH stack.
+
+Verified on CorDebug as of 2026-08-04. The fixture now carries two file-less modules of its own — an
+assembly loaded from bytes and a Reflection.Emit dynamic assembly — each reached only through a callback
+into the target, so a breakpoint in the callee leaves the file-less module's frame at index 1. The smoke
+drives metadata, IL, C#, raw image, the refusal and that frame for both. What the live run corrected:
+
+- **An in-memory module reports a bare assembly name as its filename**, not an empty string. The
+  `can_set_breakpoint` flag already accounted for that; the `set_breakpoint` guard did not, and accepted
+  such a module — producing exactly the never-binding breakpoint the flag exists to prevent. Both now
+  share `RpcHost.CanCarryBreakpoint`.
+- **dnSpy reports a dynamic module as in-memory as well.** `is_dynamic` is what separates the two.
+- **`set_il_breakpoint` still has no such guard** — it takes a path and gets a name. It does not report
+  the breakpoint as bound, so the gap is visible, but it is not refused. Unchanged and asserted as-is.
+
+**Mono verified 2026-08-04** against live UCH — see [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md).
+A modded UCH carries 16 file-less modules (MonoMod, four `HarmonyDTFAssembly*`, an in-memory copy of
+`UnityEngine.CoreModule`, nine `eval-*`); metadata, IL, C#, raw image and the refusal all behave as on
+CorDebug, and `eval-*` modules — which publish no metadata at all — refuse with `metadata_unavailable`
+rather than returning empty data. The one thing still not reproduced on Mono is a *frame* whose module
+has no file: Harmony patch frames report the original file-backed module, and the single historical
+sighting was a rendering UI-thread stack.
 
 ### Correctness and safety
 
@@ -243,7 +263,11 @@ the only known instance is on a UCH stack.
 - **`@(...)` around a `ConvertFrom-Json` array can produce a one-element array holding the collection.**
   `$list.Count` then reads 1 while the payload plainly contains several items, and a `Where-Object`
   filter over it matches nothing. Pipe through `ForEach-Object { $_ }` to flatten. This cost a full
-  smoke cycle chasing a watch-evaluation "bug" whose JSON was correct all along.
+  smoke cycle chasing a watch-evaluation "bug" whose JSON was correct all along. It bit a second time in
+  `list_modules`: a filter that matched the nested array passed the *whole* collection through, so two
+  module assertions were green on some other module's flags until a module with a legitimately false
+  `can_set_breakpoint` was added and one of them flipped. A passing check proves nothing if the filter
+  never narrowed anything.
 - **Windows PowerShell 5.1 is .NET Framework**: no `RandomNumberGenerator.GetBytes(int)`, no
   `Convert.ToHexString`; `-match` against a collection returns matches rather than a boolean; and
   `ConvertFrom-Json '[]'` does not survive `.Count` checks. All three cost debugging cycles in the test
@@ -257,8 +281,9 @@ observed to terminate the target, so callers must use `detach`.
 
 0. **Exercise Phase 4 against UCH.** Stepping, conditions and hit counts are verified on CorDebug only.
    Mono's stepping is a different implementation and its sequence-point rule already bit breakpoints.
-1. **Verify the file-less module path against UCH**, which is the only place a real one has been seen.
-   Metadata should now resolve for it; `set_breakpoint` should refuse it with `module_has_no_path`.
+1. **Verify the file-less module path against UCH.** The CorDebug side is now covered by the fixture's
+   own in-memory and dynamic modules; Mono is a different engine, and UCH is where the real specimen
+   lives. Metadata should resolve; `set_breakpoint` should refuse with `module_has_no_path`.
 2. Phase 7 or Phase 9, whichever the workflow needs first.
 
 ## Local PowerShell scratchpads

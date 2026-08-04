@@ -168,7 +168,10 @@ ship without being filterable and advertised in the same edit.
   through dnSpy's metadata service. `get_raw_module` returns paged base64 with a whole-image SHA-256;
   for a file-less module the image is reconstructed from runtime metadata.
   `set_breakpoint` refuses with `module_has_no_path`, and `list_modules` flags them
-  `can_set_breakpoint: false`, because dnSpy addresses breakpoint locations by file path.
+  `can_set_breakpoint: false`, because dnSpy addresses breakpoint locations by file path. Note that
+  such a module does not necessarily report an *empty* filename: an in-memory one reports its bare
+  assembly name, which is not a path anything can load. `is_dynamic` / `is_in_memory` are the reliable
+  test, and both tools now derive the refusal from them.
 - **Analysis results remain debugger-addressable.** `search_text` returns the containing method's module
   and token, `find_references` returns methods whose IL names the target member, and
   `find_implementations` returns loaded direct subclasses or interface implementers. All are bounded;

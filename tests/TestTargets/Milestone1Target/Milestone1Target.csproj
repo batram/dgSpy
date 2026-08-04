@@ -7,4 +7,17 @@
     <DebugType>portable</DebugType>
     <Optimize>false</Optimize>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- ReferenceOutputAssembly=false keeps the payload out of the output directory and off the
+         compile references: the fixture loads it from the embedded bytes, and only from there.
+         The reference still forces the payload to build before this project's compile step, which
+         is what makes the EmbeddedResource path below resolvable on a clean build. -->
+    <ProjectReference Include="..\InMemoryPayload\InMemoryPayload.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <Private>false</Private>
+    </ProjectReference>
+    <EmbeddedResource Include="..\InMemoryPayload\bin\$(Configuration)\net48\InMemoryPayload.dll">
+      <LogicalName>InMemoryPayload.dll</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
 </Project>

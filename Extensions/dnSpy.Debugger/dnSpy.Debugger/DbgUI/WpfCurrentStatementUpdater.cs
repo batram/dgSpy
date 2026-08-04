@@ -44,6 +44,9 @@ namespace dnSpy.Debugger.DbgUI {
 
 		void ActivateMainWindow_UI() {
 			uiDispatcher.VerifyAccess();
+			// dgSpy addition: this is the one that fires on every debugger stop.
+			if (DgSpyWindowActivation.Suppressed)
+				return;
 			if (mainWindowHandle == IntPtr.Zero)
 				mainWindowHandle = new WindowInteropHelper(appWindow.Value.MainWindow).Handle;
 

@@ -100,7 +100,7 @@ try {
 	$env:DGSPY_RPC_PORT = [string]$RpcPort
 	$env:DGSPY_URL = $gatewayUrl
 	$env:DGSPY_TOKEN = $token
-	$dnSpyProcess = Start-Process -FilePath (Join-Path $dnSpyDir 'dnSpy.exe') -ArgumentList '--multiple' `
+	$dnSpyProcess = Start-Process -FilePath (Join-Path $dnSpyDir 'dnSpy.exe') -ArgumentList '--multiple','--dgspy-no-window-activation' `
 		-WorkingDirectory $dnSpyDir -WindowStyle Hidden -PassThru
 	$gatewayProcess = Start-Process -FilePath 'dotnet' -ArgumentList ('"' + $gatewayDll + '"') `
 		-WorkingDirectory (Split-Path $gatewayDll) -WindowStyle Hidden -PassThru `
@@ -149,7 +149,7 @@ try {
 	$failedWhileDown = $false
 	try { Invoke-Tool -Name 'get_host_info' -Arguments @{} | Out-Null } catch { $failedWhileDown = $true }
 	Assert-That 'a tool call fails while dnSpy is down' $failedWhileDown
-	$dnSpyProcess = Start-Process -FilePath (Join-Path $dnSpyDir 'dnSpy.exe') -ArgumentList '--multiple' `
+	$dnSpyProcess = Start-Process -FilePath (Join-Path $dnSpyDir 'dnSpy.exe') -ArgumentList '--multiple','--dgspy-no-window-activation' `
 		-WorkingDirectory $dnSpyDir -WindowStyle Hidden -PassThru
 	if (-not (Wait-Until { @(Get-NetTCPConnection -State Listen -LocalPort $RpcPort -ErrorAction SilentlyContinue).Count -gt 0 } 60)) {
 		throw "Extension RPC endpoint did not come back after the dnSpy restart."
@@ -456,10 +456,16 @@ try {
 	$missingWatch = Invoke-Tool -Name 'remove_watch' -Arguments @{ session_id = $sessionId; watch_id = 999999 } -ExpectError
 	Assert-That 'remove_watch refuses an unknown id' ($missingWatch -match 'does not exist')
 
-	$modules = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId })
+	# ForEach-Object, not @(...) alone: @() around a ConvertFrom-Json array yields a one-element array
+	# holding the whole collection, and every filter below then matches that one item and passes on the
+	# strength of some other module's flags. These two checks were green that way until the fixture
+	# grew a module whose can_set_breakpoint is legitimately false.
+	$modules = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
 	Assert-That 'list_modules finds the target module' (@($modules | Where-Object { $_.filename -like '*Milestone1Target.exe' }).Count -eq 1) "(got $($modules.Count) modules)"
 	Assert-That 'a file-backed module reports that it can carry a breakpoint' (@($modules | Where-Object { $_.filename -like '*Milestone1Target.exe' }).can_set_breakpoint)
-	Assert-That 'every module without a path is marked as unable to carry a breakpoint' (@($modules | Where-Object { [string]::IsNullOrEmpty($_.filename) -and $_.can_set_breakpoint }).Count -eq 0)
+	# Not "has no filename": an in-memory module reports a bare assembly name there, which is not a path
+	# set_il_breakpoint can use. The dynamic and in-memory flags are the honest test.
+	Assert-That 'every dynamic or in-memory module is marked as unable to carry a breakpoint' (@($modules | Where-Object { ($_.is_dynamic -or $_.is_in_memory) -and $_.can_set_breakpoint }).Count -eq 0)
 
 	Write-Host "== advanced evaluation and low-level debugging ==" -ForegroundColor Cyan
 	$invoked = Invoke-Tool -Name 'invoke_method' -Arguments @{ session_id = $sessionId; expression = 'System.Math.Abs(-7)'; thread_id = $stepThread; frame_index = 0; timeout_ms = 2000 }
@@ -555,6 +561,103 @@ try {
 	$badModule = Invoke-Tool -Name 'get_il' -Arguments @{ session_id = $sessionId; module = 'NotLoaded.dll'; method_token = $methodToken } -ExpectError
 	Assert-That 'an unloaded module is refused with a pointer to list_modules' ($badModule -match 'list_modules')
 	Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
+
+	# The file-less module path was reasoned about rather than exercised: the only real specimen anyone
+	# had seen was a frame on a live UCH stack. The fixture now carries two of its own — an assembly
+	# loaded from bytes and a Reflection.Emit dynamic assembly — so the whole claim is testable here:
+	# metadata resolves, breakpoints are refused explicitly, and a frame belonging to a module with no
+	# path is still navigable to its IL. This covers CorDebug only; Mono is a different engine and still
+	# needs the manual UCH pass.
+	Write-Host "== dynamic and in-memory modules ==" -ForegroundColor Cyan
+	$flDocs = @(Invoke-Tool -Name 'list_documents' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
+	$flModules = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
+	$flSeen = ($flDocs | Where-Object { $_.is_dynamic -or $_.is_in_memory } |
+		ForEach-Object { "$($_.name)/'$($_.filename)'/'$($_.assembly_full_name)'/meta=$($_.has_metadata)" }) -join ', '
+	Assert-That 'the fixture produces file-less modules at all' (@($flModules | Where-Object { $_.is_dynamic -or $_.is_in_memory }).Count -ge 2) "(file-less documents: $flSeen)"
+
+	foreach ($flCase in @(
+		@{ Label = 'an in-memory'; Assembly = 'InMemoryPayload'; Type = 'InMemoryPayload.Trampoline'; Callee = 'ViaInMemory'; Dynamic = $false },
+		@{ Label = 'a dynamic'; Assembly = 'DgSpyDynamicPayload'; Type = 'DgSpyDynamicPayload.Trampoline'; Callee = 'ViaDynamic'; Dynamic = $true })) {
+
+		# Identify by assembly identity from metadata, not by dnSpy's display name: the display name for
+		# a module with no file is derived from its load address and differs every run.
+		$flDoc = $flDocs | Where-Object { $_.assembly_full_name -like ($flCase.Assembly + ',*') } | Select-Object -First 1
+		Assert-That "$($flCase.Label) module resolves its metadata through DbgMetadataService" ($null -ne $flDoc -and $flDoc.has_metadata) "(file-less documents: $flSeen)"
+		if ($null -eq $flDoc) { continue }
+		$flName = $flDoc.name
+		# A file-less module does not necessarily report an empty filename: an in-memory one reports its
+		# bare assembly name. What matters is that it is not a path anything can be loaded from.
+		Assert-That "$($flCase.Label) module reports no usable file path" (-not [IO.Path]::IsPathRooted($flDoc.filename)) "(was '$($flDoc.filename)')"
+		# dnSpy reports a dynamic module as in-memory as well — it has no file either way — so in-memory
+		# is true for both and is_dynamic is what separates them.
+		Assert-That "$($flCase.Label) module is classified in-memory, and dynamic only when it is" ($flDoc.is_in_memory -and $flDoc.is_dynamic -eq $flCase.Dynamic) "(is_dynamic=$($flDoc.is_dynamic) is_in_memory=$($flDoc.is_in_memory))"
+
+		$flModule = $flModules | Where-Object { $_.name -eq $flName } | Select-Object -First 1
+		Assert-That "list_modules lists $($flCase.Label) module under the name list_documents used" ($null -ne $flModule)
+		Assert-That "list_modules flags $($flCase.Label) module as unable to carry a breakpoint" ($null -ne $flModule -and -not $flModule.can_set_breakpoint)
+
+		# Everything below addresses the module by that name alone, which is all a caller holding a frame
+		# or a search result has. A path would be the easy case and is not the one in question.
+		$flMetadata = Invoke-Tool -Name 'get_metadata' -Arguments @{ session_id = $sessionId; module = $flName }
+		Assert-That "get_metadata reads $($flCase.Label) module by name" ($flMetadata.assembly_full_name -like ($flCase.Assembly + ',*') -and $flMetadata.table_row_counts.MethodDef -ge 1) "(assembly='$($flMetadata.assembly_full_name)')"
+		$flTypes = Invoke-Tool -Name 'list_types' -Arguments @{ session_id = $sessionId; module = $flName; name_pattern = 'Trampoline' }
+		Assert-That "list_types finds the type inside $($flCase.Label) module" (@($flTypes.symbols | Where-Object { $_.full_name -eq $flCase.Type }).Count -eq 1) "(total=$($flTypes.total))"
+		$flMembers = Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $flName; type = $flCase.Type; name_pattern = 'Call' }
+		$flCall = $flMembers.symbols | Where-Object { $_.name -eq 'Call' -and $_.kind -eq 'method' } | Select-Object -First 1
+		Assert-That "list_members returns a metadata token from $($flCase.Label) module" ($null -ne $flCall -and $flCall.method_token -gt 0) "(token=$($flCall.method_token))"
+
+		$flIl = Invoke-Tool -Name 'get_il' -Arguments @{ session_id = $sessionId; module = $flName; type = $flCase.Type; method = 'Call' }
+		Assert-That "get_il disassembles a method in $($flCase.Label) module" (@($flIl.instructions).Count -gt 0 -and $flIl.method_token -eq $flCall.method_token)
+		Assert-That "the IL from $($flCase.Label) module contains the callback it makes" (@($flIl.instructions | Where-Object { $_.opcode -match 'call' }).Count -ge 1)
+		$flCsharp = Invoke-Tool -Name 'get_csharp' -Arguments @{ session_id = $sessionId; module = $flName; method_token = $flCall.method_token }
+		Assert-That "get_csharp decompiles a method in $($flCase.Label) module" ($flCsharp.code -match 'Call') "(len=$($flCsharp.code.Length))"
+
+		# A module with no file is served by serializing the runtime's own metadata back into an image,
+		# so the hash is of that image and deliberately not of any file on disk.
+		$flRaw = Invoke-Tool -Name 'get_raw_module' -Arguments @{ session_id = $sessionId; module = $flName; offset = 0; count = 64 }
+		$flRawBytes = [Convert]::FromBase64String($flRaw.data_base64)
+		Assert-That "get_raw_module serializes $($flCase.Label) module to a PE image" ($flRawBytes.Length -eq 64 -and $flRawBytes[0] -eq 0x4D -and $flRawBytes[1] -eq 0x5A -and $flRaw.total_size -gt 64 -and $flRaw.truncated) "(total=$($flRaw.total_size))"
+		Assert-That "get_raw_module hashes the whole serialized image" ($flRaw.sha256 -match '^[0-9a-f]{64}$') "(was '$($flRaw.sha256)')"
+
+		# The point of the whole flag: refused explicitly, with the reason, rather than accepted as a
+		# breakpoint that silently never binds.
+		$flRefused = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = $flName; type = $flCase.Type; method = 'Call' } -ExpectError
+		Assert-That "set_breakpoint refuses $($flCase.Label) module by name with the reason" ($flRefused -match 'in-memory or dynamic module') "(was '$flRefused')"
+		# set_il_breakpoint has no such guard — it takes a path and gets a name. It must at least not
+		# claim to be bound, which is what would make the gap invisible to a caller.
+		$flUnbound = Invoke-Tool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $flName; method_token = $flCall.method_token; il_offset = 0 }
+		Assert-That "set_il_breakpoint on $($flCase.Label) module does not report a bound breakpoint" (-not $flUnbound.bound) "(bound=$($flUnbound.bound) severity=$($flUnbound.severity))"
+		Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
+
+		# The original UCH observation was a *frame* naming a module with no file. Reproduce it: the
+		# callee is reached only through this module, so frame 1 belongs to it.
+		$flNamed = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = $flCase.Callee }
+		Assert-That "a breakpoint binds in the method $($flCase.Label) module calls" ($flNamed.bound) "(msg='$($flNamed.message)')"
+		Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
+		$flStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $flNamed.cursor_event_id; timeout_ms = 8000 }
+		Assert-That "the call through $($flCase.Label) module reaches the breakpoint" (-not $flStop.timed_out -and @($flStop.events).Count -gt 0)
+		if (-not $flStop.timed_out) {
+			$flFrames = @(Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId; thread_id = @($flStop.events)[0].thread_id; max_frames = 4 } | ForEach-Object { $_ })
+			Assert-That "the stop is inside the method $($flCase.Label) module calls" ($flFrames[0].name -match $flCase.Callee) "(was '$($flFrames[0].name)')"
+			# This is the deferred Phase 4 limitation, stated as an assertion: the caller frame names a
+			# module and carries no path for it.
+			Assert-That "the caller frame names $($flCase.Label) module and reports no path for it" ($flFrames[1].module_name -eq $flName -and -not [IO.Path]::IsPathRooted($flFrames[1].module)) "(module_name='$($flFrames[1].module_name)' module='$($flFrames[1].module)')"
+			# Frame identity in, IL out, with nothing but what the frame itself reported.
+			$flFrameIl = Invoke-Tool -Name 'get_il' -Arguments @{ session_id = $sessionId; module = $flFrames[1].module_name; method_token = $flFrames[1].method_token }
+			Assert-That "that frame's own identity is enough to fetch its IL" ($flFrameIl.method_token -eq $flFrames[1].method_token -and $flFrameIl.declaring_type -eq $flCase.Type) "(declaring_type='$($flFrameIl.declaring_type)')"
+		}
+		Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
+	}
+
+	# Leave the session paused where the rest of the script found it: at Tick's entry. The later check
+	# that a running target refuses get_callstack resumes and asks immediately, so it needs Tick's 100ms
+	# body ahead of it — resuming from the trampolines instead lands on the next Tick hit in microseconds.
+	$flSettle = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = 'Tick' }
+	Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
+	$flSettled = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $flSettle.cursor_event_id; timeout_ms = 8000 }
+	Assert-That 'the session returns to a stop inside the fixture loop' (-not $flSettled.timed_out)
+	Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
+
 	$breakpoint = Invoke-Tool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
 
 	$reenabled = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true }

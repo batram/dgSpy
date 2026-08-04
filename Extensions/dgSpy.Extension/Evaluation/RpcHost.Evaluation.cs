@@ -288,7 +288,7 @@ namespace dgSpy.Extension {
 				Address=m.Address,Size=m.Size,Version=m.Version,
 				// A module with no file cannot carry a breakpoint today: set_il_breakpoint takes a path.
 				// Saying so per module beats letting the caller discover it from a breakpoint that never binds.
-				CanSetBreakpoint=!string.IsNullOrEmpty(m.Filename) && !m.IsInMemory && !m.IsDynamic,
+				CanSetBreakpoint=CanCarryBreakpoint(m),
 			}).OrderBy(m=>m.ProcessId).ThenBy(m=>m.Order).ToArray(),cancellationToken).ConfigureAwait(false);
 		}
 	}

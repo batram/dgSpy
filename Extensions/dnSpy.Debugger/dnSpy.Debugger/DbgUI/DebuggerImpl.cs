@@ -444,6 +444,11 @@ namespace dnSpy.Debugger.DbgUI {
 		}
 
 		void ActivateWindow_UI() {
+			// dgSpy addition: a headless host must not pull the foreground away from the user. The
+			// message box a caller of ShowError_UI is about to show still appears; it simply does not
+			// drag the whole window forward first.
+			if (DgSpyWindowActivation.Suppressed)
+				return;
 			NativeMethods.SetForegroundWindow(new WindowInteropHelper(appWindow.Value.MainWindow).Handle);
 			NativeMethods.SetWindowPos(new WindowInteropHelper(appWindow.Value.MainWindow).Handle, IntPtr.Zero, 0, 0, 0, 0, 3);
 			appWindow.Value.MainWindow.Activate();

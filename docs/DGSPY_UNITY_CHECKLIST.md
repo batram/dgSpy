@@ -185,6 +185,56 @@ A second full pass, on a fresh UCH launch:
 Note the first frame's module: `data-000001BE153D3040`, an in-memory module with no file path.
 `set_il_breakpoint` takes a module path, so frames like that cannot currently carry a breakpoint.
 
+### Re-run 2026-08-04: dynamic and in-memory modules
+
+The Mono half of the file-less module work. CorDebug is covered automatically now (the fixture carries
+an in-memory and a dynamic module of its own); this is the engine the original
+`data-000001BE153D3040` sighting came from. Scripts: `ps_scratch\Test-UchFilelessModules.ps1` (34
+checks), `Test-UchFilelessFrames.ps1` (8), `Test-UchHarmonyCallerFrame.ps1` (5). All green.
+
+A modded UCH carries **16 file-less modules**, so this is the normal case here, not an edge case:
+
+| Module | Kind | Metadata |
+|---|---|---|
+| `MonoMod.Utils.Cil.ILGeneratorProxy` | in-memory | ✅ |
+| `MonoMod.Utils.GetManagedSizeHelper` | in-memory | ✅ |
+| `UnityEngine.CoreModule` (a second, in-memory copy) | in-memory | ✅ |
+| `HarmonyDTFAssembly1`–`4` | in-memory | ✅ |
+| `eval-0`–`eval-8` (Mono func-eval scratch assemblies) | dynamic | ❌ none published |
+
+Verified against each of the first three: `get_metadata`, `list_types`, `list_members`, `get_il`,
+`get_csharp` and `get_raw_module` all resolve **by module name alone**, and `set_breakpoint` refuses
+with `module_has_no_path`. The `eval-*` modules refuse every read with `metadata_unavailable` rather
+than returning empty data, and are still listed rather than dropped.
+
+What this pass corrected:
+
+- **`data-<hex>` is the display name, not the filename.** An in-memory Mono module reports that same
+  string as its *filename* too — it is not empty, and it is not a path. `is_dynamic` / `is_in_memory`
+  are the reliable test; emptiness is not. The CorDebug `set_breakpoint` guard keyed off emptiness and
+  therefore accepted such a module; both now share one predicate.
+- **A dynamic module is reported as in-memory as well.** `is_dynamic` is what separates the two.
+- **Harmony patches do not produce a file-less frame on Mono.** Measured over two passes, graphical
+  and headless: 36 breakpoints bound in plugin patch methods, every hit reporting a *file-backed*
+  caller (`Assembly-CSharp.dll`, `UnityEngine.UI.dll`). HarmonyX detours through MonoMod and the soft
+  debugger attributes the frame to the original method's module, not to `HarmonyDTFAssemblyN`.
+
+**Still not reproduced on Mono: a frame whose module has no file.** Eight sampled pauses and three
+breakpoint stops with all-thread stack scans found none. The one historical sighting was a rendering
+UI-thread stack, and `-nographics` removes that thread's work entirely. The behaviour is covered
+deterministically on CorDebug by the fixture; on Mono it remains observed-once.
+
+### Running UCH without it stealing focus
+
+`-batchmode -nographics` — a minimized window is not enough, Unity restores and focuses it during
+startup. `ps_scratch\Restart-UchBackground.ps1` does this. The trade-off is that `-nographics` removes
+the UI thread, which is exactly where the file-less frame was originally seen, so use a graphical
+launch when hunting for that specifically.
+
+dnSpy needs `--dgspy-no-window-activation` for the same reason; see
+[DGSPY_BASELINE.md](DGSPY_BASELINE.md). Verified with `ps_scratch\Watch-ForegroundWindow.ps1`: across
+36 breakpoint binds and 3 stops the foreground never changed.
+
 ### Also observed
 
 - Headless thread selection originally took `Processes.SelectMany(p => p.Threads).First()`, which on
