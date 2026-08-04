@@ -4,12 +4,17 @@ using System.Reflection.Emit;
 using System.Threading;
 
 namespace Milestone1Target {
+	[AttributeUsage(AttributeTargets.Class)] sealed class Phase8MarkerAttribute : Attribute { }
 	interface IWorker { int Run(int value); }
 	class BaseWorker { public virtual int Run(int value) => value; }
+	[Phase8Marker]
 	sealed class Worker : BaseWorker, IWorker { public override int Run(int value) => value + 7; }
 
 	static class Program {
 		static volatile bool keepRunning = true;
+		static volatile bool loadDeferredModule;
+		static int observedWorkerValue;
+		static event Action Phase8Event;
 
 		static void Main(string[] commandLine) {
 			Console.WriteLine("PID=" + System.Diagnostics.Process.GetCurrentProcess().Id);
@@ -24,7 +29,9 @@ namespace Milestone1Target {
 			// frame on the stack — the case set_breakpoint has to refuse rather than never bind.
 			var inMemory=LoadInMemoryTrampoline();
 			var emitted=EmitDynamicTrampoline();
+			ExercisePhase8Relationships();
 			while (keepRunning) {
+				if (loadDeferredModule) { LoadDeferredPayload(); loadDeferredModule=false; }
 				Tick(41);
 				// Both round trips are microseconds against Tick's 100ms sleep, so a bare pause still
 				// lands in Tick essentially always; the other checks select their frame with a breakpoint.
@@ -44,6 +51,15 @@ namespace Milestone1Target {
 			}
 			var method=Assembly.Load(image).GetType("InMemoryPayload.Trampoline").GetMethod("Call");
 			return (Func<Func<int,int>,int,int>)Delegate.CreateDelegate(typeof(Func<Func<int,int>,int,int>),method);
+		}
+
+		static void LoadDeferredPayload() {
+			byte[] image;
+			using (var stream=typeof(Program).Assembly.GetManifestResourceStream("DeferredPayload.dll")) {
+				image=new byte[stream.Length];
+				for (var read=0;read<image.Length;) read+=stream.Read(image,read,image.Length-read);
+			}
+			Assembly.Load(image);
 		}
 
 		/// <summary>A genuinely dynamic module: Reflection.Emit with AssemblyBuilderAccess.Run, whose
@@ -82,6 +98,17 @@ namespace Milestone1Target {
 		static int UseWorker(IWorker worker,int value) {
 			string searchableText = "phase-six-text-search-fixture";
 			return worker.Run(value) + searchableText.Length;
+		}
+
+		static int ExercisePhase8Relationships() {
+			Action handler=()=>observedWorkerValue++;
+			Phase8Event+=handler;
+			Phase8Event?.Invoke();
+			var worker=new Worker();
+			observedWorkerValue=worker.Run(observedWorkerValue);
+			var result=observedWorkerValue;
+			Phase8Event-=handler;
+			return result;
 		}
 
 		// Called only through the in-memory module, so a breakpoint here puts that module's frame at

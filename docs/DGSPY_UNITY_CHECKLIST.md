@@ -271,3 +271,25 @@ A fresh UCH launch, 20 checks, all green (`ps_scratch\Test-UchEventVocabulary.ps
 
 The cross-check is the one worth keeping: it is what proves the catalog is complete on the Mono path
 rather than merely self-consistent.
+
+### Re-run 2026-08-04: Phase 8 debugger completeness
+
+`tests\run-uch-phase8.ps1` passes **20/20 checks** against the headless Steam build. It attaches
+through the Mono endpoint, reaches a managed breakpoint in UltimateGlorpExplorer, and verifies:
+
+- C# Autos on a selected Mono frame;
+- object-ID create, survival across resume, evaluate, and release using `System.AppDomain.CurrentDomain`;
+- hashed scalar value export and bounded `analyze_symbol` execution;
+- module-breakpoint filter round-trip;
+- canonical breakpoint export plus merge dry-run;
+- exception flags, module conditions, and custom-policy removal;
+- debugger output access separate from stop events;
+- clean detach without terminating UCH.
+
+The preceding Phase 4–6 synchronization pass also completed managed evaluation and stepping, but reproduced
+the known reconnect race on its first breakpoint: dnSpy returned "Can't set a breakpoint when the process
+is paused." Twelve subsequently armed breakpoints bound and one hit, so this remains the documented initial
+binding race rather than a Phase 8 regression.
+
+Not yet exercised on UCH: an actual module-unload breakpoint stop, a categorized exception stop, host value
+export, object-ID disposal caused by runtime exit/detach, breakpoint `replace`, and multi-target behavior.

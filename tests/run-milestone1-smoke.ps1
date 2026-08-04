@@ -415,10 +415,23 @@ try {
 	Assert-That 'list_object_ids finds the created id' (@($listedIds | Where-Object { $_.object_id -eq $objectId.object_id }).Count -eq 1)
 	$readId = Invoke-Tool -Name 'evaluate_object_id' -Arguments @{ session_id = $sessionId; object_id = $objectId.object_id; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 1 }
 	Assert-That 'evaluate_object_id resolves the persistent value' ($readId.value.error -eq $null)
+	# Resume to a fresh breakpoint stop before reading the ID again. A same-stop read only proves lookup;
+	# this proves CorDebug kept the strong handle while the target ran.
+	$null = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true }
+	$idResumeCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
+	$null = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId }
+	$idResumeStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $idResumeCursor; timeout_ms = 8000 }
+	Assert-That 'the target resumes and stops again while an object ID is retained' (-not $idResumeStop.timed_out)
+	$stepThread = @($idResumeStop.events)[0].thread_id
+	$readAfterResume = Invoke-Tool -Name 'evaluate_object_id' -Arguments @{ session_id = $sessionId; object_id = $objectId.object_id; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 1 }
+	Assert-That 'an object ID survives target resume' ($readAfterResume.value.error -eq $null -and $readAfterResume.object_id -eq $objectId.object_id)
+	$null = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
 	$releasedId = Invoke-Tool -Name 'release_object_id' -Arguments @{ session_id = $sessionId; object_id = $objectId.object_id; process_id = $targetId; runtime_id = $objectId.runtime_id }
 	Assert-That 'release_object_id releases exactly the selected id' ($releasedId.object_id -eq $objectId.object_id)
+	$releasedRead = Invoke-Tool -Name 'evaluate_object_id' -Arguments @{ session_id = $sessionId; object_id = $objectId.object_id; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 1 } -ExpectError
+	Assert-That 'a released object ID cannot be evaluated' ($releasedRead -match 'not active')
 	$autos = @(Invoke-Tool -Name 'get_autos' -Arguments @{ session_id = $sessionId; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } | ForEach-Object { $_ })
-	Assert-That 'get_autos reaches the C# Autos provider' ($autos.Count -ge 0)
+	Assert-That 'get_autos returns structured C# Autos entries' ($autos.Count -gt 0 -and @($autos | Where-Object { $null -eq $_.expression -or $null -eq $_.display }).Count -eq 0) "(count=$($autos.Count); entries=$(($autos | ConvertTo-Json -Compress -Depth 5)))"
 	$valueExport = Invoke-Tool -Name 'get_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'get_value_export returns hashed bounded bytes' ($valueExport.total_size -eq 4 -and $valueExport.sha256.Length -eq 64 -and [Convert]::FromBase64String($valueExport.data_base64).Length -eq 4)
 	$hostExport = Invoke-Tool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = 'input.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 }
@@ -513,15 +526,44 @@ try {
 	Assert-That 'set_instruction_pointer validates and audits the selected frame' ($setIp.completed -and $setIp.causes_side_effects -and $setIp.capability -eq 'set_instruction_pointer')
 	$outputMessages = Invoke-Tool -Name 'get_output' -Arguments @{ session_id = $sessionId; after_output_id = 0 }
 	Assert-That 'get_output exposes bounded debugger messages including audits' (@($outputMessages.messages | Where-Object { $_.message -like '*dgSpy audit*' }).Count -ge 1)
-	$moduleBreak = Invoke-Tool -Name 'set_module_breakpoint' -Arguments @{ session_id = $sessionId; module_name = 'NeverLoaded.Phase8.*'; is_loaded = $true }
+	$moduleBreak = Invoke-Tool -Name 'set_module_breakpoint' -Arguments @{ session_id = $sessionId; module_name = 'DeferredPayload*'; is_loaded = $true }
 	$moduleBreaks = @(Invoke-Tool -Name 'list_module_breakpoints' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
 	Assert-That 'module breakpoints round-trip dnSpy filters' (@($moduleBreaks | Where-Object { $_.breakpoint_id -eq $moduleBreak.breakpoint_id -and $_.is_loaded }).Count -eq 1)
+	$moduleCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
+	$null = Invoke-Tool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'loadDeferredModule'; value = 'true'; thread_id = $stepThread; frame_index = 0 }
+	$null = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId }
+	$moduleStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $moduleCursor; timeout_ms = 8000 }
+	Assert-That 'a module-load breakpoint stops on an actual deferred Assembly.Load' (-not $moduleStop.timed_out -and @($moduleStop.events).Count -gt 0)
+	$stepThread = @($moduleStop.events)[0].thread_id
+	$loadedModules = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
+	Assert-That 'the deferred in-memory module is visible after the module breakpoint' (@($loadedModules | Where-Object { $_.name -like 'DeferredPayload*' }).Count -eq 1)
 	$null = Invoke-Tool -Name 'remove_module_breakpoint' -Arguments @{ session_id = $sessionId; breakpoint_id = $moduleBreak.breakpoint_id }
 	$breakpointDocument = Invoke-Tool -Name 'export_breakpoints' -Arguments @{ session_id = $sessionId }
 	$breakpointDryRun = Invoke-Tool -Name 'import_breakpoints' -Arguments @{ session_id = $sessionId; document = $breakpointDocument; mode = 'merge'; dry_run = $true }
 	Assert-That 'breakpoint interchange dry-run validates without mutation' ($breakpointDryRun.dry_run -and $breakpointDryRun.removed -eq 0)
+	$truncatedDocument = $breakpointDocument | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+	$truncatedDocument.exception_truncated = $true
+	$truncatedReplace = Invoke-Tool -Name 'import_breakpoints' -Arguments @{ session_id = $sessionId; document = $truncatedDocument; mode = 'replace'; dry_run = $true } -ExpectError
+	Assert-That 'replace rejects a truncated breakpoint document' ($truncatedReplace -match 'truncated')
+	$sentinelModule = Invoke-Tool -Name 'set_module_breakpoint' -Arguments @{ session_id = $sessionId; module_name = 'Phase8.Replace.Sentinel'; is_loaded = $true }
+	$null = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true; condition = 'input == -1' }
+	$replaceDocument = $breakpointDocument | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+	$replaceDocument.exceptions = @(); $replaceDocument.exception_total = 0; $replaceDocument.exception_truncated = $false
+	$replaceResult = Invoke-Tool -Name 'import_breakpoints' -Arguments @{ session_id = $sessionId; document = $replaceDocument; mode = 'replace' }
+	$afterReplaceModules = @(Invoke-Tool -Name 'list_module_breakpoints' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
+	$afterReplaceCode = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{} | ForEach-Object { $_ }) | Where-Object { $_.method_token -eq $breakpoint.method_token -and $_.il_offset -eq $breakpoint.il_offset }
+	Assert-That 'replace removes breakpoints absent from the document' (@($afterReplaceModules | Where-Object { $_.breakpoint_id -eq $sentinelModule.breakpoint_id }).Count -eq 0 -and $replaceResult.removed -ge 1)
+	Assert-That 'replace restores settings on a breakpoint with the same stable identity' (@($afterReplaceCode).Count -eq 1 -and -not $afterReplaceCode.enabled -and $null -eq $afterReplaceCode.condition) "(entries=$(($afterReplaceCode | ConvertTo-Json -Compress -Depth 5)))"
 	$categories = @(Invoke-Tool -Name 'list_exception_categories' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
 	Assert-That 'exception categories expose DotNet' (@($categories | Where-Object { $_.category -eq 'DotNet' }).Count -eq 1)
+	$policy = Invoke-Tool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true; stop_unhandled = $false; conditions = @(@{ kind = 'module_equals'; module = 'Milestone1Target.exe' }) }
+	Assert-That 'exception policy mutation preserves flags and module conditions' ($policy.stop_thrown -and -not $policy.stop_unhandled -and @($policy.conditions).Count -eq 1 -and $policy.conditions[0].module -eq 'Milestone1Target.exe')
+	$removedPolicy = Invoke-Tool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' }
+	Assert-That 'remove_exception_policy returns the policy it removed' ($removedPolicy.name -eq 'Milestone1Target.Phase8FixtureException')
+	$null = Invoke-Tool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true }
+	$null = Invoke-Tool -Name 'restore_exception_defaults' -Arguments @{ session_id = $sessionId }
+	$removedAfterReset = Invoke-Tool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' } -ExpectError
+	Assert-That 'restore_exception_defaults removes custom policies' ($removedAfterReset -match 'Phase8FixtureException') "(error='$removedAfterReset')"
 
 	Write-Host "== symbols, IL and decompilation ==" -ForegroundColor Cyan
 	$documents = @(Invoke-Tool -Name 'list_documents' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
@@ -567,9 +609,30 @@ try {
 	Assert-That 'find_references identifies the containing method by token' (@($refs.symbols | Where-Object { $_.name -eq 'UseWorker' }).Count -eq 1) "(total=$($refs.total))"
 	$analysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $runToken; search_module = 'Milestone1Target'; count = 20 }
 	Assert-That 'analyze_symbol returns typed endpoint identities' (@($analysis.edges | Where-Object { $_.kind -eq 'caller' -and $_.source.name -eq 'UseWorker' -and $_.target.method_token -eq $runToken }).Count -eq 1) "(total=$($analysis.total))"
-
+	$useWorker = @(Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.Program'; name_pattern = 'UseWorker' }).symbols | Select-Object -First 1
+	$calleeAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $useWorker.method_token; search_module = 'Milestone1Target'; count = 20 }
+	Assert-That 'analyze_symbol returns typed callee edges' (@($calleeAnalysis.edges | Where-Object { $_.kind -eq 'callee' -and $_.target.name -eq 'Run' }).Count -ge 1)
+	$boundedAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $runToken; search_module = 'Milestone1Target'; count = 20; max_methods = 1 }
+	Assert-That 'analyze_symbol enforces its hard method scan budget' ($boundedAnalysis.scanned_methods -eq 1 -and $boundedAnalysis.scan_truncated -and $boundedAnalysis.truncated)
+	$constructors = @(Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.Worker'; name_pattern = '.ctor' }).symbols
+	$constructorAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $constructors[0].method_token; search_module = 'Milestone1Target'; count = 20 }
+	Assert-That 'analyze_symbol identifies construction sites' (@($constructorAnalysis.edges | Where-Object { $_.kind -eq 'constructs' -and $_.source.name -eq 'ExercisePhase8Relationships' }).Count -eq 1)
+	$field = @(Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.Program'; name_pattern = 'observedWorkerValue' }).symbols | Select-Object -First 1
+	$fieldAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $field.method_token; search_module = 'Milestone1Target'; count = 20 }
+	Assert-That 'analyze_symbol distinguishes field reads and writes' (@($fieldAnalysis.edges | Where-Object { $_.kind -eq 'field_read' }).Count -ge 1 -and @($fieldAnalysis.edges | Where-Object { $_.kind -eq 'field_write' }).Count -ge 1)
+	$event = @(Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.Program'; name_pattern = 'Phase8Event' }).symbols | Where-Object { $_.kind -eq 'event' } | Select-Object -First 1
+	$eventAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $event.method_token; search_module = 'Milestone1Target'; count = 20 }
+	Assert-That 'analyze_symbol distinguishes event add and remove access' (@($eventAnalysis.edges | Where-Object { $_.kind -eq 'event_add' }).Count -ge 1 -and @($eventAnalysis.edges | Where-Object { $_.kind -eq 'event_remove' }).Count -ge 1)
+	$marker = @(Invoke-Tool -Name 'list_types' -Arguments @{ session_id = $sessionId; module = $targetExe; name_pattern = 'Phase8MarkerAttribute' }).symbols | Select-Object -First 1
+	$attributeAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $marker.method_token; search_module = 'Milestone1Target'; count = 20 }
+	Assert-That 'analyze_symbol identifies attribute relationships' (@($attributeAnalysis.edges | Where-Object { $_.kind -eq 'attribute' -and $_.source.full_name -eq 'Milestone1Target.Worker' }).Count -eq 1)
 	$ifaceTypes = Invoke-Tool -Name 'list_types' -Arguments @{ session_id = $sessionId; module = $targetExe; name_pattern = 'IWorker' }
 	$ifaceToken = @($ifaceTypes.symbols | Where-Object { $_.full_name -eq 'Milestone1Target.IWorker' })[0].method_token
+	$interfaceAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $ifaceToken; search_module = 'Milestone1Target'; count = 20 }
+	Assert-That 'analyze_symbol identifies interface implementation relationships' (@($interfaceAnalysis.edges | Where-Object { $_.kind -eq 'implements' -and $_.source.full_name -eq 'Milestone1Target.Worker' }).Count -eq 1)
+	$baseRun = @(Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.BaseWorker'; name_pattern = 'Run' }).symbols | Select-Object -First 1
+	$overrideAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $baseRun.method_token; search_module = 'Milestone1Target'; count = 20 }
+	Assert-That 'analyze_symbol identifies ordinary virtual overrides' (@($overrideAnalysis.edges | Where-Object { $_.kind -eq 'override' -and $_.source.full_name -eq 'Milestone1Target.Worker.Run' }).Count -eq 1) "(edges=$(($overrideAnalysis.edges | ConvertTo-Json -Compress -Depth 5)))"
 	$impls = Invoke-Tool -Name 'find_implementations' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $ifaceToken; search_module = 'Milestone1Target'; count = 10 }
 	Assert-That 'find_implementations finds a direct interface implementer' (@($impls.symbols | Where-Object { $_.full_name -eq 'Milestone1Target.Worker' }).Count -eq 1) "(total=$($impls.total))"
 

@@ -97,14 +97,14 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | `get_disassembly` — managed IL and CorDebug JIT-native blocks | ✅ automated live |
 | `get_registers` — explicit `capability_unsupported` on this dnSpy contract | ✅ automated live failure contract |
 | `set_instruction_pointer` — current-frame/method and engine validation, audited | ✅ automated live |
-| **Phase 8 closed out** — debugger completeness | ✅ 2026-08-04 (CorDebug; multi-target fixture and Mono open) |
-| Object IDs and C# Autos | ✅ automated live |
+| **Phase 8 in progress** — debugger completeness | ⚠️ single-target CorDebug + Mono verified; multi-target startup open |
+| Object IDs across resume/release and structured C# Autos | ✅ automated live |
 | Bounded cursor-based debugger output, separate from stop events | ✅ unit + automated live |
-| Module load/unload breakpoint filters | ✅ automated live round-trip |
-| Canonical bounded breakpoint export/import; merge/replace and dry-run contracts | ✅ unit + automated dry-run |
-| Exception categories, flags, and module conditions | ✅ contract + category live |
+| Module load/unload breakpoint filters | ✅ automated live load stop + filter round-trip; unload stop open |
+| Canonical bounded breakpoint export/import; merge/replace and dry-run contracts | ✅ automated live replace + dry-run |
+| Exception categories, flags, module conditions, removal and reset | ✅ automated live policy lifecycle; actual exception stops open |
 | Value export chunks and host writes below `DGSPY_EXPORT_ROOT` | ✅ automated live, including traversal/overwrite refusal |
-| `analyze_symbol` typed caller/callee/field/construction/override/implementation/attribute edges with a hard scan budget | ✅ automated caller edge live |
+| `analyze_symbol` typed caller/callee/field/construction/override/implementation/attribute/event edges with a hard scan budget | ✅ automated live across all listed edge kinds |
 
 Test suites, all green:
 
@@ -112,27 +112,30 @@ Test suites, all green:
 dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 29 checks, wire + capability contract
 dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 173 checks, access control + deadline bounds
 dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 16 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 326 checks, end to end
+.\tests\run-milestone1-smoke.ps1                                       # 345 checks, end to end
 ```
 
 All four suites are green as of 2026-08-04: 29 / 173 / 16 unit
-checks and 326 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
+checks and 345 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
 verified against live UCH — see
 [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). **Phases 4 and 5 are verified on CorDebug only.**
-Stepping, conditions, evaluation, and Phase 7/8 operations have not been exercised against Mono/Unity, and Mono differs enough
-elsewhere (sequence points, asynchronous frame fetch) that this is a real gap rather than a formality.
+Phase 8's safe single-target surface has a dedicated 20-check UCH pass. Phase 7 operations and Phase 8's
+actual module-unload and categorized-exception stops have not been exercised against Mono/Unity; Mono differs
+enough elsewhere (sequence points, asynchronous frame fetch) that these remain real gaps rather than formalities.
 
 ## Remaining gaps
 
 ### Phase 8 live-verification boundaries
 
-The default dnSpy manager and dgSpy protocol now support explicit process/runtime targeting and the
-`mixed` aggregate state, but the automated fixture owns one process and one runtime. A true multi-process
-run still has to prove per-process pause/continue and every `ambiguous_target` no-op path. Phase 8's new
-Mono/Unity paths are likewise capability-described and compile against the engine, but are not yet live
-UCH evidence. Breakpoint `replace`, object-ID survival across resume, and the less common analyzer edge
-kinds have contract/implementation coverage but only merge dry-run, same-stop object IDs, and a caller
-edge are currently in the live smoke.
+The default dnSpy manager can own multiple processes, and dgSpy has explicit process/runtime selectors and
+the `mixed` aggregate state, but `StartSessionAsync` still rejects a second attach or launch. Multiple active
+targets are therefore not currently reachable through dgSpy. That must be implemented before per-process
+pause/continue and every `ambiguous_target` no-op path can be verified. The live UCH pass now proves Mono
+Autos, object IDs across resume/release, scalar value export, bounded analysis, module-breakpoint filters,
+breakpoint interchange dry-run, exception-policy lifecycle, output messages, and safe detach. CorDebug coverage
+also proves an actual module-load stop, breakpoint replace, and every listed analyzer edge kind. Actual module
+unload and categorized-exception stops, teardown-driven object-ID cleanup, and reparse-point host-export
+refusal remain unverified live.
 
 ### Partly addressed: frames can name a module that has no file
 
