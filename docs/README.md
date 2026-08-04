@@ -21,6 +21,8 @@ roadmap.
 - [Unity verification checklist](DGSPY_UNITY_CHECKLIST.md) — repeatable Mono/Unity checks and evidence.
 - [Modernization regression gate](MODERNIZATION_GATE.md) — dependency-stage fixtures, contract snapshots,
   and shared/CorDebug/Unity pass commands.
+- [dnSpyEx synchronization](DNSPYEX_SYNC.md) — updating the integration branch and preparing focused
+  upstream pull requests.
 - [Upstream source review](UPSTREAM_SOURCE_REVIEW.md) — pinned-versus-current dependency assessment and
   modernization recommendations.
 
