@@ -1,15 +1,11 @@
-# dgSpy status and handoff
+# dgSpy status and verification ledger
 
 Last updated 2026-08-04. Branch `dgspy-mcp-milestone-1`.
 
 Scope in force: x64 only, .NET Framework CorDebug (`CLR v4.0.30319`), plus the Mono/Unity path for UCH.
-CoreCLR and x86 are out. See [DGSPY_BASELINE.md](DGSPY_BASELINE.md) for the toolchain and thread rules,
-[DGSPY_MILESTONE1.md](DGSPY_MILESTONE1.md) for the tool surface,
-[DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md) for the manual Mono/Unity pass,
-[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) for the roadmap.
-
-**Phase 0 is complete.** All exit criteria are verified, including both supported engine acquisition
-paths and the automated x64 target assertion.
+CoreCLR and x86 are out. Start at [the documentation index](README.md). The completed first implementation
+section is summarized in [DELIVERED_LOCAL_CORE.md](DELIVERED_LOCAL_CORE.md); this file retains the detailed
+evidence and limitations that should not be compressed into the active roadmap.
 
 ## Done and verified
 
@@ -20,7 +16,7 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | MEF extension loads in x64 net48 dnSpy, logs version | ✅ verified |
 | Phase 0 engine acquisition: CorDebug via discovery, endpoint-launched UCH via `attach_endpoint` | ✅ verified both engines |
 | CorDebug smoke target is explicitly x64 and its reported architecture is asserted | ✅ automated |
-| **Phase 1 closed out** — see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) for the one amended criterion | ✅ 2026-08-03 |
+| **Phase 1 closed out** — one cancellation criterion was amended; see Correctness and safety below | ✅ 2026-08-03 |
 | **Phase 2 closed out** — attach, launch, lifecycle control, terminal cleanup | ✅ 2026-08-03 |
 | **Phase 3 closed out** — normalized event stream and non-destructive waiting | ✅ 2026-08-03 |
 | Loopback TCP RPC, versioned, structured errors | ✅ verified |
@@ -293,18 +289,16 @@ sighting was a rendering UI-thread stack.
   `ConvertFrom-Json '[]'` does not survive `.Count` checks. All three cost debugging cycles in the test
   harness — the smoke script has comments where each bit.
 
-## Suggested order for the next session
+## Current next step
 
-Phases 0 through 3 are closed and Milestone 1's full vertical slice is delivered. The separate
-dnSpy-window shutdown path remains a host-lifecycle concern: closing dnSpy with an attachment has been
-observed to terminate the target, so callers must use `detach`.
+Phases 0–8 are closed. The old session-order list was completed or superseded by the later evidence in
+this ledger. Follow [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md): first make the current checkout
+reproducible, then modernize the dnSpyEx-aligned decompiler, dnlib, debugger, and expression-compiler
+sources behind the recorded regression gates. Secure remote-host work follows the stable modernized
+baseline.
 
-0. **Exercise Phase 4 against UCH.** Stepping, conditions and hit counts are verified on CorDebug only.
-   Mono's stepping is a different implementation and its sequence-point rule already bit breakpoints.
-1. **Verify the file-less module path against UCH.** The CorDebug side is now covered by the fixture's
-   own in-memory and dynamic modules; Mono is a different engine, and UCH is where the real specimen
-   lives. Metadata should resolve; `set_breakpoint` should refuse with `module_has_no_path`.
-2. Phase 7 or Phase 9, whichever the workflow needs first.
+The separate dnSpy-window shutdown warning remains in force: closing dnSpy with an attachment has been
+observed to terminate the target, so all automated and manual workflows must use `detach`.
 
 ## Local PowerShell scratchpads
 

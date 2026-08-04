@@ -25,15 +25,20 @@
 | `dgSpy.Gateway` | `net7.0` | Standalone process, not loaded into dnSpy. |
 | `tests/TestTargets/Milestone1Target` | `net48`, x64 | CorDebug smoke target; the project pins `PlatformTarget=x64` and the smoke test verifies dnSpy reports `X64`. |
 
-The dgSpy projects are intentionally **not** in `dnSpy.sln`, and dgSpy builds through `build-dgspy.ps1`. dnSpy's own sources are otherwise untouched, with one deliberate exception recorded below.
+The dgSpy projects are intentionally **not** in `dnSpy.sln`, and dgSpy builds through `build-dgspy.ps1`.
+The deliberate upstream edits are recorded below because each is a modernization/rebase obligation.
 
 ### Edits to upstream dnSpy sources
 
-Keep this list at one entry if at all possible: every line here is a merge conflict with upstream and a behavior difference that only exists on this machine.
+Keep this list small: every line is a merge conflict with upstream and a behavior difference that must
+survive or be proven obsolete during modernization.
 
 | File | Change | Why |
 |---|---|---|
 | `dnSpy/dnSpy.Contracts.Debugger/DbgMessageEventArgs.cs` | `DbgMessageThreadExitedEventArgs` now assigns `ExitCode` in its constructor | Upstream accepts `exitCode` and drops it, so the property was always `null`. dgSpy reports thread exit codes in the `thread_exited` event and cannot synthesize what the ctor discarded. A one-line fix and a clean upstream PR candidate. |
+| `Extensions/dnSpy.Debugger/Mono.Debugger.Soft` gitlink | Local commit `888ded0f` bounds `ThreadMirror.GetFrames()` to three seconds | A Unity thread can disappear while frames are requested and some runtimes never reply, wedging dnSpy's Mono debugger thread. Neither checked Mono nor dnSpyEx contains an equivalent bound. The commit must be pushed to a durable fork or reapplied during modernization. |
+| `Extensions/dnSpy.Debugger/.../DbgUI/DgSpyWindowActivation.cs` | Adds the `--dgspy-no-window-activation` switch | Automated stops must not steal foreground focus from the user. |
+| `Extensions/dnSpy.Debugger/.../DbgUI/DebuggerImpl.cs` and `WpfCurrentStatementUpdater.cs` | Honor the no-activation switch | Suppresses only foreground activation; dnSpy remains visible and interactive. |
 
 ## Build and deploy
 
@@ -146,9 +151,9 @@ Two rules follow:
 RPC surface, the smoke script and all three unit suites stayed green the entire time the Debug menu
 was broken. UI composition regressions in the fork are only visible by looking at the window.
 
-## dgSpy's modifications to dnSpy itself
+## Window-activation compatibility patch
 
-Kept as small as possible, because every line here is a rebase cost against upstream/dnSpyEx.
+The complete upstream-edit inventory is above. These details explain the UI-specific part of it.
 
 | File | Change |
 |---|---|

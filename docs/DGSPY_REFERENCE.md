@@ -1,4 +1,6 @@
-# dgSpy milestone 1
+# dgSpy local tool and behavior reference
+
+This documents the delivered local tool surface through the completed first implementation section.
 
 Three components:
 
@@ -32,11 +34,25 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 
 ## Tools
 
-`get_host_info`, `get_capabilities`, `list_programs`, `attach`, `attach_endpoint`, `detach`,
-`list_sessions`, `get_session_state`, `pause`, `continue`, `set_il_breakpoint`, `list_breakpoints`,
-`remove_breakpoint`, `clear_breakpoints`, `wait_for_stop`, `wait_for_event`, `get_events`,
-`get_stop_reason`, `list_threads`, `get_callstack`,
-`get_frame`.
+- Host, discovery, and lifecycle: `get_host_info`, `get_capabilities`, `list_programs`, `attach`,
+  `attach_endpoint`, `launch`, `list_sessions`, `get_session_state`, `pause`, `continue`, `detach`,
+  `terminate`, `restart`.
+- Events and output: `get_events`, `wait_for_event`, `wait_for_stop`, `get_stop_reason`, `get_output`,
+  `wait_for_output`.
+- Threads and values: `list_threads`, `get_callstack`, `get_frame`, `evaluate`, `get_members`, `set_value`,
+  `get_exception`, `add_watch`, `list_watches`, `remove_watch`, `get_autos`, `create_object_id`,
+  `list_object_ids`, `evaluate_object_id`, `release_object_id`, `get_value_export`, `write_value_export`.
+- Breakpoints and control: `set_il_breakpoint`, `set_breakpoint`, `list_breakpoints`, `update_breakpoint`,
+  `remove_breakpoint`, `clear_breakpoints`, `set_exception_breakpoint`, `list_exception_breakpoints`,
+  `step_into`, `step_over`, `step_out`, `set_module_breakpoint`, `list_module_breakpoints`,
+  `update_module_breakpoint`, `remove_module_breakpoint`, `export_breakpoints`, `import_breakpoints`,
+  `list_exception_categories`, `list_exception_policies`, `set_exception_policy`,
+  `remove_exception_policy`, `restore_exception_defaults`.
+- Code and metadata: `list_modules`, `list_documents`, `list_types`, `list_members`, `search_symbols`,
+  `get_il`, `get_csharp`, `search_text`, `find_references`, `find_implementations`, `get_metadata`,
+  `get_raw_module`, `analyze_symbol`.
+- Explicit side effects and low-level access: `invoke_method`, `create_object`, `read_memory`,
+  `write_memory`, `get_disassembly`, `get_registers`, `set_instruction_pointer`.
 
 ## State and lifetime rules
 
@@ -228,10 +244,8 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj
 The unit tests cover the wire contract and capability catalog, the gateway's access control and its
 deadline-versus-bound invariant, and the extension's pure program-identity, session-state, and bounded
 event-cursor invariants. The smoke script is the end-to-end test: it builds, deploys, starts a
-disposable target plus dnSpy plus the gateway, and asserts 89 checks across access control, loopback-only
-reachability, dnSpy-restart recovery, host info and capabilities, x64 discovery and provider filtering,
-attach, thread/frame inspection, breakpoints, and detach. It stops everything it starts and exits
-non-zero on any failure.
+disposable targets plus dnSpy plus the gateway, and currently asserts 363 checks across the delivered
+CorDebug surface. It stops everything it starts and exits non-zero on any failure.
 
 The smoke script covers `attach_endpoint`'s argument validation and failure path only; its success
 path needs a Mono/Unity target and is a manual checklist, [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md).
