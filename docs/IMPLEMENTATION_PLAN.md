@@ -1,6 +1,6 @@
 # dgSpy MCP Implementation Plan
 
-**Current state:** see [docs/DGSPY_STATUS.md](docs/DGSPY_STATUS.md) for what is implemented and
+**Current state:** see [DGSPY_STATUS.md](DGSPY_STATUS.md) for what is implemented and
 verified, what is still open, and the handoff notes. This document is the target, not the status.
 
 ## Objective
@@ -194,7 +194,7 @@ asserted end to end.
 
 ## Phase 1: Local RPC and discovery — **complete**
 
-Closed out 2026-08-03; see [docs/DGSPY_STATUS.md](docs/DGSPY_STATUS.md) for the verification record.
+Closed out 2026-08-03; see [DGSPY_STATUS.md](DGSPY_STATUS.md) for the verification record.
 One exit criterion was amended rather than met: dnSpy exposes no way to abort a queued dispatcher
 callback or a started evaluation, so a deadline reports `deadline_exceeded` without unwinding the
 debugger. That limitation is now advertised through `get_capabilities` instead of being implied away.
@@ -808,7 +808,7 @@ reachable only from a detached HEAD and the gitlink. A bare mirror exists at
 
 Related, and required before publishing: the superproject's own `origin` is `github.com/dnspy/dnspy`,
 which cannot be pushed to, so **every dgSpy commit is local-only as well**. And
-[docs/DGSPY_BASELINE.md](docs/DGSPY_BASELINE.md) claims dgSpy makes exactly one edit to dnSpy sources;
+[DGSPY_BASELINE.md](DGSPY_BASELINE.md) claims dgSpy makes exactly one edit to dnSpy sources;
 there are two — the `DbgMessageThreadExitedEventArgs` `ExitCode` fix and this frame-fetch bound. GPLv3 §5
 wants both stated.
 

@@ -1,6 +1,6 @@
 # dgSpy Assembly Editing and Project Export Plan
 
-**Status:** separate future capability track; not implemented or scheduled. Live debugging remains in
+**Status:** separate future capability track; not implemented or scheduled. The live-debugging roadmap remains in
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), and arbitrary target C# execution remains in
 [TARGET_CODE_EXECUTION_PLAN.md](TARGET_CODE_EXECUTION_PLAN.md).
 

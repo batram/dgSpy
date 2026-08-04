@@ -1,6 +1,6 @@
 # dgSpy Target C# Execution Plan
 
-**Status:** separate future capability track; not implemented or scheduled. The debugger roadmap remains
+**Status:** separate future capability track; not implemented or scheduled. The main debugger roadmap remains
 in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). dnSpy-host scripting is a different trust boundary,
 documented in [DNSPY_SCRIPTING_PLAN.md](DNSPY_SCRIPTING_PLAN.md).
 

@@ -1,6 +1,6 @@
 # dgSpy dnSpy-Host C# Scripting Plan
 
-**Status:** deliberately unscheduled. Implement only for a concrete workflow that typed debugger operations
+**Status:** deliberately unscheduled. Implement this only for a concrete workflow that typed debugger operations
 cannot serve. This capability is intentionally outside [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 ## Objective and trust boundary

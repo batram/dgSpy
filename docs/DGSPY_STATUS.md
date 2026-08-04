@@ -6,7 +6,7 @@ Scope in force: x64 only, .NET Framework CorDebug (`CLR v4.0.30319`), plus the M
 CoreCLR and x86 are out. See [DGSPY_BASELINE.md](DGSPY_BASELINE.md) for the toolchain and thread rules,
 [DGSPY_MILESTONE1.md](DGSPY_MILESTONE1.md) for the tool surface,
 [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md) for the manual Mono/Unity pass,
-`IMPLEMENTATION_PLAN.md` for the roadmap.
+[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) for the roadmap.
 
 **Phase 0 is complete.** All exit criteria are verified, including both supported engine acquisition
 paths and the automated x64 target assertion.
@@ -20,7 +20,7 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | MEF extension loads in x64 net48 dnSpy, logs version | ✅ verified |
 | Phase 0 engine acquisition: CorDebug via discovery, endpoint-launched UCH via `attach_endpoint` | ✅ verified both engines |
 | CorDebug smoke target is explicitly x64 and its reported architecture is asserted | ✅ automated |
-| **Phase 1 closed out** — see `IMPLEMENTATION_PLAN.md` for the one amended criterion | ✅ 2026-08-03 |
+| **Phase 1 closed out** — see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) for the one amended criterion | ✅ 2026-08-03 |
 | **Phase 2 closed out** — attach, launch, lifecycle control, terminal cleanup | ✅ 2026-08-03 |
 | **Phase 3 closed out** — normalized event stream and non-destructive waiting | ✅ 2026-08-03 |
 | Loopback TCP RPC, versioned, structured errors | ✅ verified |
