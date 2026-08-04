@@ -12,6 +12,7 @@ using dgSpy.Protocol;
 using dnSpy.Contracts.Debugger;
 using dnSpy.Contracts.Debugger.Attach;
 using dnSpy.Contracts.Debugger.Breakpoints.Code;
+using dnSpy.Contracts.Debugger.Breakpoints.Modules;
 using dnSpy.Contracts.Debugger.CallStack;
 using dnSpy.Contracts.Debugger.DotNet.Code;
 using dnSpy.Contracts.Debugger.DotNet.Mono;
@@ -26,14 +27,14 @@ using Newtonsoft.Json.Linq;
 
 namespace dgSpy.Extension {
 	sealed partial class RpcHost : IDisposable {
-		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DbgCodeBreakpointsService breakpoints; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions; readonly DbgMetadataService metadataService; readonly IDecompilerService decompilers;
+		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DbgCodeBreakpointsService breakpoints; readonly DbgModuleBreakpointsService moduleBreakpoints; readonly DbgObjectIdService objectIds; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions; readonly DbgMetadataService metadataService; readonly IDecompilerService decompilers;
 		readonly EvaluationQueue evaluations=new EvaluationQueue();
-		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>();
+		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>();
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		TcpListener? tcpListener;
 		Task? listener; string? sessionId; string? attachedProgramId; string? sessionKind; string? lifecycleAction; long stateVersion; bool attaching; bool faulted; string? faultMessage; string? lastUserMessage; int? terminalExitCode; string? terminalReason;
-		public RpcHost(AttachableProcessesService programs, DbgManager manager, DbgCodeBreakpointsService breakpoints, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDecompilerService decompilers) {
-			this.programs=programs; this.manager=manager; this.breakpoints=breakpoints; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.decompilers=decompilers;
+		public RpcHost(AttachableProcessesService programs, DbgManager manager, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDecompilerService decompilers) {
+			this.programs=programs; this.manager=manager; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.decompilers=decompilers;
 			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { if (manager.IsRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded);
 			// An engine that fails to connect reports it here rather than through DbgManager.Start, which
 			// only rejects options it cannot build an engine from. Recording it turns "faulted" from a
@@ -41,6 +42,7 @@ namespace dgSpy.Extension {
 			// modal error box — on the *UI* thread, so it does not block the debugger dispatcher or this
 			// RPC, but it does leave a dialog nobody headless will dismiss.
 			manager.MessageUserMessage += (_,e) => { lock(sync) lastUserMessage=e.Message; };
+			manager.DbgManagerMessage += (_,e) => output.Add(e.MessageKind,e.Message);
 		}
 		public void Start() { if (listener is not null) return; manager.WriteMessage($"dgSpy {Version} listening on 127.0.0.1:{rpcPort}"); listener=Task.Run(ListenAsync); }
 		async Task ListenAsync() { try { tcpListener=new TcpListener(IPAddress.Loopback,rpcPort); tcpListener.Start(8); while(!shutdown.IsCancellationRequested) { var client=await tcpListener.AcceptTcpClientAsync().ConfigureAwait(false); _=HandleClientAsync(client); } } catch(ObjectDisposedException) when(shutdown.IsCancellationRequested) { } catch(Exception ex) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.ErrorUser,"dgSpy TCP listener: "+ex.Message); } }
@@ -68,8 +70,8 @@ namespace dgSpy.Extension {
 			case "detach": return RpcResponse.Success(req.RequestId,await DetachAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "terminate": return RpcResponse.Success(req.RequestId,await TerminateAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "restart": return RpcResponse.Success(req.RequestId,await RestartAsync(req,requestCancellation.Token).ConfigureAwait(false));
-			case "pause": CheckSession(req); await OnDebuggerAsync(()=>{ CheckVersion(req); manager.BreakAll(); return true; }).ConfigureAwait(false); await WaitForDebuggerAsync(()=>!manager.IsDebugging || manager.IsRunning==false,requestCancellation.Token).ConfigureAwait(false); return RpcResponse.Success(req.RequestId,await OnDebuggerAsync(State,requestCancellation.Token).ConfigureAwait(false));
-			case "continue": CheckSession(req); await OnDebuggerAsync(()=>{ CheckVersion(req); manager.RunAll(); return true; }).ConfigureAwait(false); await WaitForDebuggerAsync(()=>!manager.IsDebugging || manager.IsRunning!=false,requestCancellation.Token).ConfigureAwait(false); return RpcResponse.Success(req.RequestId,await OnDebuggerAsync(State,requestCancellation.Token).ConfigureAwait(false));
+			case "pause": CheckSession(req); await OnDebuggerAsync(()=>{ CheckVersion(req); SelectProcess(req).Break(); return true; }).ConfigureAwait(false); await WaitForDebuggerAsync(()=>!manager.IsDebugging || manager.IsRunning!=true,requestCancellation.Token).ConfigureAwait(false); return RpcResponse.Success(req.RequestId,await OnDebuggerAsync(State,requestCancellation.Token).ConfigureAwait(false));
+			case "continue": CheckSession(req); await OnDebuggerAsync(()=>{ CheckVersion(req); SelectProcess(req).Run(); return true; }).ConfigureAwait(false); await WaitForDebuggerAsync(()=>!manager.IsDebugging || manager.IsRunning!=false,requestCancellation.Token).ConfigureAwait(false); return RpcResponse.Success(req.RequestId,await OnDebuggerAsync(State,requestCancellation.Token).ConfigureAwait(false));
 			case "set_il_breakpoint": return RpcResponse.Success(req.RequestId,await SetBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "list_breakpoints": return RpcResponse.Success(req.RequestId,await ListBreakpointsAsync(requestCancellation.Token).ConfigureAwait(false));
 			case "remove_breakpoint": return RpcResponse.Success(req.RequestId,await RemoveBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
@@ -114,6 +116,27 @@ namespace dgSpy.Extension {
 			case "get_disassembly": return RpcResponse.Success(req.RequestId,await GetDisassemblyAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_registers": return RpcResponse.Success(req.RequestId,await GetRegistersAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "set_instruction_pointer": return RpcResponse.Success(req.RequestId,await SetInstructionPointerAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "create_object_id": return RpcResponse.Success(req.RequestId,await CreateObjectIdAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "list_object_ids": return RpcResponse.Success(req.RequestId,await ListObjectIdsAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "evaluate_object_id": return RpcResponse.Success(req.RequestId,await EvaluateObjectIdAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "release_object_id": return RpcResponse.Success(req.RequestId,await ReleaseObjectIdAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_autos": return RpcResponse.Success(req.RequestId,await GetAutosAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_output": return RpcResponse.Success(req.RequestId,GetOutput(req));
+			case "wait_for_output": return RpcResponse.Success(req.RequestId,await WaitForOutputAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "set_module_breakpoint": return RpcResponse.Success(req.RequestId,await SetModuleBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "list_module_breakpoints": return RpcResponse.Success(req.RequestId,await ListModuleBreakpointsAsync(requestCancellation.Token).ConfigureAwait(false));
+			case "update_module_breakpoint": return RpcResponse.Success(req.RequestId,await UpdateModuleBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "remove_module_breakpoint": return RpcResponse.Success(req.RequestId,await RemoveModuleBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "list_exception_categories": return RpcResponse.Success(req.RequestId,await ListExceptionCategoriesAsync(requestCancellation.Token).ConfigureAwait(false));
+			case "list_exception_policies": return RpcResponse.Success(req.RequestId,await ListExceptionPoliciesAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "set_exception_policy": return RpcResponse.Success(req.RequestId,await SetExceptionPolicyAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "remove_exception_policy": return RpcResponse.Success(req.RequestId,await RemoveExceptionPolicyAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "restore_exception_defaults": return RpcResponse.Success(req.RequestId,await RestoreExceptionDefaultsAsync(requestCancellation.Token).ConfigureAwait(false));
+			case "export_breakpoints": return RpcResponse.Success(req.RequestId,await ExportBreakpointsAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "import_breakpoints": return RpcResponse.Success(req.RequestId,await ImportBreakpointsAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_value_export": return RpcResponse.Success(req.RequestId,await GetValueExportAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "write_value_export": return RpcResponse.Success(req.RequestId,await WriteValueExportAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "analyze_symbol": return RpcResponse.Success(req.RequestId,await AnalyzeSymbolAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			default: return RpcResponse.Failure(req.RequestId,"unsupported","Unknown operation: "+req.Operation);
 			}
 		} catch (OperationCanceledException) { return RpcResponse.Failure(req.RequestId,"deadline_exceeded","The operation exceeded its deadline."); } catch (RpcException ex) { return RpcResponse.Failure(req.RequestId,ex.Code,ex.Message); } catch (Exception ex) { return RpcResponse.Failure(req.RequestId,"internal_error",ex.Message); } }
@@ -181,7 +204,7 @@ namespace dgSpy.Extension {
 		async Task<SessionState> StartSessionAsync(string programId,string kind,Func<string?> start,TimeSpan connectWait,CancellationToken cancellationToken) {
 			if (sessionId is not null && await OnDebuggerAsync(()=>manager.IsDebugging).ConfigureAwait(false)) throw new RpcException("session_already_active","Detach the current session before attaching to another program.");
 			var rejected=await OnDebuggerAsync(()=>{
-				lock(sync) { events.Reset(); stateVersion=0; attaching=true; faulted=false; faultMessage=null; lastUserMessage=null; terminalExitCode=null; terminalReason=null; sessionKind=kind; lifecycleAction=null; }
+				lock(sync) { events.Reset(); output.Reset(); stateVersion=0; attaching=true; faulted=false; faultMessage=null; lastUserMessage=null; terminalExitCode=null; terminalReason=null; sessionKind=kind; lifecycleAction=null; }
 				var failure=start();
 				if (failure is null) { sessionId=Guid.NewGuid().ToString("N"); stateVersion++; }
 				else lock(sync) attaching=false;

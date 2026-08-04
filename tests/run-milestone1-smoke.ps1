@@ -98,6 +98,7 @@ try {
 	$methodToken = [uint32](($targetLines | Where-Object { $_ -like 'TOKEN=*' }) -replace '^TOKEN=', '')
 
 	$env:DGSPY_RPC_PORT = [string]$RpcPort
+	$env:DGSPY_EXPORT_ROOT = $runDirectory
 	$env:DGSPY_URL = $gatewayUrl
 	$env:DGSPY_TOKEN = $token
 	$dnSpyProcess = Start-Process -FilePath (Join-Path $dnSpyDir 'dnSpy.exe') -ArgumentList '--multiple','--dgspy-no-window-activation' `
@@ -179,7 +180,7 @@ try {
 
 	Write-Host "== discovery ==" -ForegroundColor Cyan
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
-	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame','update_breakpoint','set_exception_breakpoint','list_exception_breakpoints','step_into','step_over','step_out','evaluate','get_members','set_value','get_exception','add_watch','list_watches','remove_watch','list_modules','list_documents','list_types','list_members','search_symbols','get_il','get_csharp','search_text','find_references','find_implementations','get_metadata','get_raw_module','set_breakpoint','invoke_method','create_object','read_memory','write_memory','get_disassembly','get_registers','set_instruction_pointer') {
+	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame','update_breakpoint','set_exception_breakpoint','list_exception_breakpoints','step_into','step_over','step_out','evaluate','get_members','set_value','get_exception','add_watch','list_watches','remove_watch','list_modules','list_documents','list_types','list_members','search_symbols','get_il','get_csharp','search_text','find_references','find_implementations','get_metadata','get_raw_module','set_breakpoint','invoke_method','create_object','read_memory','write_memory','get_disassembly','get_registers','set_instruction_pointer','create_object_id','list_object_ids','evaluate_object_id','release_object_id','get_autos','get_output','wait_for_output','set_module_breakpoint','list_module_breakpoints','update_module_breakpoint','remove_module_breakpoint','export_breakpoints','import_breakpoints','list_exception_categories','list_exception_policies','set_exception_policy','remove_exception_policy','restore_exception_defaults','get_value_export','write_value_export','analyze_symbol') {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
 	}
 
@@ -406,6 +407,26 @@ try {
 	Assert-That 'this in a static method reports an error rather than a fabricated value' (-not [string]::IsNullOrWhiteSpace($thisValue.error) -and -not $thisValue.has_raw_value) "(error='$($thisValue.error)')"
 	$label = Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $sessionId; expression = 'label'; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'a reference local evaluates without a raw scalar or an error' ($null -eq $label.error) "(error='$($label.error)')"
+	# CorDebug cannot create an object ID for every reference kind (notably strings). Main's commandLine
+	# array is a stable heap object and exercises the actual persistent-reference path.
+	$objectId = Invoke-Tool -Name 'create_object_id' -Arguments @{ session_id = $sessionId; expression = 'commandLine'; process_id = $targetId; runtime_id = $program.runtime_guid; thread_id = $stepThread; frame_index = 1 }
+	Assert-That 'create_object_id returns runtime-scoped identity' ($objectId.object_id -ge 1 -and $objectId.process_id -eq $targetId)
+	$listedIds = @(Invoke-Tool -Name 'list_object_ids' -Arguments @{ session_id = $sessionId; process_id = $targetId; runtime_id = $objectId.runtime_id } | ForEach-Object { $_ })
+	Assert-That 'list_object_ids finds the created id' (@($listedIds | Where-Object { $_.object_id -eq $objectId.object_id }).Count -eq 1)
+	$readId = Invoke-Tool -Name 'evaluate_object_id' -Arguments @{ session_id = $sessionId; object_id = $objectId.object_id; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 1 }
+	Assert-That 'evaluate_object_id resolves the persistent value' ($readId.value.error -eq $null)
+	$releasedId = Invoke-Tool -Name 'release_object_id' -Arguments @{ session_id = $sessionId; object_id = $objectId.object_id; process_id = $targetId; runtime_id = $objectId.runtime_id }
+	Assert-That 'release_object_id releases exactly the selected id' ($releasedId.object_id -eq $objectId.object_id)
+	$autos = @(Invoke-Tool -Name 'get_autos' -Arguments @{ session_id = $sessionId; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } | ForEach-Object { $_ })
+	Assert-That 'get_autos reaches the C# Autos provider' ($autos.Count -ge 0)
+	$valueExport = Invoke-Tool -Name 'get_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 }
+	Assert-That 'get_value_export returns hashed bounded bytes' ($valueExport.total_size -eq 4 -and $valueExport.sha256.Length -eq 64 -and [Convert]::FromBase64String($valueExport.data_base64).Length -eq 4)
+	$hostExport = Invoke-Tool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = 'input.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 }
+	Assert-That 'write_value_export writes below the configured root with the same hash' ((Test-Path -LiteralPath $hostExport.path) -and $hostExport.sha256 -eq $valueExport.sha256 -and -not [string]::IsNullOrWhiteSpace($hostExport.audit_id))
+	$pathEscape = Invoke-Tool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = '..\outside.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } -ExpectError
+	Assert-That 'write_value_export rejects traversal outside the configured root' ($pathEscape -match 'outside DGSPY_EXPORT_ROOT')
+	$overwrite = Invoke-Tool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = 'input.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } -ExpectError
+	Assert-That 'write_value_export rejects overwrite by default' ($overwrite -match 'already exists')
 
 	$frameValues = Invoke-Tool -Name 'get_frame' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0; include = @('locals') }
 	Assert-That 'get_frame include returns the full value list, objects included' (@($frameValues.values).Count -ge 1) "(got $(@($frameValues.values).Count))"
@@ -490,6 +511,17 @@ try {
 	$currentFrame = Invoke-Tool -Name 'get_frame' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0 }
 	$setIp = Invoke-Tool -Name 'set_instruction_pointer' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0; module = $currentFrame.module; method_token = $currentFrame.method_token; il_offset = $currentFrame.il_offset }
 	Assert-That 'set_instruction_pointer validates and audits the selected frame' ($setIp.completed -and $setIp.causes_side_effects -and $setIp.capability -eq 'set_instruction_pointer')
+	$outputMessages = Invoke-Tool -Name 'get_output' -Arguments @{ session_id = $sessionId; after_output_id = 0 }
+	Assert-That 'get_output exposes bounded debugger messages including audits' (@($outputMessages.messages | Where-Object { $_.message -like '*dgSpy audit*' }).Count -ge 1)
+	$moduleBreak = Invoke-Tool -Name 'set_module_breakpoint' -Arguments @{ session_id = $sessionId; module_name = 'NeverLoaded.Phase8.*'; is_loaded = $true }
+	$moduleBreaks = @(Invoke-Tool -Name 'list_module_breakpoints' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
+	Assert-That 'module breakpoints round-trip dnSpy filters' (@($moduleBreaks | Where-Object { $_.breakpoint_id -eq $moduleBreak.breakpoint_id -and $_.is_loaded }).Count -eq 1)
+	$null = Invoke-Tool -Name 'remove_module_breakpoint' -Arguments @{ session_id = $sessionId; breakpoint_id = $moduleBreak.breakpoint_id }
+	$breakpointDocument = Invoke-Tool -Name 'export_breakpoints' -Arguments @{ session_id = $sessionId }
+	$breakpointDryRun = Invoke-Tool -Name 'import_breakpoints' -Arguments @{ session_id = $sessionId; document = $breakpointDocument; mode = 'merge'; dry_run = $true }
+	Assert-That 'breakpoint interchange dry-run validates without mutation' ($breakpointDryRun.dry_run -and $breakpointDryRun.removed -eq 0)
+	$categories = @(Invoke-Tool -Name 'list_exception_categories' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
+	Assert-That 'exception categories expose DotNet' (@($categories | Where-Object { $_.category -eq 'DotNet' }).Count -eq 1)
 
 	Write-Host "== symbols, IL and decompilation ==" -ForegroundColor Cyan
 	$documents = @(Invoke-Tool -Name 'list_documents' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
@@ -533,6 +565,8 @@ try {
 	$runToken = @($workerMembers.symbols | Where-Object { $_.kind -eq 'method' })[0].method_token
 	$refs = Invoke-Tool -Name 'find_references' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $runToken; search_module = 'Milestone1Target'; count = 10 }
 	Assert-That 'find_references identifies the containing method by token' (@($refs.symbols | Where-Object { $_.name -eq 'UseWorker' }).Count -eq 1) "(total=$($refs.total))"
+	$analysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $runToken; search_module = 'Milestone1Target'; count = 20 }
+	Assert-That 'analyze_symbol returns typed endpoint identities' (@($analysis.edges | Where-Object { $_.kind -eq 'caller' -and $_.source.name -eq 'UseWorker' -and $_.target.method_token -eq $runToken }).Count -eq 1) "(total=$($analysis.total))"
 
 	$ifaceTypes = Invoke-Tool -Name 'list_types' -Arguments @{ session_id = $sessionId; module = $targetExe; name_pattern = 'IWorker' }
 	$ifaceToken = @($ifaceTypes.symbols | Where-Object { $_.full_name -eq 'Milestone1Target.IWorker' })[0].method_token

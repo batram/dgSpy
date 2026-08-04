@@ -34,17 +34,23 @@ namespace dgSpy.Extension {
 
 		DbgModule FindModule(string module) {
 			var all=manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules).ToArray();
-			var found=all.FirstOrDefault(m=>string.Equals(m.Filename,module,StringComparison.OrdinalIgnoreCase))
-				?? all.FirstOrDefault(m=>string.Equals(m.Name,module,StringComparison.OrdinalIgnoreCase))
-				?? all.FirstOrDefault(m=>m.Filename.EndsWith("\\"+module,StringComparison.OrdinalIgnoreCase));
-			if (found is null) throw new RpcException("module_not_found",$"No loaded module matches '{module}'. Use list_modules and pass an exact filename or name.");
-			return found;
+			var matches=all.Where(m=>string.Equals(m.Filename,module,StringComparison.OrdinalIgnoreCase)||string.Equals(m.Name,module,StringComparison.OrdinalIgnoreCase)||m.Filename.EndsWith("\\"+module,StringComparison.OrdinalIgnoreCase)).ToArray();
+			if (matches.Length==0) throw new RpcException("module_not_found",$"No loaded module matches '{module}'. Use list_modules and pass an exact filename or name.");
+			if (matches.Length>1) throw new RpcException("ambiguous_target",$"Module '{module}' exists in more than one active runtime; pass process_id and runtime_id.");
+			return matches[0];
+		}
+		DbgModule FindModule(RpcRequest req,string module) {
+			var processId=(int?)req.Arguments["process_id"]; var runtimeId=(string?)req.Arguments["runtime_id"];
+			var matches=manager.Processes.Where(p=>!processId.HasValue||p.Id==processId.Value).SelectMany(p=>p.Runtimes).Where(r=>string.IsNullOrEmpty(runtimeId)||StringComparer.OrdinalIgnoreCase.Equals(r.Guid.ToString("D"),runtimeId)||StringComparer.OrdinalIgnoreCase.Equals(r.Name,runtimeId)).SelectMany(r=>r.Modules).Where(m=>string.Equals(m.Filename,module,StringComparison.OrdinalIgnoreCase)||string.Equals(m.Name,module,StringComparison.OrdinalIgnoreCase)||m.Filename.EndsWith("\\"+module,StringComparison.OrdinalIgnoreCase)).ToArray();
+			if(matches.Length==0) throw new RpcException("module_not_found",$"No loaded module matches '{module}' in the selected target. Use list_modules and pass an exact filename or name.");
+			if(matches.Length>1) throw new RpcException("ambiguous_target",$"Module '{module}' matches more than one active runtime; pass process_id and runtime_id.");
+			return matches[0];
 		}
 
 		async Task<T> WithMetadataAsync<T>(RpcRequest req,string moduleArgument,Func<ModuleDef,T> callback,CancellationToken cancellationToken) {
 			var module=(string?)req.Arguments[moduleArgument];
 			if (string.IsNullOrWhiteSpace(module)) throw new RpcException("invalid_arguments",$"{moduleArgument} is required.");
-			var dbgModule=await OnDebuggerAsync(()=>FindModule(module!),cancellationToken).ConfigureAwait(false);
+			var dbgModule=await OnDebuggerAsync(()=>FindModule(req,module!),cancellationToken).ConfigureAwait(false);
 			return await evaluations.RunAsync(()=>{
 				// This is also the answer to the in-memory module gap: dnSpy resolves dynamic and
 				// in-memory modules through the same service, so metadata is reachable for a module that
@@ -346,7 +352,7 @@ namespace dgSpy.Extension {
 			if (string.IsNullOrWhiteSpace(module)) throw new RpcException("invalid_arguments","module is required.");
 			var offset=Math.Max(0,(int?)req.Arguments["offset"] ?? 0);
 			var count=Math.Min(1024*1024,Math.Max(1,(int?)req.Arguments["count"] ?? 256*1024));
-			var dbgModule=await OnDebuggerAsync(()=>FindModule(module!),cancellationToken).ConfigureAwait(false);
+			var dbgModule=await OnDebuggerAsync(()=>FindModule(req,module!),cancellationToken).ConfigureAwait(false);
 			var filename=await OnDebuggerAsync(()=>dbgModule.Filename,cancellationToken).ConfigureAwait(false);
 			return await evaluations.RunAsync(()=>{
 				byte[] bytes;
@@ -372,7 +378,7 @@ namespace dgSpy.Extension {
 				return method.MDToken.ToUInt32();
 			},cancellationToken).ConfigureAwait(false);
 			var module=req.Arguments.Value<string>("module")!;
-			var dbgModule=await OnDebuggerAsync(()=>FindModule(module),cancellationToken).ConfigureAwait(false);
+			var dbgModule=await OnDebuggerAsync(()=>FindModule(req,module),cancellationToken).ConfigureAwait(false);
 			var (path,addressable)=await OnDebuggerAsync(()=>(dbgModule.Filename,CanCarryBreakpoint(dbgModule)),cancellationToken).ConfigureAwait(false);
 			if (!addressable)
 				throw new RpcException("module_has_no_path",$"'{module}' is an in-memory or dynamic module, so it has no file path for set_il_breakpoint to address; the runtime reports '{path}', which is not one. Its metadata is readable through get_csharp and get_il.");

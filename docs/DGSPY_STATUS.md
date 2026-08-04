@@ -97,24 +97,42 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | `get_disassembly` — managed IL and CorDebug JIT-native blocks | ✅ automated live |
 | `get_registers` — explicit `capability_unsupported` on this dnSpy contract | ✅ automated live failure contract |
 | `set_instruction_pointer` — current-frame/method and engine validation, audited | ✅ automated live |
+| **Phase 8 closed out** — debugger completeness | ✅ 2026-08-04 (CorDebug; multi-target fixture and Mono open) |
+| Object IDs and C# Autos | ✅ automated live |
+| Bounded cursor-based debugger output, separate from stop events | ✅ unit + automated live |
+| Module load/unload breakpoint filters | ✅ automated live round-trip |
+| Canonical bounded breakpoint export/import; merge/replace and dry-run contracts | ✅ unit + automated dry-run |
+| Exception categories, flags, and module conditions | ✅ contract + category live |
+| Value export chunks and host writes below `DGSPY_EXPORT_ROOT` | ✅ automated live, including traversal/overwrite refusal |
+| `analyze_symbol` typed caller/callee/field/construction/override/implementation/attribute edges with a hard scan budget | ✅ automated caller edge live |
 
 Test suites, all green:
 
 ```powershell
-dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 27 checks, wire + capability contract
-dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 130 checks, access control + deadline bounds
-dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 291 checks, end to end
+dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 29 checks, wire + capability contract
+dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 173 checks, access control + deadline bounds
+dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 16 checks, extension core
+.\tests\run-milestone1-smoke.ps1                                       # 326 checks, end to end
 ```
 
-All four suites are green as of 2026-08-04: 27 / 130 / 15 unit
-checks and 291 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
+All four suites are green as of 2026-08-04: 29 / 173 / 16 unit
+checks and 326 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
 verified against live UCH — see
 [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). **Phases 4 and 5 are verified on CorDebug only.**
-Stepping, conditions, evaluation, and Phase 7 mutation/low-level operations have not been exercised against Mono/Unity, and Mono differs enough
+Stepping, conditions, evaluation, and Phase 7/8 operations have not been exercised against Mono/Unity, and Mono differs enough
 elsewhere (sequence points, asynchronous frame fetch) that this is a real gap rather than a formality.
 
 ## Remaining gaps
+
+### Phase 8 live-verification boundaries
+
+The default dnSpy manager and dgSpy protocol now support explicit process/runtime targeting and the
+`mixed` aggregate state, but the automated fixture owns one process and one runtime. A true multi-process
+run still has to prove per-process pause/continue and every `ambiguous_target` no-op path. Phase 8's new
+Mono/Unity paths are likewise capability-described and compile against the engine, but are not yet live
+UCH evidence. Breakpoint `replace`, object-ID survival across resume, and the less common analyzer edge
+kinds have contract/implementation coverage but only merge dry-run, same-stop object IDs, and a caller
+edge are currently in the live smoke.
 
 ### Partly addressed: frames can name a module that has no file
 

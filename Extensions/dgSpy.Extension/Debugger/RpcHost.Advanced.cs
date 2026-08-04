@@ -43,7 +43,7 @@ namespace dgSpy.Extension {
 			var processes=manager.Processes.ToArray();
 			if (processId is null && processes.Length==1) return processes[0];
 			return processes.FirstOrDefault(p=>p.Id==processId)
-				?? throw new RpcException("process_not_found",processId is null ? "More than one process is active; pass process_id." : $"Process {processId} is not active.");
+				?? throw new RpcException(processId is null ? "ambiguous_target" : "process_not_found",processId is null ? "More than one process is active; pass process_id." : $"Process {processId} is not active.");
 		}
 
 		static ulong UInt64Argument(RpcRequest req,string name) {

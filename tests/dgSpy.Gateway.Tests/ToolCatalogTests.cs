@@ -46,4 +46,11 @@ public sealed class ToolCatalogTests {
 			Assert.Contains("audit",Description(tool),StringComparison.OrdinalIgnoreCase);
 		}
 	}
+
+	[Fact]
+	public void Phase8_surface_is_complete_and_host_export_is_visibly_side_effecting() {
+		var names=ToolCatalog.All.Select(Name).ToHashSet(StringComparer.Ordinal);
+		foreach(var name in new[]{"create_object_id","list_object_ids","evaluate_object_id","release_object_id","get_autos","get_output","wait_for_output","set_module_breakpoint","list_module_breakpoints","update_module_breakpoint","remove_module_breakpoint","export_breakpoints","import_breakpoints","list_exception_categories","list_exception_policies","set_exception_policy","remove_exception_policy","restore_exception_defaults","get_value_export","write_value_export","analyze_symbol"}) Assert.Contains(name,names);
+		Assert.Contains("SIDE EFFECTING",Description(ToolCatalog.All.Single(t=>Name(t)=="write_value_export")));
+	}
 }

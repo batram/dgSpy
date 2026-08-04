@@ -337,4 +337,32 @@ public class CapabilityContractTests {
 		Assert.False((bool?)step["completed"]);
 		Assert.Null(step["error"]);
 	}
+
+	[Fact]
+	public void Phase8_operations_are_bounded_and_permissions_are_machine_readable() {
+		var mutating=new[]{"create_object_id","release_object_id","set_module_breakpoint","update_module_breakpoint","remove_module_breakpoint","import_breakpoints","set_exception_policy","remove_exception_policy","restore_exception_defaults","write_value_export"};
+		var readOnly=new[]{"list_object_ids","evaluate_object_id","get_autos","get_output","wait_for_output","list_module_breakpoints","export_breakpoints","list_exception_categories","list_exception_policies","get_value_export","analyze_symbol"};
+		Assert.All(mutating,name=>Assert.True(CapabilityCatalog.Operations.Single(o=>o.Operation==name).MutatesSession,name));
+		Assert.All(readOnly,name=>Assert.False(CapabilityCatalog.Operations.Single(o=>o.Operation==name).MutatesSession,name));
+		Assert.All(mutating.Concat(readOnly),name=>Assert.True(CapabilityCatalog.BoundMs(name)>0,name));
+		var capabilities=JObject.FromObject(CapabilityCatalog.Describe("0.1.0"));
+		Assert.True((bool?)capabilities["engines"]![0]!["object_ids"]);
+		Assert.Equal(16*1024*1024,(int?)capabilities["limits"]!["max_value_export_bytes"]);
+	}
+
+	[Fact]
+	public void Phase8_documents_and_chunks_round_trip_without_display_parsing() {
+		var document=new BreakpointDocument { Code=new[]{new BreakpointInfo { Module="a.dll",MethodToken=0x06000001,IlOffset=2 }},Modules=new[]{new ModuleBreakpointInfo { ModuleName="Plugin*",IsLoaded=true }},ExceptionTotal=12,ExceptionTruncated=true };
+		var json=JObject.FromObject(document);
+		Assert.Equal("dgspy.breakpoints",(string?)json["format"]);
+		Assert.Equal(0x06000001u,(uint?)json["code"]![0]!["method_token"]);
+		Assert.Equal(12,(int?)json["exception_total"]);
+		Assert.True((bool?)json["exception_truncated"]);
+		var analysis=JObject.FromObject(new AnalysisResult { ScannedMethods=1000,ScanTruncated=true,Truncated=true });
+		Assert.Equal(1000,(int?)analysis["scanned_methods"]);
+		Assert.True((bool?)analysis["scan_truncated"]);
+		var chunk=JObject.FromObject(new ValueExportChunk { TotalSize=4,Count=2,Sha256="abc",DataBase64="AAE=" });
+		Assert.Equal("abc",(string?)chunk["sha256"]);
+		Assert.Equal("AAE=",(string?)chunk["data_base64"]);
+	}
 }

@@ -128,4 +128,18 @@ public sealed class ExtensionCoreTests {
 		Assert.Equal(0,buffer.LastEventId);
 		Assert.Empty(buffer.FindAfter(0));
 	}
+
+	[Fact]
+	public async Task OutputBufferIsBoundedCursorBasedAndNonDestructive() {
+		var buffer=new OutputBuffer(2);
+		buffer.Add("Output","one"); buffer.Add("ErrorUser","two"); buffer.Add("Output","three");
+		var snapshot=buffer.Snapshot(0);
+		Assert.True(snapshot.Truncated);
+		Assert.Equal(2,snapshot.Messages.Length);
+		Assert.Equal(new[]{"two","three"},snapshot.Messages.Select(m=>m.Message));
+		Assert.Equal(snapshot.Messages.Select(m=>m.OutputId),buffer.Snapshot(0).Messages.Select(m=>m.OutputId));
+		using var cancelled=new CancellationTokenSource();
+		var wait=buffer.WaitAsync(snapshot.Last,cancelled.Token); cancelled.Cancel();
+		await Assert.ThrowsAnyAsync<OperationCanceledException>(()=>wait);
+	}
 }

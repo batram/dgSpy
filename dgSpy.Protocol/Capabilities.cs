@@ -22,6 +22,8 @@ namespace dgSpy.Protocol {
 		[JsonProperty("registers")] public bool Registers { get; set; }
 		[JsonProperty("set_instruction_pointer")] public bool SetInstructionPointer { get; set; }
 		[JsonProperty("abort_function_evaluation")] public bool AbortFunctionEvaluation { get; set; }
+		[JsonProperty("object_ids")] public bool ObjectIds { get; set; }
+		[JsonProperty("exception_modes")] public string[] ExceptionModes { get; set; }=Array.Empty<string>();
 		[JsonProperty("notes")] public string Notes { get; set; }="";
 	}
 	/// <summary>The extension's own upper bound for one operation. The gateway derives its deadline from
@@ -42,6 +44,7 @@ namespace dgSpy.Protocol {
 		/// started evaluation, so that work still runs to completion.</summary>
 		[JsonProperty("cancels_in_flight_work")] public bool CancelsInFlightWork { get; set; }
 		[JsonProperty("max_evaluation_timeout_ms")] public int MaxEvaluationTimeoutMs { get; set; }
+		[JsonProperty("max_value_export_bytes")] public int MaxValueExportBytes { get; set; }
 	}
 	public sealed class CapabilityInfo {
 		[JsonProperty("host_id")] public string HostId { get; set; }="";
@@ -242,25 +245,32 @@ namespace dgSpy.Protocol {
 			Op("get_disassembly",12000),
 			Op("get_registers",8000),
 			Op("set_instruction_pointer",12000,mutates:true),
+			// Phase 8 debugger-completeness operations.
+			Op("create_object_id",20000,mutates:true), Op("list_object_ids",5000), Op("evaluate_object_id",20000), Op("release_object_id",5000,mutates:true),
+			Op("get_autos",20000), Op("get_output",5000), Op("wait_for_output",12000),
+			Op("set_module_breakpoint",5000,mutates:true), Op("list_module_breakpoints",5000), Op("update_module_breakpoint",5000,mutates:true), Op("remove_module_breakpoint",5000,mutates:true),
+			Op("export_breakpoints",10000), Op("import_breakpoints",30000,mutates:true),
+			Op("list_exception_categories",5000), Op("list_exception_policies",10000), Op("set_exception_policy",5000,mutates:true), Op("remove_exception_policy",5000,mutates:true), Op("restore_exception_defaults",5000,mutates:true),
+			Op("get_value_export",20000), Op("write_value_export",20000,mutates:true), Op("analyze_symbol",60000),
 		};
 		public static readonly EngineCapabilities[] Engines = {
 			new EngineCapabilities {
 				Engine="cordebug", DisplayName=".NET Framework CorDebug (CLR v4.0.30319)",
 				Acquisition=new[]{"list_programs+attach"}, Discoverable=true,
 				ArbitraryIlOffsetBreakpoints=true, SequencePointBreakpointsOnly=false, DetachWithoutTerminating=true,
-				MethodInvocation=true,ObjectConstruction=true,MemoryAccess=true,NativeDisassembly=true,Registers=false,SetInstructionPointer=true,AbortFunctionEvaluation=true,
+				MethodInvocation=true,ObjectConstruction=true,MemoryAccess=true,NativeDisassembly=true,Registers=false,SetInstructionPointer=true,AbortFunctionEvaluation=true,ObjectIds=true,ExceptionModes=new[]{"thrown","unhandled"},
 				Notes="Accepts a breakpoint at any IL offset. Closing dnSpy with a session attached terminates the target; detach instead.",
 			},
 			new EngineCapabilities {
 				Engine="unity", DisplayName="Mono/Unity soft debugger",
 				Acquisition=new[]{"attach_endpoint"}, Discoverable=false,
 				ArbitraryIlOffsetBreakpoints=false, SequencePointBreakpointsOnly=true, DetachWithoutTerminating=true,
-				MethodInvocation=true,ObjectConstruction=true,MemoryAccess=true,NativeDisassembly=false,Registers=false,SetInstructionPointer=true,AbortFunctionEvaluation=true,
+				MethodInvocation=true,ObjectConstruction=true,MemoryAccess=true,NativeDisassembly=false,Registers=false,SetInstructionPointer=true,AbortFunctionEvaluation=true,ObjectIds=true,ExceptionModes=new[]{"thrown","unhandled"},
 				Notes="A target launched with an explicit --debugger-agent endpoint emits no discovery beacon, so only attach_endpoint reaches it, and the endpoint accepts one connection per launch. Breakpoints bind only at sequence points.",
 			},
 		};
 		public static readonly CapabilityLimits Limits = new CapabilityLimits {
-			MaxFrames=100, MaxWaitTimeoutMs=10000, MaxConnectionTimeoutMs=300000, MaxConcurrentSessions=1, CancelsInFlightWork=false, MaxEvaluationTimeoutMs=10000,
+			MaxFrames=100, MaxWaitTimeoutMs=10000, MaxConnectionTimeoutMs=300000, MaxConcurrentSessions=1, CancelsInFlightWork=false, MaxEvaluationTimeoutMs=10000, MaxValueExportBytes=16*1024*1024,
 		};
 		public static bool IsKnownOperation(string operation) => Operations.Any(o=>o.Operation==operation);
 		/// <summary>The extension's upper bound for an operation, or 0 when it is not a known operation.</summary>

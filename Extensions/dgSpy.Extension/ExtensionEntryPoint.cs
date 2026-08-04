@@ -3,6 +3,7 @@ using System.ComponentModel.Composition;
 using dnSpy.Contracts.Debugger;
 using dnSpy.Contracts.Debugger.Attach;
 using dnSpy.Contracts.Debugger.Breakpoints.Code;
+using dnSpy.Contracts.Debugger.Breakpoints.Modules;
 using dnSpy.Contracts.Debugger.CallStack;
 using dnSpy.Contracts.Debugger.DotNet.Code;
 using dnSpy.Contracts.Debugger.Evaluation;
@@ -17,8 +18,8 @@ namespace dgSpy.Extension {
 		readonly RpcHost host;
 
 		[ImportingConstructor]
-		ExtensionEntryPoint(AttachableProcessesService programs, DbgManager manager, DbgCodeBreakpointsService breakpoints, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDecompilerService decompilers) =>
-			host=new RpcHost(programs,manager,breakpoints,locations,callStack,languages,exceptions,metadataService,decompilers);
+		ExtensionEntryPoint(AttachableProcessesService programs, DbgManager manager, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDecompilerService decompilers) =>
+			host=new RpcHost(programs,manager,breakpoints,moduleBreakpoints,objectIds,locations,callStack,languages,exceptions,metadataService,decompilers);
 
 		public IEnumerable<string> MergedResourceDictionaries { get { yield break; } }
 		public ExtensionInfo ExtensionInfo => new ExtensionInfo { ShortDescription="dgSpy MCP debugger bridge 0.1.0" };

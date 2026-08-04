@@ -14,6 +14,7 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\Identity\ProgramIdentity.cs" Link="Identity\ProgramIdentity.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\SessionStateCalculator.cs" Link="Debugger\SessionStateCalculator.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\DebugEventBuffer.cs" Link="Events\DebugEventBuffer.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Events\OutputBuffer.cs" Link="Events\OutputBuffer.cs" />
     <ProjectReference Include="..\..\dgSpy.Protocol\dgSpy.Protocol.csproj" />
   </ItemGroup>
 </Project>

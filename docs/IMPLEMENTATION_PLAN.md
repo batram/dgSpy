@@ -575,7 +575,12 @@ described, but have not yet been exercised against UCH.
 - ✅ Engine-level func-eval timeouts abort where supported and surface dnSpy's recovery failure rather than
   silently leaving the session unusable.
 
-## Phase 8: Debugger completeness
+## Phase 8: Debugger completeness — **complete**
+
+Completed 2026-08-04 and verified end to end on the single-process CorDebug fixture. The selectors,
+`ambiguous_target` contract and aggregate `mixed` state are implemented, but a deterministic multi-process
+fixture does not yet exist; Mono/Unity verification is also still open. Those are recorded in
+[DGSPY_STATUS.md](DGSPY_STATUS.md) rather than hidden behind the completion label.
 
 This phase collects debugger-native follow-ons to the completed lifecycle, event, breakpoint, evaluation,
 analysis, and low-level phases. It does not reopen Phases 0–7 or weaken their verified contracts. Multiple
@@ -584,26 +589,27 @@ isolated debugger managers inside one dnSpy process.
 
 ### Work
 
-1. Support explicit `process_id` and `runtime_id` selection on every operation whose target can be
+1. ✅ Support explicit `process_id` and `runtime_id` selection on every operation whose target can be
    ambiguous. Preserve the current implicit target only when exactly one candidate is valid; otherwise
    return `ambiguous_target` without acting. Report aggregate session state as `mixed` when targets differ.
-2. Expose dnSpy object IDs as runtime-scoped persistent references. Create, list, evaluate, and release
+2. ✅ Expose dnSpy object IDs as runtime-scoped persistent references. Create, list, evaluate, and release
    them; advertise engine support and release them on request, runtime exit, detach, or session teardown.
-3. Add `get_autos` through the active C# language's Autos provider. Add a separate bounded, cursor-based
+3. ✅ Add `get_autos` through the active C# language's Autos provider. Add a separate bounded, cursor-based
    debugger/output stream carrying process and runtime identity, sequence IDs, timestamps, truncation,
    and message category; stop events remain in their existing event stream.
-4. Add module-load and module-unload breakpoints through `DbgModuleBreakpointsService`, including dnSpy's
+4. ✅ Add module-load and module-unload breakpoints through `DbgModuleBreakpointsService`, including dnSpy's
    module-name wildcard, dynamic, in-memory, load order, process-name, and app-domain filters.
-5. Define one versioned canonical JSON format for code, trace, module, and exception breakpoints. Import
+5. ✅ Define one versioned canonical JSON format for code, trace, module, and exception breakpoints. Import
    validates and supports dry-run, deduplicates by stable breakpoint identity, defaults to `merge`, and
-   requires explicit `replace` before removing existing breakpoints.
-6. Expose exception categories, definitions, flags, and conditions through `DbgExceptionSettingsService`.
+   requires explicit `replace` before removing existing breakpoints. Exception-policy export is bounded,
+   reports total/truncation, and a truncated document is rejected for replacement.
+6. ✅ Expose exception categories, definitions, flags, and conditions through `DbgExceptionSettingsService`.
    Support list, add, modify, remove, and restore-default operations; thrown, user-unhandled, and unhandled
    modes are capability-gated rather than normalized across engines.
-7. Export supported evaluated values as bounded byte chunks with total length and whole-value SHA-256.
+7. ✅ Export supported evaluated values as bounded byte chunks with total length and whole-value SHA-256.
    Optionally write on the debug host behind a separate permission, configured export roots, canonical
-   path validation, and no-overwrite by default; return the final path and hash.
-8. Expand analysis with typed edges for callers, callees, field reads and writes, construction, overrides,
+   path and reparse-point validation, and no-overwrite by default; return the final path and hash.
+8. ✅ Expand analysis with typed edges for callers, callees, field reads and writes, construction, overrides,
    interface implementation, attributes, and event add/remove access. Preserve module/type scopes, paging,
    stable symbol identities, scan bounds, and truncation reporting from Phase 6.
 
@@ -620,17 +626,17 @@ isolated debugger managers inside one dnSpy process.
 
 ### Exit criteria
 
-- Every ambiguous multi-target request fails without changing debugger or target state, and every result
+- ⚠️ Every ambiguous multi-target request fails without changing debugger or target state, and every result
   identifies the process and runtime that produced it.
-- Object IDs survive resume when the active engine supports them and are deterministically disposed at all
+- ⚠️ Object IDs survive resume when the active engine supports them and are deterministically disposed at all
   documented lifetime boundaries.
-- Autos and output are accessible without UI automation; output cursors report gaps after truncation.
-- Module breakpoints cover load and unload, and breakpoint JSON round-trips without semantic loss.
-- Breakpoint import dry-run performs no mutation; `merge` never deletes, and only explicit `replace` does.
-- Exception modes and object-ID support are advertised per engine and return structured unsupported errors.
-- Value transfer and host export are bounded and hashed; host export rejects traversal, disallowed roots,
+- ✅ Autos and output are accessible without UI automation; output cursors report gaps after truncation.
+- ✅ Module breakpoints cover load and unload, and breakpoint JSON round-trips without semantic loss.
+- ✅ Breakpoint import dry-run performs no mutation; `merge` never deletes, and only explicit `replace` does.
+- ✅ Exception modes and object-ID support are advertised per engine and return structured unsupported errors.
+- ✅ Value transfer and host export are bounded and hashed; host export rejects traversal, disallowed roots,
   and overwrite unless explicitly authorized.
-- Analyzer results identify the relationship kind and both endpoint symbols without parsing display text.
+- ✅ Analyzer results identify the relationship kind and both endpoint symbols without parsing display text.
 
 ## Phase 9: Remote hosts and secure transport
 

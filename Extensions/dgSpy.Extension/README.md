@@ -4,14 +4,16 @@
 - `Rpc/`: loopback transport, request dispatch, and structured RPC errors.
 - `Debugger/`: debugger-dispatcher scheduling, lifecycle control, debugger-state rules, breakpoint
   settings and exception settings (`RpcHost.Breakpoints.cs`), stepping (`RpcHost.Stepping.cs`), and
-  Phase 7 memory/disassembly/set-IP operations (`RpcHost.Advanced.cs`).
+  Phase 7 memory/disassembly/set-IP operations (`RpcHost.Advanced.cs`), and Phase 8 object IDs, Autos,
+  module breakpoints, breakpoint interchange, exception policies and value export
+  (`RpcHost.Completeness.cs`, `RpcHost.BreakpointInterchange.cs`).
 
 A dnSpy *settings* write does not take effect on the dispatcher hop that makes it: the setter posts the
 real work back to the dispatcher even when the caller is already on it. Write on one hop and read back
 on the next — dispatcher delivery is FIFO, so the queued work runs in between. Describing a breakpoint
 in the same callback that changed it reports the old settings and looks like a write that did nothing.
-- `Events/`: normalized debugger/lifecycle events, bounded non-destructive cursor reads, cancellable
-  shared-signal waits, stop-reason lookup, and truncation reporting.
+- `Events/`: normalized debugger/lifecycle events and a separate debugger-output stream, both with bounded
+  non-destructive cursor reads, cancellable shared-signal waits, and truncation reporting.
 - `Evaluation/`: expression evaluation, member expansion, assignment, watches and module listing. Every
   evaluation runs on the `EvaluationQueue`, never the dispatcher — func-eval executes code inside the
   target and would otherwise stall event delivery for the whole session.
@@ -20,7 +22,7 @@ in the same callback that changed it reports the old settings and looks like a w
 and return its id. `get_registers` reports `capability_unsupported`: this dnSpy version has no public
 register contract. Callers should inspect per-engine flags from `get_capabilities` before low-level work.
 
-- `Decompiler/`: metadata, symbol search, IL, decompilation and breakpoint-by-name. Metadata and
+- `Decompiler/`: metadata, symbol search, typed relationship analysis, IL, decompilation and breakpoint-by-name. Metadata and
   decompilation also run on the `EvaluationQueue`: dnlib loads lazily and dnSpy caches one `ModuleDef`
   per module, so two concurrent readers of the same module race, and a large decompile on the
   dispatcher would stall event delivery for the whole session.
