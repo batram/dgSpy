@@ -1,6 +1,6 @@
 # dgSpy status and handoff
 
-Last updated 2026-08-03. Branch `dgspy-mcp-milestone-1`.
+Last updated 2026-08-04. Branch `dgspy-mcp-milestone-1`.
 
 Scope in force: x64 only, .NET Framework CorDebug (`CLR v4.0.30319`), plus the Mono/Unity path for UCH.
 CoreCLR and x86 are out. See [DGSPY_BASELINE.md](DGSPY_BASELINE.md) for the toolchain and thread rules,
@@ -90,21 +90,27 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | `search_text` / `find_references` / `find_implementations` — bounded analysis with symbol identities | ✅ automated CorDebug + live UCH |
 | `get_metadata` / `get_raw_module` — token facts and paged image with SHA-256 | ✅ automated CorDebug + live UCH |
 | `set_breakpoint` by type + method name, same path as `set_il_breakpoint` | ✅ automated live |
+| **Phase 7 closed out** — explicit invocation, memory, disassembly, capabilities, set-IP, hard func-eval timeout | ✅ 2026-08-04 (CorDebug) |
+| `invoke_method` / `create_object` — separate side-effecting tools with audit ids | ✅ automated live |
+| `read_memory` / `write_memory` — bounded target access; writes visibly side-effecting | ✅ automated live |
+| `get_disassembly` — managed IL and CorDebug JIT-native blocks | ✅ automated live |
+| `get_registers` — explicit `capability_unsupported` on this dnSpy contract | ✅ automated live failure contract |
+| `set_instruction_pointer` — current-frame/method and engine validation, audited | ✅ automated live |
 
 Test suites, all green:
 
 ```powershell
-dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 25 checks, wire + capability contract
-dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 115 checks, access control + deadline bounds
+dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 27 checks, wire + capability contract
+dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 130 checks, access control + deadline bounds
 dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 15 checks, extension core
-.\tests\run-milestone1-smoke.ps1                                       # 234 checks, end to end
+.\tests\run-milestone1-smoke.ps1                                       # 249 checks, end to end
 ```
 
-All four suites are green as of the Phase 6 close-out on 2026-08-04: 25 / 115 / 15 unit
-checks and 234 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
+All four suites are green as of the Phase 7 close-out on 2026-08-04: 27 / 130 / 15 unit
+checks and 249 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
 verified against live UCH — see
 [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). **Phases 4 and 5 are verified on CorDebug only.**
-Stepping, conditions and evaluation have not been exercised against Mono/Unity, and Mono differs enough
+Stepping, conditions, evaluation, and Phase 7 mutation/low-level operations have not been exercised against Mono/Unity, and Mono differs enough
 elsewhere (sequence points, asynchronous frame fetch) that this is a real gap rather than a formality.
 
 ## Remaining gaps

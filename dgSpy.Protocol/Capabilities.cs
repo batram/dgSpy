@@ -15,6 +15,13 @@ namespace dgSpy.Protocol {
 		[JsonProperty("arbitrary_il_offset_breakpoints")] public bool ArbitraryIlOffsetBreakpoints { get; set; }
 		[JsonProperty("sequence_point_breakpoints_only")] public bool SequencePointBreakpointsOnly { get; set; }
 		[JsonProperty("detach_without_terminating")] public bool DetachWithoutTerminating { get; set; }
+		[JsonProperty("method_invocation")] public bool MethodInvocation { get; set; }
+		[JsonProperty("object_construction")] public bool ObjectConstruction { get; set; }
+		[JsonProperty("memory_access")] public bool MemoryAccess { get; set; }
+		[JsonProperty("native_disassembly")] public bool NativeDisassembly { get; set; }
+		[JsonProperty("registers")] public bool Registers { get; set; }
+		[JsonProperty("set_instruction_pointer")] public bool SetInstructionPointer { get; set; }
+		[JsonProperty("abort_function_evaluation")] public bool AbortFunctionEvaluation { get; set; }
 		[JsonProperty("notes")] public string Notes { get; set; }="";
 	}
 	/// <summary>The extension's own upper bound for one operation. The gateway derives its deadline from
@@ -34,6 +41,7 @@ namespace dgSpy.Protocol {
 		/// deadline_exceeded once, but dnSpy exposes no way to cancel a queued dispatcher callback or a
 		/// started evaluation, so that work still runs to completion.</summary>
 		[JsonProperty("cancels_in_flight_work")] public bool CancelsInFlightWork { get; set; }
+		[JsonProperty("max_evaluation_timeout_ms")] public int MaxEvaluationTimeoutMs { get; set; }
 	}
 	public sealed class CapabilityInfo {
 		[JsonProperty("host_id")] public string HostId { get; set; }="";
@@ -224,23 +232,35 @@ namespace dgSpy.Protocol {
 			Op("get_metadata",30000),
 			Op("get_raw_module",60000),
 			Op("set_breakpoint",30000,mutates:true),
+			// Phase 7. Invocation is deliberately a separate, always-side-effecting surface. The hard
+			// func-eval deadline is passed into dnSpy's evaluation context rather than merely timing out
+			// the RPC wait. Raw memory is capped by the tool schema and low-level operations are bounded.
+			Op("invoke_method",12000,mutates:true),
+			Op("create_object",12000,mutates:true),
+			Op("read_memory",8000),
+			Op("write_memory",8000,mutates:true),
+			Op("get_disassembly",12000),
+			Op("get_registers",8000),
+			Op("set_instruction_pointer",12000,mutates:true),
 		};
 		public static readonly EngineCapabilities[] Engines = {
 			new EngineCapabilities {
 				Engine="cordebug", DisplayName=".NET Framework CorDebug (CLR v4.0.30319)",
 				Acquisition=new[]{"list_programs+attach"}, Discoverable=true,
 				ArbitraryIlOffsetBreakpoints=true, SequencePointBreakpointsOnly=false, DetachWithoutTerminating=true,
+				MethodInvocation=true,ObjectConstruction=true,MemoryAccess=true,NativeDisassembly=true,Registers=false,SetInstructionPointer=true,AbortFunctionEvaluation=true,
 				Notes="Accepts a breakpoint at any IL offset. Closing dnSpy with a session attached terminates the target; detach instead.",
 			},
 			new EngineCapabilities {
 				Engine="unity", DisplayName="Mono/Unity soft debugger",
 				Acquisition=new[]{"attach_endpoint"}, Discoverable=false,
 				ArbitraryIlOffsetBreakpoints=false, SequencePointBreakpointsOnly=true, DetachWithoutTerminating=true,
+				MethodInvocation=true,ObjectConstruction=true,MemoryAccess=true,NativeDisassembly=false,Registers=false,SetInstructionPointer=true,AbortFunctionEvaluation=true,
 				Notes="A target launched with an explicit --debugger-agent endpoint emits no discovery beacon, so only attach_endpoint reaches it, and the endpoint accepts one connection per launch. Breakpoints bind only at sequence points.",
 			},
 		};
 		public static readonly CapabilityLimits Limits = new CapabilityLimits {
-			MaxFrames=100, MaxWaitTimeoutMs=10000, MaxConnectionTimeoutMs=300000, MaxConcurrentSessions=1, CancelsInFlightWork=false,
+			MaxFrames=100, MaxWaitTimeoutMs=10000, MaxConnectionTimeoutMs=300000, MaxConcurrentSessions=1, CancelsInFlightWork=false, MaxEvaluationTimeoutMs=10000,
 		};
 		public static bool IsKnownOperation(string operation) => Operations.Any(o=>o.Operation==operation);
 		/// <summary>The extension's upper bound for an operation, or 0 when it is not a known operation.</summary>

@@ -301,6 +301,31 @@ public class CapabilityContractTests {
 	}
 
 	[Fact]
+	public void Phase7_capabilities_separate_inspection_from_audited_mutation() {
+		var mutating=new[] { "invoke_method","create_object","write_memory","set_instruction_pointer" };
+		var readOnly=new[] { "read_memory","get_disassembly","get_registers" };
+		foreach (var name in mutating) Assert.True(CapabilityCatalog.Operations.Single(o=>o.Operation==name).MutatesSession,$"{name} must be labeled mutating");
+		foreach (var name in readOnly) Assert.False(CapabilityCatalog.Operations.Single(o=>o.Operation==name).MutatesSession,$"{name} must remain read-only");
+		Assert.All(mutating.Concat(readOnly),name=>Assert.True(CapabilityCatalog.BoundMs(name)>0,$"{name} has no bound"));
+
+		var capabilities=JObject.Parse(JsonConvert.SerializeObject(CapabilityCatalog.Describe("0.1.0")));
+		Assert.True((bool?)capabilities["engines"]![0]!["memory_access"]);
+		Assert.False((bool?)capabilities["engines"]![1]!["native_disassembly"]);
+		Assert.False((bool?)capabilities["engines"]![0]!["registers"]);
+		Assert.Equal(10000,(int?)capabilities["limits"]!["max_evaluation_timeout_ms"]);
+	}
+
+	[Fact]
+	public void Phase7_mutation_and_memory_results_are_explicit_on_the_wire() {
+		var mutation=JObject.Parse(JsonConvert.SerializeObject(new MutationResult { Completed=true,AuditId="audit-1",Capability="method_invocation" }));
+		Assert.True((bool?)mutation["causes_side_effects"]);
+		Assert.Equal("audit-1",(string?)mutation["audit_id"]);
+		var memory=JObject.Parse(JsonConvert.SerializeObject(new MemoryResult { Address=16,Length=2,DataBase64="AAE=" }));
+		Assert.Equal("memory_access",(string?)memory["capability"]);
+		Assert.Equal("AAE=",(string?)memory["data_base64"]);
+	}
+
+	[Fact]
 	public void A_step_result_round_trips_with_snake_case_wire_names() {
 		var step = JObject.Parse(JsonConvert.SerializeObject(new StepResult {
 			SessionId = "s", ThreadId = "100:200", StepKind = StepKinds.Over, CursorEventId = 42, Completed = false,

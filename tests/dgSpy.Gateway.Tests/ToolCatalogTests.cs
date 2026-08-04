@@ -1,4 +1,6 @@
 using System.Reflection;
+using System;
+using System.Linq;
 using dgSpy.Protocol;
 using Xunit;
 
@@ -10,6 +12,7 @@ namespace dgSpy.Gateway.Tests;
 /// apart again.</summary>
 public sealed class ToolCatalogTests {
 	static string Name(object tool) => (string)tool.GetType().GetProperty("name", BindingFlags.Public | BindingFlags.Instance)!.GetValue(tool)!;
+	static string Description(object tool) => (string)tool.GetType().GetProperty("description", BindingFlags.Public | BindingFlags.Instance)!.GetValue(tool)!;
 	public static TheoryData<string> ToolNames {
 		get { var data=new TheoryData<string>(); foreach (var tool in ToolCatalog.All) data.Add(Name(tool)); return data; }
 	}
@@ -34,4 +37,13 @@ public sealed class ToolCatalogTests {
 	public void The_slowest_operation_keeps_its_full_connection_timeout() =>
 		Assert.True(ToolCatalog.DeadlineSeconds("attach_endpoint")*1000 > CapabilityCatalog.Limits.MaxConnectionTimeoutMs,
 			"attach_endpoint must outlast the largest connection timeout a caller can ask for.");
+
+	[Fact]
+	public void Phase7_side_effecting_tools_are_visibly_labeled() {
+		foreach (var name in new[] { "invoke_method","create_object","write_memory","set_instruction_pointer" }) {
+			var tool=ToolCatalog.All.Single(t=>Name(t)==name);
+			Assert.Contains("SIDE EFFECTING",Description(tool));
+			Assert.Contains("audit",Description(tool),StringComparison.OrdinalIgnoreCase);
+		}
+	}
 }

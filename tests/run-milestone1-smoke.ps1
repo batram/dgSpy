@@ -179,7 +179,7 @@ try {
 
 	Write-Host "== discovery ==" -ForegroundColor Cyan
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
-	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame','update_breakpoint','set_exception_breakpoint','list_exception_breakpoints','step_into','step_over','step_out','evaluate','get_members','set_value','get_exception','add_watch','list_watches','remove_watch','list_modules','list_documents','list_types','list_members','search_symbols','get_il','get_csharp','search_text','find_references','find_implementations','get_metadata','get_raw_module','set_breakpoint') {
+	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame','update_breakpoint','set_exception_breakpoint','list_exception_breakpoints','step_into','step_over','step_out','evaluate','get_members','set_value','get_exception','add_watch','list_watches','remove_watch','list_modules','list_documents','list_types','list_members','search_symbols','get_il','get_csharp','search_text','find_references','find_implementations','get_metadata','get_raw_module','set_breakpoint','invoke_method','create_object','read_memory','write_memory','get_disassembly','get_registers','set_instruction_pointer') {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
 	}
 
@@ -460,6 +460,30 @@ try {
 	Assert-That 'list_modules finds the target module' (@($modules | Where-Object { $_.filename -like '*Milestone1Target.exe' }).Count -eq 1) "(got $($modules.Count) modules)"
 	Assert-That 'a file-backed module reports that it can carry a breakpoint' (@($modules | Where-Object { $_.filename -like '*Milestone1Target.exe' }).can_set_breakpoint)
 	Assert-That 'every module without a path is marked as unable to carry a breakpoint' (@($modules | Where-Object { [string]::IsNullOrEmpty($_.filename) -and $_.can_set_breakpoint }).Count -eq 0)
+
+	Write-Host "== advanced evaluation and low-level debugging ==" -ForegroundColor Cyan
+	$invoked = Invoke-Tool -Name 'invoke_method' -Arguments @{ session_id = $sessionId; expression = 'System.Math.Abs(-7)'; thread_id = $stepThread; frame_index = 0; timeout_ms = 2000 }
+	Assert-That 'invoke_method performs explicit audited func-eval' ($invoked.completed -and $invoked.causes_side_effects -and -not [string]::IsNullOrWhiteSpace($invoked.audit_id) -and $invoked.value.value -eq 7)
+	$created = Invoke-Tool -Name 'create_object' -Arguments @{ session_id = $sessionId; expression = 'new System.Text.StringBuilder()'; thread_id = $stepThread; frame_index = 0; timeout_ms = 2000 }
+	Assert-That 'create_object is a separate audited side-effect boundary' ($created.completed -and $created.causes_side_effects -and $created.capability -eq 'object_construction')
+	$targetModule = $modules | Where-Object { $_.filename -like '*Milestone1Target.exe' } | Select-Object -First 1
+	# Use the OS process value here. Windows PowerShell 5.1 turns a UInt64 read back through
+	# ConvertFrom-Json into a PSCustomObject on some builds; that is a harness conversion artifact.
+	$moduleAddress = [uint64](Get-Process -Id $targetId).MainModule.BaseAddress.ToInt64()
+	$memory = Invoke-Tool -Name 'read_memory' -Arguments @{ session_id = $sessionId; process_id = $targetId; address = $moduleAddress; length = 2 }
+	$memoryBytes = [Convert]::FromBase64String($memory.data_base64)
+	Assert-That 'read_memory reads bounded target bytes' ($memoryBytes[0] -eq 0x4D -and $memoryBytes[1] -eq 0x5A -and -not $memory.causes_side_effects)
+	$written = Invoke-Tool -Name 'write_memory' -Arguments @{ session_id = $sessionId; process_id = $targetId; address = $moduleAddress; data_base64 = $memory.data_base64 }
+	Assert-That 'write_memory labels the idempotent fixture write as side effecting' ($written.written -and $written.causes_side_effects)
+	$managedDisassembly = Invoke-Tool -Name 'get_disassembly' -Arguments @{ session_id = $sessionId; mode = 'managed'; module = $targetExe; method_token = $methodToken }
+	Assert-That 'get_disassembly exposes managed IL with its capability' ($managedDisassembly.capability -eq 'managed_il' -and @($managedDisassembly.body.instructions).Count -gt 0)
+	$nativeDisassembly = Invoke-Tool -Name 'get_disassembly' -Arguments @{ session_id = $sessionId; mode = 'native'; thread_id = $stepThread; frame_index = 0 }
+	Assert-That 'get_disassembly exposes JIT native blocks when advertised' ($nativeDisassembly.capability -eq 'native_disassembly' -and @($nativeDisassembly.blocks).Count -gt 0)
+	$registerFailure = Invoke-Tool -Name 'get_registers' -Arguments @{ session_id = $sessionId; thread_id = $stepThread } -ExpectError
+	Assert-That 'get_registers returns a structured unsupported capability failure' ($registerFailure -match 'not exposed|unsupported')
+	$currentFrame = Invoke-Tool -Name 'get_frame' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0 }
+	$setIp = Invoke-Tool -Name 'set_instruction_pointer' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0; module = $currentFrame.module; method_token = $currentFrame.method_token; il_offset = $currentFrame.il_offset }
+	Assert-That 'set_instruction_pointer validates and audits the selected frame' ($setIp.completed -and $setIp.causes_side_effects -and $setIp.capability -eq 'set_instruction_pointer')
 
 	Write-Host "== symbols, IL and decompilation ==" -ForegroundColor Cyan
 	$documents = @(Invoke-Tool -Name 'list_documents' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })

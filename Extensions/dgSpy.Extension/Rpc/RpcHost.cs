@@ -107,6 +107,13 @@ namespace dgSpy.Extension {
 			case "get_metadata": return RpcResponse.Success(req.RequestId,await GetMetadataAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_raw_module": return RpcResponse.Success(req.RequestId,await GetRawModuleAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "set_breakpoint": return RpcResponse.Success(req.RequestId,await SetNamedBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "invoke_method": return RpcResponse.Success(req.RequestId,await InvokeExpressionAsync(req,"method_invocation",requestCancellation.Token).ConfigureAwait(false));
+			case "create_object": return RpcResponse.Success(req.RequestId,await InvokeExpressionAsync(req,"object_construction",requestCancellation.Token).ConfigureAwait(false));
+			case "read_memory": return RpcResponse.Success(req.RequestId,await ReadMemoryAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "write_memory": return RpcResponse.Success(req.RequestId,await WriteMemoryAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_disassembly": return RpcResponse.Success(req.RequestId,await GetDisassemblyAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_registers": return RpcResponse.Success(req.RequestId,await GetRegistersAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "set_instruction_pointer": return RpcResponse.Success(req.RequestId,await SetInstructionPointerAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			default: return RpcResponse.Failure(req.RequestId,"unsupported","Unknown operation: "+req.Operation);
 			}
 		} catch (OperationCanceledException) { return RpcResponse.Failure(req.RequestId,"deadline_exceeded","The operation exceeded its deadline."); } catch (RpcException ex) { return RpcResponse.Failure(req.RequestId,ex.Code,ex.Message); } catch (Exception ex) { return RpcResponse.Failure(req.RequestId,"internal_error",ex.Message); } }

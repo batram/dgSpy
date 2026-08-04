@@ -248,6 +248,22 @@ namespace dgSpy.Protocol {
 		[JsonProperty("session_id", NullValueHandling=NullValueHandling.Ignore)] public string? SessionId { get; set; }
 		[JsonProperty("state_version")] public long StateVersion { get; set; }
 	}
+	public sealed class MemoryResult {
+		[JsonProperty("address")] public ulong Address { get; set; }
+		[JsonProperty("length")] public int Length { get; set; }
+		[JsonProperty("data_base64", NullValueHandling=NullValueHandling.Ignore)] public string? DataBase64 { get; set; }
+		[JsonProperty("written")] public bool Written { get; set; }
+		[JsonProperty("causes_side_effects")] public bool CausesSideEffects { get; set; }
+		[JsonProperty("capability")] public string Capability { get; set; }="memory_access";
+	}
+	public sealed class MutationResult {
+		[JsonProperty("completed")] public bool Completed { get; set; }
+		[JsonProperty("causes_side_effects")] public bool CausesSideEffects { get; set; }=true;
+		[JsonProperty("audit_id")] public string AuditId { get; set; }="";
+		[JsonProperty("value", NullValueHandling=NullValueHandling.Ignore)] public EvaluatedValue? Value { get; set; }
+		[JsonProperty("error", NullValueHandling=NullValueHandling.Ignore)] public string? Error { get; set; }
+		[JsonProperty("capability")] public string Capability { get; set; }="";
+	}
 	/// <summary>A stored expression, re-evaluated on demand. Deliberately not a retained value handle:
 	/// a handle goes stale on the next resume, an expression does not.</summary>
 	public sealed class WatchInfo {

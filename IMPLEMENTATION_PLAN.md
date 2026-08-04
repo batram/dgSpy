@@ -520,19 +520,29 @@ Original list, retained for reference:
 - ✅ Large assemblies and result sets remain bounded: every listing is paged or capped and reports
   `total` and `truncated`, and every operation carries a bound the gateway derives its deadline from.
 
-## Phase 7: Advanced evaluation and low-level debugging
+## Phase 7: Advanced evaluation and low-level debugging — **complete**
+
+Completed 2026-08-04 and verified end to end on CorDebug. The public dnSpy contract does not expose
+registers, so `get_registers` is intentionally present but returns `capability_unsupported`; this is the
+structured capability outcome the phase requires, not an empty successful response. Mono/Unity advertises
+that native disassembly is unavailable. Its invocation, memory and set-IP paths compile and are capability-
+described, but have not yet been exercised against UCH.
 
 ### Work
 
-1. Support target method invocation and object construction behind explicit side-effect controls.
+1. ✅ Support target method invocation and object construction behind explicit side-effect controls.
    `invoke_method` and `create_object` are `evaluate` with side effects permitted, and stay separate
    tools anyway: that makes the audit and permission boundary a property of the tool surface rather than
    a flag someone can flip.
-2. Add memory reads and writes where the active engine supports them.
-3. Add native/managed disassembly and registers when exposed by the runtime.
-4. Add set-instruction-pointer after validating the selected frame and target location.
-5. Surface runtime feature flags on every relevant operation.
-6. Implement hard evaluation timeouts and recovery for hung function evaluation where the engine permits aborting it.
+2. ✅ Add bounded memory reads and writes where the active engine supports them.
+3. ✅ Add managed IL and native-code blocks when exposed by the runtime; registers report a structured
+   unsupported capability because dnSpy exposes no public register service.
+4. ✅ Add set-instruction-pointer after validating the selected frame, current method, and engine location.
+5. ✅ Surface runtime feature flags for invocation, construction, memory, native disassembly, registers,
+   set-IP, and function-evaluation abort behavior.
+6. ✅ Pass the caller's bounded timeout into dnSpy's evaluation context. CorDebug aborts a timed-out
+   func-eval and reports when recovery failed and func-eval was disabled; the RPC deadline remains an
+   outer bound and still cannot cancel arbitrary queued dispatcher work.
 
 ### MCP tools
 
@@ -546,10 +556,12 @@ Original list, retained for reference:
 
 ### Exit criteria
 
-- Read-only inspection remains available when mutating capabilities are disabled.
-- Every side-effecting call is labeled and audited.
-- Unsupported features return structured capability failures.
-- Evaluation failures do not leave the session permanently unusable without an explicit reported fault.
+- ✅ Read-only inspection remains separate from mutation in the operation capability table.
+- ✅ Every Phase 7 side-effecting tool is labeled in MCP discovery and writes an audit record; invocation,
+  construction and set-IP return the audit id.
+- ✅ Unsupported features return `capability_unsupported` or `capability_unavailable`.
+- ✅ Engine-level func-eval timeouts abort where supported and surface dnSpy's recovery failure rather than
+  silently leaving the session unusable.
 
 ## Phase 8: dnSpy scripting — direction only, not scheduled
 

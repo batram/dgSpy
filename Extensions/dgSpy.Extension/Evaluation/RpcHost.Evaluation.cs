@@ -64,10 +64,13 @@ namespace dgSpy.Extension {
 		/// evaluation thread. The context is closed on every path — it owns engine-side resources.</summary>
 		async Task<T> WithEvaluationAsync<T>(RpcRequest req,Func<CapturedFrame,DbgEvaluationInfo,T> callback,CancellationToken cancellationToken) {
 			var captured=await CaptureFrameAsync(req,cancellationToken).ConfigureAwait(false);
+			var timeoutMs=Math.Min(CapabilityCatalog.Limits.MaxEvaluationTimeoutMs,Math.Max(1,(int?)req.Arguments["timeout_ms"] ?? 1000));
 			using var evaluation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token,cancellationToken);
 			return await evaluations.RunAsync(()=>{
 				if (captured.Frame.IsClosed) throw new RpcException("stale_handle","The target resumed while this frame was being evaluated. Pause again and request a fresh snapshot.");
-				var context=captured.Language.CreateContext(captured.Frame,cancellationToken:evaluation.Token);
+				// dnSpy forwards this deadline to the engine's func-eval implementation. CorDebug aborts a
+				// timed-out eval and temporarily disables further func-eval if recovery itself fails.
+				var context=captured.Language.CreateContext(captured.Frame,funcEvalTimeout:TimeSpan.FromMilliseconds(timeoutMs),cancellationToken:evaluation.Token);
 				try { return callback(captured,new DbgEvaluationInfo(context,captured.Frame,evaluation.Token)); }
 				finally { context.Close(); }
 			},cancellationToken).ConfigureAwait(false);
@@ -116,6 +119,27 @@ namespace dgSpy.Extension {
 				try { return DescribeNode(nodes[0],eval,expression!); }
 				finally { manager.Close(nodes); }
 			},cancellationToken).ConfigureAwait(false);
+		}
+
+		async Task<MutationResult> InvokeExpressionAsync(RpcRequest req,string capability,CancellationToken cancellationToken) {
+			CheckSession(req);
+			var expression=(string?)req.Arguments["expression"];
+			if (string.IsNullOrWhiteSpace(expression)) throw new RpcException("invalid_arguments","expression is required.");
+			var auditId=AuditMutation(req.Operation,expression!);
+			return await WithEvaluationAsync(req,(captured,eval)=>{
+				var nodes=CreateNodes(captured,eval,new[]{expression!},allowFuncEval:true,allowSideEffects:true);
+				try {
+					var value=DescribeNode(nodes[0],eval,expression!);
+					return new MutationResult { Completed=value.Error is null,CausesSideEffects=true,AuditId=auditId,Value=value.Error is null ? value : null,Error=value.Error,Capability=capability };
+				}
+				finally { manager.Close(nodes); }
+			},cancellationToken).ConfigureAwait(false);
+		}
+
+		string AuditMutation(string operation,string detail) {
+			var id=Guid.NewGuid().ToString("N");
+			manager.WriteMessage(PredefinedDbgManagerMessageKinds.Output,$"dgSpy audit {id}: operation={operation} session={sessionId ?? "none"} side_effects=true detail={detail}");
+			return id;
 		}
 
 		// Children of one expression, one level deep and paged. Depth is the caller's to control by
