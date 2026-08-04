@@ -244,19 +244,25 @@ namespace dgSpy.Extension {
 				lock(sync) processLifecycleActions[process.Id]=selectedCanDetach?"detach":"terminate";
 				await OnDebuggerAsync(()=>{ if(selectedCanDetach) process.Detach(); else process.Terminate(); return true; },cancellationToken).ConfigureAwait(false);
 				await WaitForDebuggerAsync(()=>manager.Processes.All(p=>p.Id!=process.Id),cancellationToken).ConfigureAwait(false);
+				var processStillActive=await OnDebuggerAsync(()=>manager.Processes.Any(p=>p.Id==process.Id),cancellationToken).ConfigureAwait(false);
+				DetachCompletionGuard.EnsureRemoved(processStillActive,process.Id);
 				var active=await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false);
 				var selectedSessionId=sessionId!;
 				if(!active) lock(sync) { sessionId=null; attachedProgramId=null; sessionKind=null; lifecycleAction=null; attaching=false; faulted=false; faultMessage=null; lastUserMessage=null; terminalExitCode=null; terminalReason=null; }
 				return new DetachResult { SessionId=selectedSessionId,ProcessId=process.Id,Detached=selectedCanDetach,Terminated=!selectedCanDetach,SessionActive=active,StateVersion=stateVersion };
 			}
+			var wasDebugging=await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false);
 			var canDetach=await OnDebuggerAsync(()=>!manager.IsDebugging || manager.CanDetachWithoutTerminating,cancellationToken).ConfigureAwait(false);
 			if (!canDetach && !allowTerminate) throw new RpcException("detach_would_terminate","dnSpy cannot detach from this target without terminating it. Pass allow_terminate=true to stop debugging anyway.");
 			if (!canDetach) lock(sync) lifecycleAction="terminate";
 			await OnDebuggerAsync(()=>{ CloseStepper(); if (manager.IsDebugging) { if (canDetach) manager.DetachAll(); else manager.StopDebuggingAll(); } return true; },cancellationToken).ConfigureAwait(false);
 			await WaitForDebuggerAsync(()=>!manager.IsDebugging,cancellationToken).ConfigureAwait(false);
 			var stillDebugging=await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false);
+			DetachCompletionGuard.EnsureRemoved(stillDebugging);
 			string id; lock(sync) { id=sessionId!; if (!stillDebugging) { sessionId=null; attachedProgramId=null; sessionKind=null; lifecycleAction=null; attaching=false; faulted=false; faultMessage=null; lastUserMessage=null; terminalExitCode=null; terminalReason=null; } }
-			Record(EventKinds.Detached);
+			// A real process removal records the detached event in OnProcessExited. A faulted connection
+			// never created a process, so it needs the event here after the session is cleared.
+			if(!wasDebugging) Record(EventKinds.Detached);
 			return new DetachResult { SessionId=id,Detached=!stillDebugging && canDetach,Terminated=!stillDebugging && !canDetach,SessionActive=stillDebugging,StateVersion=stateVersion };
 		}
 		async Task<SessionSummary[]> ListSessionsAsync(CancellationToken cancellationToken) => await OnDebuggerAsync(()=>{

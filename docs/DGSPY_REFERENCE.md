@@ -86,7 +86,8 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 - `pause` and `continue` return the state they produced, not the state before the transition.
 - **`detach` is the only safe way to end a session.** Closing dnSpy with a session attached terminates
   the target. `detach` refuses with `detach_would_terminate` when dnSpy cannot detach cleanly, unless
-  `allow_terminate=true`.
+  `allow_terminate=true`. If the engine does not actually remove the target within ten seconds, it
+  returns `detach_timed_out`, preserves the active session, and emits no false detached event.
 - **`launch` uses dnSpy start options, not `Process.Start` plus attach.** `restart` is therefore available
   only for a dgSpy-launched target. `terminate` is always explicit and separate from safe `detach`.
 - A target exit leaves a terminal session that can still be inspected with `get_session_state` and

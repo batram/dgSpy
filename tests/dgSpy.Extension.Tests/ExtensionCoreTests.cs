@@ -151,4 +151,15 @@ public sealed class ExtensionCoreTests {
 		Assert.Equal("stale_handle",error.Code);
 		Assert.Contains("refresh",error.Message);
 	}
+
+	[Fact]
+	public void Incomplete_detach_is_never_reported_as_success() {
+		DetachCompletionGuard.EnsureRemoved(false,4242);
+
+		var selected=Assert.Throws<RpcException>(()=>DetachCompletionGuard.EnsureRemoved(true,4242));
+		Assert.Equal("detach_timed_out",selected.Code);
+		Assert.Contains("4242",selected.Message);
+		var global=Assert.Throws<RpcException>(()=>DetachCompletionGuard.EnsureRemoved(true));
+		Assert.Equal("detach_timed_out",global.Code);
+	}
 }

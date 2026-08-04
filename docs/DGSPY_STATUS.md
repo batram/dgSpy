@@ -62,7 +62,7 @@ Verified means exercised end to end against a real dnSpy and a real target, not 
 | Evaluation off the dispatcher (`EvaluationQueue`)                                                                             | ✅ built and regression-tested, benefit not directly observable                         |
 | Response serialization off the dispatcher                                                                                     | ✅ built, not directly observable                                                       |
 | Extension split into entry point, RPC, debugger, events, and identity boundaries                                              | ✅ built                                                                                |
-| `dgSpy.Extension.Tests` identity, state, event-cursor, and stale-frame coverage                                               | ✅ 17 tests                                                                             |
+| `dgSpy.Extension.Tests` identity, state, event-cursor, stale-frame, and detach coverage                                      | ✅ 18 tests                                                                             |
 | Event-kind and stop-reason vocabularies advertised in `get_capabilities`                                                      | ✅ verified both engines                                                                |
 | Every kind the Mono engine actually emits is in the advertised vocabulary                                                     | ✅ cross-checked against a live UCH session                                             |
 | An unknown `kinds` value is rejected rather than silently matching nothing                                                    | ✅ verified both engines                                                                |
@@ -107,11 +107,11 @@ Test suites, all green:
 ```powershell
 dotnet test .\tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj   # 29 checks, wire + capability contract
 dotnet test .\tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj     # 182 checks, access control + transport + deadlines
-dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 17 checks, extension core
+dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj # 18 checks, extension core
 .\tests\run-milestone1-smoke.ps1                                       # 365 checks, end to end
 ```
 
-All four suites are green as of 2026-08-04: 29 / 182 / 17 unit
+All four suites are green as of 2026-08-04: 29 / 182 / 18 unit
 checks and 365 live smoke checks. The event-vocabulary work and complete Phase 6 surface were additionally
 verified against live UCH — see
 [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md). **Phases 4 and 5 are verified on CorDebug only.**
