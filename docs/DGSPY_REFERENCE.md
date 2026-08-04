@@ -78,7 +78,7 @@ without a preflight, so loopback binding alone would leave the debugger open to 
   broadcasts no discovery beacon, so `list_programs` can never see it and `attach` has no `program_id`
   to take. Pass `process_is_suspended: true` when the agent argument said `suspend=y`. The session is
   an attach either way, so `detach` leaves the target running. See
-  [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md).
+  [historical Unity checklist](history/DGSPY_UNITY_CHECKLIST.md).
 - A session that comes up and then fails reports `state: "faulted"` with `fault_message` — dnSpy's own
   connect-failure text when it produced one. Options dnSpy rejects outright are a caller error and
   return `attach_failed` instead, without creating a session. A faulted session still holds the
@@ -249,4 +249,5 @@ disposable targets plus dnSpy plus the gateway, and currently asserts 365 checks
 CorDebug surface. It stops everything it starts and exits non-zero on any failure.
 
 The smoke script covers `attach_endpoint`'s argument validation and failure path only; its success
-path needs a Mono/Unity target and is a manual checklist, [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md).
+path needs a Mono/Unity target; the completed manual acceptance record is in the
+[historical Unity checklist](history/DGSPY_UNITY_CHECKLIST.md).

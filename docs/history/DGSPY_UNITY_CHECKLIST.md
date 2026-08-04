@@ -234,7 +234,7 @@ the UI thread, which is exactly where the file-less frame was originally seen, s
 launch when hunting for that specifically.
 
 dnSpy needs `--dgspy-no-window-activation` for the same reason; see
-[DGSPY_BASELINE.md](DGSPY_BASELINE.md). Verified with `ps_scratch\Watch-ForegroundWindow.ps1`: across
+[the build baseline](../DGSPY_BASELINE.md). Verified with `ps_scratch\Watch-ForegroundWindow.ps1`: across
 36 breakpoint binds and 3 stops the foreground never changed.
 
 ### Also observed

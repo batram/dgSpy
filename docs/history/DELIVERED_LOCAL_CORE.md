@@ -2,8 +2,8 @@
 
 This is the permanent completion record for the first implementation section, formerly Phases 0–8 of
 `IMPLEMENTATION_PLAN.md`. It was completed on 2026-08-04. Detailed per-tool evidence is recorded in
-[DGSPY_STATUS.md](DGSPY_STATUS.md); operational semantics are recorded in
-[DGSPY_REFERENCE.md](DGSPY_REFERENCE.md).
+[DGSPY_STATUS.md](DGSPY_STATUS.md); current operational semantics are recorded in
+[the tool reference](../DGSPY_REFERENCE.md).
 
 ## Delivered capability groups
 
@@ -47,5 +47,5 @@ counts above supersede the earlier 29 / 174 / 16 / 363 documentation-reorganizat
 ## Retained compatibility patches
 
 The delivered baseline contains two deliberate upstream-source fixes documented in
-[DGSPY_BASELINE.md](DGSPY_BASELINE.md): preservation of thread exit codes and a bounded Unity
+[the build baseline](../DGSPY_BASELINE.md): preservation of thread exit codes and a bounded Unity
 `ThreadMirror.GetFrames()` wait.

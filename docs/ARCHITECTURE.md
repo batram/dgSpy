@@ -87,5 +87,6 @@ target-code execution, artifact editing, live patching, and dnSpy-host scripting
 ## Verification rule
 
 Claims are engine-specific. “Implemented” means the code and contract exist; “verified” means exercised
-against a real dnSpy and target. Preserve separate CorDebug and Mono/Unity evidence in
-[DGSPY_STATUS.md](DGSPY_STATUS.md) and [DGSPY_UNITY_CHECKLIST.md](DGSPY_UNITY_CHECKLIST.md).
+against a real dnSpy and target. Preserve separate CorDebug and Mono/Unity evidence with the relevant
+test fixtures. The completed 2026-08-04 acceptance record is available in
+[history](history/README.md).

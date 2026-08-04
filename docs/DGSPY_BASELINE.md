@@ -1,4 +1,4 @@
-# dgSpy build baseline (Phase 0)
+# dgSpy build and deployment baseline
 
 ## Scope
 
@@ -47,7 +47,7 @@ survive or be proven obsolete during modernization.
 - Patched submodule: `https://github.com/batram/Mono.Debugger.Soft.git`, branch `dgspy`, commit
   `888ded0f0284500b32c94abc5595410342c28810`.
 - Last known-good pre-modernization tag: `pre-modernization-2026-08-04`.
-- Acceptance evidence: [status and handoff](DGSPY_STATUS.md), [Unity checklist](DGSPY_UNITY_CHECKLIST.md),
+- Historical acceptance evidence: [status ledger](history/DGSPY_STATUS.md), [Unity checklist](history/DGSPY_UNITY_CHECKLIST.md),
   and the build/test commands in this document.
 
 A fresh checkout must not borrow objects from an existing clone:

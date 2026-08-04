@@ -17,8 +17,15 @@ git merge upstream/master
 
 Resolve conflicts by preserving the documented dgSpy boundaries: the headless host integration,
 net48 extension compatibility, bounded `Mono.Debugger.Soft` fork, retained Mono/shared-debugger
-orchestration, and engine-specific running-state behavior. Then run the gates in
-[MODERNIZATION_GATE.md](MODERNIZATION_GATE.md) before merging the synchronization branch into `dgspy`.
+orchestration, and engine-specific running-state behavior. Then run the current regression gate before
+merging the synchronization branch into `dgspy`:
+
+```powershell
+.\tests\run-modernization-gate.ps1 -Stage Full
+```
+
+Use `Shared`, `CorDebug`, or `Unity` while iterating, but require `Full` for acceptance. The original
+modernization acceptance record remains in [history](history/MODERNIZATION_GATE.md).
 
 ## Contribute a focused fix upstream
 
