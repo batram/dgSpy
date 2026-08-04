@@ -103,7 +103,7 @@ namespace dnSpy.Roslyn.Glyphs {
 			case Glyph.CompletionWarning:		return DsImages.StatusWarning;
 			case Glyph.AddReference:			return DsImages.AddReference;
 			case Glyph.NuGet:					return DsImages.NuGet;
-			case Glyph.TargetTypeMatch:			return DsImages.CorrelationScope;
+			case Glyph.TargetTypeMatch:			return DsImages.Reference;
 			default:
 				Debug.Fail($"Unknown {nameof(Glyph)}: {glyph}");
 				return null;

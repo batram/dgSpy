@@ -19,7 +19,6 @@
 
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
-using dnSpy.Contracts.Debugger.Dialogs;
 using dnSpy.Contracts.Debugger.StartDebugging.Dialog;
 using dnSpy.Contracts.MVVM;
 
@@ -28,21 +27,19 @@ namespace dnSpy.Debugger.DotNet.Mono.Dialogs.DebugProgram {
 	sealed class StartDebuggingOptionsPageProviderImpl : StartDebuggingOptionsPageProvider {
 		readonly IPickFilename pickFilename;
 		readonly IPickDirectory pickDirectory;
-		readonly IDbgEnvironmentEditorService environmentEditorService;
 
 		[ImportingConstructor]
-		StartDebuggingOptionsPageProviderImpl(IPickFilename pickFilename, IPickDirectory pickDirectory, IDbgEnvironmentEditorService environmentEditorService) {
+		StartDebuggingOptionsPageProviderImpl(IPickFilename pickFilename, IPickDirectory pickDirectory) {
 			this.pickFilename = pickFilename;
 			this.pickDirectory = pickDirectory;
-			this.environmentEditorService = environmentEditorService;
 		}
 
 		public override IEnumerable<StartDebuggingOptionsPage> Create(StartDebuggingOptionsPageContext context) {
-			yield return new UnityStartDebuggingOptionsPage(pickFilename, pickDirectory, environmentEditorService);
+			yield return new UnityStartDebuggingOptionsPage(pickFilename, pickDirectory);
 			yield return new UnityConnectStartDebuggingOptionsPage();
 			// Disable mono support, see https://github.com/dnSpy/dnSpy/issues/643
 			// (Step Over doesn't work unless there's a portable PDB file available)
-			//yield return new MonoStartDebuggingOptionsPage(pickFilename, pickDirectory, environmentEditorService);
+			//yield return new MonoStartDebuggingOptionsPage(pickFilename, pickDirectory);
 			//yield return new MonoConnectStartDebuggingOptionsPage();
 		}
 	}

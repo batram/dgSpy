@@ -96,7 +96,7 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl {
 						else
 							wait = endTime - now;
 					}
-					bool signaled = dispatchQueueEvent.WaitOne(wait);
+					bool signaled = dispatchQueueEvent.WaitOne(waitTime);
 					if (!signaled) {
 						timedOut = true;
 						return null;

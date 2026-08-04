@@ -89,7 +89,6 @@ namespace dnSpy.Debugger.Evaluation.ViewModel.Impl {
 			switch (context.VM.VariablesWindowKind) {
 			case VariablesWindowKind.Locals: return dnSpy_Debugger_Resources.ShortCutKeyF2;
 			case VariablesWindowKind.Autos: return dnSpy_Debugger_Resources.ShortCutKeyF2;
-			case VariablesWindowKind.StaticFields: return dnSpy_Debugger_Resources.ShortCutKeyF2;
 			case VariablesWindowKind.Watch: return null;
 			default: throw new InvalidOperationException();
 			}

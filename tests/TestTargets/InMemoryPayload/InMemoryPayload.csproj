@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Built only to be embedded in Milestone1Target and loaded from bytes at runtime, so the fixture
+       owns a module with no file on disk. Never copied next to the target: if the DLL sat beside the
+       exe, dnSpy could resolve the module to a path and the file-less case would stop being one. -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <DebugType>portable</DebugType>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+</Project>

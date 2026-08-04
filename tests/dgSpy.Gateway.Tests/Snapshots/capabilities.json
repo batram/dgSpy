@@ -1,0 +1,510 @@
+{
+  "host_id": "local",
+  "protocol_version": 1,
+  "extension_version": "snapshot",
+  "operations": [
+    {
+      "operation": "ping",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_host_info",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_capabilities",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "list_programs",
+      "max_duration_ms": 20000,
+      "mutates_session": false
+    },
+    {
+      "operation": "attach",
+      "max_duration_ms": 12000,
+      "mutates_session": true
+    },
+    {
+      "operation": "attach_endpoint",
+      "max_duration_ms": 305000,
+      "mutates_session": true
+    },
+    {
+      "operation": "launch",
+      "max_duration_ms": 15000,
+      "mutates_session": true
+    },
+    {
+      "operation": "get_session_state",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "list_sessions",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "detach",
+      "max_duration_ms": 12000,
+      "mutates_session": true
+    },
+    {
+      "operation": "terminate",
+      "max_duration_ms": 12000,
+      "mutates_session": true
+    },
+    {
+      "operation": "restart",
+      "max_duration_ms": 15000,
+      "mutates_session": true
+    },
+    {
+      "operation": "pause",
+      "max_duration_ms": 12000,
+      "mutates_session": true
+    },
+    {
+      "operation": "continue",
+      "max_duration_ms": 12000,
+      "mutates_session": true
+    },
+    {
+      "operation": "set_il_breakpoint",
+      "max_duration_ms": 10000,
+      "mutates_session": true
+    },
+    {
+      "operation": "list_breakpoints",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "remove_breakpoint",
+      "max_duration_ms": 5000,
+      "mutates_session": true
+    },
+    {
+      "operation": "clear_breakpoints",
+      "max_duration_ms": 5000,
+      "mutates_session": true
+    },
+    {
+      "operation": "wait_for_stop",
+      "max_duration_ms": 12000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_events",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "wait_for_event",
+      "max_duration_ms": 12000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_stop_reason",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "list_threads",
+      "max_duration_ms": 8000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_callstack",
+      "max_duration_ms": 20000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_frame",
+      "max_duration_ms": 20000,
+      "mutates_session": false
+    },
+    {
+      "operation": "update_breakpoint",
+      "max_duration_ms": 10000,
+      "mutates_session": true
+    },
+    {
+      "operation": "set_exception_breakpoint",
+      "max_duration_ms": 5000,
+      "mutates_session": true
+    },
+    {
+      "operation": "list_exception_breakpoints",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "step_into",
+      "max_duration_ms": 15000,
+      "mutates_session": true
+    },
+    {
+      "operation": "step_over",
+      "max_duration_ms": 15000,
+      "mutates_session": true
+    },
+    {
+      "operation": "step_out",
+      "max_duration_ms": 15000,
+      "mutates_session": true
+    },
+    {
+      "operation": "evaluate",
+      "max_duration_ms": 20000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_members",
+      "max_duration_ms": 20000,
+      "mutates_session": false
+    },
+    {
+      "operation": "set_value",
+      "max_duration_ms": 20000,
+      "mutates_session": true
+    },
+    {
+      "operation": "get_exception",
+      "max_duration_ms": 20000,
+      "mutates_session": false
+    },
+    {
+      "operation": "add_watch",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "list_watches",
+      "max_duration_ms": 20000,
+      "mutates_session": false
+    },
+    {
+      "operation": "remove_watch",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "list_modules",
+      "max_duration_ms": 8000,
+      "mutates_session": false
+    },
+    {
+      "operation": "list_documents",
+      "max_duration_ms": 30000,
+      "mutates_session": false
+    },
+    {
+      "operation": "list_types",
+      "max_duration_ms": 30000,
+      "mutates_session": false
+    },
+    {
+      "operation": "list_members",
+      "max_duration_ms": 30000,
+      "mutates_session": false
+    },
+    {
+      "operation": "search_symbols",
+      "max_duration_ms": 60000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_il",
+      "max_duration_ms": 30000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_csharp",
+      "max_duration_ms": 60000,
+      "mutates_session": false
+    },
+    {
+      "operation": "search_text",
+      "max_duration_ms": 120000,
+      "mutates_session": false
+    },
+    {
+      "operation": "find_references",
+      "max_duration_ms": 60000,
+      "mutates_session": false
+    },
+    {
+      "operation": "find_implementations",
+      "max_duration_ms": 60000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_metadata",
+      "max_duration_ms": 30000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_raw_module",
+      "max_duration_ms": 60000,
+      "mutates_session": false
+    },
+    {
+      "operation": "set_breakpoint",
+      "max_duration_ms": 30000,
+      "mutates_session": true
+    },
+    {
+      "operation": "invoke_method",
+      "max_duration_ms": 12000,
+      "mutates_session": true
+    },
+    {
+      "operation": "create_object",
+      "max_duration_ms": 12000,
+      "mutates_session": true
+    },
+    {
+      "operation": "read_memory",
+      "max_duration_ms": 8000,
+      "mutates_session": false
+    },
+    {
+      "operation": "write_memory",
+      "max_duration_ms": 8000,
+      "mutates_session": true
+    },
+    {
+      "operation": "get_disassembly",
+      "max_duration_ms": 12000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_registers",
+      "max_duration_ms": 8000,
+      "mutates_session": false
+    },
+    {
+      "operation": "set_instruction_pointer",
+      "max_duration_ms": 12000,
+      "mutates_session": true
+    },
+    {
+      "operation": "create_object_id",
+      "max_duration_ms": 20000,
+      "mutates_session": true
+    },
+    {
+      "operation": "list_object_ids",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "evaluate_object_id",
+      "max_duration_ms": 20000,
+      "mutates_session": false
+    },
+    {
+      "operation": "release_object_id",
+      "max_duration_ms": 5000,
+      "mutates_session": true
+    },
+    {
+      "operation": "get_autos",
+      "max_duration_ms": 20000,
+      "mutates_session": false
+    },
+    {
+      "operation": "get_output",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "wait_for_output",
+      "max_duration_ms": 12000,
+      "mutates_session": false
+    },
+    {
+      "operation": "set_module_breakpoint",
+      "max_duration_ms": 5000,
+      "mutates_session": true
+    },
+    {
+      "operation": "list_module_breakpoints",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "update_module_breakpoint",
+      "max_duration_ms": 5000,
+      "mutates_session": true
+    },
+    {
+      "operation": "remove_module_breakpoint",
+      "max_duration_ms": 5000,
+      "mutates_session": true
+    },
+    {
+      "operation": "export_breakpoints",
+      "max_duration_ms": 10000,
+      "mutates_session": false
+    },
+    {
+      "operation": "import_breakpoints",
+      "max_duration_ms": 30000,
+      "mutates_session": true
+    },
+    {
+      "operation": "list_exception_categories",
+      "max_duration_ms": 5000,
+      "mutates_session": false
+    },
+    {
+      "operation": "list_exception_policies",
+      "max_duration_ms": 10000,
+      "mutates_session": false
+    },
+    {
+      "operation": "set_exception_policy",
+      "max_duration_ms": 5000,
+      "mutates_session": true
+    },
+    {
+      "operation": "remove_exception_policy",
+      "max_duration_ms": 5000,
+      "mutates_session": true
+    },
+    {
+      "operation": "restore_exception_defaults",
+      "max_duration_ms": 5000,
+      "mutates_session": true
+    },
+    {
+      "operation": "get_value_export",
+      "max_duration_ms": 20000,
+      "mutates_session": false
+    },
+    {
+      "operation": "write_value_export",
+      "max_duration_ms": 20000,
+      "mutates_session": true
+    },
+    {
+      "operation": "analyze_symbol",
+      "max_duration_ms": 60000,
+      "mutates_session": false
+    }
+  ],
+  "engines": [
+    {
+      "engine": "cordebug",
+      "display_name": ".NET Framework CorDebug (CLR v4.0.30319)",
+      "acquisition": [
+        "list_programs+attach"
+      ],
+      "discoverable": true,
+      "arbitrary_il_offset_breakpoints": true,
+      "sequence_point_breakpoints_only": false,
+      "detach_without_terminating": true,
+      "method_invocation": true,
+      "object_construction": true,
+      "memory_access": true,
+      "native_disassembly": true,
+      "registers": false,
+      "set_instruction_pointer": true,
+      "abort_function_evaluation": true,
+      "object_ids": true,
+      "exception_modes": [
+        "thrown",
+        "unhandled"
+      ],
+      "notes": "Accepts a breakpoint at any IL offset. Closing dnSpy with a session attached terminates the target; detach instead."
+    },
+    {
+      "engine": "unity",
+      "display_name": "Mono/Unity soft debugger",
+      "acquisition": [
+        "attach_endpoint"
+      ],
+      "discoverable": false,
+      "arbitrary_il_offset_breakpoints": false,
+      "sequence_point_breakpoints_only": true,
+      "detach_without_terminating": true,
+      "method_invocation": true,
+      "object_construction": true,
+      "memory_access": true,
+      "native_disassembly": false,
+      "registers": false,
+      "set_instruction_pointer": true,
+      "abort_function_evaluation": true,
+      "object_ids": true,
+      "exception_modes": [
+        "thrown",
+        "unhandled"
+      ],
+      "notes": "A target launched with an explicit --debugger-agent endpoint emits no discovery beacon, so only attach_endpoint reaches it, and the endpoint accepts one connection per launch. Breakpoints bind only at sequence points."
+    }
+  ],
+  "limits": {
+    "max_frames": 100,
+    "max_wait_timeout_ms": 10000,
+    "max_connection_timeout_ms": 300000,
+    "max_concurrent_sessions": 1,
+    "cancels_in_flight_work": false,
+    "max_evaluation_timeout_ms": 10000,
+    "max_value_export_bytes": 16777216
+  },
+  "event_kinds": [
+    "session_started",
+    "session_ended",
+    "attached",
+    "attach_failed",
+    "detached",
+    "restarted",
+    "continued",
+    "terminated",
+    "restart_process_exited",
+    "session_exited",
+    "process_created",
+    "runtime_created",
+    "runtime_exited",
+    "module_loaded",
+    "module_unloaded",
+    "thread_created",
+    "thread_exited",
+    "exception_thrown",
+    "breakpoint_hit",
+    "step_completed",
+    "entry_point",
+    "program_break",
+    "break",
+    "stopped"
+  ],
+  "stop_reasons": [
+    "breakpoint",
+    "exception",
+    "step",
+    "entry_point",
+    "program_break",
+    "pause",
+    "unknown"
+  ],
+  "step_kinds": [
+    "into",
+    "over",
+    "out"
+  ],
+  "condition_kinds": [
+    "is_true",
+    "when_changed"
+  ],
+  "hit_count_kinds": [
+    "equals",
+    "multiple_of",
+    "at_least"
+  ]
+}

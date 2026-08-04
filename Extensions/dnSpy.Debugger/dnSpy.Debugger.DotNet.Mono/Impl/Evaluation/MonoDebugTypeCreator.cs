@@ -19,8 +19,6 @@
 
 using System;
 using System.Diagnostics;
-using dnlib.DotNet;
-using dnlib.DotNet.MD;
 using dnSpy.Debugger.DotNet.Metadata;
 using Mono.Debugger.Soft;
 
@@ -72,14 +70,10 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl.Evaluation {
 			case DmdTypeSignatureKind.Type:
 				if (!engine.TryGetMonoModule(type.Module.GetDebuggerModule() ?? throw new InvalidOperationException(), out var monoModule))
 					throw new InvalidOperationException();
-				Debug.Assert(MDToken.ToTable(type.MetadataToken) == Table.TypeDef);
+				Debug.Assert((type.MetadataToken >> 24) == 0x02);
 				//TODO: This can sometimes crash Unity's old mono fork
 				//TODO: It's possible to resolve types, but it's an internal method and it requires a method in the module
-				TypeMirror? typeMirror = null;
-				if (CanUseTokenResolution(monoModule, type))
-					typeMirror = monoModule.Assembly.GetType((uint)type.MetadataToken);
-				typeMirror ??= monoModule.Assembly.GetType(type.FullName, false, false);
-				result = (typeMirror, false);
+				result = (monoModule.Assembly.GetType(type.FullName, false, false), false);
 				if (result.type is null)
 					throw new InvalidOperationException();
 				if (result.type.MetadataToken != type.MetadataToken)
@@ -171,14 +165,6 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl.Evaluation {
 			if (result is not null)
 				return result;
 			return monoTypeLoader?.Load(monoType.Assembly, fullName);
-		}
-
-		static bool CanUseTokenResolution(ModuleMirror module, DmdType type) {
-			if (!module.Assembly.VirtualMachine.Version.AtLeast(2, 47))
-				return false;
-			if (module.Assembly.IsDynamic)
-				return false;
-			return true;
 		}
 	}
 }

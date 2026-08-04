@@ -39,7 +39,7 @@ namespace dnSpy.Roslyn.Text.Classification {
 
 		public FrameworkElement Create(string tag, ImmutableArray<TaggedText> taggedParts, bool colorize) {
 			var context = TaggedTextClassifierContext.Create(tag, taggedParts, colorize);
-			return textElementProvider.CreateTextElement(classificationFormatMap, context, contentType, TextElementFlags.None);
+			return textElementProvider.CreateTextElement(classificationFormatMap, context, contentType.TypeName, TextElementFlags.None);
 		}
 
 		public void Dispose() { }

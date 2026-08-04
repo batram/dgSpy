@@ -62,12 +62,6 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl.Evaluation {
 				else
 					flags |= ValueFlags.IsNull;
 			}
-			else if (value is PointerValue ptr && (Type.IsPointer || Type.IsFunctionPointer) && ptr.Address == 0L) {
-				if (Type.IsByRef)
-					flags |= ValueFlags.IsNullByRef;
-				else
-					flags |= ValueFlags.IsNull;
-			}
 			this.flags = flags;
 		}
 		static readonly object boxed0L = 0L;
@@ -75,9 +69,9 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl.Evaluation {
 		public override IDbgDotNetRuntime? TryGetDotNetRuntime() => engine.DotNetRuntime;
 
 		public override DbgDotNetValueResult LoadIndirect() {
-			if (!Type.IsByRef && !Type.IsPointer)
+			if (!Type.IsByRef)
 				return base.LoadIndirect();
-			if (IsNullByRef || IsNull)
+			if (IsNullByRef)
 				return DbgDotNetValueResult.Create(new SyntheticNullValue(Type.GetElementType()!));
 			if (engine.CheckMonoDebugThread())
 				return Dereference_MonoDebug();
@@ -85,14 +79,9 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl.Evaluation {
 		}
 
 		DbgDotNetValueResult Dereference_MonoDebug() {
-			Debug.Assert((Type.IsByRef && !IsNullByRef) || (Type.IsPointer && !IsNull));
+			Debug.Assert(Type.IsByRef && !IsNullByRef);
 			engine.VerifyMonoDebugThread();
-			ValueLocation vl;
-			if (value is PointerValue ptrVal && Type.IsPointer)
-				vl = new PointerValueLocation(Type.GetElementType()!, ptrVal);
-			else
-				vl = valueLocation.Dereference();
-			return DbgDotNetValueResult.Create(engine.CreateDotNetValue_MonoDebug(vl));
+			return DbgDotNetValueResult.Create(engine.CreateDotNetValue_MonoDebug(valueLocation.Dereference()));
 		}
 
 		public override string? StoreIndirect(DbgEvaluationInfo evalInfo, object? value) {
@@ -284,12 +273,7 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl.Evaluation {
 				addr = (ulong)om.Address;
 				if (addr == 0)
 					return null;
-				if (!om.VirtualMachine.Version.AtLeast(2, 46))
-					return new DbgRawAddressValue(addr, 0);
-				var offsetToObjectData = (uint)Type.AppDomain.Runtime.PointerSize * 2;
-				if (onlyDataAddress)
-					return new DbgRawAddressValue(addr + offsetToObjectData, (ulong)om.Type.GetValueSize());
-				return new DbgRawAddressValue(addr, (ulong)om.Type.GetValueSize() + offsetToObjectData);
+				return new DbgRawAddressValue(addr, 0);
 
 			default:
 				return null;
@@ -305,10 +289,33 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl.Evaluation {
 				return null;
 			var arrayCount = v.Length;
 			var startAddr = addr + (uint)offsetToArrayData.Value;
-			if (!elementType.TryGetSize(out var elemSize))
+			if (!TryGetSize(elementType, out var elemSize))
 				return new DbgRawAddressValue(startAddr, 0);
 			ulong totalSize = (uint)elemSize * (ulong)(uint)arrayCount;
 			return new DbgRawAddressValue(startAddr, totalSize);
+		}
+
+		static bool TryGetSize(DmdType type, out int size) {
+			if (!type.IsValueType || type.IsPointer || type.IsFunctionPointer || type == type.AppDomain.System_IntPtr || type == type.AppDomain.System_UIntPtr) {
+				size = type.AppDomain.Runtime.PointerSize;
+				return true;
+			}
+
+			switch (DmdType.GetTypeCode(type)) {
+			case TypeCode.Boolean:		size = 1; return true;
+			case TypeCode.Char:			size = 2; return true;
+			case TypeCode.SByte:		size = 1; return true;
+			case TypeCode.Byte:			size = 1; return true;
+			case TypeCode.Int16:		size = 2; return true;
+			case TypeCode.UInt16:		size = 2; return true;
+			case TypeCode.Int32:		size = 4; return true;
+			case TypeCode.UInt32:		size = 4; return true;
+			case TypeCode.Int64:		size = 8; return true;
+			case TypeCode.UInt64:		size = 8; return true;
+			case TypeCode.Single:		size = 4; return true;
+			case TypeCode.Double:		size = 8; return true;
+			default:					size = 0; return false;
+			}
 		}
 
 		public override DbgDotNetRawValue GetRawValue() => rawValue;

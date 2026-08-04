@@ -1,6 +1,10 @@
-# dnSpyEx
+# dnSpy - [Latest release](https://github.com/dnSpy/dnSpy/releases)
 
-dnSpyEx is an unofficial continuation of the [dnSpy](https://github.com/dnSpy/dnSpy) project which is a debugger and .NET assembly editor. You can use it to edit and debug assemblies even if you don't have any source code available. Main features:
+> This fork includes dgSpy, a local MCP debugger/decompiler extension and gateway. Start with the
+> [dgSpy documentation index](docs/README.md); the active work is in the
+> [dgSpy implementation plan](docs/IMPLEMENTATION_PLAN.md).
+
+dnSpy is a debugger and .NET assembly editor. You can use it to edit and debug assemblies even if you don't have any source code available. Main features:
 
 - Debug .NET and Unity assemblies
 - Edit .NET and Unity assemblies
@@ -14,21 +18,18 @@ See below for more features
 
 ## Binaries
 
-Latest stable release: https://github.com/dnSpyEx/dnSpy/releases
-
-If you like living on the edge you can use the latest "beta" builds from:
-[![](https://github.com/dnSpyEx/dnSpy/workflows/GitHub%20CI/badge.svg)](https://github.com/dnSpyEx/dnSpy/actions)
+https://github.com/dnSpy/dnSpy/releases
 
 ## Building
 
 ```PS
-git clone --recursive https://github.com/dnSpyEx/dnSpy.git
+git clone --recursive https://github.com/dnSpy/dnSpy.git
 cd dnSpy
 # or dotnet build
 ./build.ps1 -NoMsbuild
 ```
 
-To debug Unity games, you need this repo too: https://github.com/dnSpyEx/dnSpy-Unity-mono
+To debug Unity games, you need this repo too: https://github.com/dnSpy/dnSpy-Unity-mono (or get the binaries from https://github.com/dnSpy/dnSpy/releases/unity)
 
 # Debugger
 
@@ -41,14 +42,12 @@ To debug Unity games, you need this repo too: https://github.com/dnSpyEx/dnSpy-U
 - Break on module load
 - Tracepoints and conditional breakpoints
 - Export/import breakpoints and tracepoints
-- Optional Just My Code (JMC) stepping filters for system libraries
 - Call stack, threads, modules, processes windows
 - Break on thrown exceptions (1st chance)
 - Variables windows support evaluating C# / Visual Basic expressions
 - Dynamic modules can be debugged (but not dynamic methods due to CLR limitations)
 - Output window logs various debugging events, and it shows timestamps by default :)
 - Assemblies that decrypt themselves at runtime can be debugged, dnSpy will use the in-memory image. You can also force dnSpy to always use in-memory images instead of disk files.
-- Bypasses for common debugger detection techniques
 - Public API, you can write an extension or use the C# Interactive window to control the debugger
 
 # Assembly Editor
@@ -71,7 +70,7 @@ To debug Unity games, you need this repo too: https://github.com/dnSpyEx/dnSpy-U
 
 # Other
 
-- BAML decompiler and disassembler
+- BAML decompiler
 - Blue, light and dark themes (and a dark high contrast theme)
 - Bookmarks
 - C# Interactive window can be used to script dnSpy
@@ -91,9 +90,7 @@ To debug Unity games, you need this repo too: https://github.com/dnSpyEx/dnSpy-U
 - [dnlib](https://github.com/0xd4d/dnlib) (.NET metadata reader/writer which can also read obfuscated assemblies)
 - [VS MEF](https://github.com/microsoft/vs-mef) (Faster MEF equals faster startup)
 - [ClrMD](https://github.com/microsoft/clrmd) (Access to lower level debugging info not provided by the CorDebug API)
-- [Iced](https://github.com/icedland/iced) (x86/x64 disassembler)
-- [Newtonsoft.Json](https://github.com/JamesNK/Newtonsoft.Json) (JSON serializer & deserializer)
-- [NuGet.Configuration](https://github.com/NuGet/NuGet.Client) (NuGet configuration file reader)
+- [Iced](https://github.com/0xd4d/iced) (x86/x64 disassembler)
 
 # Translating dnSpy
 
@@ -101,7 +98,7 @@ To debug Unity games, you need this repo too: https://github.com/dnSpyEx/dnSpy-U
 
 # Wiki
 
-See the [Wiki](https://github.com/dnSpyEx/dnSpy/wiki) for build instructions and other documentation.
+See the [Wiki](https://github.com/dnSpy/dnSpy/wiki) for build instructions and other documentation.
 
 # License
 

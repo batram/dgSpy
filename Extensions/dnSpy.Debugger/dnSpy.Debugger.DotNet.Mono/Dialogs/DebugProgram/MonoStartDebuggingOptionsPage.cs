@@ -21,7 +21,6 @@ using System;
 using System.IO;
 using System.Windows.Input;
 using dnSpy.Contracts.Debugger;
-using dnSpy.Contracts.Debugger.Dialogs;
 using dnSpy.Contracts.Debugger.DotNet.Mono;
 using dnSpy.Contracts.Debugger.StartDebugging;
 using dnSpy.Contracts.Debugger.StartDebugging.Dialog;
@@ -48,8 +47,8 @@ namespace dnSpy.Debugger.DotNet.Mono.Dialogs.DebugProgram {
 
 		public ICommand PickMonoExePathCommand => new RelayCommand(a => PickMonoExePath());
 
-		public MonoStartDebuggingOptionsPage(IPickFilename pickFilename, IPickDirectory pickDirectory, IDbgEnvironmentEditorService environmentEditorService)
-			: base(pickFilename, pickDirectory, environmentEditorService) {
+		public MonoStartDebuggingOptionsPage(IPickFilename pickFilename, IPickDirectory pickDirectory)
+			: base(pickFilename, pickDirectory) {
 		}
 
 		static readonly string MonoExeFilter = $"mono.exe|mono.exe";

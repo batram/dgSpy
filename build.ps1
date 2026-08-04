@@ -1,8 +1,8 @@
 param(
-	[ValidateSet("all","netframework","net","net-x86","net-x64")]
 	[string]$buildtfm = 'all',
-	[switch]$NoMsbuild
-	)
+	[switch]$NoMsbuild,
+	[string]$MSBuildPath = 'msbuild'
+)
 $ErrorActionPreference = 'Stop'
 
 $netframework_tfm = 'net48'
@@ -10,6 +10,19 @@ $net_tfm = 'net10.0-windows'
 $configuration = 'Release'
 $net_baseoutput = "dnSpy\dnSpy\bin\$configuration"
 $apphostpatcher_dir = "Build\AppHostPatcher"
+$msbuildExe = $null
+
+# Resolve the build tool before cleaning any generated output. A plain PowerShell session may not
+# have MSBuild on PATH even though Visual Studio is installed; callers can pass -MSBuildPath.
+if (-not $NoMsbuild) {
+	$msbuildCommand = Get-Command -Name $MSBuildPath -CommandType Application -ErrorAction Stop
+	$msbuildExe = $msbuildCommand.Source
+	if ($msbuildExe -like '*Visual Studio\18\*') {
+		$dotnetVersion = (& dotnet --version).Trim()
+		$env:MSBuildSDKsPath = Join-Path $env:ProgramFiles "dotnet\sdk\$dotnetVersion\Sdks"
+		$env:MSBuildEnableWorkloadResolver = 'false'
+	}
+}
 
 #
 # The reason we don't use dotnet build is that dotnet build doesn't support COM references yet https://github.com/dnSpy/dnSpy/issues/1053
@@ -19,58 +32,42 @@ function Build-NetFramework {
 	Write-Host 'Building .NET Framework x86 and x64 binaries'
 
 	$outdir = "$net_baseoutput\$netframework_tfm"
+	# This directory is repackaged below so dnSpy executables stay at the root and their dependencies
+	# move under bin. Reusing an already-packaged directory nests the previous bin again on every run
+	# (net48\bin\bin, then bin\bin\bin). Start from a validated clean framework output instead.
+	$expectedOutdir = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "$net_baseoutput\$netframework_tfm"))
+	$resolvedOutdir = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot $outdir))
+	if (-not $resolvedOutdir.Equals($expectedOutdir, [StringComparison]::OrdinalIgnoreCase)) {
+		throw "Refusing to clean unexpected .NET Framework output: $resolvedOutdir"
+	}
+	if (Test-Path -LiteralPath $resolvedOutdir) {
+		Remove-Item -LiteralPath $resolvedOutdir -Recurse -Force
+	}
 
 	if ($NoMsbuild) {
-		dotnet build -v:m -c $configuration
+		dotnet build -v:m -c $configuration -f $netframework_tfm
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 	else {
-		msbuild -v:m -m -restore -t:Build -p:Configuration=$configuration
+		& $msbuildExe -v:m -m -restore -t:Build -p:Configuration=$configuration -p:TargetFramework=$netframework_tfm
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 
 	# move all files to a bin sub dir but keep the exe files
-	Rename-Item $outdir bin
+	Rename-Item -LiteralPath $outdir -NewName bin
 	New-Item -ItemType Directory $outdir > $null
-	Move-Item $net_baseoutput\bin $outdir
+	Move-Item -LiteralPath $net_baseoutput\bin -Destination $outdir
 	foreach ($filename in 'dnSpy-x86.exe', 'dnSpy-x86.exe.config', 'dnSpy-x86.pdb',
 			 'dnSpy.exe', 'dnSpy.exe.config', 'dnSpy.pdb',
 			 'dnSpy.Console.exe', 'dnSpy.Console.exe.config', 'dnSpy.Console.pdb') {
-		Move-Item $outdir\bin\$filename $outdir
+		Move-Item -LiteralPath $outdir\bin\$filename -Destination $outdir
 	}
 }
 
 function Build-Net {
-    Write-Host 'Building .NET x86 and x64 binaries'
-
-    $outdir = "$net_baseoutput\$net_tfm"
-
-    if ($NoMsbuild) {
-        dotnet build -v:m -c $configuration -f $net_tfm
-        if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    }
-    else {
-        msbuild -v:m -m -restore -t:Build -p:Configuration=$configuration -p:TargetFramework=$net_tfm
-        if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    }
-
-    Write-Host "Patching .NET apphosts"
-
-    # move all files to a bin sub dir but keep the exe apphosts
-    Rename-Item $outdir bin
-    New-Item -ItemType Directory $outdir > $null
-    Move-Item $net_baseoutput\bin $outdir
-    foreach ($exe in 'dnSpy.exe', 'dnSpy-x86.exe', 'dnSpy.Console.exe') {
-        Move-Item $outdir\bin\$exe $outdir
-        & $apphostpatcher_dir\bin\$configuration\$netframework_tfm\AppHostPatcher.exe $outdir\$exe -d bin
-        if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    }
-}
-
-function Build-SelfContainedNet {
 	param([string]$arch)
 
-	Write-Host "Building self contained .NET $arch binaries"
+	Write-Host "Building .NET $arch binaries"
 
 	$rid = "win-$arch"
 	$outdir = "$net_baseoutput\$net_tfm\$rid"
@@ -81,11 +78,9 @@ function Build-SelfContainedNet {
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 	else {
-		msbuild -v:m -m -restore -t:Publish -p:Configuration=$configuration -p:TargetFramework=$net_tfm -p:RuntimeIdentifier=$rid -p:SelfContained=True
+		& $msbuildExe -v:m -m -restore -t:Publish -p:Configuration=$configuration -p:TargetFramework=$net_tfm -p:RuntimeIdentifier=$rid -p:SelfContained=True
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
-
-    Write-Host "Patching self contained .NET $arch apphosts"
 
 	# move all files to a bin sub dir but keep the exe apphosts
 	$tmpbin = 'tmpbin'
@@ -100,35 +95,29 @@ function Build-SelfContainedNet {
 	}
 }
 
-$buildNetFramework  = $buildtfm -eq 'all' -or $buildtfm -eq 'netframework'
-$buildNet           = $buildtfm -eq 'all' -or $buildtfm -eq 'net'
-$buildNetX86        = $buildtfm -eq 'all' -or $buildtfm -eq 'net-x86'
-$buildNetX64        = $buildtfm -eq 'all' -or $buildtfm -eq 'net-x64'
+$buildNet	 = $buildtfm -eq 'all' -or $buildtfm -eq 'netframework'
+$buildNetX86 = $buildtfm -eq 'all' -or $buildtfm -eq 'net-x86'
+$buildNetX64 = $buildtfm -eq 'all' -or $buildtfm -eq 'net-x64'
 
-if ($buildNetX86 -or $buildNetX64 -or $buildNet) {
-    Write-Host 'Building AppHostPatcher tool'
+if ($buildNetX86 -or $buildNetX64) {
 	if ($NoMsbuild) {
 		dotnet build -v:m -c $configuration -f $netframework_tfm $apphostpatcher_dir\AppHostPatcher.csproj
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 	else {
-		msbuild -v:m -m -restore -t:Build -p:Configuration=$configuration -p:TargetFramework=$netframework_tfm $apphostpatcher_dir\AppHostPatcher.csproj
+		& $msbuildExe -v:m -m -restore -t:Build -p:Configuration=$configuration -p:TargetFramework=$netframework_tfm $apphostpatcher_dir\AppHostPatcher.csproj
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 }
 
-if ($buildNetFramework) {
+if ($buildNet) {
 	Build-NetFramework
 }
 
-if ($buildNet) {
-    Build-Net
-}
-
 if ($buildNetX86) {
-	Build-SelfContainedNet x86
+	Build-Net x86
 }
 
 if ($buildNetX64) {
-	Build-SelfContainedNet x64
+	Build-Net x64
 }

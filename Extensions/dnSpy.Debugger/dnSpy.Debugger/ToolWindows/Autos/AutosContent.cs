@@ -20,7 +20,6 @@
 using System;
 using System.ComponentModel.Composition;
 using dnSpy.Contracts.Controls;
-using dnSpy.Contracts.Debugger;
 using dnSpy.Contracts.Text;
 using dnSpy.Contracts.Text.Classification;
 using dnSpy.Debugger.Evaluation.UI;
@@ -31,17 +30,13 @@ namespace dnSpy.Debugger.ToolWindows.Autos {
 	sealed class AutosContent : VariablesWindowContentBase {
 		public static readonly Guid VariablesWindowGuid = new Guid("F183274A-8EC3-4DE7-A291-388C6BB73362");
 
-		readonly DebuggerSettings debuggerSettings;
-
 		[ImportingConstructor]
-		AutosContent(IWpfCommandService wpfCommandService, VariablesWindowVMFactory variablesWindowVMFactory, DebuggerSettings debuggerSettings) {
-			this.debuggerSettings = debuggerSettings;
+		AutosContent(IWpfCommandService wpfCommandService, VariablesWindowVMFactory variablesWindowVMFactory) =>
 			Initialize(wpfCommandService, variablesWindowVMFactory, CreateVariablesWindowVMOptions());
-		}
 
 		VariablesWindowVMOptions CreateVariablesWindowVMOptions() {
 			var options = new VariablesWindowVMOptions() {
-				VariablesWindowValueNodesProvider = new AutosVariablesWindowValueNodesProvider(debuggerSettings),
+				VariablesWindowValueNodesProvider = new AutosVariablesWindowValueNodesProvider(),
 				WindowContentType = ContentTypes.AutosWindow,
 				NameColumnName = PredefinedTextClassifierTags.AutosWindowName,
 				ValueColumnName = PredefinedTextClassifierTags.AutosWindowValue,
