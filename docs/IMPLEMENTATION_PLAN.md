@@ -30,7 +30,7 @@ it maintains compatible forks of ILSpy v2, NRefactory, Roslyn.ExpressionCompiler
 Do this on a dedicated branch. Do not mix dependency migration with new MCP behavior, remote transport,
 or optional execution/editing features.
 
-### 2.1 Make the current baseline reproducible
+### 2.1 Make the current baseline reproducible — complete
 
 1. Choose the durable home for `Mono.Debugger.Soft` commit `888ded0f` (prefer a project fork; vendoring is
    the fallback) and update the tracked submodule URL or layout.
@@ -45,6 +45,15 @@ Exit criteria:
 - `build-dgspy.ps1` can build and deploy from that checkout.
 - The three unit suites pass sequentially.
 - The local frame-fetch timeout is reachable from a durable remote or is applied as a documented patch.
+
+Completed 2026-08-04. The public superproject is
+[`batram/dgSpy`](https://github.com/batram/dgSpy), the patched submodule is the public
+[`batram/Mono.Debugger.Soft`](https://github.com/batram/Mono.Debugger.Soft) fork with `dgspy` as its
+default branch, and tag `pre-modernization-2026-08-04` preserves the last known-good baseline. A
+`--depth 1 --recurse-submodules --shallow-submodules` clone into an empty test directory resolved all
+seven gitlinks, including `888ded0f`, without a local object database. From that clone, the documented
+VS 2019 net48 build and `build-dgspy.ps1` build/deploy succeeded; the Protocol, Gateway, and Extension
+suites then passed sequentially with 29, 182, and 18 tests respectively (229 total).
 
 ### 2.2 Establish a modernization regression gate
 
