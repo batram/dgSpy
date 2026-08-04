@@ -1,5 +1,10 @@
 # Central Gateway remote hosts
 
+Build a deploy-only x64 host with `.\pack-remote-host.ps1`. The resulting archive includes the
+self-contained net10 dnSpy runtime, matching dgSpy extension, process-scoped launcher, and hash
+manifest; it deliberately excludes the Gateway. See the [build baseline](DGSPY_BASELINE.md) for bundle
+deployment and state handling.
+
 The supported routing shape keeps every dgSpy extension on `127.0.0.1`. A central Gateway connects to
 remote extensions through local SSH tunnel ports and routes MCP tools by stable `host_id`.
 

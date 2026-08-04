@@ -43,20 +43,24 @@ Progress:
 - **Complete:** stable extension `host_id`, authenticated gateway-to-extension RPC, and central-Gateway
   registration/discovery/routing through loopback tunnel endpoints. Requests fail closed on missing or
   invalid credentials, ambiguous/unknown hosts, mismatched identity, and non-loopback registry addresses.
-- **Open:** self-contained remote-host packaging, live SSH-tunnel acceptance, MCP client identity, leases,
+- **Complete:** self-contained x64 remote-host packing with bundle-local launcher state and a deterministic
+  SHA-256 manifest.
+- **Open:** clean-host and live SSH-tunnel acceptance, MCP client identity, leases,
   permissions, disconnect policy, audit records, client-to-Gateway HTTPS, and any direct encrypted
   listener.
 
-1. Produce a self-contained x64 remote debugger-host bundle built on the central development machine:
+1. **Complete.** Produce a self-contained x64 remote debugger-host bundle built on the central development machine:
    dnSpyEx, a compatible dgSpy extension target, protocol/runtime dependencies, and a process-scoped
    launcher. A remote Windows host must not need Git, an SDK, Visual Studio/MSBuild, a separately
    installed .NET runtime, a VC++ redistributable installer, or a local Gateway. Include any required
    managed and native runtime files in the bundle and publish a deterministic manifest with hashes.
-2. Verify the bundle on a clean Windows Server host using copy/extract plus the launcher only. Prove MEF
-   composition, authenticated port 7351 startup, host identity persistence, debugger attach/control, safe
-   detach, restart, and removal without leaving machine-wide configuration behind.
+2. **Partial.** A file-deployed bundle on Windows Server 2019 proved manifest-valid extraction, MEF
+   composition, authenticated port 7351 startup, identity persistence across host launches,
+   attach/pause/inspect/resume/safe-detach against an x64 .NET Framework worker, and target/host liveness
+   after detach. Finish on a genuinely clean supported Windows Server host with an explicit prerequisite
+   inventory, then prove restart and complete removal leave no machine-wide configuration behind.
 3. Verify multi-host registration, discovery, and routing over live SSH tunnels.
-4. Retain authenticated extension RPC and loopback binding as the default endpoint boundary.
+4. **Complete.** Retain authenticated extension RPC and loopback binding as the default endpoint boundary.
 5. Complete MCP Streamable HTTP session behavior required by strict clients.
 6. Define session ownership or leases before supporting competing clients or independent sessions.
 7. Add per-client and per-target permissions for discovery, inspection, execution control, mutation,

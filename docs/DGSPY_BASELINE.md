@@ -7,7 +7,7 @@
 | Architecture | x64 only |
 | dnSpy build | `net48` and `net10.0-windows`, Release |
 | Debug engines | .NET Framework CorDebug (`CLR v4.0.30319`, covering 4.0–4.8) and Mono/Unity (UCH) |
-| Out of scope for now | x86, CoreCLR, remote hosts, multi-session |
+| Out of scope for now | x86, CoreCLR, clean-host/SSH remote acceptance, multi-session |
 
 ## Toolchain
 
@@ -21,7 +21,7 @@
 | Project | TFM | Notes |
 |---|---|---|
 | `dgSpy.Protocol` | `netstandard2.0` | DTOs only. Referenced by both sides, so it must stay loadable from net48 and net7.0. |
-| `Extensions/dgSpy.Extension` | `net48` | Pinned; does not inherit the host's `net10.0-windows` target. Output is `dgSpy.Extension.x.dll` — dnSpy's scanner only loads `*.x.dll`. |
+| `Extensions/dgSpy.Extension` | `net48`, `net10.0-windows` | The net48 target remains the local baseline; the net10 target is packed with the self-contained remote host. Output is `dgSpy.Extension.x.dll` — dnSpy's scanner only loads `*.x.dll`. |
 | `dgSpy.Gateway` | `net7.0` | Standalone process, not loaded into dnSpy. |
 | `tests/TestTargets/Milestone1Target` | `net48`, x64 | CorDebug smoke target; the project pins `PlatformTarget=x64` and the smoke test verifies dnSpy reports `X64`. |
 
@@ -93,6 +93,31 @@ that is a build-driver limitation, not a source failure.
 ```powershell
 .\build.ps1 net-x64 -NoMsbuild
 ```
+
+Build the deploy-only remote host archive on the development machine:
+
+```powershell
+.\pack-remote-host.ps1
+```
+
+This publishes `artifacts\remote-host\dgSpy-remote-host-win-x64.zip`. It contains the self-contained
+net10 x64 dnSpy host, the matching dgSpy extension and its private dependencies, a process-scoped
+launcher, and `manifest.json` with a stable sorted SHA-256 inventory. The Gateway is intentionally not
+included. On the remote machine, extract the archive and run:
+
+```powershell
+.\launcher\Start-dgSpyRemoteHost.cmd
+```
+
+The launcher creates `state\host.id` and `state\rpc.token` inside the extracted bundle and reuses them
+across restarts. It changes environment variables only for dnSpy's child process; it does not install a
+runtime or redistributable, modify PATH or the registry, add a service/firewall rule, or write
+machine-wide configuration. Copy `state\rpc.token` through the administrative channel when configuring
+the central Gateway. Use `-InitializeOnly` to create or inspect the paths without starting dnSpy.
+Removing the extracted directory removes the host and its state.
+
+Validate an archive's complete hash inventory and launcher-state persistence with
+`.\tests\verify-remote-host-package.ps1`.
 
 ### Do not substitute `dotnet build` for the dnSpy baseline
 

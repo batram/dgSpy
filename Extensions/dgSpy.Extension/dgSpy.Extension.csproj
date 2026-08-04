@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
   <Import Project="..\..\DnSpyCommon.props" />
-  <!-- Current scope is x64 net48 dnSpy only; net5.0-windows is untested, so don't inherit it from DnSpyCommon.props. -->
-  <PropertyGroup><TargetFrameworks>net48</TargetFrameworks><AssemblyName>dgSpy.Extension.x</AssemblyName><RootNamespace>dgSpy.Extension</RootNamespace><Nullable>enable</Nullable><UseWPF>true</UseWPF></PropertyGroup>
+  <!-- The net10 target is loaded by the self-contained remote host; net48 remains the local/live-tested baseline. -->
+  <PropertyGroup><TargetFrameworks>net48;net10.0-windows</TargetFrameworks><AssemblyName>dgSpy.Extension.x</AssemblyName><RootNamespace>dgSpy.Extension</RootNamespace><Nullable>enable</Nullable><UseWPF>true</UseWPF></PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\dgSpy.Protocol\dgSpy.Protocol.csproj" />
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.DnSpy\dnSpy.Contracts.DnSpy.csproj" />
