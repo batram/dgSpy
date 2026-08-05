@@ -91,7 +91,8 @@ Progress:
    rejects unsupported revisions, and explicitly returns 405 because dgSpy has no server SSE stream.
 6. **Complete.** For the authenticated loopback deployment, assign each initialized MCP session a controller identity.
    `attach` and `launch` claim one debugger session; inspection remains shared, while session mutations
-   require the controller and an exact `expected_state_version`. Expiry releases only controller
+   require the controller and the exact relevant lifecycle, execution, or breakpoint revision; paused
+   frame mutations additionally require `stop_id`. Expiry releases only controller
    ownership and never changes the target. Gateway restart leaves recovered debugger sessions unowned;
    `claim_session` explicitly recovers them. `release_session` relinquishes control without detach.
 7. **Complete for the delivered trust model.** Provide a coarse `full-control` (default) or `inspect-only` Gateway profile. Defer per-user and
@@ -101,7 +102,7 @@ Progress:
    the target's exact running/paused state. No timeout, ownership expiry, or reconnect may implicitly
    resume, detach, terminate, or restart a target.
 9. **Complete.** Write bounded JSONL audit records for side-effecting requests with timestamp, audit ID, controller,
-   host/session identifiers, operation, state-version guard, outcome, and error code. Never record
+   host/session identifiers, operation, scoped-version guard, outcome, and error code. Never record
    credentials, expressions, evaluated values, memory, exported bytes, or artifact contents.
 
 Exit criteria:
@@ -118,8 +119,8 @@ Exit criteria:
 - Ownership tests cover contention, disconnect, expiry, and recovery without implicit target control.
 
 Trusted-local control-plane acceptance used two initialized MCP sessions against the TLS Windows Server
-host. The non-controller received `session_owned`; missing and stale guards received
-`state_version_required` and `stale_state`; refreshed pause/continue succeeded; release and explicit
+host. The non-controller received `session_owned`; missing and stale guards received scoped
+`*_version_required` and `stale_*` errors; refreshed pause/continue succeeded; release and explicit
 claim transferred control. After central Gateway restart the same running debugger session returned
 unowned, mutation failed `session_unowned`, explicit claim recovered it, and only the disposable target
 was terminated. Packaged plaintext and TLS restart smokes passed the same unowned/claim/version path.

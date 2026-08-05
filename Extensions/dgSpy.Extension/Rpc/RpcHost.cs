@@ -33,6 +33,7 @@ namespace dgSpy.Extension {
 		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DebuggerSettings debuggerSettings; readonly DbgCodeBreakpointsService breakpoints; readonly DbgModuleBreakpointsService moduleBreakpoints; readonly DbgObjectIdService objectIds; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions; readonly DbgMetadataService metadataService; readonly Lazy<DbgModuleIdProvider>[] moduleIdProviders; readonly IDecompilerService decompilers;
 		readonly EvaluationQueue evaluations=new EvaluationQueue(); readonly SemaphoreSlim targetControl=new SemaphoreSlim(1,1);
 		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>();
+		long lifecycleVersion,executionVersion,breakpointsVersion; string? stopId;
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		readonly RpcSecuritySettings rpcSecurity=RpcSecuritySettings.Load();
 		TcpListener? tcpListener;
@@ -54,6 +55,9 @@ namespace dgSpy.Extension {
 		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers) {
 			this.programs=programs; this.manager=manager; this.debuggerSettings=debuggerSettings; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.moduleIdProviders=moduleIdProviders.ToArray(); this.decompilers=decompilers;
 			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { if (IsTargetRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded);
+			breakpoints.BreakpointsChanged += (_,__) => IncrementBreakpointsVersion(); breakpoints.BreakpointsModified += (_,__) => IncrementBreakpointsVersion();
+			moduleBreakpoints.BreakpointsChanged += (_,__) => IncrementBreakpointsVersion(); moduleBreakpoints.BreakpointsModified += (_,__) => IncrementBreakpointsVersion();
+			exceptions.ExceptionsChanged += (_,__) => IncrementBreakpointsVersion(); exceptions.ExceptionSettingsModified += (_,__) => IncrementBreakpointsVersion();
 			// An engine that fails to connect reports it here rather than through DbgManager.Start, which
 			// only rejects options it cannot build an engine from. Recording it turns "faulted" from a
 			// timeout guess into dnSpy's own reason. dnSpy's UI subscribes to the same event and shows a
@@ -106,6 +110,7 @@ namespace dgSpy.Extension {
 			var authenticationError=RpcRequestAuthenticator.Reject(req.Operation,req.HostId,req.AuthenticationToken,rpcSecurity.HostId,rpcSecurity.Token);
 			if (authenticationError is not null) return RpcResponse.Failure(req.RequestId,"unauthorized",authenticationError);
 			if (req.DeadlineUtc is DateTime deadline && deadline<=DateTime.UtcNow) return RpcResponse.Failure(req.RequestId,"deadline_exceeded","Request deadline has expired.");
+			CheckOperationVersion(req);
 			using var requestCancellation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
 			if (req.DeadlineUtc is DateTime requestDeadline) requestCancellation.CancelAfter(requestDeadline-DateTime.UtcNow > TimeSpan.Zero ? requestDeadline-DateTime.UtcNow : TimeSpan.FromMilliseconds(1));
 			switch (req.Operation) {
@@ -256,7 +261,7 @@ namespace dgSpy.Extension {
 			var adding=sessionId is not null && await OnDebuggerAsync(()=>manager.IsDebugging).ConfigureAwait(false);
 			var oldProcessIds=adding ? await OnDebuggerAsync(()=>manager.Processes.Select(p=>p.Id).ToArray(),cancellationToken).ConfigureAwait(false) : Array.Empty<int>();
 			var rejected=await OnDebuggerAsync(()=>{
-				lock(sync) { if(!adding) { events.Reset(); output.Reset(); stateVersion=0; attaching=true; faulted=false; faultMessage=null; terminalExitCode=null; terminalReason=null; sessionKind=kind; lifecycleAction=null; processLifecycleActions.Clear(); } lastUserMessage=null; }
+				lock(sync) { if(!adding) { events.Reset(); output.Reset(); stateVersion=0; lifecycleVersion=0; executionVersion=0; stopId=null; attaching=true; faulted=false; faultMessage=null; terminalExitCode=null; terminalReason=null; sessionKind=kind; lifecycleAction=null; processLifecycleActions.Clear(); } lastUserMessage=null; }
 				var failure=start();
 				if (failure is null) { if(!adding) sessionId=Guid.NewGuid().ToString("N"); stateVersion++; }
 				else if(!adding) lock(sync) attaching=false;
@@ -287,6 +292,7 @@ namespace dgSpy.Extension {
 		// terminates the target. If dnSpy cannot detach without killing it, say so instead of doing it.
 		async Task<DetachResult> DetachAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
+			CheckLifecycleVersion(req);
 			bool allowTerminate=(bool?)req.Arguments["allow_terminate"] ?? false;
 			if(req.Arguments["process_id"] is not null) {
 				var process=await OnDebuggerAsync(()=>SelectProcess(req),cancellationToken).ConfigureAwait(false);
@@ -300,7 +306,7 @@ namespace dgSpy.Extension {
 				var active=await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false);
 				var selectedSessionId=sessionId!;
 				if(!active) lock(sync) { sessionId=null; attachedProgramId=null; sessionKind=null; lifecycleAction=null; attaching=false; faulted=false; faultMessage=null; lastUserMessage=null; terminalExitCode=null; terminalReason=null; }
-				return new DetachResult { SessionId=selectedSessionId,ProcessId=process.Id,Detached=selectedCanDetach,Terminated=!selectedCanDetach,SessionActive=active,StateVersion=stateVersion };
+				return new DetachResult { SessionId=selectedSessionId,ProcessId=process.Id,Detached=selectedCanDetach,Terminated=!selectedCanDetach,SessionActive=active,StateVersion=stateVersion,LifecycleVersion=lifecycleVersion };
 			}
 			var wasDebugging=await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false);
 			var canDetach=await OnDebuggerAsync(()=>!manager.IsDebugging || manager.CanDetachWithoutTerminating,cancellationToken).ConfigureAwait(false);
@@ -314,14 +320,14 @@ namespace dgSpy.Extension {
 			// A real process removal records the detached event in OnProcessExited. A faulted connection
 			// never created a process, so it needs the event here after the session is cleared.
 			if(!wasDebugging) Record(EventKinds.Detached);
-			return new DetachResult { SessionId=id,Detached=!stillDebugging && canDetach,Terminated=!stillDebugging && !canDetach,SessionActive=stillDebugging,StateVersion=stateVersion };
+			return new DetachResult { SessionId=id,Detached=!stillDebugging && canDetach,Terminated=!stillDebugging && !canDetach,SessionActive=stillDebugging,StateVersion=stateVersion,LifecycleVersion=lifecycleVersion };
 		}
 		async Task<SessionSummary[]> ListSessionsAsync(CancellationToken cancellationToken) => await OnDebuggerAsync(()=>{
 			if (sessionId is null) return Array.Empty<SessionSummary>();
 			var state=State();
-			return new[] { new SessionSummary { SessionId=state.SessionId,State=state.State,ProgramId=attachedProgramId ?? "",StateVersion=state.StateVersion,LastEventId=state.LastEventId,ProcessIds=state.ProcessIds,CanDetachWithoutTerminating=manager.IsDebugging && manager.CanDetachWithoutTerminating } };
+			return new[] { new SessionSummary { SessionId=state.SessionId,State=state.State,ProgramId=attachedProgramId ?? "",StateVersion=state.StateVersion,LastEventId=state.LastEventId,ProcessIds=state.ProcessIds,LifecycleVersion=state.LifecycleVersion,ExecutionVersion=state.ExecutionVersion,BreakpointsVersion=state.BreakpointsVersion,StopId=state.StopId,CanDetachWithoutTerminating=manager.IsDebugging && manager.CanDetachWithoutTerminating } };
 		},cancellationToken).ConfigureAwait(false);
-		SessionState State() { if (sessionId is null) throw new RpcException("session_not_found","No active dgSpy session."); if (attaching && manager.IsDebugging && manager.Processes.Length!=0) attaching=false; return new SessionState { SessionId=sessionId,State=SessionStateCalculator.Get(faulted,attaching,manager.IsDebugging,AggregateRunningState),StateVersion=stateVersion,LastEventId=events.LastEventId,ProcessIds=manager.Processes.Select(p=>p.Id).ToArray(),FaultMessage=faulted ? faultMessage : null,ExitCode=terminalExitCode,TerminalReason=terminalReason }; }
+		SessionState State() { if (sessionId is null) throw new RpcException("session_not_found","No active dgSpy session."); if (attaching && manager.IsDebugging && manager.Processes.Length!=0) attaching=false; return new SessionState { SessionId=sessionId,State=SessionStateCalculator.Get(faulted,attaching,manager.IsDebugging,AggregateRunningState),StateVersion=stateVersion,LastEventId=events.LastEventId,ProcessIds=manager.Processes.Select(p=>p.Id).ToArray(),LifecycleVersion=lifecycleVersion,ExecutionVersion=executionVersion,BreakpointsVersion=breakpointsVersion,StopId=stopId,FaultMessage=faulted ? faultMessage : null,ExitCode=terminalExitCode,TerminalReason=terminalReason }; }
 		// Polls on the dispatcher so callers observe the state the operation actually produced. Bounded
 		// by the request deadline; a timeout returns the current state rather than throwing, so the
 		// caller still learns where the session got to.

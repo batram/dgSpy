@@ -5,6 +5,19 @@ using Xunit;
 namespace dgSpy.Extension.Tests;
 
 public sealed class ExtensionCoreTests {
+	[Theory]
+	[InlineData(EventKinds.ThreadCreated,false,false)]
+	[InlineData(EventKinds.ThreadExited,false,false)]
+	[InlineData(EventKinds.ModuleLoaded,false,false)]
+	[InlineData(EventKinds.ModuleUnloaded,false,false)]
+	[InlineData(EventKinds.ProcessCreated,true,false)]
+	[InlineData(EventKinds.RuntimeExited,true,false)]
+	[InlineData(EventKinds.Continued,false,true)]
+	[InlineData(EventKinds.Stopped,false,true)]
+	public void Events_advance_only_the_relevant_revision(string kind,bool lifecycle,bool execution) {
+		Assert.Equal(lifecycle,StateRevisionKinds.ChangesLifecycle(kind));
+		Assert.Equal(execution,StateRevisionKinds.ChangesExecution(kind));
+	}
 	[Fact]
 	public void Rpc_authentication_requires_token_and_exact_host_identity() {
 		Assert.Null(RpcRequestAuthenticator.Reject("get_host_info","host-a","secret","host-a","secret"));

@@ -66,6 +66,7 @@ namespace dgSpy.Extension {
 
 		async Task<SessionState> TerminateAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
+			CheckLifecycleVersion(req);
 			if (!await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false)) throw new RpcException("session_not_running","The session has already ended.");
 			if(req.Arguments["process_id"] is not null) {
 				var process=await OnDebuggerAsync(()=>SelectProcess(req),cancellationToken).ConfigureAwait(false);
@@ -87,6 +88,7 @@ namespace dgSpy.Extension {
 
 		async Task<SessionState> RestartAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
+			CheckLifecycleVersion(req);
 			var oldProcessIds=await OnDebuggerAsync(()=>manager.Processes.Select(process=>process.Id).ToArray(),cancellationToken).ConfigureAwait(false);
 			var canRestart=await OnDebuggerAsync(()=>sessionKind=="launch" && manager.Processes.Length==1 && manager.CanRestart,cancellationToken).ConfigureAwait(false);
 			if (!canRestart) throw new RpcException("restart_unsupported","Only a target launched through dgSpy can be restarted, and the active engine must advertise restart support.");

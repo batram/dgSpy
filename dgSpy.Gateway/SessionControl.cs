@@ -53,6 +53,16 @@ public sealed class SessionControllers {
 
 public sealed record SessionControllerInfo(string SessionId,string? HostId,string ClientId,DateTime ClaimedUtc);
 
+public static class MutationGuards {
+	static readonly HashSet<string> Lifecycle=new(StringComparer.Ordinal) { "detach","terminate","restart" };
+	static readonly HashSet<string> Breakpoints=new(StringComparer.Ordinal) { "set_il_breakpoint","set_breakpoint","remove_breakpoint","clear_breakpoints","update_breakpoint","set_exception_breakpoint","set_module_breakpoint","update_module_breakpoint","remove_module_breakpoint","import_breakpoints","set_exception_policy","remove_exception_policy","restore_exception_defaults" };
+	static readonly HashSet<string> StopBound=new(StringComparer.Ordinal) { "step_into","step_over","step_out","set_value","invoke_method","create_object","set_instruction_pointer","create_object_id","write_value_export" };
+	public static string Scope(string operation) => Lifecycle.Contains(operation) ? "lifecycle" : Breakpoints.Contains(operation) ? "breakpoints" : "execution";
+	public static string Argument(string operation) => "expected_"+Scope(operation)+"_version";
+	public static string StateProperty(string operation) => Scope(operation)+"_version";
+	public static bool RequiresStop(string operation) => StopBound.Contains(operation);
+}
+
 public sealed class GatewayAccessPolicy {
 	public string Mode { get; }
 	public GatewayAccessPolicy() { var configured=Environment.GetEnvironmentVariable("DGSPY_ACCESS_MODE")?.Trim().ToLowerInvariant(); Mode=configured is null or "" or "full-control" ? "full-control" : configured=="inspect-only" ? configured : throw new InvalidOperationException("DGSPY_ACCESS_MODE must be full-control or inspect-only."); }
@@ -65,7 +75,7 @@ public sealed class GatewayAuditLog {
 	public GatewayAuditLog() : this(Environment.GetEnvironmentVariable("DGSPY_AUDIT_FILE") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy","gateway-audit.jsonl"),5*1024*1024) { }
 	internal GatewayAuditLog(string path,long maxBytes) { this.path=path; this.maxBytes=maxBytes; }
 	public void Write(string auditId,string clientId,string? hostId,string? sessionId,string operation,long? expectedVersion,string outcome,string? errorCode) {
-		var record=new { timestamp_utc=DateTime.UtcNow.ToString("O"),audit_id=auditId,controller_id=clientId,host_id=hostId,session_id=sessionId,operation,expected_state_version=expectedVersion,outcome,error_code=errorCode };
+		var record=new { timestamp_utc=DateTime.UtcNow.ToString("O"),audit_id=auditId,controller_id=clientId,host_id=hostId,session_id=sessionId,operation,expected_version_scope=MutationGuards.Scope(operation),expected_version=expectedVersion,outcome,error_code=errorCode };
 		var line=ProtocolJson.Serialize(record)+Environment.NewLine;
 		try { lock(sync) { Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!); if(File.Exists(path) && new FileInfo(path).Length+line.Length>maxBytes) { var previous=path+".1"; if(File.Exists(previous)) File.Delete(previous); File.Move(path,previous); } File.AppendAllText(path,line); } } catch { }
 	}
@@ -75,21 +85,22 @@ public sealed class GatewayToolExecutor {
 	readonly HostRouter router; readonly SessionControllers controllers; readonly GatewayAccessPolicy access; readonly GatewayAuditLog audit;
 	public GatewayToolExecutor(HostRouter router,SessionControllers controllers,GatewayAccessPolicy access,GatewayAuditLog audit) { this.router=router; this.controllers=controllers; this.access=access; this.audit=audit; }
 	public async Task<RpcResponse> ExecuteAsync(string operation,JsonObject arguments,string clientId,CancellationToken token) {
-		var hostId=(string?)arguments["host_id"]; var sessionId=(string?)arguments["session_id"]; var expected=(long?)arguments["expected_state_version"];
+		var hostId=(string?)arguments["host_id"]; var sessionId=(string?)arguments["session_id"]; var guardArgument=MutationGuards.Argument(operation); var expected=(long?)arguments[guardArgument] ?? (long?)arguments["expected_state_version"];
 		var mutates=CapabilityCatalog.Operations.Any(item=>item.Operation==operation && item.MutatesSession); var controlMutation=operation is "claim_session" or "release_session";
 		var auditId=mutates || controlMutation ? Guid.NewGuid().ToString("N") : null;
 		try {
 			if(operation=="get_session_controller") { if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var current=controllers.Get(sessionId); return RpcResponse.Success(Guid.NewGuid().ToString("N"),current is null ? new { session_id=sessionId,owned=false,controller_id=(string?)null } : new { session_id=sessionId,owned=true,controller_id=(string?)current.ClientId }); }
-			if(operation=="claim_session") { access.AuthorizeMutation(operation); if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var state=await GetStateAsync(arguments,token); var claimed=controllers.Claim(sessionId,hostId,clientId); audit.Write(auditId!,clientId,hostId,sessionId,operation,null,"succeeded",null); return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,controller_id=claimed.ClientId,state_version=StateVersion(state) }); }
+			if(operation=="claim_session") { access.AuthorizeMutation(operation); if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var state=await GetStateAsync(arguments,token); var claimed=controllers.Claim(sessionId,hostId,clientId); var node=ProtocolJson.ToNode(state)!; audit.Write(auditId!,clientId,hostId,sessionId,operation,null,"succeeded",null); return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,controller_id=claimed.ClientId,state_version=(long?)node["state_version"],lifecycle_version=(long?)node["lifecycle_version"],execution_version=(long?)node["execution_version"],breakpoints_version=(long?)node["breakpoints_version"],stop_id=(string?)node["stop_id"] }); }
 			if(operation=="release_session") { access.AuthorizeMutation(operation); if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var released=controllers.Release(sessionId,clientId); audit.Write(auditId!,clientId,hostId,sessionId,operation,null,"succeeded",null); return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,released=true,controller_id=released.ClientId }); }
 			if(mutates) {
 				access.AuthorizeMutation(operation);
 				if(operation is not ("attach" or "attach_endpoint" or "launch")) {
 					if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments",$"'{operation}' requires session_id.");
 					controllers.Authorize(sessionId,clientId);
-					if(!expected.HasValue) throw new GatewayControlException("state_version_required",$"'{operation}' requires expected_state_version.");
-					var state=await GetStateAsync(arguments,token); var current=StateVersion(state);
-					if(expected.Value!=current) throw new GatewayControlException("stale_state",$"Expected state {expected.Value}, current state is {current}.");
+					if(!expected.HasValue) throw new GatewayControlException(MutationGuards.Scope(operation)+"_version_required",$"'{operation}' requires {guardArgument}.");
+					var state=await GetStateAsync(arguments,token); var legacy=arguments[guardArgument] is null; var property=legacy ? "state_version" : MutationGuards.StateProperty(operation); var current=Version(state,property);
+					if(expected.Value!=current) throw new GatewayControlException(legacy ? "stale_state" : "stale_"+MutationGuards.Scope(operation),$"Expected {property} {expected.Value}, current value is {current}.");
+					if(!legacy && MutationGuards.RequiresStop(operation)) { var expectedStop=(string?)arguments["expected_stop_id"]; var currentStop=(string?)ProtocolJson.ToNode(state)!["stop_id"]; if(string.IsNullOrWhiteSpace(expectedStop)) throw new GatewayControlException("stop_id_required",$"'{operation}' requires expected_stop_id from the current paused state."); if(expectedStop!=currentStop) throw new GatewayControlException("stale_stop",$"Expected stop '{expectedStop}', current stop is '{currentStop ?? "none"}'."); }
 				}
 			}
 			var response=await router.CallAsync(new RpcRequest { Operation=operation,Arguments=(JsonObject)arguments.DeepClone(),DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds(operation)) },token);
@@ -102,5 +113,6 @@ public sealed class GatewayToolExecutor {
 		catch(Exception ex) { if(auditId is not null) audit.Write(auditId,clientId,hostId,sessionId,operation,expected,"failed","internal_error"); return RpcResponse.Failure(Guid.NewGuid().ToString("N"),"internal_error",ex.Message); }
 	}
 	async Task<object> GetStateAsync(JsonObject source,CancellationToken token) { var args=new JsonObject(); if(source["host_id"] is not null) args["host_id"]=source["host_id"]!.DeepClone(); args["session_id"]=source["session_id"]!.DeepClone(); var response=await router.CallAsync(new RpcRequest { Operation="get_session_state",Arguments=args,DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds("get_session_state")) },token); if(response.Error is not null) throw new GatewayControlException(response.Error.Code,response.Error.Message); return response.Result!; }
-	static long StateVersion(object state) => (long?)ProtocolJson.ToNode(state)!["state_version"] ?? throw new GatewayControlException("invalid_state","Host did not report state_version.");
+	static long StateVersion(object state) => Version(state,"state_version");
+	static long Version(object state,string property) => (long?)ProtocolJson.ToNode(state)![property] ?? throw new GatewayControlException("invalid_state",$"Host did not report {property}.");
 }

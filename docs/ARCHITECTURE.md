@@ -57,15 +57,18 @@ A host identity represents one trusted extension instance. The delivered local r
 identity to an authenticated endpoint. The planned remote registry maps a provisioned identity to its
 authenticated live outbound connection. Both reject ambiguous, unknown, duplicate, or mismatched
 selection. A session represents one logical attachment or launch and reports `attaching`,
-`running`, `paused`, `mixed`, `detaching`, `exited`, or `faulted`, plus a monotonic `state_version` and
-event cursor.
+`running`, `paused`, `mixed`, `detaching`, `exited`, or `faulted`. `event_id` orders the event stream;
+`lifecycle_version`, `execution_version`, and `breakpoints_version` are independent optimistic-concurrency
+guards; and `stop_id` identifies one paused execution snapshot. The legacy all-event `state_version`
+remains on the wire only for compatibility.
 
 Programs, processes, runtimes, modules, threads, frames, values, symbols, breakpoints, and object IDs use
 typed or opaque identities. Display strings and dnSpy `RuntimeId.ToString()` are never durable identity.
 Frame/value snapshots are invalid after resume unless an engine-backed object ID explicitly provides
 persistence. An initialized MCP session controls a debugger session created by its `attach` or `launch`.
-Inspection is shared; every session mutation requires that controller plus the exact
-`expected_state_version`. A Gateway restart intentionally recovers debugger sessions as unowned, and
+Inspection is shared; every session mutation requires that controller plus its exact relevant scoped
+revision. Frame-bound mutations also require the current `stop_id`. Thread and module notifications can
+advance `event_id` without invalidating lifecycle or execution commands. A Gateway restart intentionally recovers debugger sessions as unowned, and
 `claim_session` is the only recovery action. Ownership changes never change target state.
 
 ## Concurrency and lifetime invariants

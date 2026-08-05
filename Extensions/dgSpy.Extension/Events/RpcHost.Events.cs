@@ -139,8 +139,33 @@ namespace dgSpy.Extension {
 
 		void Record(string kind) => Record(new DebugEvent { Kind=kind });
 		void Record(string kind,bool terminal,int? processId,int? exitCode,string? reason) => Record(new DebugEvent { Kind=kind,Terminal=terminal,ProcessId=processId,ExitCode=exitCode,Reason=reason });
-		DebugEvent Record(DebugEvent value) { lock(sync) return events.Add(value,++stateVersion); }
+		DebugEvent Record(DebugEvent value) { lock(sync) {
+			stateVersion++;
+			if(StateRevisionKinds.ChangesLifecycle(value.Kind)) { lifecycleVersion++; if(value.Terminal || value.Kind==EventKinds.Detached || value.Kind==EventKinds.SessionEnded) stopId=null; }
+			if(value.Kind==EventKinds.Continued) { executionVersion++; stopId=null; }
+			else if(value.Kind==EventKinds.Stopped) { executionVersion++; stopId=Guid.NewGuid().ToString("N"); }
+			value.LifecycleVersion=lifecycleVersion; value.ExecutionVersion=executionVersion; value.BreakpointsVersion=breakpointsVersion; value.StopId=stopId;
+			return events.Add(value,stateVersion);
+		} }
+		void IncrementBreakpointsVersion() { lock(sync) breakpointsVersion++; }
 		void CheckSession(RpcRequest req) { var id=(string?)req.Arguments["session_id"]; if(sessionId is null || id!=sessionId) throw new RpcException("session_not_found","The session_id is not active."); }
-		void CheckVersion(RpcRequest req) { var expected=(long?)req.Arguments["expected_state_version"]; if(expected.HasValue && expected.Value!=stateVersion) throw new RpcException("stale_state",$"Expected state {expected.Value}, current state is {stateVersion}."); }
+		void CheckVersion(RpcRequest req) => CheckExecutionVersion(req);
+		void CheckLifecycleVersion(RpcRequest req) => CheckScopedVersion(req,"expected_lifecycle_version",lifecycleVersion,"lifecycle");
+		void CheckExecutionVersion(RpcRequest req) { CheckScopedVersion(req,"expected_execution_version",executionVersion,"execution"); var expectedStop=(string?)req.Arguments["expected_stop_id"]; if(expectedStop is not null && expectedStop!=stopId) throw new RpcException("stale_stop",$"Expected stop '{expectedStop}', current stop is '{stopId ?? "none"}'."); }
+		void CheckBreakpointsVersion(RpcRequest req) => CheckScopedVersion(req,"expected_breakpoints_version",breakpointsVersion,"breakpoints");
+		void CheckScopedVersion(RpcRequest req,string name,long current,string scope) {
+			var expected=(long?)req.Arguments[name];
+			if(expected.HasValue && expected.Value!=current) throw new RpcException("stale_"+scope,$"Expected {scope} version {expected.Value}, current {scope} version is {current}.");
+			var legacy=(long?)req.Arguments["expected_state_version"];
+			if(!expected.HasValue && legacy.HasValue && legacy.Value!=stateVersion) throw new RpcException("stale_state",$"Expected state {legacy.Value}, current state is {stateVersion}.");
+		}
+		void CheckOperationVersion(RpcRequest req) {
+			if(req.Arguments["session_id"] is not null) CheckSession(req);
+			switch(req.Operation) {
+			case "detach": case "terminate": case "restart": CheckLifecycleVersion(req); break;
+			case "pause": case "continue": case "step_into": case "step_over": case "step_out": case "set_value": case "invoke_method": case "create_object": case "write_memory": case "set_instruction_pointer": case "create_object_id": case "release_object_id": case "write_value_export": CheckExecutionVersion(req); break;
+			case "set_il_breakpoint": case "set_breakpoint": case "remove_breakpoint": case "clear_breakpoints": case "update_breakpoint": case "set_exception_breakpoint": case "set_module_breakpoint": case "update_module_breakpoint": case "remove_module_breakpoint": case "import_breakpoints": case "set_exception_policy": case "remove_exception_policy": case "restore_exception_defaults": CheckBreakpointsVersion(req); break;
+			}
+		}
 	}
 }

@@ -93,7 +93,7 @@
     },
     {
       "name": "attach_endpoint",
-      "description": "Attach to a Mono/Unity soft-debugger endpoint by address and port. Use this when the target was launched with --debugger-agent=transport=dt_socket,server=y,address=HOST:PORT: such a target emits no discovery beacon, so list_programs can never see it and attach cannot reach it. Returns state \"faulted\" with fault_message when the connection fails.",
+      "description": "Attach to a Mono/Unity soft-debugger endpoint by address and port. Use this when the target was launched with --debugger-agent=transport=dt_socket,server=y,address=HOST:PORT: such a target emits no discovery beacon, so list_programs can never see it and attach cannot reach it. Returns state \u0022faulted\u0022 with fault_message when the connection fails.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -116,7 +116,7 @@
               "unity",
               "mono"
             ],
-            "description": "Default unity. Must match the target's runtime."
+            "description": "Default unity. Must match the target\u0027s runtime."
           },
           "process_is_suspended": {
             "type": "boolean",
@@ -124,7 +124,7 @@
           },
           "connection_timeout_ms": {
             "type": "integer",
-            "description": "Socket retry window. dnSpy's default is 10000; capped at 300000."
+            "description": "Socket retry window. dnSpy\u0027s default is 10000; capped at 300000."
           }
         },
         "required": [
@@ -134,7 +134,7 @@
     },
     {
       "name": "launch",
-      "description": "Launch a target through dnSpy's debugger engine. Unlike attach, dnSpy owns the process, so terminate and restart have deterministic semantics.",
+      "description": "Launch a target through dnSpy\u0027s debugger engine. Unlike attach, dnSpy owns the process, so terminate and restart have deterministic semantics.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -294,14 +294,18 @@
             "type": "boolean",
             "description": "Stop debugging even if that terminates the selected target."
           },
+          "expected_lifecycle_version": {
+            "type": "integer",
+            "description": "Required exact lifecycle_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
           "session_id",
-          "expected_state_version"
+          "expected_lifecycle_version"
         ]
       }
     },
@@ -321,14 +325,18 @@
           "process_id": {
             "type": "integer"
           },
+          "expected_lifecycle_version": {
+            "type": "integer",
+            "description": "Required exact lifecycle_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
           "session_id",
-          "expected_state_version"
+          "expected_lifecycle_version"
         ]
       }
     },
@@ -345,14 +353,18 @@
           "session_id": {
             "type": "string"
           },
+          "expected_lifecycle_version": {
+            "type": "integer",
+            "description": "Required exact lifecycle_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
           "session_id",
-          "expected_state_version"
+          "expected_lifecycle_version"
         ]
       }
     },
@@ -374,11 +386,15 @@
           },
           "expected_state_version": {
             "type": "integer"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
           }
         },
         "required": [
           "session_id",
-          "expected_state_version"
+          "expected_execution_version"
         ]
       }
     },
@@ -400,17 +416,21 @@
           },
           "expected_state_version": {
             "type": "integer"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
           }
         },
         "required": [
           "session_id",
-          "expected_state_version"
+          "expected_execution_version"
         ]
       }
     },
     {
       "name": "set_il_breakpoint",
-      "description": "Set an exact module/token/IL-offset breakpoint and report whether the engine actually bound it. Check `bound`: false with severity \"error\" will never be hit, false with no error is pending a module load. On Mono/Unity a breakpoint can only sit on a sequence point; many offsets qualify but a frame's own il_offset often does not, and a refused one is retried at method entry (offset 0) unless snap_to_sequence_point is false — when that happens `snapped` is true and it stops earlier than requested. Pass the returned `cursor_event_id` to wait_for_stop as after_event_id: a cursor read after this call has already missed the first hit on a hot method.",
+      "description": "Set an exact module/token/IL-offset breakpoint and report whether the engine actually bound it. Check \u0060bound\u0060: false with severity \u0022error\u0022 will never be hit, false with no error is pending a module load. On Mono/Unity a breakpoint can only sit on a sequence point; many offsets qualify but a frame\u0027s own il_offset often does not, and a refused one is retried at method entry (offset 0) unless snap_to_sequence_point is false \u2014 when that happens \u0060snapped\u0060 is true and it stops earlier than requested. Pass the returned \u0060cursor_event_id\u0060 to wait_for_stop as after_event_id: a cursor read after this call has already missed the first hit on a hot method.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -434,9 +454,13 @@
             "type": "boolean",
             "description": "Default true. Retry at method entry when the engine refuses the requested offset."
           },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -444,7 +468,7 @@
           "module",
           "method_token",
           "il_offset",
-          "expected_state_version"
+          "expected_breakpoints_version"
         ]
       }
     },
@@ -709,7 +733,7 @@
     },
     {
       "name": "get_frame",
-      "description": "Inspect one paused frame by caller-selected thread_id and zero-based frame_index. `locals` holds primitive scalars only; pass include to also get objects and `this` in `values`, which is one round trip against one evaluation context.",
+      "description": "Inspect one paused frame by caller-selected thread_id and zero-based frame_index. \u0060locals\u0060 holds primitive scalars only; pass include to also get objects and \u0060this\u0060 in \u0060values\u0060, which is one round trip against one evaluation context.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -737,7 +761,7 @@
                 "this"
               ]
             },
-            "description": "locals covers arguments too — dnSpy does not separate them. Unknown values are rejected rather than ignored."
+            "description": "locals covers arguments too \u2014 dnSpy does not separate them. Unknown values are rejected rather than ignored."
           },
           "allow_func_eval": {
             "type": "boolean",
@@ -753,7 +777,7 @@
     },
     {
       "name": "update_breakpoint",
-      "description": "Change an existing breakpoint's enabled state, condition, hit count, or trace message. Conditions and hit counts are evaluated by the engine inside the target, so a condition that cannot be evaluated fails at hit time rather than here. Pass an empty string for condition or trace_message to clear it; omit a field to leave it unchanged.",
+      "description": "Change an existing breakpoint\u0027s enabled state, condition, hit count, or trace message. Conditions and hit counts are evaluated by the engine inside the target, so a condition that cannot be evaluated fails at hit time rather than here. Pass an empty string for condition or trace_message to clear it; omit a field to leave it unchanged.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -769,7 +793,7 @@
           },
           "condition": {
             "type": "string",
-            "description": "Expression in the target's language. Empty string clears the condition."
+            "description": "Expression in the target\u0027s language. Empty string clears the condition."
           },
           "condition_kind": {
             "type": "string",
@@ -808,7 +832,7 @@
     },
     {
       "name": "set_exception_breakpoint",
-      "description": "Stop when an exception is thrown. Pass a fully qualified type name, or omit name to set the category's default that governs every exception it does not name. Like code breakpoints these are dnSpy-global and outlive a session.",
+      "description": "Stop when an exception is thrown. Pass a fully qualified type name, or omit name to set the category\u0027s default that governs every exception it does not name. Like code breakpoints these are dnSpy-global and outlive a session.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -848,7 +872,7 @@
           },
           "include_second_chance": {
             "type": "boolean",
-            "description": "Default false. True adds dnSpy's stock second-chance defaults — expect thousands of entries."
+            "description": "Default false. True adds dnSpy\u0027s stock second-chance defaults \u2014 expect thousands of entries."
           },
           "max_results": {
             "type": "integer",
@@ -862,7 +886,7 @@
     },
     {
       "name": "step_into",
-      "description": "Step into the call at the current instruction. The stop arrives on the event stream like any other, with stop_reason \"step\": pass the returned cursor_event_id to wait_for_stop. completed=false means the step is still running, not that it failed.",
+      "description": "Step into the call at the current instruction. The stop arrives on the event stream like any other, with stop_reason \u0022step\u0022: pass the returned cursor_event_id to wait_for_stop. completed=false means the step is still running, not that it failed.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -879,11 +903,20 @@
           },
           "expected_state_version": {
             "type": "integer"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
+          "expected_stop_id": {
+            "type": "string",
+            "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
           }
         },
         "required": [
           "session_id",
-          "expected_state_version"
+          "expected_execution_version",
+          "expected_stop_id"
         ]
       }
     },
@@ -905,11 +938,20 @@
           },
           "expected_state_version": {
             "type": "integer"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
+          "expected_stop_id": {
+            "type": "string",
+            "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
           }
         },
         "required": [
           "session_id",
-          "expected_state_version"
+          "expected_execution_version",
+          "expected_stop_id"
         ]
       }
     },
@@ -931,17 +973,26 @@
           },
           "expected_state_version": {
             "type": "integer"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
+          "expected_stop_id": {
+            "type": "string",
+            "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
           }
         },
         "required": [
           "session_id",
-          "expected_state_version"
+          "expected_execution_version",
+          "expected_stop_id"
         ]
       }
     },
     {
       "name": "evaluate",
-      "description": "Evaluate an expression against a paused frame. Returns the raw scalar and dnSpy's formatted display text as separate fields, so numbers stay comparable without parsing display text. has_raw_value distinguishes a value of null from a value that is unavailable or optimized away. Func-eval is OFF by default: an expression that calls a property getter runs code inside the target, which can deadlock a target holding a lock and can mutate what you were inspecting.",
+      "description": "Evaluate an expression against a paused frame. Returns the raw scalar and dnSpy\u0027s formatted display text as separate fields, so numbers stay comparable without parsing display text. has_raw_value distinguishes a value of null from a value that is unavailable or optimized away. Func-eval is OFF by default: an expression that calls a property getter runs code inside the target, which can deadlock a target holding a lock and can mutate what you were inspecting.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1009,15 +1060,24 @@
             "maximum": 10000,
             "description": "Hard engine func-eval timeout; default 1000."
           },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
+          },
+          "expected_stop_id": {
+            "type": "string",
+            "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
           }
         },
         "required": [
           "session_id",
           "expression",
-          "expected_state_version"
+          "expected_execution_version",
+          "expected_stop_id"
         ]
       }
     },
@@ -1051,15 +1111,24 @@
             "maximum": 10000,
             "description": "Hard engine func-eval timeout; default 1000."
           },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
+          },
+          "expected_stop_id": {
+            "type": "string",
+            "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
           }
         },
         "required": [
           "session_id",
           "expression",
-          "expected_state_version"
+          "expected_execution_version",
+          "expected_stop_id"
         ]
       }
     },
@@ -1119,22 +1188,26 @@
           "data_base64": {
             "type": "string"
           },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
           "session_id",
           "address",
           "data_base64",
-          "expected_state_version"
+          "expected_execution_version"
         ]
       }
     },
     {
       "name": "get_disassembly",
-      "description": "Return managed IL or the selected frame's JIT native code blocks. Unsupported native bodies return a structured capability failure.",
+      "description": "Return managed IL or the selected frame\u0027s JIT native code blocks. Unsupported native bodies return a structured capability failure.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1225,9 +1298,17 @@
             "type": "integer",
             "minimum": 0
           },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
+          },
+          "expected_stop_id": {
+            "type": "string",
+            "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
           }
         },
         "required": [
@@ -1235,13 +1316,14 @@
           "module",
           "method_token",
           "il_offset",
-          "expected_state_version"
+          "expected_execution_version",
+          "expected_stop_id"
         ]
       }
     },
     {
       "name": "get_members",
-      "description": "Expand one object one level, paged. Pass a returned member's `expression` back here to go deeper: depth is deliberately the caller's to control, because recursing server-side is unbounded on a cyclic object graph. Reports total and truncated.",
+      "description": "Expand one object one level, paged. Pass a returned member\u0027s \u0060expression\u0060 back here to go deeper: depth is deliberately the caller\u0027s to control, because recursing server-side is unbounded on a cyclic object graph. Reports total and truncated.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1316,22 +1398,31 @@
             "type": "boolean",
             "description": "Default false."
           },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
+          },
+          "expected_stop_id": {
+            "type": "string",
+            "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
           }
         },
         "required": [
           "session_id",
           "expression",
           "value",
-          "expected_state_version"
+          "expected_execution_version",
+          "expected_stop_id"
         ]
       }
     },
     {
       "name": "get_exception",
-      "description": "Get the exception that stopped the target, from dnSpy's own exceptions provider rather than a typed expression. An empty array is a normal answer: most stops are not exception stops.",
+      "description": "Get the exception that stopped the target, from dnSpy\u0027s own exceptions provider rather than a typed expression. An empty array is a normal answer: most stops are not exception stops.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1598,7 +1689,7 @@
     },
     {
       "name": "get_il",
-      "description": "Disassemble a method to IL with offsets and operands. is_sequence_point marks the offsets Mono will accept a breakpoint at — it rejects every other one with NO_SEQ_POINT_AT_IL_OFFSET, which dnSpy turns into a silently unbound breakpoint. has_sequence_points=false means no PDB was available, NOT that there are no legal offsets. Identify the method by method_token, or by type plus method.",
+      "description": "Disassemble a method to IL with offsets and operands. is_sequence_point marks the offsets Mono will accept a breakpoint at \u2014 it rejects every other one with NO_SEQ_POINT_AT_IL_OFFSET, which dnSpy turns into a silently unbound breakpoint. has_sequence_points=false means no PDB was available, NOT that there are no legal offsets. Identify the method by method_token, or by type plus method.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1623,7 +1714,7 @@
           },
           "signature": {
             "type": "string",
-            "description": "Full name of the intended overload, when type+method is ambiguous."
+            "description": "Full name of the intended overload, when type\u002Bmethod is ambiguous."
           }
         },
         "required": [
@@ -1673,7 +1764,7 @@
     },
     {
       "name": "set_breakpoint",
-      "description": "Set a breakpoint by type and method name instead of a metadata token. Resolves the name, then takes exactly the same path as set_il_breakpoint, so binding state, Mono sequence-point snapping and cursor_event_id behave identically — read that tool's description. Overloads are reported as ambiguous with their full names rather than resolved by guessing.",
+      "description": "Set a breakpoint by type and method name instead of a metadata token. Resolves the name, then takes exactly the same path as set_il_breakpoint, so binding state, Mono sequence-point snapping and cursor_event_id behave identically \u2014 read that tool\u0027s description. Overloads are reported as ambiguous with their full names rather than resolved by guessing.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1705,9 +1796,13 @@
             "type": "boolean",
             "description": "Default true."
           },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -1715,7 +1810,7 @@
           "module",
           "type",
           "method",
-          "expected_state_version"
+          "expected_breakpoints_version"
         ]
       }
     },
@@ -1890,15 +1985,24 @@
           "allow_func_eval": {
             "type": "boolean"
           },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
+          },
+          "expected_stop_id": {
+            "type": "string",
+            "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
           }
         },
         "required": [
           "session_id",
           "expression",
-          "expected_state_version"
+          "expected_execution_version",
+          "expected_stop_id"
         ]
       }
     },
@@ -1990,15 +2094,19 @@
           "runtime_id": {
             "type": "string"
           },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
           "session_id",
           "object_id",
-          "expected_state_version"
+          "expected_execution_version"
         ]
       }
     },
@@ -2129,14 +2237,18 @@
           "app_domain_name": {
             "type": "string"
           },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
           "session_id",
-          "expected_state_version"
+          "expected_breakpoints_version"
         ]
       }
     },
@@ -2200,15 +2312,19 @@
           "app_domain_name": {
             "type": "string"
           },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
           "session_id",
           "breakpoint_id",
-          "expected_state_version"
+          "expected_breakpoints_version"
         ]
       }
     },
@@ -2228,15 +2344,19 @@
           "breakpoint_id": {
             "type": "integer"
           },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
           "session_id",
           "breakpoint_id",
-          "expected_state_version"
+          "expected_breakpoints_version"
         ]
       }
     },
@@ -2290,15 +2410,19 @@
           "dry_run": {
             "type": "boolean"
           },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
           "session_id",
           "document",
-          "expected_state_version"
+          "expected_breakpoints_version"
         ]
       }
     },
@@ -2376,14 +2500,18 @@
               "type": "object"
             }
           },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
           "session_id",
-          "expected_state_version"
+          "expected_breakpoints_version"
         ]
       }
     },
@@ -2406,14 +2534,18 @@
           "name": {
             "type": "string"
           },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
           "session_id",
-          "expected_state_version"
+          "expected_breakpoints_version"
         ]
       }
     },
@@ -2430,14 +2562,18 @@
           "session_id": {
             "type": "string"
           },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
           "session_id",
-          "expected_state_version"
+          "expected_breakpoints_version"
         ]
       }
     },
@@ -2521,16 +2657,25 @@
             "type": "integer",
             "minimum": 0
           },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
           "expected_state_version": {
             "type": "integer",
-            "description": "Required exact state_version for every session mutation."
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
+          },
+          "expected_stop_id": {
+            "type": "string",
+            "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
           }
         },
         "required": [
           "session_id",
           "expression",
           "path",
-          "expected_state_version"
+          "expected_execution_version",
+          "expected_stop_id"
         ]
       }
     },

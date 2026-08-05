@@ -53,6 +53,8 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("session_id")] public string SessionId { get; set; }=""; [JsonPropertyName("state")] public string State { get; set; }="";
 		[JsonPropertyName("program_id")] public string ProgramId { get; set; }=""; [JsonPropertyName("state_version")] public long StateVersion { get; set; }
 		[JsonPropertyName("last_event_id")] public long LastEventId { get; set; } [JsonPropertyName("process_ids")] public int[] ProcessIds { get; set; }=Array.Empty<int>();
+		[JsonPropertyName("lifecycle_version")] public long LifecycleVersion { get; set; } [JsonPropertyName("execution_version")] public long ExecutionVersion { get; set; }
+		[JsonPropertyName("breakpoints_version")] public long BreakpointsVersion { get; set; } [JsonPropertyName("stop_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? StopId { get; set; }
 		[JsonPropertyName("can_detach_without_terminating")] public bool CanDetachWithoutTerminating { get; set; }
 	}
 	public sealed class DetachResult {
@@ -60,11 +62,16 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("terminated")] public bool Terminated { get; set; } [JsonPropertyName("state_version")] public long StateVersion { get; set; }
 		[JsonPropertyName("process_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? ProcessId { get; set; }
 		[JsonPropertyName("session_active")] public bool SessionActive { get; set; }
+		[JsonPropertyName("lifecycle_version")] public long LifecycleVersion { get; set; }
 	}
 	public sealed class SessionState {
 		[JsonPropertyName("session_id")] public string SessionId { get; set; }=""; [JsonPropertyName("state")] public string State { get; set; }="running";
 		[JsonPropertyName("state_version")] public long StateVersion { get; set; } [JsonPropertyName("last_event_id")] public long LastEventId { get; set; }
 		[JsonPropertyName("process_ids")] public int[] ProcessIds { get; set; }=Array.Empty<int>();
+		[JsonPropertyName("lifecycle_version")] public long LifecycleVersion { get; set; }
+		[JsonPropertyName("execution_version")] public long ExecutionVersion { get; set; }
+		[JsonPropertyName("breakpoints_version")] public long BreakpointsVersion { get; set; }
+		[JsonPropertyName("stop_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? StopId { get; set; }
 		/// <summary>Why the session is <c>faulted</c>. dnSpy's own connect-failure text when it produced
 		/// one, otherwise a deadline description. Absent for every other state.</summary>
 		[JsonPropertyName("fault_message"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? FaultMessage { get; set; }
@@ -75,6 +82,10 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("event_id")] public long EventId { get; set; }
 		[JsonPropertyName("kind")] public string Kind { get; set; }="";
 		[JsonPropertyName("state_version")] public long StateVersion { get; set; }
+		[JsonPropertyName("lifecycle_version")] public long LifecycleVersion { get; set; }
+		[JsonPropertyName("execution_version")] public long ExecutionVersion { get; set; }
+		[JsonPropertyName("breakpoints_version")] public long BreakpointsVersion { get; set; }
+		[JsonPropertyName("stop_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? StopId { get; set; }
 		[JsonPropertyName("timestamp_utc")] public DateTime TimestampUtc { get; set; }=DateTime.UtcNow;
 		[JsonPropertyName("terminal")] public bool Terminal { get; set; }
 		[JsonPropertyName("process_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? ProcessId { get; set; }

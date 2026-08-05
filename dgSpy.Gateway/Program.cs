@@ -79,8 +79,11 @@ public static class ToolCatalog {
 		foreach (var property in properties.GetType().GetProperties()) routedProperties[property.Name]=property.GetValue(properties)!;
 		var requiredProperties=(required ?? Array.Empty<string>()).ToList();
 		if (CapabilityCatalog.Operations.Any(item=>item.Operation==name && item.MutatesSession) && routedProperties.ContainsKey("session_id")) {
-			if(!routedProperties.ContainsKey("expected_state_version")) routedProperties["expected_state_version"]=new { type="integer",description="Required exact state_version for every session mutation." };
-			if(!requiredProperties.Contains("expected_state_version")) requiredProperties.Add("expected_state_version");
+			var guard=MutationGuards.Argument(name);
+			routedProperties[guard]=new { type="integer",description=$"Required exact {MutationGuards.StateProperty(name)}; unrelated debugger events do not invalidate it." };
+			if(!routedProperties.ContainsKey("expected_state_version")) routedProperties["expected_state_version"]=new { type="integer",description="Deprecated compatibility guard. Prefer the scoped version field." };
+			if(!requiredProperties.Contains(guard)) requiredProperties.Add(guard);
+			if(MutationGuards.RequiresStop(name)) { routedProperties["expected_stop_id"]=new { type="string",description="Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again." }; if(!requiredProperties.Contains("expected_stop_id")) requiredProperties.Add("expected_stop_id"); }
 		}
 		return new { name,description,inputSchema=new { type="object",properties=routedProperties,required=requiredProperties.ToArray() } };
 	}

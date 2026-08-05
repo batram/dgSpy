@@ -76,8 +76,12 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
 ## State and lifetime rules
 
 - `attach` and `launch` assign their initialized MCP session as controller. Other controllers may inspect
-  but cannot mutate that debugger session. Every session mutation requires its current exact
-  `expected_state_version`; stale or missing versions fail before acting. `release_session` changes only
+  but cannot mutate that debugger session. Mutations use the narrow revision they depend on:
+  `expected_lifecycle_version` for detach/terminate/restart, `expected_execution_version` for target and
+  frame mutations, and `expected_breakpoints_version` for breakpoint/policy changes. Frame-bound
+  mutations also require the opaque `expected_stop_id`. Missing or stale relevant guards fail before
+  acting; unrelated thread/module events do not invalidate them. `expected_state_version` remains an
+  optional compatibility alias but is no longer advertised as the required guard. `release_session` changes only
   ownership. An idle owner or Gateway restart leaves the target untouched and requires explicit
   `claim_session` before further mutations.
 - MCP disconnect, controller expiry, Gateway disconnect/restart, and remote-host disconnect never resume,
@@ -121,7 +125,10 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   `get_events`. The event carries PID, exit code, terminal reason, and a terminal flag. Call `detach` to
   clear the terminal session, or start the next session once the debugger has stopped.
 - `list_sessions` recovers a lost `session_id`.
-- Mutations may include `expected_state_version`; a mismatch returns `stale_state`.
+- `event_id` is only an event cursor. `state_version` remains as a legacy all-event counter. The scoped
+  revisions report relevant change domains and return `stale_lifecycle`, `stale_execution`,
+  `stale_breakpoints`, or `stale_stop` on mismatch. `stop_id` changes only when the target reaches a new
+  stop and is cleared on resume.
 - `list_threads` requires a paused session and returns stable `thread_id` values as
   `process_id:os_thread_id`, including managed ID, name and state. It deliberately does not fetch every
   stack: Unity threads can exit during frame retrieval, and some Mono runtimes never answer that raced

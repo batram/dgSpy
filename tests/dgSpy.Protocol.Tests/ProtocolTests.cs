@@ -56,7 +56,7 @@ public class RpcContractTests {
 		var result=new WaitResult {
 			OldestEventId=9, OldestAvailableCursor=8, LastEventId=11, Truncated=true,
 			Events=new[] { new DebugEvent {
-				EventId=11, Kind="stopped", StateVersion=4, ProcessId=42, ThreadId="42:7",
+				EventId=11, Kind="stopped", StateVersion=4, LifecycleVersion=2, ExecutionVersion=3, BreakpointsVersion=5, StopId="stop-a", ProcessId=42, ThreadId="42:7",
 				StopReason="breakpoint", BreakpointId=3, Module="Target.exe", MethodToken=0x06000001, IlOffset=12,
 			} },
 		};
@@ -68,6 +68,10 @@ public class RpcContractTests {
 		Assert.Equal("breakpoint",(string?)wire["events"]![0]!["stop_reason"]);
 		Assert.Equal(3,(int?)wire["events"]![0]!["breakpoint_id"]);
 		Assert.Equal(12u,(uint?)wire["events"]![0]!["il_offset"]);
+		Assert.Equal(2,(long?)wire["events"]![0]!["lifecycle_version"]);
+		Assert.Equal(3,(long?)wire["events"]![0]!["execution_version"]);
+		Assert.Equal(5,(long?)wire["events"]![0]!["breakpoints_version"]);
+		Assert.Equal("stop-a",(string?)wire["events"]![0]!["stop_id"]);
 	}
 }
 

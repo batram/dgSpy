@@ -90,6 +90,15 @@ public class RpcClientSettingsTests {
 }
 
 public class SessionControlTests {
+	[Theory]
+	[InlineData("detach","lifecycle","expected_lifecycle_version")]
+	[InlineData("continue","execution","expected_execution_version")]
+	[InlineData("set_value","execution","expected_execution_version")]
+	[InlineData("set_il_breakpoint","breakpoints","expected_breakpoints_version")]
+	public void Mutation_guards_are_scoped_to_the_affected_state(string operation,string scope,string argument) {
+		Assert.Equal(scope,MutationGuards.Scope(operation));
+		Assert.Equal(argument,MutationGuards.Argument(operation));
+	}
 	[Fact]
 	public void Active_controller_blocks_contention_but_expiry_allows_explicit_reclaim() {
 		var clients=new McpClientSessions(TimeSpan.FromMinutes(5)); var controllers=new SessionControllers(clients);
@@ -129,14 +138,18 @@ public class SessionControlTests {
 	}
 
 	[Fact]
-	public void Every_session_mutation_schema_advertises_state_version_guard() {
+	public void Every_session_mutation_schema_advertises_scoped_version_guard_and_legacy_alias() {
 		var tools=ProtocolJson.ToNode(ToolCatalog.All)!.AsArray();
 		foreach(var operation in CapabilityCatalog.Operations.Where(item=>item.MutatesSession)) {
 			var tool=tools.OfType<JsonObject>().Single(item=>(string?)item["name"]==operation.Operation);
 			if(tool["inputSchema"]?["properties"]?["session_id"] is not null)
 			{
+				var guard=MutationGuards.Argument(operation.Operation);
 				Assert.NotNull(tool["inputSchema"]?["properties"]?["expected_state_version"]);
-				Assert.Contains("expected_state_version",ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
+				Assert.NotNull(tool["inputSchema"]?["properties"]?[guard]);
+				Assert.Contains(guard,ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
+				Assert.DoesNotContain("expected_state_version",ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
+				if(MutationGuards.RequiresStop(operation.Operation)) Assert.Contains("expected_stop_id",ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
 			}
 		}
 	}
@@ -233,24 +246,24 @@ public class HostRegistryTests {
 	}
 
 	[Fact]
-	public async Task Executor_claims_launch_and_enforces_controller_and_state_version() {
+	public async Task Executor_claims_launch_and_enforces_controller_and_scoped_execution_version() {
 		var directory=CreateRegistryDirectory(); var auditPath=Path.Combine(directory,"audit.jsonl");
 		try {
 			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} }); var router=new HostRouter(HostRegistry.FromJson(json,directory));
 			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start(); using var remote=new TcpClient(); var accept=listener.AcceptTcpClientAsync(); await remote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var gateway=await accept;
 			var gatewayReader=new StreamReader(gateway.GetStream(),Encoding.UTF8,false,4096,true); var gatewayWriter=new StreamWriter(gateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true}; Assert.True(router.TryRegister("host-a",gateway,gatewayReader,gatewayWriter,out _));
 			var remoteReader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true); var remoteWriter=new StreamWriter(remote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true};
-			var responder=Task.Run(async ()=>{ for(var i=0;i<4;i++){ var request=ProtocolJson.Deserialize<RpcRequest>((await remoteReader.ReadLineAsync())!)!; object result=request.Operation switch { "launch"=>new SessionState { SessionId="session-a",State="running",StateVersion=7 }, "get_session_state"=>new SessionState { SessionId="session-a",State="running",StateVersion=7 }, "pause"=>new SessionState { SessionId="session-a",State="paused",StateVersion=8 }, _=>new { ok=true } }; await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,result))); } });
+			var responder=Task.Run(async ()=>{ for(var i=0;i<4;i++){ var request=ProtocolJson.Deserialize<RpcRequest>((await remoteReader.ReadLineAsync())!)!; object result=request.Operation switch { "launch"=>new SessionState { SessionId="session-a",State="running",StateVersion=7,ExecutionVersion=3,LifecycleVersion=2,BreakpointsVersion=1 }, "get_session_state"=>new SessionState { SessionId="session-a",State="running",StateVersion=7,ExecutionVersion=3,LifecycleVersion=2,BreakpointsVersion=1 }, "pause"=>new SessionState { SessionId="session-a",State="paused",StateVersion=8,ExecutionVersion=4,LifecycleVersion=2,BreakpointsVersion=1 }, _=>new { ok=true } }; await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,result))); } });
 			var clients=new McpClientSessions(TimeSpan.FromMinutes(5)); clients.Touch("client-a"); clients.Touch("client-b"); var controllers=new SessionControllers(clients); var audit=new GatewayAuditLog(auditPath,4096);
 			var inspectOnly=new GatewayToolExecutor(router,controllers,new GatewayAccessPolicy("inspect-only"),audit); Assert.Equal("access_denied",(await inspectOnly.ExecuteAsync("launch",ProtocolJson.ToObject(new { host_id="host-a",filename="target.exe" }),"client-a",default)).Error?.Code);
 			var executor=new GatewayToolExecutor(router,controllers,new GatewayAccessPolicy("full-control"),audit);
 			Assert.Equal("invalid_arguments",(await executor.ExecuteAsync("set_exception_policy",ProtocolJson.ToObject(new { host_id="host-a",name="Example" }),"client-a",default)).Error?.Code);
 			var launched=await executor.ExecuteAsync("launch",ProtocolJson.ToObject(new { host_id="host-a",filename="target.exe" }),"client-a",default); Assert.Null(launched.Error); Assert.Equal("client-a",controllers.Get("session-a")?.ClientId);
-			var selection=ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a",expected_state_version=7 });
+			var selection=ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a",expected_execution_version=3 });
 			Assert.Equal("session_owned",(await executor.ExecuteAsync("pause",selection,"client-b",default)).Error?.Code);
-			Assert.Equal("state_version_required",(await executor.ExecuteAsync("pause",ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a" }),"client-a",default)).Error?.Code);
-			Assert.Equal("stale_state",(await executor.ExecuteAsync("pause",ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a",expected_state_version=6 }),"client-a",default)).Error?.Code);
-			Assert.Null((await executor.ExecuteAsync("pause",selection,"client-a",default)).Error); await responder; listener.Stop(); Assert.Contains("state_version_required",File.ReadAllText(auditPath));
+			Assert.Equal("execution_version_required",(await executor.ExecuteAsync("pause",ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a" }),"client-a",default)).Error?.Code);
+			Assert.Equal("stale_execution",(await executor.ExecuteAsync("pause",ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a",expected_execution_version=2 }),"client-a",default)).Error?.Code);
+			Assert.Null((await executor.ExecuteAsync("pause",selection,"client-a",default)).Error); await responder; listener.Stop(); Assert.Contains("execution_version_required",File.ReadAllText(auditPath));
 		}
 		finally { Directory.Delete(directory,true); }
 	}
