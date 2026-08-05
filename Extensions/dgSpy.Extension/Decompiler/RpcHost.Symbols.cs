@@ -156,7 +156,7 @@ namespace dgSpy.Extension {
 			CheckSession(req);
 			var pattern=(string?)req.Arguments["pattern"];
 			if (string.IsNullOrWhiteSpace(pattern)) throw new RpcException("invalid_arguments","pattern is required.");
-			var kinds=req.Arguments["kinds"]?.ToObject<string[]>() ?? new[]{"type","method"};
+			var kinds=ProtocolJson.FromNode<string[]>(req.Arguments["kinds"]) ?? new[]{"type","method"};
 			var moduleFilter=(string?)req.Arguments["module"];
 			var count=Math.Min(MaxSymbolResults,Math.Max(1,(int?)req.Arguments["count"] ?? 100));
 			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules)
@@ -388,7 +388,7 @@ namespace dgSpy.Extension {
 				var method=FindMethod(metadata,req);
 				return method.MDToken.ToUInt32();
 			},cancellationToken).ConfigureAwait(false);
-			var module=req.Arguments.Value<string>("module")!;
+			var module=req.Arguments["module"]?.GetValue<string>()!;
 			req.Arguments["method_token"]=resolved;
 			if (req.Arguments["il_offset"] is null) req.Arguments["il_offset"]=0;
 			return await SetBreakpointAsync(req,cancellationToken).ConfigureAwait(false);

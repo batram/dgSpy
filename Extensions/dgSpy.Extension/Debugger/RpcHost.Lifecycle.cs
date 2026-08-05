@@ -7,7 +7,7 @@ using dgSpy.Protocol;
 using dnSpy.Contracts.Debugger;
 using dnSpy.Contracts.Debugger.DotNet.CorDebug;
 using dnSpy.Contracts.Debugger.DotNet.Mono;
-using Newtonsoft.Json.Linq;
+using System.Text.Json.Nodes;
 
 namespace dgSpy.Extension {
 	sealed partial class RpcHost {
@@ -39,7 +39,7 @@ namespace dgSpy.Extension {
 				break;
 			default: throw new RpcException("invalid_arguments","engine must be \"cordebug\" or \"unity\".");
 			}
-			ApplyEnvironment(options,req.Arguments["environment"] as JObject);
+			ApplyEnvironment(options,req.Arguments["environment"] as JsonObject);
 			return await StartSessionAsync("launch:"+engine+":"+filename,"launch",()=>manager.Start(options),connectWait,cancellationToken).ConfigureAwait(false);
 		}
 
@@ -52,15 +52,15 @@ namespace dgSpy.Extension {
 			}
 		}
 
-		static void ApplyEnvironment(StartDebuggingOptions options,JObject? environment) {
+		static void ApplyEnvironment(StartDebuggingOptions options,JsonObject? environment) {
 			if (environment is null) return;
 			DbgEnvironment target;
 			if (options is CorDebugStartDebuggingOptions corDebug) target=corDebug.Environment;
 			else if (options is MonoStartDebuggingOptionsBase mono) target=mono.Environment;
 			else return;
-			foreach (var property in environment.Properties()) {
-				if (property.Value.Type!=JTokenType.String) throw new RpcException("invalid_arguments","environment values must be strings.");
-				target.Add(property.Name,(string)property.Value!);
+			foreach (var property in environment) {
+				if (property.Value is not JsonValue value || !value.TryGetValue<string>(out var text)) throw new RpcException("invalid_arguments","environment values must be strings.");
+				target.Add(property.Key,text);
 			}
 		}
 

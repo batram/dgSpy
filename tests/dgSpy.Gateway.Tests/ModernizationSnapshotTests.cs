@@ -1,17 +1,14 @@
 using System;
 using System.IO;
 using dgSpy.Protocol;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace dgSpy.Gateway.Tests;
 
 public sealed class ModernizationSnapshotTests {
-	static readonly JsonSerializerSettings Settings = new() {
-		NullValueHandling = NullValueHandling.Ignore,
-		Formatting = Formatting.Indented,
-	};
+	static readonly JsonSerializerOptions Settings = new(ProtocolJson.Options) { WriteIndented=true };
 
 	[Fact]
 	public void Mcp_tool_discovery_matches_the_modernization_baseline() =>
@@ -28,7 +25,7 @@ public sealed class ModernizationSnapshotTests {
 			? updateDirectory
 			: outputDirectory;
 		var path = Path.Combine(directory, name);
-		var json = JsonConvert.SerializeObject(actual, Settings) + Environment.NewLine;
+		var json = ProtocolJson.Serialize(actual, Settings) + Environment.NewLine;
 		if (Environment.GetEnvironmentVariable("DGSPY_UPDATE_SNAPSHOTS") == "1") {
 			Directory.CreateDirectory(directory);
 			File.WriteAllText(path, json);
@@ -36,9 +33,9 @@ public sealed class ModernizationSnapshotTests {
 		}
 
 		Assert.True(File.Exists(path), $"Missing modernization snapshot: {path}");
-		var expected = JToken.Parse(File.ReadAllText(path));
-		var observed = JToken.Parse(json);
-		Assert.True(JToken.DeepEquals(expected, observed),
+		var expected = JsonNode.Parse(File.ReadAllText(path));
+		var observed = JsonNode.Parse(json);
+		Assert.True(JsonNode.DeepEquals(expected, observed),
 			$"{name} drifted. Review behavior separately, then run tests/run-modernization-gate.ps1 -UpdateSnapshots only for an accepted wire-contract change.");
 	}
 }

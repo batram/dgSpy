@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using dgSpy.Protocol;
 using dnSpy.Contracts.Debugger.DotNet.Evaluation;
 using dnSpy.Contracts.Metadata;
-using Newtonsoft.Json.Linq;
+using System.Text.Json.Nodes;
 
 namespace dgSpy.Extension {
 	sealed partial class RpcHost {
@@ -85,18 +85,20 @@ namespace dgSpy.Extension {
 
 		static ulong UInt64Argument(RpcRequest req,string name) {
 			var token=req.Arguments[name] ?? throw new RpcException("invalid_arguments",name+" is required.");
-			try { return Convert.ToUInt64(((JValue)token).Value,CultureInfo.InvariantCulture); }
-			catch(Exception ex) when (ex is InvalidCastException || ex is FormatException || ex is OverflowException) {
-				throw new RpcException("invalid_arguments",name+" must be an unsigned 64-bit integer.");
+			if (token is JsonValue value) {
+				if (value.TryGetValue<ulong>(out var unsigned)) return unsigned;
+				if (value.TryGetValue<long>(out var signed) && signed>=0) return (ulong)signed;
+				if (value.TryGetValue<string>(out var text) && ulong.TryParse(text,NumberStyles.Integer,CultureInfo.InvariantCulture,out unsigned)) return unsigned;
 			}
+			throw new RpcException("invalid_arguments",name+" must be an unsigned 64-bit integer.");
 		}
 
-		async Task<JObject> GetDisassemblyAsync(RpcRequest req,CancellationToken cancellationToken) {
+		async Task<JsonObject> GetDisassemblyAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
 			var mode=(string?)req.Arguments["mode"] ?? "native";
 			if (mode=="managed") {
 				var body=await GetIlAsync(req,cancellationToken).ConfigureAwait(false);
-				return JObject.FromObject(new { mode="managed",capability="managed_il",body });
+				return ProtocolJson.ToObject(new { mode="managed",capability="managed_il",body });
 			}
 			if (mode!="native") throw new RpcException("invalid_argument","mode must be native or managed.");
 			var captured=await CaptureFrameAsync(req,cancellationToken).ConfigureAwait(false);
@@ -105,11 +107,11 @@ namespace dgSpy.Extension {
 				if (runtime is null || (runtime.Features & DbgDotNetRuntimeFeatures.NativeMethodBodies)==0)
 					throw new RpcException("capability_unsupported","native_disassembly is not supported by this runtime.");
 				if (!runtime.TryGetNativeCode(captured.Frame,out var code)) throw new RpcException("capability_unavailable","The runtime supports native method bodies, but this frame has no JIT-compiled native body.");
-				return JObject.FromObject(new { mode="native",capability="native_disassembly",kind=code.Kind.ToString(),optimization=code.Optimization.ToString(),method=code.MethodName,module=code.ModuleName,blocks=code.Blocks.Select(b=>new { kind=b.Kind.ToString(),address=b.Address,il_offset=b.ILOffset,data_base64=Convert.ToBase64String(b.Code.Array!,b.Code.Offset,b.Code.Count) }).ToArray() });
+				return ProtocolJson.ToObject(new { mode="native",capability="native_disassembly",kind=code.Kind.ToString(),optimization=code.Optimization.ToString(),method=code.MethodName,module=code.ModuleName,blocks=code.Blocks.Select(b=>new { kind=b.Kind.ToString(),address=b.Address,il_offset=b.ILOffset,data_base64=Convert.ToBase64String(b.Code.Array!,b.Code.Offset,b.Code.Count) }).ToArray() });
 			},cancellationToken).ConfigureAwait(false);
 		}
 
-		Task<JObject> GetRegistersAsync(RpcRequest req,CancellationToken cancellationToken) {
+		Task<JsonObject> GetRegistersAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
 			throw new RpcException("capability_unsupported","registers are not exposed by dnSpy's public debugger contracts on this host.");
 		}

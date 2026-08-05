@@ -1,7 +1,7 @@
 using dgSpy.Gateway;
 using dgSpy.Protocol;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls(builder.Configuration["DGSPY_URL"] ?? "http://127.0.0.1:7350");
@@ -32,14 +32,15 @@ app.MapGet("/health", () => Results.Json(new { status="ok", protocol_version=Pro
 app.MapGet("/mcp", () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed));
 app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, GatewayToolExecutor executor, McpClientSessions clients, CancellationToken cancellationToken) => {
 	var rejection = RequestGuard.Reject(http.Request.Headers.Origin, http.Request.Headers[RequestGuard.TokenHeader], token, http.Connection.RemoteIpAddress);
-	if (rejection is not null) return Results.Json(new { jsonrpc="2.0", id=(JToken?)null, error=new { code=-32600, message=rejection } }, statusCode: StatusCodes.Status403Forbidden);
+	if (rejection is not null) return Results.Json(new { jsonrpc="2.0", id=(JsonNode?)null, error=new { code=-32600, message=rejection } }, statusCode: StatusCodes.Status403Forbidden);
 	using var reader = new StreamReader(http.Request.Body);
-	var root = JObject.Parse(await reader.ReadToEndAsync(cancellationToken));
-	var id = root["id"];
+	var root = JsonNode.Parse(await reader.ReadToEndAsync(cancellationToken))!.AsObject();
+	// JSON-RPC ids are scalar values. Materialize the JsonNode so ASP.NET writes the scalar itself.
+	var id = JsonRpcEnvelope.MaterializeId(root["id"]);
 	try {
-		var method = (string?)root["method"];
+		var method = root["method"]?.GetValue<string>();
 		if (method == "initialize") {
-			var negotiated=McpProtocol.Negotiate((string?)root["params"]?["protocolVersion"]);
+			var negotiated=McpProtocol.Negotiate(root["params"]?["protocolVersion"]?.GetValue<string>());
 			var clientId=clients.Create(); http.Response.Headers[McpClientSessions.Header]=clientId;
 			return Results.Json(new { jsonrpc="2.0", id, result=new { protocolVersion=negotiated, capabilities=new { tools=new { listChanged=false } }, serverInfo=new { name="dgSpy", version="0.1.0" } } });
 		}
@@ -50,18 +51,15 @@ app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, GatewayToolExecutor
 		var client=clients.Resolve(http.Request.Headers[McpClientSessions.Header]);
 		if (method == "tools/list") return Results.Json(new { jsonrpc="2.0", id, result=new { tools=ToolCatalog.All } });
 		if (method != "tools/call") return McpError(id, -32601, "Method not found");
-		var name=(string?)root["params"]?["name"] ?? ""; var args=(JObject?)root["params"]?["arguments"] ?? new JObject();
+		var name=root["params"]?["name"]?.GetValue<string>() ?? ""; var args=root["params"]?["arguments"] as JsonObject ?? new JsonObject();
 		if (name=="list_hosts") {
 			var hosts=await rpc.ListHostsAsync(cancellationToken);
-			return Results.Json(new { jsonrpc="2.0",id,result=new { structuredContent=new { hosts },content=new[] { new { type="text",text=JsonConvert.SerializeObject(hosts) } } } });
+			return Results.Json(new { jsonrpc="2.0",id,result=new { structuredContent=new { hosts },content=new[] { new { type="text",text=ProtocolJson.Serialize(hosts) } } } });
 		}
 		var response=await executor.ExecuteAsync(name,args,client,cancellationToken);
 		if (response.Error is not null) return Results.Json(new { jsonrpc="2.0", id, result=new { isError=true, structuredContent=new { error=response.Error }, content=new[] { new { type="text", text=response.Error.Message } } } });
-		// ASP.NET uses System.Text.Json for the HTTP envelope, while the local protocol uses Newtonsoft.
-		// Passing a JValue through directly exposes its object model for UInt64 values instead of the JSON
-		// number (notably module addresses). Materialize a plain CLR graph before crossing serializers.
-		var structured=response.Result is null ? null : System.Text.Json.JsonSerializer.Deserialize<object>(JsonConvert.SerializeObject(response.Result));
-		return Results.Json(new { jsonrpc="2.0", id, result=new { structuredContent=structured, content=new[] { new { type="text", text=JsonConvert.SerializeObject(response.Result) } } } });
+		var structured=response.Result is null ? null : ProtocolJson.ToNode(response.Result);
+		return Results.Json(new { jsonrpc="2.0", id, result=new { structuredContent=structured, content=new[] { new { type="text", text=ProtocolJson.Serialize(response.Result) } } } });
 	} catch (Exception ex) { return McpError(id, -32603, ex.Message); }
 });
 try { app.Run(); }
@@ -72,7 +70,7 @@ catch (Exception ex) {
 	Console.Error.WriteLine(saved ? $"dgSpy Gateway stopped: {ex.Message}. Details: {fatalLog}" : $"dgSpy Gateway stopped: {ex}");
 	Environment.ExitCode=1;
 }
-static IResult McpError(JToken? id, int code, string message) => Results.Json(new { jsonrpc="2.0", id, error=new { code, message } });
+static IResult McpError(object? id, int code, string message) => Results.Json(new { jsonrpc="2.0", id, error=new { code, message } });
 
 public static class ToolCatalog {
 	static object Tool(string name,string description,object properties,string[]? required=null,bool routed=true) {

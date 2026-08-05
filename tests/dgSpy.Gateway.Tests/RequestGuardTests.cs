@@ -8,8 +8,8 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading.Tasks;
 using dgSpy.Protocol;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using dgSpy.Gateway;
 using Xunit;
 
@@ -130,13 +130,13 @@ public class SessionControlTests {
 
 	[Fact]
 	public void Every_session_mutation_schema_advertises_state_version_guard() {
-		var tools=Newtonsoft.Json.Linq.JArray.FromObject(ToolCatalog.All);
+		var tools=ProtocolJson.ToNode(ToolCatalog.All)!.AsArray();
 		foreach(var operation in CapabilityCatalog.Operations.Where(item=>item.MutatesSession)) {
-			var tool=tools.OfType<Newtonsoft.Json.Linq.JObject>().Single(item=>(string?)item["name"]==operation.Operation);
+			var tool=tools.OfType<JsonObject>().Single(item=>(string?)item["name"]==operation.Operation);
 			if(tool["inputSchema"]?["properties"]?["session_id"] is not null)
 			{
 				Assert.NotNull(tool["inputSchema"]?["properties"]?["expected_state_version"]);
-				Assert.Contains("expected_state_version",tool["inputSchema"]?["required"]?.Values<string>() ?? Array.Empty<string>());
+				Assert.Contains("expected_state_version",ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
 			}
 		}
 	}
@@ -173,7 +173,7 @@ public class HostRegistryTests {
 		var directory=CreateRegistryDirectory();
 		try {
 			Assert.Throws<InvalidOperationException>(()=>HostRegistry.FromJson(RegistryJson(("host-a",7451,"a.token"),("host-a",7452,"b.token")),directory));
-			var json=JsonConvert.SerializeObject(new { hosts=new[]{new { host_id="host-a",address="10.0.0.5",port=7451,token_file="a.token" }} });
+			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",address="10.0.0.5",port=7451,token_file="a.token" }} });
 			Assert.Throws<InvalidOperationException>(()=>HostRegistry.FromJson(json,directory));
 		}
 		finally { Directory.Delete(directory,true); }
@@ -183,7 +183,7 @@ public class HostRegistryTests {
 	public void Outbound_hosts_have_no_dialable_endpoint_and_authenticate_exactly() {
 		var directory=CreateRegistryDirectory();
 		try {
-			var json=JsonConvert.SerializeObject(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} });
+			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} });
 			var registry=HostRegistry.FromJson(json,directory);
 			var endpoint=registry.Select("host-a");
 			Assert.True(endpoint.IsOutbound);
@@ -202,7 +202,7 @@ public class HostRegistryTests {
 			using var key=RSA.Create(2048); var request=new CertificateRequest("CN=host-a",key,HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1);
 			using var certificate=request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1),DateTimeOffset.UtcNow.AddDays(1));
 			File.WriteAllBytes(Path.Combine(directory,"host-a.cer"),certificate.Export(X509ContentType.Cert));
-			var json=JsonConvert.SerializeObject(new { hosts=new[]{new { host_id="host-a",transport="outbound_tls",token_file="a.token",client_certificate_file="host-a.cer" }} });
+			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound_tls",token_file="a.token",client_certificate_file="host-a.cer" }} });
 			var router=new HostRouter(HostRegistry.FromJson(json,directory)); var expected=certificate.GetCertHash(); var wrong=(byte[])expected.Clone(); wrong[0]^=0xff;
 			Assert.False(router.TryAuthenticate("host-a","token-a",false,expected,out _));
 			Assert.False(router.TryAuthenticate("host-a","token-a",true,null,out _));
@@ -217,7 +217,7 @@ public class HostRegistryTests {
 	public async Task Outbound_connection_routes_requests_and_rejects_a_duplicate() {
 		var directory=CreateRegistryDirectory();
 		try {
-			var json=JsonConvert.SerializeObject(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} });
+			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} });
 			var router=new HostRouter(HostRegistry.FromJson(json,directory));
 			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start();
 			using var remote=new TcpClient(); var accept=listener.AcceptTcpClientAsync(); await remote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var gateway=await accept;
@@ -225,9 +225,9 @@ public class HostRegistryTests {
 			Assert.True(router.TryRegister("host-a",gateway,gatewayReader,gatewayWriter,out _));
 			Assert.False(router.TryRegister("host-a",new TcpClient(),new StreamReader(Stream.Null),new StreamWriter(Stream.Null),out _));
 			var remoteReader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true); var remoteWriter=new StreamWriter(remote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true};
-			var responder=Task.Run(async ()=>{ var request=JsonConvert.DeserializeObject<RpcRequest>((await remoteReader.ReadLineAsync())!)!; await remoteWriter.WriteLineAsync(JsonConvert.SerializeObject(RpcResponse.Success(request.RequestId,new { ok=true }))); });
-			var response=await router.CallAsync(new RpcRequest { Operation="get_host_info",Arguments=new Newtonsoft.Json.Linq.JObject { ["host_id"]="host-a" } },default);
-			await responder; listener.Stop(); Assert.Null(response.Error); Assert.Equal(true,(bool?)Newtonsoft.Json.Linq.JObject.FromObject(response.Result!)["ok"]);
+			var responder=Task.Run(async ()=>{ var request=ProtocolJson.Deserialize<RpcRequest>((await remoteReader.ReadLineAsync())!)!; await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,new { ok=true }))); });
+			var response=await router.CallAsync(new RpcRequest { Operation="get_host_info",Arguments=new JsonObject { ["host_id"]="host-a" } },default);
+			await responder; listener.Stop(); Assert.Null(response.Error); Assert.Equal(true,(bool?)ProtocolJson.ToObject(response.Result!)["ok"]);
 		}
 		finally { Directory.Delete(directory,true); }
 	}
@@ -236,20 +236,20 @@ public class HostRegistryTests {
 	public async Task Executor_claims_launch_and_enforces_controller_and_state_version() {
 		var directory=CreateRegistryDirectory(); var auditPath=Path.Combine(directory,"audit.jsonl");
 		try {
-			var json=JsonConvert.SerializeObject(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} }); var router=new HostRouter(HostRegistry.FromJson(json,directory));
+			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} }); var router=new HostRouter(HostRegistry.FromJson(json,directory));
 			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start(); using var remote=new TcpClient(); var accept=listener.AcceptTcpClientAsync(); await remote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var gateway=await accept;
 			var gatewayReader=new StreamReader(gateway.GetStream(),Encoding.UTF8,false,4096,true); var gatewayWriter=new StreamWriter(gateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true}; Assert.True(router.TryRegister("host-a",gateway,gatewayReader,gatewayWriter,out _));
 			var remoteReader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true); var remoteWriter=new StreamWriter(remote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true};
-			var responder=Task.Run(async ()=>{ for(var i=0;i<4;i++){ var request=JsonConvert.DeserializeObject<RpcRequest>((await remoteReader.ReadLineAsync())!)!; object result=request.Operation switch { "launch"=>new SessionState { SessionId="session-a",State="running",StateVersion=7 }, "get_session_state"=>new SessionState { SessionId="session-a",State="running",StateVersion=7 }, "pause"=>new SessionState { SessionId="session-a",State="paused",StateVersion=8 }, _=>new { ok=true } }; await remoteWriter.WriteLineAsync(JsonConvert.SerializeObject(RpcResponse.Success(request.RequestId,result))); } });
+			var responder=Task.Run(async ()=>{ for(var i=0;i<4;i++){ var request=ProtocolJson.Deserialize<RpcRequest>((await remoteReader.ReadLineAsync())!)!; object result=request.Operation switch { "launch"=>new SessionState { SessionId="session-a",State="running",StateVersion=7 }, "get_session_state"=>new SessionState { SessionId="session-a",State="running",StateVersion=7 }, "pause"=>new SessionState { SessionId="session-a",State="paused",StateVersion=8 }, _=>new { ok=true } }; await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,result))); } });
 			var clients=new McpClientSessions(TimeSpan.FromMinutes(5)); clients.Touch("client-a"); clients.Touch("client-b"); var controllers=new SessionControllers(clients); var audit=new GatewayAuditLog(auditPath,4096);
-			var inspectOnly=new GatewayToolExecutor(router,controllers,new GatewayAccessPolicy("inspect-only"),audit); Assert.Equal("access_denied",(await inspectOnly.ExecuteAsync("launch",JObject.FromObject(new { host_id="host-a",filename="target.exe" }),"client-a",default)).Error?.Code);
+			var inspectOnly=new GatewayToolExecutor(router,controllers,new GatewayAccessPolicy("inspect-only"),audit); Assert.Equal("access_denied",(await inspectOnly.ExecuteAsync("launch",ProtocolJson.ToObject(new { host_id="host-a",filename="target.exe" }),"client-a",default)).Error?.Code);
 			var executor=new GatewayToolExecutor(router,controllers,new GatewayAccessPolicy("full-control"),audit);
-			Assert.Equal("invalid_arguments",(await executor.ExecuteAsync("set_exception_policy",JObject.FromObject(new { host_id="host-a",name="Example" }),"client-a",default)).Error?.Code);
-			var launched=await executor.ExecuteAsync("launch",JObject.FromObject(new { host_id="host-a",filename="target.exe" }),"client-a",default); Assert.Null(launched.Error); Assert.Equal("client-a",controllers.Get("session-a")?.ClientId);
-			var selection=JObject.FromObject(new { host_id="host-a",session_id="session-a",expected_state_version=7 });
+			Assert.Equal("invalid_arguments",(await executor.ExecuteAsync("set_exception_policy",ProtocolJson.ToObject(new { host_id="host-a",name="Example" }),"client-a",default)).Error?.Code);
+			var launched=await executor.ExecuteAsync("launch",ProtocolJson.ToObject(new { host_id="host-a",filename="target.exe" }),"client-a",default); Assert.Null(launched.Error); Assert.Equal("client-a",controllers.Get("session-a")?.ClientId);
+			var selection=ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a",expected_state_version=7 });
 			Assert.Equal("session_owned",(await executor.ExecuteAsync("pause",selection,"client-b",default)).Error?.Code);
-			Assert.Equal("state_version_required",(await executor.ExecuteAsync("pause",JObject.FromObject(new { host_id="host-a",session_id="session-a" }),"client-a",default)).Error?.Code);
-			Assert.Equal("stale_state",(await executor.ExecuteAsync("pause",JObject.FromObject(new { host_id="host-a",session_id="session-a",expected_state_version=6 }),"client-a",default)).Error?.Code);
+			Assert.Equal("state_version_required",(await executor.ExecuteAsync("pause",ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a" }),"client-a",default)).Error?.Code);
+			Assert.Equal("stale_state",(await executor.ExecuteAsync("pause",ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a",expected_state_version=6 }),"client-a",default)).Error?.Code);
 			Assert.Null((await executor.ExecuteAsync("pause",selection,"client-a",default)).Error); await responder; listener.Stop(); Assert.Contains("state_version_required",File.ReadAllText(auditPath));
 		}
 		finally { Directory.Delete(directory,true); }
@@ -263,7 +263,7 @@ public class HostRegistryTests {
 		return directory;
 	}
 
-	static string RegistryJson(params (string HostId,int Port,string TokenFile)[] hosts) => JsonConvert.SerializeObject(new {
+	static string RegistryJson(params (string HostId,int Port,string TokenFile)[] hosts) => ProtocolJson.Serialize(new {
 		hosts=hosts.Select(host=>new { host_id=host.HostId,display_name=host.HostId,address="127.0.0.1",port=host.Port,token_file=host.TokenFile }),
 	});
 }

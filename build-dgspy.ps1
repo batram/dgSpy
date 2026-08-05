@@ -58,9 +58,16 @@ if (Test-Path -LiteralPath $obsoleteDeployDir) {
 }
 
 New-Item -ItemType Directory -Path $deployDir -Force | Out-Null
-# Newtonsoft.Json is a dependency of dgSpy.Protocol and is not shipped by dnSpy. The LoadFrom
-# context probes the extension's own directory, so it must sit next to the extension.
-foreach ($file in 'dgSpy.Extension.x.dll', 'dgSpy.Extension.x.pdb', 'dgSpy.Protocol.dll', 'dgSpy.Protocol.pdb', 'Newtonsoft.Json.dll') {
+# dgSpy.Protocol targets netstandard2.0, so its System.Text.Json compatibility assemblies must sit
+# beside the net48 extension in the LoadFrom context. Copy only these dependencies, never dnSpy's
+# own contracts. Remove the obsolete Newtonsoft payload left by earlier dgSpy deployments.
+$obsoleteNewtonsoft = Join-Path $deployDir 'Newtonsoft.Json.dll'
+if (Test-Path -LiteralPath $obsoleteNewtonsoft) { Remove-Item -LiteralPath $obsoleteNewtonsoft -Force }
+foreach ($file in @(
+	'dgSpy.Extension.x.dll', 'dgSpy.Extension.x.pdb', 'dgSpy.Protocol.dll', 'dgSpy.Protocol.pdb',
+	'System.Text.Json.dll', 'System.Text.Encodings.Web.dll', 'System.Memory.dll', 'System.Buffers.dll',
+	'System.Runtime.CompilerServices.Unsafe.dll', 'System.Threading.Tasks.Extensions.dll', 'Microsoft.Bcl.AsyncInterfaces.dll'
+)) {
 	Copy-Item (Join-Path $extensionOutput $file) $deployDir -Force
 }
 

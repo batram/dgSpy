@@ -48,7 +48,7 @@ namespace dgSpy.Extension {
 		/// empty result that is indistinguishable from "the event never happened" — the same false-negative
 		/// shape as reading the event cursor too late. The valid set is served by get_capabilities.</summary>
 		static string[]? ReadKinds(RpcRequest req) {
-			var kinds=req.Arguments["kinds"]?.ToObject<string[]>();
+			var kinds=ProtocolJson.FromNode<string[]>(req.Arguments["kinds"]);
 			if (kinds is null) return null;
 			var unknown=kinds.Where(kind=>!EventKinds.IsKnown(kind)).ToArray();
 			if (unknown.Length!=0) throw new RpcException("invalid_argument",$"Unknown event kind(s) {string.Join(", ",unknown)}. Valid kinds: {string.Join(", ",EventKinds.All)}.");

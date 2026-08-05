@@ -1,87 +1,87 @@
 using System;
 using System.Linq;
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
 
 namespace dgSpy.Protocol {
 	/// <summary>One supported debugger engine and the behavior that is genuinely specific to it.
 	/// Advertised rather than assumed: CorDebug and Mono/Unity differ in ways a caller cannot guess,
 	/// most sharply in what counts as a legal breakpoint location.</summary>
 	public sealed class EngineCapabilities {
-		[JsonProperty("engine")] public string Engine { get; set; }="";
-		[JsonProperty("display_name")] public string DisplayName { get; set; }="";
+		[JsonPropertyName("engine")] public string Engine { get; set; }="";
+		[JsonPropertyName("display_name")] public string DisplayName { get; set; }="";
 		/// <summary>How a session on this engine is acquired, eg. "list_programs+attach".</summary>
-		[JsonProperty("acquisition")] public string[] Acquisition { get; set; }=Array.Empty<string>();
-		[JsonProperty("discoverable")] public bool Discoverable { get; set; }
-		[JsonProperty("arbitrary_il_offset_breakpoints")] public bool ArbitraryIlOffsetBreakpoints { get; set; }
-		[JsonProperty("sequence_point_breakpoints_only")] public bool SequencePointBreakpointsOnly { get; set; }
-		[JsonProperty("detach_without_terminating")] public bool DetachWithoutTerminating { get; set; }
-		[JsonProperty("method_invocation")] public bool MethodInvocation { get; set; }
-		[JsonProperty("object_construction")] public bool ObjectConstruction { get; set; }
-		[JsonProperty("memory_access")] public bool MemoryAccess { get; set; }
-		[JsonProperty("native_disassembly")] public bool NativeDisassembly { get; set; }
-		[JsonProperty("registers")] public bool Registers { get; set; }
-		[JsonProperty("set_instruction_pointer")] public bool SetInstructionPointer { get; set; }
-		[JsonProperty("abort_function_evaluation")] public bool AbortFunctionEvaluation { get; set; }
-		[JsonProperty("object_ids")] public bool ObjectIds { get; set; }
-		[JsonProperty("exception_modes")] public string[] ExceptionModes { get; set; }=Array.Empty<string>();
-		[JsonProperty("notes")] public string Notes { get; set; }="";
+		[JsonPropertyName("acquisition")] public string[] Acquisition { get; set; }=Array.Empty<string>();
+		[JsonPropertyName("discoverable")] public bool Discoverable { get; set; }
+		[JsonPropertyName("arbitrary_il_offset_breakpoints")] public bool ArbitraryIlOffsetBreakpoints { get; set; }
+		[JsonPropertyName("sequence_point_breakpoints_only")] public bool SequencePointBreakpointsOnly { get; set; }
+		[JsonPropertyName("detach_without_terminating")] public bool DetachWithoutTerminating { get; set; }
+		[JsonPropertyName("method_invocation")] public bool MethodInvocation { get; set; }
+		[JsonPropertyName("object_construction")] public bool ObjectConstruction { get; set; }
+		[JsonPropertyName("memory_access")] public bool MemoryAccess { get; set; }
+		[JsonPropertyName("native_disassembly")] public bool NativeDisassembly { get; set; }
+		[JsonPropertyName("registers")] public bool Registers { get; set; }
+		[JsonPropertyName("set_instruction_pointer")] public bool SetInstructionPointer { get; set; }
+		[JsonPropertyName("abort_function_evaluation")] public bool AbortFunctionEvaluation { get; set; }
+		[JsonPropertyName("object_ids")] public bool ObjectIds { get; set; }
+		[JsonPropertyName("exception_modes")] public string[] ExceptionModes { get; set; }=Array.Empty<string>();
+		[JsonPropertyName("notes")] public string Notes { get; set; }="";
 	}
 	/// <summary>The extension's own upper bound for one operation. The gateway derives its deadline from
 	/// this instead of guessing: a gateway deadline shorter than the inner bound abandons work that was
 	/// about to succeed.</summary>
 	public sealed class OperationBound {
-		[JsonProperty("operation")] public string Operation { get; set; }="";
-		[JsonProperty("max_duration_ms")] public int MaxDurationMs { get; set; }
-		[JsonProperty("mutates_session")] public bool MutatesSession { get; set; }
+		[JsonPropertyName("operation")] public string Operation { get; set; }="";
+		[JsonPropertyName("max_duration_ms")] public int MaxDurationMs { get; set; }
+		[JsonPropertyName("mutates_session")] public bool MutatesSession { get; set; }
 	}
 	public sealed class CapabilityLimits {
-		[JsonProperty("max_frames")] public int MaxFrames { get; set; }
-		[JsonProperty("max_wait_timeout_ms")] public int MaxWaitTimeoutMs { get; set; }
-		[JsonProperty("max_connection_timeout_ms")] public int MaxConnectionTimeoutMs { get; set; }
-		[JsonProperty("max_concurrent_sessions")] public int MaxConcurrentSessions { get; set; }
+		[JsonPropertyName("max_frames")] public int MaxFrames { get; set; }
+		[JsonPropertyName("max_wait_timeout_ms")] public int MaxWaitTimeoutMs { get; set; }
+		[JsonPropertyName("max_connection_timeout_ms")] public int MaxConnectionTimeoutMs { get; set; }
+		[JsonPropertyName("max_concurrent_sessions")] public int MaxConcurrentSessions { get; set; }
 		/// <summary>False, and deliberately advertised. An expired deadline abandons the wait and reports
 		/// deadline_exceeded once, but dnSpy exposes no way to cancel a queued dispatcher callback or a
 		/// started evaluation, so that work still runs to completion.</summary>
-		[JsonProperty("cancels_in_flight_work")] public bool CancelsInFlightWork { get; set; }
-		[JsonProperty("max_evaluation_timeout_ms")] public int MaxEvaluationTimeoutMs { get; set; }
-		[JsonProperty("max_value_export_bytes")] public int MaxValueExportBytes { get; set; }
+		[JsonPropertyName("cancels_in_flight_work")] public bool CancelsInFlightWork { get; set; }
+		[JsonPropertyName("max_evaluation_timeout_ms")] public int MaxEvaluationTimeoutMs { get; set; }
+		[JsonPropertyName("max_value_export_bytes")] public int MaxValueExportBytes { get; set; }
 	}
 	public sealed class CapabilityInfo {
-		[JsonProperty("host_id")] public string HostId { get; set; }="";
-		[JsonProperty("protocol_version")] public int ProtocolVersion { get; set; }=dgSpy.Protocol.ProtocolVersion.Current;
-		[JsonProperty("extension_version")] public string ExtensionVersion { get; set; }="";
-		[JsonProperty("operations")] public OperationBound[] Operations { get; set; }=Array.Empty<OperationBound>();
-		[JsonProperty("engines")] public EngineCapabilities[] Engines { get; set; }=Array.Empty<EngineCapabilities>();
-		[JsonProperty("limits")] public CapabilityLimits Limits { get; set; }=new CapabilityLimits();
+		[JsonPropertyName("host_id")] public string HostId { get; set; }="";
+		[JsonPropertyName("protocol_version")] public int ProtocolVersion { get; set; }=dgSpy.Protocol.ProtocolVersion.Current;
+		[JsonPropertyName("extension_version")] public string ExtensionVersion { get; set; }="";
+		[JsonPropertyName("operations")] public OperationBound[] Operations { get; set; }=Array.Empty<OperationBound>();
+		[JsonPropertyName("engines")] public EngineCapabilities[] Engines { get; set; }=Array.Empty<EngineCapabilities>();
+		[JsonPropertyName("limits")] public CapabilityLimits Limits { get; set; }=new CapabilityLimits();
 		/// <summary>Every value the normalized event stream can produce in <c>kind</c>, and therefore every
 		/// value the <c>kinds</c> filter accepts.</summary>
-		[JsonProperty("event_kinds")] public string[] EventKinds { get; set; }=Array.Empty<string>();
+		[JsonPropertyName("event_kinds")] public string[] EventKinds { get; set; }=Array.Empty<string>();
 		/// <summary>Every value a <c>stopped</c> event can carry in <c>stop_reason</c>.</summary>
-		[JsonProperty("stop_reasons")] public string[] StopReasons { get; set; }=Array.Empty<string>();
+		[JsonPropertyName("stop_reasons")] public string[] StopReasons { get; set; }=Array.Empty<string>();
 		/// <summary><c>step_into</c>, <c>step_over</c> and <c>step_out</c> accept these.</summary>
-		[JsonProperty("step_kinds")] public string[] StepKinds { get; set; }=Array.Empty<string>();
+		[JsonPropertyName("step_kinds")] public string[] StepKinds { get; set; }=Array.Empty<string>();
 		/// <summary>Values <c>update_breakpoint</c> accepts for <c>condition_kind</c>.</summary>
-		[JsonProperty("condition_kinds")] public string[] ConditionKinds { get; set; }=Array.Empty<string>();
+		[JsonPropertyName("condition_kinds")] public string[] ConditionKinds { get; set; }=Array.Empty<string>();
 		/// <summary>Values <c>update_breakpoint</c> accepts for <c>hit_count_kind</c>.</summary>
-		[JsonProperty("hit_count_kinds")] public string[] HitCountKinds { get; set; }=Array.Empty<string>();
+		[JsonPropertyName("hit_count_kinds")] public string[] HitCountKinds { get; set; }=Array.Empty<string>();
 	}
 	public sealed class HostInfo {
 		/// <summary>Stable identity of the extension endpoint. It is generated once per installation or
 		/// supplied explicitly for a managed host.</summary>
-		[JsonProperty("host_id")] public string HostId { get; set; }="";
-		[JsonProperty("display_name")] public string DisplayName { get; set; }="";
-		[JsonProperty("machine_name")] public string MachineName { get; set; }="";
-		[JsonProperty("dnspy_version")] public string DnSpyVersion { get; set; }="";
-		[JsonProperty("dgspy_version")] public string DgSpyVersion { get; set; }="";
-		[JsonProperty("protocol_version")] public int ProtocolVersion { get; set; }=dgSpy.Protocol.ProtocolVersion.Current;
-		[JsonProperty("operating_system")] public string OperatingSystem { get; set; }="";
-		[JsonProperty("architecture")] public string Architecture { get; set; }="";
-		[JsonProperty("dnspy_process_id")] public int DnSpyProcessId { get; set; }
-		[JsonProperty("connection_state")] public string ConnectionState { get; set; }="connected";
-		[JsonProperty("engines")] public string[] Engines { get; set; }=Array.Empty<string>();
+		[JsonPropertyName("host_id")] public string HostId { get; set; }="";
+		[JsonPropertyName("display_name")] public string DisplayName { get; set; }="";
+		[JsonPropertyName("machine_name")] public string MachineName { get; set; }="";
+		[JsonPropertyName("dnspy_version")] public string DnSpyVersion { get; set; }="";
+		[JsonPropertyName("dgspy_version")] public string DgSpyVersion { get; set; }="";
+		[JsonPropertyName("protocol_version")] public int ProtocolVersion { get; set; }=dgSpy.Protocol.ProtocolVersion.Current;
+		[JsonPropertyName("operating_system")] public string OperatingSystem { get; set; }="";
+		[JsonPropertyName("architecture")] public string Architecture { get; set; }="";
+		[JsonPropertyName("dnspy_process_id")] public int DnSpyProcessId { get; set; }
+		[JsonPropertyName("connection_state")] public string ConnectionState { get; set; }="connected";
+		[JsonPropertyName("engines")] public string[] Engines { get; set; }=Array.Empty<string>();
 		/// <summary>How this endpoint authenticates gateway RPC callers.</summary>
-		[JsonProperty("authentication")] public string Authentication { get; set; }="";
-		[JsonProperty("session_id", NullValueHandling=NullValueHandling.Ignore)] public string? SessionId { get; set; }
+		[JsonPropertyName("authentication")] public string Authentication { get; set; }="";
+		[JsonPropertyName("session_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? SessionId { get; set; }
 	}
 	/// <summary>The complete vocabulary of the normalized event stream. These are constants rather than
 	/// literals at the call sites on purpose: <c>kinds</c> is a caller-supplied filter, and a kind that

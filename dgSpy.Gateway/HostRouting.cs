@@ -4,9 +4,10 @@ using System.Net.Security;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
 using dgSpy.Protocol;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
 
 namespace dgSpy.Gateway;
 
@@ -39,7 +40,7 @@ public sealed class HostRegistry {
 	}
 
 	public static HostRegistry FromJson(string json,string baseDirectory) {
-		var document=JsonConvert.DeserializeObject<HostRegistryDocument>(json) ?? throw new InvalidOperationException("The host registry is invalid JSON.");
+		var document=ProtocolJson.Deserialize<HostRegistryDocument>(json) ?? throw new InvalidOperationException("The host registry is invalid JSON.");
 		if (document.Hosts.Length==0) throw new InvalidOperationException("The host registry contains no hosts.");
 		var endpoints=new List<HostEndpoint>();
 		var ids=new HashSet<string>(StringComparer.Ordinal);
@@ -99,16 +100,16 @@ public sealed class HostRegistry {
 	}
 	static string ResolvePath(string? configured,string baseDirectory,string purpose) { if(string.IsNullOrWhiteSpace(configured)) throw new InvalidOperationException($"The {purpose} file is not configured."); var path=Path.IsPathRooted(configured) ? configured : Path.Combine(baseDirectory,configured); if(!File.Exists(path)) throw new InvalidOperationException($"The {purpose} file '{path}' does not exist."); return path; }
 
-	sealed class HostRegistryDocument { [JsonProperty("hosts")] public HostRegistration[] Hosts { get; set; }=Array.Empty<HostRegistration>(); }
+	sealed class HostRegistryDocument { [JsonPropertyName("hosts")] public HostRegistration[] Hosts { get; set; }=Array.Empty<HostRegistration>(); }
 	sealed class HostRegistration {
-		[JsonProperty("host_id")] public string HostId { get; set; }="";
-		[JsonProperty("display_name")] public string? DisplayName { get; set; }
-		[JsonProperty("address")] public string Address { get; set; }="127.0.0.1";
-		[JsonProperty("port")] public int Port { get; set; }
-		[JsonProperty("transport")] public string? Transport { get; set; }
-		[JsonProperty("token_environment")] public string? TokenEnvironment { get; set; }
-		[JsonProperty("token_file")] public string? TokenFile { get; set; }
-		[JsonProperty("client_certificate_file")] public string? ClientCertificateFile { get; set; }
+		[JsonPropertyName("host_id")] public string HostId { get; set; }="";
+		[JsonPropertyName("display_name")] public string? DisplayName { get; set; }
+		[JsonPropertyName("address")] public string Address { get; set; }="127.0.0.1";
+		[JsonPropertyName("port")] public int Port { get; set; }
+		[JsonPropertyName("transport")] public string? Transport { get; set; }
+		[JsonPropertyName("token_environment")] public string? TokenEnvironment { get; set; }
+		[JsonPropertyName("token_file")] public string? TokenFile { get; set; }
+		[JsonPropertyName("client_certificate_file")] public string? ClientCertificateFile { get; set; }
 	}
 }
 
@@ -175,17 +176,17 @@ sealed class EndpointRpcClient : IHostRpcClient {
 		using var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true) { AutoFlush=true };
 		using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true);
 		var ping=new RpcRequest { Operation="ping",HostId=endpoint.HostId,AuthenticationToken=endpoint.Token,DeadlineUtc=DateTime.UtcNow.AddSeconds(3) };
-		await writer.WriteLineAsync(JsonConvert.SerializeObject(ping));
+		await writer.WriteLineAsync(ProtocolJson.Serialize(ping));
 		var handshakeLine=await reader.ReadLineAsync(cancellationToken) ?? throw new IOException("The dgSpy extension closed the pipe during handshake.");
-		var response=JsonConvert.DeserializeObject<RpcResponse>(handshakeLine) ?? throw new IOException("Invalid dgSpy handshake response.");
+		var response=ProtocolJson.Deserialize<RpcResponse>(handshakeLine) ?? throw new IOException("Invalid dgSpy handshake response.");
 		if (response.Version!=ProtocolVersion.Current || response.Error is not null)
 			throw new IOException(response.Error?.Message ?? $"dgSpy protocol mismatch: expected {ProtocolVersion.Current}, received {response.Version}.");
-		var handshake=(response.Result as JObject)?.ToObject<Handshake>() ?? throw new IOException("The dgSpy extension returned an invalid handshake.");
+		var handshake=(response.Result as JsonObject)?.Deserialize<Handshake>(ProtocolJson.Options) ?? throw new IOException("The dgSpy extension returned an invalid handshake.");
 		RpcClientSettings.EnsureExpectedHost(endpoint.HostId,handshake.HostId);
 		request.HostId=handshake.HostId; request.AuthenticationToken=endpoint.Token;
-		await writer.WriteLineAsync(JsonConvert.SerializeObject(request));
+		await writer.WriteLineAsync(ProtocolJson.Serialize(request));
 		var line=await reader.ReadLineAsync(cancellationToken) ?? throw new IOException("The dgSpy extension closed the pipe.");
-		return JsonConvert.DeserializeObject<RpcResponse>(line) ?? throw new IOException("Invalid RPC response.");
+		return ProtocolJson.Deserialize<RpcResponse>(line) ?? throw new IOException("Invalid RPC response.");
 	}
 }
 
@@ -213,9 +214,9 @@ sealed class ReverseConnection : IDisposable {
 	public async Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken) {
 		await calls.WaitAsync(cancellationToken);
 		try {
-			await writer.WriteLineAsync(JsonConvert.SerializeObject(request));
+			await writer.WriteLineAsync(ProtocolJson.Serialize(request));
 			var line=await reader.ReadLineAsync(cancellationToken) ?? throw new IOException("The remote host disconnected.");
-			return JsonConvert.DeserializeObject<RpcResponse>(line) ?? throw new IOException("Invalid remote host response.");
+			return ProtocolJson.Deserialize<RpcResponse>(line) ?? throw new IOException("Invalid remote host response.");
 		} catch { Dispose(); throw; } finally { calls.Release(); }
 	}
 	public void Dispose() { client.Dispose(); }
@@ -239,11 +240,11 @@ public sealed class RemoteHostListener : BackgroundService {
 			Stream stream=client.GetStream(); byte[]? clientCertificateHash=null;
 			if(useTls) { var tls=new SslStream(stream,false,(_,certificate,__,___)=>certificate is not null && router.IsKnownClientCertificate(certificate.GetCertHash())); await tls.AuthenticateAsServerAsync(serverCertificate!,true,SslProtocols.Tls12,false); stream=tls; clientCertificateHash=tls.RemoteCertificate?.GetCertHash(); }
 			var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true};
-			var line=await reader.ReadLineAsync(token); var request=line is null ? null : JsonConvert.DeserializeObject<RpcRequest>(line); string error="Invalid registration.";
+			var line=await reader.ReadLineAsync(token); var request=line is null ? null : ProtocolJson.Deserialize<RpcRequest>(line); string error="Invalid registration.";
 			if (request is null || request.Operation!="register_host" || request.Version!=ProtocolVersion.Current || string.IsNullOrWhiteSpace(request.HostId) || !router.TryAuthenticate(request.HostId,request.AuthenticationToken ?? "",useTls,clientCertificateHash,out error) || !router.TryRegister(request.HostId,client,reader,writer,out error)) {
-				await writer.WriteLineAsync(JsonConvert.SerializeObject(RpcResponse.Failure(request?.RequestId ?? "","registration_rejected",error))); client.Dispose(); return;
+				await writer.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Failure(request?.RequestId ?? "","registration_rejected",error))); client.Dispose(); return;
 			}
-			await writer.WriteLineAsync(JsonConvert.SerializeObject(RpcResponse.Success(request.RequestId,new HostRegistration { HostId=request.HostId })));
+			await writer.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,new HostRegistration { HostId=request.HostId })));
 		} catch { client.Dispose(); }
 	}
 	public override void Dispose() { listener?.Stop(); base.Dispose(); }

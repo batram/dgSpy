@@ -25,8 +25,8 @@ using dnSpy.Contracts.Debugger.Exceptions;
 using dnSpy.Contracts.Debugger.Text;
 using dnSpy.Contracts.Decompiler;
 using dnSpy.Contracts.Metadata;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace dgSpy.Extension {
 	sealed partial class RpcHost : IDisposable {
@@ -64,7 +64,7 @@ namespace dgSpy.Extension {
 		}
 		public void Start() { if (listener is not null) return; manager.WriteMessage($"dgSpy {Version} host {rpcSecurity.HostId} listening on authenticated RPC 127.0.0.1:{rpcPort}"); listener=Task.Run(ListenAsync); if (RemoteGatewaySettings.TryLoad(out var remote)) outbound=Task.Run(()=>ConnectOutboundAsync(remote)); }
 		async Task ListenAsync() { try { tcpListener=new TcpListener(IPAddress.Loopback,rpcPort); tcpListener.Start(8); while(!shutdown.IsCancellationRequested) { var client=await tcpListener.AcceptTcpClientAsync().ConfigureAwait(false); _=HandleClientAsync(client); } } catch(ObjectDisposedException) when(shutdown.IsCancellationRequested) { } catch(Exception ex) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.ErrorUser,"dgSpy TCP listener: "+ex.Message); } }
-		async Task HandleClientAsync(TcpClient client) { using(client) try { using var stream=client.GetStream(); using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); using var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true}; string? line; while ((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null) { var req=JsonConvert.DeserializeObject<RpcRequest>(line); var response=req is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(req).ConfigureAwait(false); await writer.WriteLineAsync(JsonConvert.SerializeObject(response)).ConfigureAwait(false); } } 		// A client going away is routine, not an error: the gateway opens a fresh connection per request
+		async Task HandleClientAsync(TcpClient client) { using(client) try { using var stream=client.GetStream(); using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); using var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true}; string? line; while ((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null) { var req=ProtocolJson.Deserialize<RpcRequest>(line); var response=req is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(req).ConfigureAwait(false); await writer.WriteLineAsync(ProtocolJson.Serialize(response)).ConfigureAwait(false); } } 		// A client going away is routine, not an error: the gateway opens a fresh connection per request
 		// and drops it whenever a request is cancelled or hits its deadline. Reporting those through
 		// ErrorUser put a modal dialog on dnSpy's UI for every one. Genuine faults go to the Output
 		// window, which is not modal.
@@ -77,13 +77,13 @@ namespace dgSpy.Extension {
 					using var client=new TcpClient(); await client.ConnectAsync(remote.Address,remote.Port).ConfigureAwait(false);
 					using var stream=await OpenGatewayStreamAsync(client,remote).ConfigureAwait(false); using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); using var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true};
 					var registration=new RpcRequest { Operation="register_host",HostId=rpcSecurity.HostId,AuthenticationToken=rpcSecurity.Token,DeadlineUtc=DateTime.UtcNow.AddSeconds(10) };
-					await writer.WriteLineAsync(JsonConvert.SerializeObject(registration)).ConfigureAwait(false);
-					var registered=JsonConvert.DeserializeObject<RpcResponse>(await reader.ReadLineAsync().ConfigureAwait(false) ?? "") ?? throw new IOException("Gateway closed during registration.");
+					await writer.WriteLineAsync(ProtocolJson.Serialize(registration)).ConfigureAwait(false);
+					var registered=ProtocolJson.Deserialize<RpcResponse>(await reader.ReadLineAsync().ConfigureAwait(false) ?? "") ?? throw new IOException("Gateway closed during registration.");
 					if (registered.Error is not null || registered.Version!=ProtocolVersion.Current) throw new IOException(registered.Error?.Message ?? "Gateway protocol mismatch.");
-					var accepted=(registered.Result as JObject)?.ToObject<HostRegistration>() ?? throw new IOException("Gateway returned an invalid registration response.");
+					var accepted=ProtocolJson.FromNode<HostRegistration>(registered.Result as JsonObject) ?? throw new IOException("Gateway returned an invalid registration response.");
 					if (!string.Equals(accepted.HostId,rpcSecurity.HostId,StringComparison.Ordinal)) throw new IOException($"Gateway registered '{accepted.HostId}', expected '{rpcSecurity.HostId}'.");
 					manager.WriteMessage($"dgSpy host {rpcSecurity.HostId} registered with {remote.Address}:{remote.Port}"); delay=TimeSpan.FromSeconds(1);
-					string? line; while((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null && !shutdown.IsCancellationRequested) { var request=JsonConvert.DeserializeObject<RpcRequest>(line); var response=request is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(request).ConfigureAwait(false); await writer.WriteLineAsync(JsonConvert.SerializeObject(response)).ConfigureAwait(false); }
+					string? line; while((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null && !shutdown.IsCancellationRequested) { var request=ProtocolJson.Deserialize<RpcRequest>(line); var response=request is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(request).ConfigureAwait(false); await writer.WriteLineAsync(ProtocolJson.Serialize(response)).ConfigureAwait(false); }
 				} catch(Exception ex) when(!shutdown.IsCancellationRequested) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.Output,"dgSpy outbound gateway: "+ex.Message); }
 				try { await Task.Delay(delay,shutdown.Token).ConfigureAwait(false); } catch(OperationCanceledException) { return; }
 				delay=TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds*2,30));
@@ -198,9 +198,9 @@ namespace dgSpy.Extension {
 		// for, which is how a caller avoids paying for a scan it does not need — Unity's multicast
 		// discovery in particular only ever runs when it is named explicitly.
 		async Task<ProgramInfo[]> ListProgramsAsync(RpcRequest req,CancellationToken cancellationToken) {
-			var processIds=req.Arguments["process_ids"]?.ToObject<int[]>();
-			var processNames=req.Arguments["process_names"]?.ToObject<string[]>();
-			var providerNames=req.Arguments["provider_names"]?.ToObject<string[]>();
+			var processIds=ProtocolJson.FromNode<int[]>(req.Arguments["process_ids"]);
+			var processNames=ProtocolJson.FromNode<string[]>(req.Arguments["process_names"]);
+			var providerNames=ProtocolJson.FromNode<string[]>(req.Arguments["provider_names"]);
 			var values=await programs.GetAttachableProcessesAsync(processNames,processIds,providerNames,cancellationToken).ConfigureAwait(false);
 			lock(sync) { programCache.Clear(); return values.Select(p=>{
 				// RuntimeId has no string form, so identity is composed from typed fields: pid, the
@@ -507,7 +507,7 @@ namespace dgSpy.Extension {
 			req.Arguments["max_frames"]=index+1;
 			var frames=await GetCallStackAsync(req,cancellationToken).ConfigureAwait(false);
 			if (index>=frames.Length) throw new RpcException("frame_not_found",$"Thread {(string?)req.Arguments["thread_id"]} has no frame at index {index}. Refresh get_callstack and use an available frame_index.");
-			var include=req.Arguments["include"]?.ToObject<string[]>();
+			var include=ProtocolJson.FromNode<string[]>(req.Arguments["include"]);
 			if (include is null || include.Length==0) return frames[index];
 			return await GetFrameWithIncludesAsync(req,frames[index],include,cancellationToken).ConfigureAwait(false);
 		}

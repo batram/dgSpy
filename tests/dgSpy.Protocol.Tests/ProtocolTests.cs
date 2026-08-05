@@ -1,8 +1,8 @@
 using System.Linq;
 using System.Reflection;
 using dgSpy.Protocol;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace dgSpy.Protocol.Tests;
@@ -13,7 +13,7 @@ public class RpcContractTests {
 		var request = new RpcRequest { Operation = "attach", RequestId = "abc", HostId="host-a", AuthenticationToken="secret" };
 		request.Arguments["program_id"] = "1234:guid:CLR v4.0.30319";
 
-		var wire = JObject.Parse(JsonConvert.SerializeObject(request));
+		var wire = ProtocolJson.ParseObject(ProtocolJson.Serialize(request));
 
 		Assert.Equal("attach", (string?)wire["operation"]);
 		Assert.Equal("abc", (string?)wire["request_id"]);
@@ -25,7 +25,7 @@ public class RpcContractTests {
 
 	[Fact]
 	public void Failure_carries_a_structured_code_and_no_result() {
-		var wire = JObject.Parse(JsonConvert.SerializeObject(RpcResponse.Failure("r1", "stale_handle", "gone")));
+		var wire = ProtocolJson.ParseObject(ProtocolJson.Serialize(RpcResponse.Failure("r1", "stale_handle", "gone")));
 
 		Assert.Equal("stale_handle", (string?)wire["error"]!["code"]);
 		Assert.Equal("gone", (string?)wire["error"]!["message"]);
@@ -35,7 +35,7 @@ public class RpcContractTests {
 	[Fact]
 	public void Success_omits_the_error_member_entirely() {
 		// An agent must be able to branch on the presence of "error" alone.
-		var wire = JObject.Parse(JsonConvert.SerializeObject(RpcResponse.Success("r1", new Handshake())));
+		var wire = ProtocolJson.ParseObject(ProtocolJson.Serialize(RpcResponse.Success("r1", new Handshake())));
 
 		Assert.Null(wire["error"]);
 		Assert.NotNull(wire["result"]);
@@ -44,9 +44,9 @@ public class RpcContractTests {
 	[Fact]
 	public void Deadline_survives_a_round_trip_as_utc() {
 		var deadline = new DateTime(2026, 8, 3, 12, 0, 0, DateTimeKind.Utc);
-		var json = JsonConvert.SerializeObject(new RpcRequest { DeadlineUtc = deadline });
+		var json = ProtocolJson.Serialize(new RpcRequest { DeadlineUtc = deadline });
 
-		var restored = JsonConvert.DeserializeObject<RpcRequest>(json)!;
+		var restored = ProtocolJson.Deserialize<RpcRequest>(json)!;
 
 		Assert.Equal(deadline, restored.DeadlineUtc!.Value.ToUniversalTime());
 	}
@@ -61,7 +61,7 @@ public class RpcContractTests {
 			} },
 		};
 
-		var wire=JObject.Parse(JsonConvert.SerializeObject(result));
+		var wire=ProtocolJson.ParseObject(ProtocolJson.Serialize(result));
 
 		Assert.True((bool?)wire["truncated"]);
 		Assert.Equal(8,(long?)wire["oldest_available_cursor"]);
@@ -84,7 +84,7 @@ public class IdentityContractTests {
 			IlOffset = 18,
 		};
 
-		var wire = JObject.Parse(JsonConvert.SerializeObject(frame));
+		var wire = ProtocolJson.ParseObject(ProtocolJson.Serialize(frame));
 
 		Assert.Equal(@"C:\t\Milestone1Target.exe", (string?)wire["module"]);
 		Assert.Equal(100663298u, (uint?)wire["method_token"]);
@@ -100,17 +100,17 @@ public class IdentityContractTests {
 			RuntimeKindGuid = "03cfde68-877e-4dd7-9a14-5c100b37a01a",
 		};
 
-		var wire = JObject.Parse(JsonConvert.SerializeObject(program));
+		var wire = ProtocolJson.ParseObject(ProtocolJson.Serialize(program));
 
 		Assert.NotEqual((string?)wire["runtime_kind_guid"], (string?)wire["runtime_guid"]);
 	}
 
 	[Fact]
 	public void Thread_and_frame_selection_have_explicit_wire_identity() {
-		var thread = JObject.Parse(JsonConvert.SerializeObject(new ThreadInfo {
+		var thread = ProtocolJson.ParseObject(ProtocolJson.Serialize(new ThreadInfo {
 			ThreadId = "1234:99", ProcessId = 1234, OsThreadId = 99, ManagedThreadId = 7, HasManagedFrames = true,
 		}));
-		var frame = JObject.Parse(JsonConvert.SerializeObject(new FrameInfo {
+		var frame = ProtocolJson.ParseObject(ProtocolJson.Serialize(new FrameInfo {
 			FrameId = "session:5:1234:99:2", ThreadId = "1234:99", FrameIndex = 2,
 		}));
 
@@ -124,7 +124,7 @@ public class IdentityContractTests {
 
 	[Fact]
 	public void Remove_breakpoint_result_names_the_exact_removed_id() {
-		var wire = JObject.Parse(JsonConvert.SerializeObject(new RemoveBreakpointResult {
+		var wire = ProtocolJson.ParseObject(ProtocolJson.Serialize(new RemoveBreakpointResult {
 			BreakpointId = 42, Removed = true, StateVersion = 9,
 		}));
 
@@ -134,14 +134,14 @@ public class IdentityContractTests {
 
 	[Fact]
 	public void Session_summary_reports_whether_detaching_is_safe() {
-		var wire = JObject.Parse(JsonConvert.SerializeObject(new SessionSummary { CanDetachWithoutTerminating = true }));
+		var wire = ProtocolJson.ParseObject(ProtocolJson.Serialize(new SessionSummary { CanDetachWithoutTerminating = true }));
 
 		Assert.True((bool?)wire["can_detach_without_terminating"]);
 	}
 
 	[Fact]
 	public void Detach_result_distinguishes_detached_from_terminated_and_reports_remaining_session() {
-		var wire = JObject.Parse(JsonConvert.SerializeObject(new DetachResult { Detached = false, Terminated = true, ProcessId = 42, SessionActive = true }));
+		var wire = ProtocolJson.ParseObject(ProtocolJson.Serialize(new DetachResult { Detached = false, Terminated = true, ProcessId = 42, SessionActive = true }));
 
 		Assert.False((bool?)wire["detached"]);
 		Assert.True((bool?)wire["terminated"]);
@@ -151,7 +151,7 @@ public class IdentityContractTests {
 
 	[Fact]
 	public void Terminal_event_preserves_process_exit_details() {
-		var wire=JObject.FromObject(new DebugEvent { EventId=9,Kind="session_exited",StateVersion=12,Terminal=true,ProcessId=4242,ExitCode=23,Reason="target_exited" });
+		var wire=ProtocolJson.ToObject(new DebugEvent { EventId=9,Kind="session_exited",StateVersion=12,Terminal=true,ProcessId=4242,ExitCode=23,Reason="target_exited" });
 
 		Assert.True((bool?)wire["terminal"]);
 		Assert.Equal(4242,(int?)wire["process_id"]);
@@ -162,7 +162,7 @@ public class IdentityContractTests {
 	[Fact]
 	public void Program_reports_provider_names_a_caller_can_pass_back() {
 		// attach_provider used to carry the runtime GUID, which is not something list_programs accepts.
-		var wire = JObject.Parse(JsonConvert.SerializeObject(new ProgramInfo { AttachProviders = new[] { "DotNetFramework" } }));
+		var wire = ProtocolJson.ParseObject(ProtocolJson.Serialize(new ProgramInfo { AttachProviders = new[] { "DotNetFramework" } }));
 
 		Assert.Equal("DotNetFramework", (string?)wire["attach_providers"]![0]);
 	}
@@ -202,8 +202,8 @@ public class CapabilityContractTests {
 
 	[Fact]
 	public void Capabilities_and_host_info_round_trip_with_snake_case_wire_names() {
-		var capabilities = JObject.Parse(JsonConvert.SerializeObject(CapabilityCatalog.Describe("0.1.0")));
-		var host = JObject.Parse(JsonConvert.SerializeObject(new HostInfo { HostId = CapabilityCatalog.HostId, MachineName = "TESTBOX" }));
+		var capabilities = ProtocolJson.ParseObject(ProtocolJson.Serialize(CapabilityCatalog.Describe("0.1.0")));
+		var host = ProtocolJson.ParseObject(ProtocolJson.Serialize(new HostInfo { HostId = CapabilityCatalog.HostId, MachineName = "TESTBOX" }));
 
 		Assert.Equal("local", (string?)capabilities["host_id"]);
 		Assert.Equal(ProtocolVersion.Current, (int?)capabilities["protocol_version"]);
@@ -235,11 +235,11 @@ public class CapabilityContractTests {
 
 	[Fact]
 	public void The_event_kind_vocabulary_is_advertised_and_checkable() {
-		var capabilities = JObject.Parse(JsonConvert.SerializeObject(CapabilityCatalog.Describe("0.1.0")));
+		var capabilities = ProtocolJson.ParseObject(ProtocolJson.Serialize(CapabilityCatalog.Describe("0.1.0")));
 
 		// wait_for_stop filters on exactly this kind, so a caller must be able to discover it.
-		Assert.Contains(EventKinds.Stopped, capabilities["event_kinds"]!.ToObject<string[]>()!);
-		Assert.Contains(StopReasons.Breakpoint, capabilities["stop_reasons"]!.ToObject<string[]>()!);
+		Assert.Contains(EventKinds.Stopped, ProtocolJson.FromNode<string[]>(capabilities["event_kinds"]!)!);
+		Assert.Contains(StopReasons.Breakpoint, ProtocolJson.FromNode<string[]>(capabilities["stop_reasons"]!)!);
 		Assert.True(EventKinds.IsKnown(EventKinds.BreakpointHit));
 		// The near miss that used to produce a clean empty wait instead of an error.
 		Assert.False(EventKinds.IsKnown("breakpoint"));
@@ -247,11 +247,11 @@ public class CapabilityContractTests {
 
 	[Fact]
 	public void Phase4_vocabularies_are_advertised_and_rejectable() {
-		var capabilities = JObject.Parse(JsonConvert.SerializeObject(CapabilityCatalog.Describe("0.1.0")));
+		var capabilities = ProtocolJson.ParseObject(ProtocolJson.Serialize(CapabilityCatalog.Describe("0.1.0")));
 
-		Assert.Equal(new[] { "into", "over", "out" }, capabilities["step_kinds"]!.ToObject<string[]>());
-		Assert.Contains("when_changed", capabilities["condition_kinds"]!.ToObject<string[]>()!);
-		Assert.Contains("multiple_of", capabilities["hit_count_kinds"]!.ToObject<string[]>()!);
+		Assert.Equal(new[] { "into", "over", "out" }, ProtocolJson.FromNode<string[]>(capabilities["step_kinds"]!));
+		Assert.Contains("when_changed", ProtocolJson.FromNode<string[]>(capabilities["condition_kinds"]!)!);
+		Assert.Contains("multiple_of", ProtocolJson.FromNode<string[]>(capabilities["hit_count_kinds"]!)!);
 		// dnSpy calls it GreaterThanOrEquals; the wire name says what it does without the caller
 		// having to know dnSpy's enum.
 		Assert.Contains("at_least", HitCountKinds.All);
@@ -273,8 +273,8 @@ public class CapabilityContractTests {
 
 	[Fact]
 	public void An_unavailable_value_is_distinguishable_from_null_on_the_wire() {
-		var nullReference = JObject.Parse(JsonConvert.SerializeObject(new EvaluatedValue { Name = "s", Display = "null", Value = null, HasRawValue = true }));
-		var optimizedAway = JObject.Parse(JsonConvert.SerializeObject(new EvaluatedValue { Name = "s", Error = "Optimized away", HasRawValue = false }));
+		var nullReference = ProtocolJson.ParseObject(ProtocolJson.Serialize(new EvaluatedValue { Name = "s", Display = "null", Value = null, HasRawValue = true }));
+		var optimizedAway = ProtocolJson.ParseObject(ProtocolJson.Serialize(new EvaluatedValue { Name = "s", Error = "Optimized away", HasRawValue = false }));
 
 		// Both omit `value`, so has_raw_value is the only thing separating "this is null" from "the
 		// runtime cannot tell you". A caller that conflates them reports a bug that is not there.
@@ -303,10 +303,10 @@ public class CapabilityContractTests {
 			Assert.True(CapabilityCatalog.BoundMs(name) > 0, $"{name} has no bound");
 			Assert.False(CapabilityCatalog.Operations.Single(o => o.Operation == name).MutatesSession, $"{name} claims to mutate");
 		}
-		var chunk=JObject.Parse(JsonConvert.SerializeObject(new RawModuleChunk { Module="a.dll",Offset=4,Count=2,TotalSize=10,Truncated=true,Sha256="abc",DataBase64="AAE=" }));
+		var chunk=ProtocolJson.ParseObject(ProtocolJson.Serialize(new RawModuleChunk { Module="a.dll",Offset=4,Count=2,TotalSize=10,Truncated=true,Sha256="abc",DataBase64="AAE=" }));
 		Assert.Equal(10,(int?)chunk["total_size"]);
 		Assert.Equal("AAE=",(string?)chunk["data_base64"]);
-		var search=JObject.Parse(JsonConvert.SerializeObject(new TextSearchResult { ScannedMethods=200,ScanTruncated=true }));
+		var search=ProtocolJson.ParseObject(ProtocolJson.Serialize(new TextSearchResult { ScannedMethods=200,ScanTruncated=true }));
 		Assert.Equal(200,(int?)search["scanned_methods"]);
 		Assert.True((bool?)search["scan_truncated"]);
 	}
@@ -319,7 +319,7 @@ public class CapabilityContractTests {
 		foreach (var name in readOnly) Assert.False(CapabilityCatalog.Operations.Single(o=>o.Operation==name).MutatesSession,$"{name} must remain read-only");
 		Assert.All(mutating.Concat(readOnly),name=>Assert.True(CapabilityCatalog.BoundMs(name)>0,$"{name} has no bound"));
 
-		var capabilities=JObject.Parse(JsonConvert.SerializeObject(CapabilityCatalog.Describe("0.1.0")));
+		var capabilities=ProtocolJson.ParseObject(ProtocolJson.Serialize(CapabilityCatalog.Describe("0.1.0")));
 		Assert.True((bool?)capabilities["engines"]![0]!["memory_access"]);
 		Assert.False((bool?)capabilities["engines"]![1]!["native_disassembly"]);
 		Assert.False((bool?)capabilities["engines"]![0]!["registers"]);
@@ -328,17 +328,17 @@ public class CapabilityContractTests {
 
 	[Fact]
 	public void Phase7_mutation_and_memory_results_are_explicit_on_the_wire() {
-		var mutation=JObject.Parse(JsonConvert.SerializeObject(new MutationResult { Completed=true,AuditId="audit-1",Capability="method_invocation" }));
+		var mutation=ProtocolJson.ParseObject(ProtocolJson.Serialize(new MutationResult { Completed=true,AuditId="audit-1",Capability="method_invocation" }));
 		Assert.True((bool?)mutation["causes_side_effects"]);
 		Assert.Equal("audit-1",(string?)mutation["audit_id"]);
-		var memory=JObject.Parse(JsonConvert.SerializeObject(new MemoryResult { Address=16,Length=2,DataBase64="AAE=" }));
+		var memory=ProtocolJson.ParseObject(ProtocolJson.Serialize(new MemoryResult { Address=16,Length=2,DataBase64="AAE=" }));
 		Assert.Equal("memory_access",(string?)memory["capability"]);
 		Assert.Equal("AAE=",(string?)memory["data_base64"]);
 	}
 
 	[Fact]
 	public void A_step_result_round_trips_with_snake_case_wire_names() {
-		var step = JObject.Parse(JsonConvert.SerializeObject(new StepResult {
+		var step = ProtocolJson.ParseObject(ProtocolJson.Serialize(new StepResult {
 			SessionId = "s", ThreadId = "100:200", StepKind = StepKinds.Over, CursorEventId = 42, Completed = false,
 		}));
 
@@ -356,7 +356,7 @@ public class CapabilityContractTests {
 		Assert.All(mutating,name=>Assert.True(CapabilityCatalog.Operations.Single(o=>o.Operation==name).MutatesSession,name));
 		Assert.All(readOnly,name=>Assert.False(CapabilityCatalog.Operations.Single(o=>o.Operation==name).MutatesSession,name));
 		Assert.All(mutating.Concat(readOnly),name=>Assert.True(CapabilityCatalog.BoundMs(name)>0,name));
-		var capabilities=JObject.FromObject(CapabilityCatalog.Describe("0.1.0"));
+		var capabilities=ProtocolJson.ToObject(CapabilityCatalog.Describe("0.1.0"));
 		Assert.True((bool?)capabilities["engines"]![0]!["object_ids"]);
 		Assert.Equal(16*1024*1024,(int?)capabilities["limits"]!["max_value_export_bytes"]);
 	}
@@ -364,15 +364,15 @@ public class CapabilityContractTests {
 	[Fact]
 	public void Phase8_documents_and_chunks_round_trip_without_display_parsing() {
 		var document=new BreakpointDocument { Code=new[]{new BreakpointInfo { Module="a.dll",MethodToken=0x06000001,IlOffset=2 }},Modules=new[]{new ModuleBreakpointInfo { ModuleName="Plugin*",IsLoaded=true }},ExceptionTotal=12,ExceptionTruncated=true };
-		var json=JObject.FromObject(document);
+		var json=ProtocolJson.ToObject(document);
 		Assert.Equal("dgspy.breakpoints",(string?)json["format"]);
 		Assert.Equal(0x06000001u,(uint?)json["code"]![0]!["method_token"]);
 		Assert.Equal(12,(int?)json["exception_total"]);
 		Assert.True((bool?)json["exception_truncated"]);
-		var analysis=JObject.FromObject(new AnalysisResult { ScannedMethods=1000,ScanTruncated=true,Truncated=true });
+		var analysis=ProtocolJson.ToObject(new AnalysisResult { ScannedMethods=1000,ScanTruncated=true,Truncated=true });
 		Assert.Equal(1000,(int?)analysis["scanned_methods"]);
 		Assert.True((bool?)analysis["scan_truncated"]);
-		var chunk=JObject.FromObject(new ValueExportChunk { TotalSize=4,Count=2,Sha256="abc",DataBase64="AAE=" });
+		var chunk=ProtocolJson.ToObject(new ValueExportChunk { TotalSize=4,Count=2,Sha256="abc",DataBase64="AAE=" });
 		Assert.Equal("abc",(string?)chunk["sha256"]);
 		Assert.Equal("AAE=",(string?)chunk["data_base64"]);
 	}

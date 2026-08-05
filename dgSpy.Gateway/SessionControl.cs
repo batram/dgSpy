@@ -1,5 +1,5 @@
 using dgSpy.Protocol;
-using Newtonsoft.Json.Linq;
+using System.Text.Json.Nodes;
 
 namespace dgSpy.Gateway;
 
@@ -66,7 +66,7 @@ public sealed class GatewayAuditLog {
 	internal GatewayAuditLog(string path,long maxBytes) { this.path=path; this.maxBytes=maxBytes; }
 	public void Write(string auditId,string clientId,string? hostId,string? sessionId,string operation,long? expectedVersion,string outcome,string? errorCode) {
 		var record=new { timestamp_utc=DateTime.UtcNow.ToString("O"),audit_id=auditId,controller_id=clientId,host_id=hostId,session_id=sessionId,operation,expected_state_version=expectedVersion,outcome,error_code=errorCode };
-		var line=System.Text.Json.JsonSerializer.Serialize(record)+Environment.NewLine;
+		var line=ProtocolJson.Serialize(record)+Environment.NewLine;
 		try { lock(sync) { Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!); if(File.Exists(path) && new FileInfo(path).Length+line.Length>maxBytes) { var previous=path+".1"; if(File.Exists(previous)) File.Delete(previous); File.Move(path,previous); } File.AppendAllText(path,line); } } catch { }
 	}
 }
@@ -74,7 +74,7 @@ public sealed class GatewayAuditLog {
 public sealed class GatewayToolExecutor {
 	readonly HostRouter router; readonly SessionControllers controllers; readonly GatewayAccessPolicy access; readonly GatewayAuditLog audit;
 	public GatewayToolExecutor(HostRouter router,SessionControllers controllers,GatewayAccessPolicy access,GatewayAuditLog audit) { this.router=router; this.controllers=controllers; this.access=access; this.audit=audit; }
-	public async Task<RpcResponse> ExecuteAsync(string operation,JObject arguments,string clientId,CancellationToken token) {
+	public async Task<RpcResponse> ExecuteAsync(string operation,JsonObject arguments,string clientId,CancellationToken token) {
 		var hostId=(string?)arguments["host_id"]; var sessionId=(string?)arguments["session_id"]; var expected=(long?)arguments["expected_state_version"];
 		var mutates=CapabilityCatalog.Operations.Any(item=>item.Operation==operation && item.MutatesSession); var controlMutation=operation is "claim_session" or "release_session";
 		var auditId=mutates || controlMutation ? Guid.NewGuid().ToString("N") : null;
@@ -92,8 +92,8 @@ public sealed class GatewayToolExecutor {
 					if(expected.Value!=current) throw new GatewayControlException("stale_state",$"Expected state {expected.Value}, current state is {current}.");
 				}
 			}
-			var response=await router.CallAsync(new RpcRequest { Operation=operation,Arguments=(JObject)arguments.DeepClone(),DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds(operation)) },token);
-			if(response.Error is null && (operation=="attach" || operation=="attach_endpoint" || operation=="launch")) { var started=JObject.FromObject(response.Result!); var created=(string?)started["session_id"]; if(!string.IsNullOrEmpty(created)) controllers.Claim(created,hostId,clientId); }
+			var response=await router.CallAsync(new RpcRequest { Operation=operation,Arguments=(JsonObject)arguments.DeepClone(),DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds(operation)) },token);
+			if(response.Error is null && (operation=="attach" || operation=="attach_endpoint" || operation=="launch")) { var started=ProtocolJson.ToNode(response.Result!)!.AsObject(); var created=(string?)started["session_id"]; if(!string.IsNullOrEmpty(created)) controllers.Claim(created,hostId,clientId); }
 			if(response.Error is null && !string.IsNullOrWhiteSpace(sessionId) && (operation=="detach" || operation=="terminate")) controllers.ReleaseTerminal(sessionId);
 			if(auditId is not null) audit.Write(auditId,clientId,hostId,sessionId,operation,expected,response.Error is null ? "succeeded" : "failed",response.Error?.Code);
 			return response;
@@ -101,6 +101,6 @@ public sealed class GatewayToolExecutor {
 		catch(GatewayControlException ex) { if(auditId is not null) audit.Write(auditId,clientId,hostId,sessionId,operation,expected,"rejected",ex.Code); return RpcResponse.Failure(Guid.NewGuid().ToString("N"),ex.Code,ex.Message); }
 		catch(Exception ex) { if(auditId is not null) audit.Write(auditId,clientId,hostId,sessionId,operation,expected,"failed","internal_error"); return RpcResponse.Failure(Guid.NewGuid().ToString("N"),"internal_error",ex.Message); }
 	}
-	async Task<object> GetStateAsync(JObject source,CancellationToken token) { var args=new JObject(); if(source["host_id"] is not null) args["host_id"]=source["host_id"]!.DeepClone(); args["session_id"]=source["session_id"]!.DeepClone(); var response=await router.CallAsync(new RpcRequest { Operation="get_session_state",Arguments=args,DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds("get_session_state")) },token); if(response.Error is not null) throw new GatewayControlException(response.Error.Code,response.Error.Message); return response.Result!; }
-	static long StateVersion(object state) => (long?)JObject.FromObject(state)["state_version"] ?? throw new GatewayControlException("invalid_state","Host did not report state_version.");
+	async Task<object> GetStateAsync(JsonObject source,CancellationToken token) { var args=new JsonObject(); if(source["host_id"] is not null) args["host_id"]=source["host_id"]!.DeepClone(); args["session_id"]=source["session_id"]!.DeepClone(); var response=await router.CallAsync(new RpcRequest { Operation="get_session_state",Arguments=args,DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds("get_session_state")) },token); if(response.Error is not null) throw new GatewayControlException(response.Error.Code,response.Error.Message); return response.Result!; }
+	static long StateVersion(object state) => (long?)ProtocolJson.ToNode(state)!["state_version"] ?? throw new GatewayControlException("invalid_state","Host did not report state_version.");
 }

@@ -33,7 +33,7 @@ function Invoke-DgSpyRpc {
 			authentication_token = $RpcToken
 			operation = 'ping'
 			arguments = @{}
-			deadline_utc = [DateTime]::UtcNow.AddSeconds(3)
+			deadline_utc = [DateTime]::UtcNow.AddSeconds(3).ToString('O')
 			} | ConvertTo-Json -Compress))
 		$pingResponse = $reader.ReadLine() | ConvertFrom-Json
 		if ($pingResponse.error) { throw "ping failed: $($pingResponse.error.code): $($pingResponse.error.message)" }
@@ -50,7 +50,7 @@ function Invoke-DgSpyRpc {
 			authentication_token = $RpcToken
 			operation = $OperationName
 			arguments = $OperationArguments
-			deadline_utc = [DateTime]::UtcNow.AddSeconds($DeadlineSeconds)
+			deadline_utc = [DateTime]::UtcNow.AddSeconds($DeadlineSeconds).ToString('O')
 			} | ConvertTo-Json -Compress -Depth 8))
 		$response = $reader.ReadLine() | ConvertFrom-Json
 		if ($response.error) { throw "$OperationName failed: $($response.error.code): $($response.error.message)" }

@@ -155,9 +155,9 @@ installed dnSpy instead of the build output.
 On startup, dnSpy's Output window reports the loopback endpoint. If that line is missing, the
 extension did not load. The two things that actually cause this:
 
-- **`Newtonsoft.Json.dll` is missing from the deploy directory.** dnSpy does not ship it. The
-  `LoadFrom` context probes the extension's own directory for dependencies, so it must sit beside
-  `dgSpy.Extension.x.dll`. Without it the extension is dropped silently.
+- **A `System.Text.Json` compatibility assembly is missing from the deploy directory.** The net48
+  extension loads its package-pinned JSON dependency set from beside `dgSpy.Extension.x.dll`.
+  `build-dgspy.ps1` copies that explicit set; without it the extension can be dropped silently.
 - **A stale copy of `dgSpy.Extension.x.dll` in dnSpy's bin directory.** dnSpy scans both the bin
   directory and `Extensions\*`, so a leftover copy is composed twice. `build-dgspy.ps1` removes any
   before deploying.

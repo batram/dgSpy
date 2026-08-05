@@ -1,214 +1,214 @@
 using System;
 using System.Collections.Generic;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace dgSpy.Protocol {
 	public static class ProtocolVersion { public const int Current = 2; }
 	public sealed class RpcRequest {
-		[JsonProperty("version")] public int Version { get; set; } = ProtocolVersion.Current;
-		[JsonProperty("request_id")] public string RequestId { get; set; } = Guid.NewGuid().ToString("N");
-		[JsonProperty("host_id", NullValueHandling=NullValueHandling.Ignore)] public string? HostId { get; set; }
-		[JsonProperty("authentication_token", NullValueHandling=NullValueHandling.Ignore)] public string? AuthenticationToken { get; set; }
-		[JsonProperty("operation")] public string Operation { get; set; } = "";
-		[JsonProperty("deadline_utc")] public DateTime? DeadlineUtc { get; set; }
-		[JsonProperty("arguments")] public JObject Arguments { get; set; } = new JObject();
+		[JsonPropertyName("version")] public int Version { get; set; } = ProtocolVersion.Current;
+		[JsonPropertyName("request_id")] public string RequestId { get; set; } = Guid.NewGuid().ToString("N");
+		[JsonPropertyName("host_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? HostId { get; set; }
+		[JsonPropertyName("authentication_token"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? AuthenticationToken { get; set; }
+		[JsonPropertyName("operation")] public string Operation { get; set; } = "";
+		[JsonPropertyName("deadline_utc")] public DateTime? DeadlineUtc { get; set; }
+		[JsonPropertyName("arguments")] public JsonObject Arguments { get; set; } = new JsonObject();
 	}
 	public sealed class RpcResponse {
-		[JsonProperty("version")] public int Version { get; set; } = ProtocolVersion.Current;
-		[JsonProperty("request_id")] public string RequestId { get; set; } = "";
-		[JsonProperty("result", NullValueHandling=NullValueHandling.Ignore)] public object? Result { get; set; }
-		[JsonProperty("error", NullValueHandling=NullValueHandling.Ignore)] public RpcError? Error { get; set; }
+		[JsonPropertyName("version")] public int Version { get; set; } = ProtocolVersion.Current;
+		[JsonPropertyName("request_id")] public string RequestId { get; set; } = "";
+		[JsonPropertyName("result"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public object? Result { get; set; }
+		[JsonPropertyName("error"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public RpcError? Error { get; set; }
 		public static RpcResponse Success(string id, object value) => new RpcResponse { RequestId=id, Result=value };
 		public static RpcResponse Failure(string id, string code, string message) => new RpcResponse { RequestId=id, Error=new RpcError { Code=code, Message=message } };
 	}
-	public sealed class RpcError { [JsonProperty("code")] public string Code { get; set; }="internal_error"; [JsonProperty("message")] public string Message { get; set; }=""; }
+	public sealed class RpcError { [JsonPropertyName("code")] public string Code { get; set; }="internal_error"; [JsonPropertyName("message")] public string Message { get; set; }=""; }
 	public sealed class Handshake {
-		[JsonProperty("protocol_version")] public int ProtocolVersion { get; set; }=Protocol.ProtocolVersion.Current;
-		[JsonProperty("extension_version")] public string ExtensionVersion { get; set; }="0.1.0";
-		[JsonProperty("host_id")] public string HostId { get; set; }="";
+		[JsonPropertyName("protocol_version")] public int ProtocolVersion { get; set; }=Protocol.ProtocolVersion.Current;
+		[JsonPropertyName("extension_version")] public string ExtensionVersion { get; set; }="0.1.0";
+		[JsonPropertyName("host_id")] public string HostId { get; set; }="";
 	}
 	public sealed class HostRegistration {
-		[JsonProperty("protocol_version")] public int ProtocolVersion { get; set; }=Protocol.ProtocolVersion.Current;
-		[JsonProperty("host_id")] public string HostId { get; set; }="";
+		[JsonPropertyName("protocol_version")] public int ProtocolVersion { get; set; }=Protocol.ProtocolVersion.Current;
+		[JsonPropertyName("host_id")] public string HostId { get; set; }="";
 	}
 	public sealed class ProgramInfo {
-		[JsonProperty("program_id")] public string ProgramId { get; set; }=""; [JsonProperty("pid")] public int ProcessId { get; set; }
-		[JsonProperty("executable")] public string Executable { get; set; }=""; [JsonProperty("title")] public string Title { get; set; }="";
-		[JsonProperty("architecture")] public string Architecture { get; set; }="";
+		[JsonPropertyName("program_id")] public string ProgramId { get; set; }=""; [JsonPropertyName("pid")] public int ProcessId { get; set; }
+		[JsonPropertyName("executable")] public string Executable { get; set; }=""; [JsonPropertyName("title")] public string Title { get; set; }="";
+		[JsonPropertyName("architecture")] public string Architecture { get; set; }="";
 		/// <summary>Engine discriminator, eg. "CLR v4.0.30319". RuntimeId itself has no string form —
 		/// it implements only Equals/GetHashCode — so this is composed from typed fields.</summary>
-		[JsonProperty("runtime_id")] public string RuntimeId { get; set; }="";
-		[JsonProperty("runtime_name")] public string RuntimeName { get; set; }="";
+		[JsonPropertyName("runtime_id")] public string RuntimeId { get; set; }="";
+		[JsonPropertyName("runtime_name")] public string RuntimeName { get; set; }="";
 		/// <summary>Distinguishes .NET Framework from Unity/Mono. Both share one runtime *kind* GUID,
 		/// so only this tells the engines apart.</summary>
-		[JsonProperty("runtime_guid")] public string RuntimeGuid { get; set; }="";
-		[JsonProperty("runtime_kind_guid")] public string RuntimeKindGuid { get; set; }="";
+		[JsonPropertyName("runtime_guid")] public string RuntimeGuid { get; set; }="";
+		[JsonPropertyName("runtime_kind_guid")] public string RuntimeKindGuid { get; set; }="";
 		/// <summary>dnSpy attach-provider names that can produce this entry, ready to pass back as
 		/// <c>provider_names</c>. Empty when the runtime has no known provider — an entry reached through
 		/// attach_endpoint has none, because no provider ever enumerated it.</summary>
-		[JsonProperty("attach_providers")] public string[] AttachProviders { get; set; }=Array.Empty<string>();
+		[JsonPropertyName("attach_providers")] public string[] AttachProviders { get; set; }=Array.Empty<string>();
 	}
 	public sealed class SessionSummary {
-		[JsonProperty("session_id")] public string SessionId { get; set; }=""; [JsonProperty("state")] public string State { get; set; }="";
-		[JsonProperty("program_id")] public string ProgramId { get; set; }=""; [JsonProperty("state_version")] public long StateVersion { get; set; }
-		[JsonProperty("last_event_id")] public long LastEventId { get; set; } [JsonProperty("process_ids")] public int[] ProcessIds { get; set; }=Array.Empty<int>();
-		[JsonProperty("can_detach_without_terminating")] public bool CanDetachWithoutTerminating { get; set; }
+		[JsonPropertyName("session_id")] public string SessionId { get; set; }=""; [JsonPropertyName("state")] public string State { get; set; }="";
+		[JsonPropertyName("program_id")] public string ProgramId { get; set; }=""; [JsonPropertyName("state_version")] public long StateVersion { get; set; }
+		[JsonPropertyName("last_event_id")] public long LastEventId { get; set; } [JsonPropertyName("process_ids")] public int[] ProcessIds { get; set; }=Array.Empty<int>();
+		[JsonPropertyName("can_detach_without_terminating")] public bool CanDetachWithoutTerminating { get; set; }
 	}
 	public sealed class DetachResult {
-		[JsonProperty("session_id")] public string SessionId { get; set; }=""; [JsonProperty("detached")] public bool Detached { get; set; }
-		[JsonProperty("terminated")] public bool Terminated { get; set; } [JsonProperty("state_version")] public long StateVersion { get; set; }
-		[JsonProperty("process_id", NullValueHandling=NullValueHandling.Ignore)] public int? ProcessId { get; set; }
-		[JsonProperty("session_active")] public bool SessionActive { get; set; }
+		[JsonPropertyName("session_id")] public string SessionId { get; set; }=""; [JsonPropertyName("detached")] public bool Detached { get; set; }
+		[JsonPropertyName("terminated")] public bool Terminated { get; set; } [JsonPropertyName("state_version")] public long StateVersion { get; set; }
+		[JsonPropertyName("process_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? ProcessId { get; set; }
+		[JsonPropertyName("session_active")] public bool SessionActive { get; set; }
 	}
 	public sealed class SessionState {
-		[JsonProperty("session_id")] public string SessionId { get; set; }=""; [JsonProperty("state")] public string State { get; set; }="running";
-		[JsonProperty("state_version")] public long StateVersion { get; set; } [JsonProperty("last_event_id")] public long LastEventId { get; set; }
-		[JsonProperty("process_ids")] public int[] ProcessIds { get; set; }=Array.Empty<int>();
+		[JsonPropertyName("session_id")] public string SessionId { get; set; }=""; [JsonPropertyName("state")] public string State { get; set; }="running";
+		[JsonPropertyName("state_version")] public long StateVersion { get; set; } [JsonPropertyName("last_event_id")] public long LastEventId { get; set; }
+		[JsonPropertyName("process_ids")] public int[] ProcessIds { get; set; }=Array.Empty<int>();
 		/// <summary>Why the session is <c>faulted</c>. dnSpy's own connect-failure text when it produced
 		/// one, otherwise a deadline description. Absent for every other state.</summary>
-		[JsonProperty("fault_message", NullValueHandling=NullValueHandling.Ignore)] public string? FaultMessage { get; set; }
-		[JsonProperty("exit_code", NullValueHandling=NullValueHandling.Ignore)] public int? ExitCode { get; set; }
-		[JsonProperty("terminal_reason", NullValueHandling=NullValueHandling.Ignore)] public string? TerminalReason { get; set; }
+		[JsonPropertyName("fault_message"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? FaultMessage { get; set; }
+		[JsonPropertyName("exit_code"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? ExitCode { get; set; }
+		[JsonPropertyName("terminal_reason"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? TerminalReason { get; set; }
 	}
 	public sealed class DebugEvent {
-		[JsonProperty("event_id")] public long EventId { get; set; }
-		[JsonProperty("kind")] public string Kind { get; set; }="";
-		[JsonProperty("state_version")] public long StateVersion { get; set; }
-		[JsonProperty("timestamp_utc")] public DateTime TimestampUtc { get; set; }=DateTime.UtcNow;
-		[JsonProperty("terminal")] public bool Terminal { get; set; }
-		[JsonProperty("process_id", NullValueHandling=NullValueHandling.Ignore)] public int? ProcessId { get; set; }
-		[JsonProperty("runtime_guid", NullValueHandling=NullValueHandling.Ignore)] public string? RuntimeGuid { get; set; }
-		[JsonProperty("runtime_name", NullValueHandling=NullValueHandling.Ignore)] public string? RuntimeName { get; set; }
-		[JsonProperty("thread_id", NullValueHandling=NullValueHandling.Ignore)] public string? ThreadId { get; set; }
-		[JsonProperty("breakpoint_id", NullValueHandling=NullValueHandling.Ignore)] public int? BreakpointId { get; set; }
-		[JsonProperty("module", NullValueHandling=NullValueHandling.Ignore)] public string? Module { get; set; }
-		[JsonProperty("method_token", NullValueHandling=NullValueHandling.Ignore)] public uint? MethodToken { get; set; }
-		[JsonProperty("il_offset", NullValueHandling=NullValueHandling.Ignore)] public uint? IlOffset { get; set; }
-		[JsonProperty("stop_reason", NullValueHandling=NullValueHandling.Ignore)] public string? StopReason { get; set; }
-		[JsonProperty("exception_id", NullValueHandling=NullValueHandling.Ignore)] public string? ExceptionId { get; set; }
-		[JsonProperty("exception_message", NullValueHandling=NullValueHandling.Ignore)] public string? ExceptionMessage { get; set; }
-		[JsonProperty("exception_first_chance", NullValueHandling=NullValueHandling.Ignore)] public bool? ExceptionFirstChance { get; set; }
-		[JsonProperty("exception_unhandled", NullValueHandling=NullValueHandling.Ignore)] public bool? ExceptionUnhandled { get; set; }
-		[JsonProperty("error", NullValueHandling=NullValueHandling.Ignore)] public string? Error { get; set; }
-		[JsonProperty("exit_code", NullValueHandling=NullValueHandling.Ignore)] public int? ExitCode { get; set; }
-		[JsonProperty("reason", NullValueHandling=NullValueHandling.Ignore)] public string? Reason { get; set; }
+		[JsonPropertyName("event_id")] public long EventId { get; set; }
+		[JsonPropertyName("kind")] public string Kind { get; set; }="";
+		[JsonPropertyName("state_version")] public long StateVersion { get; set; }
+		[JsonPropertyName("timestamp_utc")] public DateTime TimestampUtc { get; set; }=DateTime.UtcNow;
+		[JsonPropertyName("terminal")] public bool Terminal { get; set; }
+		[JsonPropertyName("process_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? ProcessId { get; set; }
+		[JsonPropertyName("runtime_guid"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? RuntimeGuid { get; set; }
+		[JsonPropertyName("runtime_name"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? RuntimeName { get; set; }
+		[JsonPropertyName("thread_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? ThreadId { get; set; }
+		[JsonPropertyName("breakpoint_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? BreakpointId { get; set; }
+		[JsonPropertyName("module"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Module { get; set; }
+		[JsonPropertyName("method_token"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public uint? MethodToken { get; set; }
+		[JsonPropertyName("il_offset"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public uint? IlOffset { get; set; }
+		[JsonPropertyName("stop_reason"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? StopReason { get; set; }
+		[JsonPropertyName("exception_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? ExceptionId { get; set; }
+		[JsonPropertyName("exception_message"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? ExceptionMessage { get; set; }
+		[JsonPropertyName("exception_first_chance"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? ExceptionFirstChance { get; set; }
+		[JsonPropertyName("exception_unhandled"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? ExceptionUnhandled { get; set; }
+		[JsonPropertyName("error"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Error { get; set; }
+		[JsonPropertyName("exit_code"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? ExitCode { get; set; }
+		[JsonPropertyName("reason"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Reason { get; set; }
 	}
 	public class EventResult {
-		[JsonProperty("events")] public DebugEvent[] Events { get; set; }=Array.Empty<DebugEvent>();
-		[JsonProperty("oldest_event_id")] public long OldestEventId { get; set; }
-		[JsonProperty("oldest_available_cursor")] public long OldestAvailableCursor { get; set; }
-		[JsonProperty("last_event_id")] public long LastEventId { get; set; }
-		[JsonProperty("truncated")] public bool Truncated { get; set; }
+		[JsonPropertyName("events")] public DebugEvent[] Events { get; set; }=Array.Empty<DebugEvent>();
+		[JsonPropertyName("oldest_event_id")] public long OldestEventId { get; set; }
+		[JsonPropertyName("oldest_available_cursor")] public long OldestAvailableCursor { get; set; }
+		[JsonPropertyName("last_event_id")] public long LastEventId { get; set; }
+		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
 	}
-	public sealed class WaitResult : EventResult { [JsonProperty("timed_out")] public bool TimedOut { get; set; } }
+	public sealed class WaitResult : EventResult { [JsonPropertyName("timed_out")] public bool TimedOut { get; set; } }
 	public sealed class ThreadInfo {
-		[JsonProperty("thread_id")] public string ThreadId { get; set; }="";
-		[JsonProperty("process_id")] public int ProcessId { get; set; }
-		[JsonProperty("os_thread_id")] public ulong OsThreadId { get; set; }
-		[JsonProperty("managed_thread_id", NullValueHandling=NullValueHandling.Ignore)] public ulong? ManagedThreadId { get; set; }
-		[JsonProperty("name")] public string Name { get; set; }="";
-		[JsonProperty("kind")] public string Kind { get; set; }="";
-		[JsonProperty("is_main")] public bool IsMain { get; set; }
-		[JsonProperty("is_current")] public bool IsCurrent { get; set; }
+		[JsonPropertyName("thread_id")] public string ThreadId { get; set; }="";
+		[JsonPropertyName("process_id")] public int ProcessId { get; set; }
+		[JsonPropertyName("os_thread_id")] public ulong OsThreadId { get; set; }
+		[JsonPropertyName("managed_thread_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public ulong? ManagedThreadId { get; set; }
+		[JsonPropertyName("name")] public string Name { get; set; }="";
+		[JsonPropertyName("kind")] public string Kind { get; set; }="";
+		[JsonPropertyName("is_main")] public bool IsMain { get; set; }
+		[JsonPropertyName("is_current")] public bool IsCurrent { get; set; }
 		/// <summary>Present only when frame availability is already known. list_threads deliberately does
 		/// not probe every thread: a Unity thread can exit during GET_FRAME_INFO and older Mono runtimes
 		/// can omit the reply. Select a thread with get_callstack to discover its frames safely.</summary>
-		[JsonProperty("has_managed_frames", NullValueHandling=NullValueHandling.Ignore)] public bool? HasManagedFrames { get; set; }
-		[JsonProperty("suspended_count")] public int SuspendedCount { get; set; }
-		[JsonProperty("states")] public string[] States { get; set; }=Array.Empty<string>();
+		[JsonPropertyName("has_managed_frames"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? HasManagedFrames { get; set; }
+		[JsonPropertyName("suspended_count")] public int SuspendedCount { get; set; }
+		[JsonPropertyName("states")] public string[] States { get; set; }=Array.Empty<string>();
 	}
 	public sealed class FrameInfo {
-		[JsonProperty("frame_id")] public string FrameId { get; set; }="";
-		[JsonProperty("thread_id")] public string ThreadId { get; set; }="";
-		[JsonProperty("frame_index")] public int FrameIndex { get; set; }
+		[JsonPropertyName("frame_id")] public string FrameId { get; set; }="";
+		[JsonPropertyName("thread_id")] public string ThreadId { get; set; }="";
+		[JsonPropertyName("frame_index")] public int FrameIndex { get; set; }
 		/// <summary>Formatted frame, eg. "Milestone1Target.Program.Tick(int)". Display only.</summary>
-		[JsonProperty("name")] public string Name { get; set; }="";
+		[JsonPropertyName("name")] public string Name { get; set; }="";
 		/// <summary>Module filename. Together with method_token and il_offset this is the durable
 		/// identity: pass these three straight to set_il_breakpoint.</summary>
-		[JsonProperty("module")] public string Module { get; set; }="";
-		[JsonProperty("module_name")] public string ModuleName { get; set; }="";
-		[JsonProperty("method_token")] public uint MethodToken { get; set; }
-		[JsonProperty("il_offset")] public uint IlOffset { get; set; }
+		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("module_name")] public string ModuleName { get; set; }="";
+		[JsonPropertyName("method_token")] public uint MethodToken { get; set; }
+		[JsonPropertyName("il_offset")] public uint IlOffset { get; set; }
 		/// <summary>Locals that have a raw scalar. Objects are omitted; ask for <c>include: ["locals"]</c>
 		/// on <c>get_frame</c> to get everything, or <c>get_members</c> to expand one.</summary>
-		[JsonProperty("locals")] public IReadOnlyList<PrimitiveValue> Locals { get; set; }=Array.Empty<PrimitiveValue>();
+		[JsonPropertyName("locals")] public IReadOnlyList<PrimitiveValue> Locals { get; set; }=Array.Empty<PrimitiveValue>();
 		/// <summary>Populated only when <c>get_frame</c> is called with <c>include</c>. Unlike
 		/// <see cref="Locals"/> this holds every requested value, objects included.</summary>
-		[JsonProperty("values", NullValueHandling=NullValueHandling.Ignore)] public EvaluatedValue[]? Values { get; set; }
+		[JsonPropertyName("values"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public EvaluatedValue[]? Values { get; set; }
 	}
-	public sealed class PrimitiveValue { [JsonProperty("name")] public string Name { get; set; }=""; [JsonProperty("type")] public string Type { get; set; }=""; [JsonProperty("value")] public object? Value { get; set; } }
+	public sealed class PrimitiveValue { [JsonPropertyName("name")] public string Name { get; set; }=""; [JsonPropertyName("type")] public string Type { get; set; }=""; [JsonPropertyName("value")] public object? Value { get; set; } }
 	public sealed class BreakpointInfo {
-		[JsonProperty("breakpoint_id")] public int BreakpointId { get; set; }
-		[JsonProperty("module")] public string Module { get; set; }=""; [JsonProperty("method_token")] public uint MethodToken { get; set; }
-		[JsonProperty("il_offset")] public uint IlOffset { get; set; }
+		[JsonPropertyName("breakpoint_id")] public int BreakpointId { get; set; }
+		[JsonPropertyName("module")] public string Module { get; set; }=""; [JsonPropertyName("method_token")] public uint MethodToken { get; set; }
+		[JsonPropertyName("il_offset")] public uint IlOffset { get; set; }
 		/// <summary>The offset the caller asked for. Differs from <see cref="IlOffset"/> only when
 		/// <see cref="Snapped"/> is true.</summary>
-		[JsonProperty("requested_il_offset")] public uint RequestedIlOffset { get; set; }
+		[JsonPropertyName("requested_il_offset")] public uint RequestedIlOffset { get; set; }
 		/// <summary>True when the breakpoint moved to a different offset because the engine refused the
 		/// requested one. The breakpoint will stop somewhere other than where it was asked to.</summary>
-		[JsonProperty("snapped")] public bool Snapped { get; set; }
-		[JsonProperty("enabled")] public bool Enabled { get; set; }
+		[JsonPropertyName("snapped")] public bool Snapped { get; set; }
+		[JsonPropertyName("enabled")] public bool Enabled { get; set; }
 		/// <summary>True only when the engine actually created the breakpoint. False with
 		/// <c>severity: "error"</c> means it will never be hit — on Mono, usually because the offset is
 		/// not a sequence point. False with no error means it is pending, eg. the module is not loaded.</summary>
-		[JsonProperty("bound")] public bool Bound { get; set; }
-		[JsonProperty("bound_count")] public int BoundCount { get; set; }
+		[JsonPropertyName("bound")] public bool Bound { get; set; }
+		[JsonPropertyName("bound_count")] public int BoundCount { get; set; }
 		/// <summary><c>none</c>, <c>warning</c> or <c>error</c>.</summary>
-		[JsonProperty("severity")] public string Severity { get; set; }="none";
-		[JsonProperty("message", NullValueHandling=NullValueHandling.Ignore)] public string? Message { get; set; }
-		[JsonProperty("warning", NullValueHandling=NullValueHandling.Ignore)] public string? Warning { get; set; }
-		[JsonProperty("session_id", NullValueHandling=NullValueHandling.Ignore)] public string? SessionId { get; set; }
+		[JsonPropertyName("severity")] public string Severity { get; set; }="none";
+		[JsonPropertyName("message"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Message { get; set; }
+		[JsonPropertyName("warning"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Warning { get; set; }
+		[JsonPropertyName("session_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? SessionId { get; set; }
 		/// <summary>Event cursor taken immediately before the breakpoint existed. Pass this as
 		/// <c>after_event_id</c> to <c>wait_for_stop</c>. A cursor read after setting a breakpoint on a
 		/// hot method has already missed the first hit, and the wait then times out on a breakpoint that
 		/// is working perfectly. Only <c>set_il_breakpoint</c> returns it: for a breakpoint that already
 		/// existed there is no meaningful "just before", and emitting 0 would invite a caller to replay
 		/// the whole event log.</summary>
-		[JsonProperty("cursor_event_id", NullValueHandling=NullValueHandling.Ignore)] public long? CursorEventId { get; set; }
-		[JsonProperty("state_version")] public long StateVersion { get; set; }
+		[JsonPropertyName("cursor_event_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public long? CursorEventId { get; set; }
+		[JsonPropertyName("state_version")] public long StateVersion { get; set; }
 		/// <summary>Condition expression, evaluated in the target when the breakpoint is reached. Absent
 		/// when the breakpoint is unconditional.</summary>
-		[JsonProperty("condition", NullValueHandling=NullValueHandling.Ignore)] public string? Condition { get; set; }
+		[JsonPropertyName("condition"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Condition { get; set; }
 		/// <summary><c>is_true</c> or <c>when_changed</c>. See <c>BreakpointConditionKinds</c>.</summary>
-		[JsonProperty("condition_kind", NullValueHandling=NullValueHandling.Ignore)] public string? ConditionKind { get; set; }
-		[JsonProperty("hit_count", NullValueHandling=NullValueHandling.Ignore)] public int? HitCount { get; set; }
+		[JsonPropertyName("condition_kind"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? ConditionKind { get; set; }
+		[JsonPropertyName("hit_count"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? HitCount { get; set; }
 		/// <summary><c>equals</c>, <c>multiple_of</c> or <c>at_least</c>. See <c>HitCountKinds</c>.</summary>
-		[JsonProperty("hit_count_kind", NullValueHandling=NullValueHandling.Ignore)] public string? HitCountKind { get; set; }
+		[JsonPropertyName("hit_count_kind"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? HitCountKind { get; set; }
 		/// <summary>Trace message printed when the breakpoint is reached.</summary>
-		[JsonProperty("trace_message", NullValueHandling=NullValueHandling.Ignore)] public string? TraceMessage { get; set; }
+		[JsonPropertyName("trace_message"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? TraceMessage { get; set; }
 		/// <summary>True when a tracepoint prints and keeps running instead of stopping. A tracepoint that
 		/// does not stop produces no <c>stopped</c> event, so <c>wait_for_stop</c> will never see it.</summary>
-		[JsonProperty("trace_continue", NullValueHandling=NullValueHandling.Ignore)] public bool? TraceContinue { get; set; }
+		[JsonPropertyName("trace_continue"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? TraceContinue { get; set; }
 	}
 	/// <summary>Result of a step request. The step itself completes asynchronously: the stop arrives on
 	/// the event stream, exactly like a breakpoint hit.</summary>
 	public sealed class StepResult {
-		[JsonProperty("session_id")] public string SessionId { get; set; }="";
-		[JsonProperty("thread_id")] public string ThreadId { get; set; }="";
+		[JsonPropertyName("session_id")] public string SessionId { get; set; }="";
+		[JsonPropertyName("thread_id")] public string ThreadId { get; set; }="";
 		/// <summary><c>into</c>, <c>over</c> or <c>out</c>.</summary>
-		[JsonProperty("step_kind")] public string StepKind { get; set; }="";
+		[JsonPropertyName("step_kind")] public string StepKind { get; set; }="";
 		/// <summary>Event cursor taken before the step was issued, for the same reason
 		/// <c>set_il_breakpoint</c> returns one: a short step completes before a follow-up state read
 		/// returns, and a cursor taken afterwards has already missed the stop.</summary>
-		[JsonProperty("cursor_event_id")] public long CursorEventId { get; set; }
+		[JsonPropertyName("cursor_event_id")] public long CursorEventId { get; set; }
 		/// <summary>True when the step completed before this call returned. False is not a failure — wait
 		/// for the <c>stopped</c> event with <c>stop_reason: "step"</c> from <c>cursor_event_id</c>.</summary>
-		[JsonProperty("completed")] public bool Completed { get; set; }
+		[JsonPropertyName("completed")] public bool Completed { get; set; }
 		/// <summary>The engine's own reason when the step failed, eg. stepping out of the outermost frame.</summary>
-		[JsonProperty("error", NullValueHandling=NullValueHandling.Ignore)] public string? Error { get; set; }
-		[JsonProperty("state_version")] public long StateVersion { get; set; }
+		[JsonPropertyName("error"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Error { get; set; }
+		[JsonPropertyName("state_version")] public long StateVersion { get; set; }
 	}
 	/// <summary>One exception category's stop settings.</summary>
 	public sealed class ExceptionBreakpointInfo {
 		/// <summary>dnSpy's exception category, eg. <c>DotNet</c>.</summary>
-		[JsonProperty("category")] public string Category { get; set; }="";
+		[JsonPropertyName("category")] public string Category { get; set; }="";
 		/// <summary>Fully qualified exception type name, or absent for the category's default setting
 		/// that governs every exception it does not name.</summary>
-		[JsonProperty("name", NullValueHandling=NullValueHandling.Ignore)] public string? Name { get; set; }
-		[JsonProperty("stop_first_chance")] public bool StopFirstChance { get; set; }
-		[JsonProperty("stop_second_chance")] public bool StopSecondChance { get; set; }
-		[JsonProperty("state_version")] public long StateVersion { get; set; }
+		[JsonPropertyName("name"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Name { get; set; }
+		[JsonPropertyName("stop_first_chance")] public bool StopFirstChance { get; set; }
+		[JsonPropertyName("stop_second_chance")] public bool StopSecondChance { get; set; }
+		[JsonPropertyName("state_version")] public long StateVersion { get; set; }
 	}
 	/// <summary>One evaluated expression, member, or watch. Raw value and display text are separate
 	/// fields on purpose: an agent that needs to compare or compute wants the scalar, one that needs to
@@ -218,210 +218,210 @@ namespace dgSpy.Protocol {
 		/// <summary>Expression that produces this value again, including for a member reached by
 		/// expansion. This is what makes depth the caller's to control: pass a member's expression back
 		/// to get_members to go one level deeper.</summary>
-		[JsonProperty("expression")] public string Expression { get; set; }="";
-		[JsonProperty("name")] public string Name { get; set; }="";
-		[JsonProperty("type")] public string Type { get; set; }="";
+		[JsonPropertyName("expression")] public string Expression { get; set; }="";
+		[JsonPropertyName("name")] public string Name { get; set; }="";
+		[JsonPropertyName("type")] public string Type { get; set; }="";
 		/// <summary>dnSpy's formatted text, eg. <c>{Milestone1Target.Program}</c>. Display only.</summary>
-		[JsonProperty("display")] public string Display { get; set; }="";
+		[JsonPropertyName("display")] public string Display { get; set; }="";
 		/// <summary>The raw scalar when there is one. Absent for objects and for values the runtime
 		/// cannot supply.</summary>
-		[JsonProperty("value", NullValueHandling=NullValueHandling.Ignore)] public object? Value { get; set; }
+		[JsonPropertyName("value"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public object? Value { get; set; }
 		/// <summary>Distinguishes a value of <c>null</c> from no value at all. A null reference has a raw
 		/// value of null and <c>has_raw_value: true</c>; an optimized-away or unavailable local has
 		/// <c>has_raw_value: false</c> and usually an <c>error</c> saying which.</summary>
-		[JsonProperty("has_raw_value")] public bool HasRawValue { get; set; }
-		[JsonProperty("error", NullValueHandling=NullValueHandling.Ignore)] public string? Error { get; set; }
-		[JsonProperty("read_only")] public bool ReadOnly { get; set; }
+		[JsonPropertyName("has_raw_value")] public bool HasRawValue { get; set; }
+		[JsonPropertyName("error"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Error { get; set; }
+		[JsonPropertyName("read_only")] public bool ReadOnly { get; set; }
 		/// <summary>True when reading this value ran target code, eg. a property getter.</summary>
-		[JsonProperty("causes_side_effects")] public bool CausesSideEffects { get; set; }
+		[JsonPropertyName("causes_side_effects")] public bool CausesSideEffects { get; set; }
 		/// <summary>Null when dnSpy does not know without evaluating.</summary>
-		[JsonProperty("has_children", NullValueHandling=NullValueHandling.Ignore)] public bool? HasChildren { get; set; }
+		[JsonPropertyName("has_children"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? HasChildren { get; set; }
 	}
 	/// <summary>One level of an object's members, paged. Expansion is never recursive: a cyclic object
 	/// graph would be unbounded, and the caller cannot cancel a walk it did not ask for.</summary>
 	public sealed class MemberList {
-		[JsonProperty("expression")] public string Expression { get; set; }="";
-		[JsonProperty("members")] public EvaluatedValue[] Members { get; set; }=Array.Empty<EvaluatedValue>();
-		[JsonProperty("total")] public long Total { get; set; }
-		[JsonProperty("offset")] public int Offset { get; set; }
-		[JsonProperty("truncated")] public bool Truncated { get; set; }
-		[JsonProperty("session_id", NullValueHandling=NullValueHandling.Ignore)] public string? SessionId { get; set; }
-		[JsonProperty("state_version")] public long StateVersion { get; set; }
+		[JsonPropertyName("expression")] public string Expression { get; set; }="";
+		[JsonPropertyName("members")] public EvaluatedValue[] Members { get; set; }=Array.Empty<EvaluatedValue>();
+		[JsonPropertyName("total")] public long Total { get; set; }
+		[JsonPropertyName("offset")] public int Offset { get; set; }
+		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
+		[JsonPropertyName("session_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? SessionId { get; set; }
+		[JsonPropertyName("state_version")] public long StateVersion { get; set; }
 	}
 	public sealed class AssignmentResult {
-		[JsonProperty("expression")] public string Expression { get; set; }="";
-		[JsonProperty("assigned")] public bool Assigned { get; set; }
+		[JsonPropertyName("expression")] public string Expression { get; set; }="";
+		[JsonPropertyName("assigned")] public bool Assigned { get; set; }
 		/// <summary>The value read back after a successful assignment.</summary>
-		[JsonProperty("value", NullValueHandling=NullValueHandling.Ignore)] public EvaluatedValue? Value { get; set; }
-		[JsonProperty("error", NullValueHandling=NullValueHandling.Ignore)] public string? Error { get; set; }
+		[JsonPropertyName("value"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public EvaluatedValue? Value { get; set; }
+		[JsonPropertyName("error"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Error { get; set; }
 		/// <summary>True when the expression did not compile, which means no target code ran. False with
 		/// an error means the target may already have been touched.</summary>
-		[JsonProperty("compiler_error", NullValueHandling=NullValueHandling.Ignore)] public bool? CompilerError { get; set; }
-		[JsonProperty("session_id", NullValueHandling=NullValueHandling.Ignore)] public string? SessionId { get; set; }
-		[JsonProperty("state_version")] public long StateVersion { get; set; }
+		[JsonPropertyName("compiler_error"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? CompilerError { get; set; }
+		[JsonPropertyName("session_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? SessionId { get; set; }
+		[JsonPropertyName("state_version")] public long StateVersion { get; set; }
 	}
 	public sealed class MemoryResult {
-		[JsonProperty("address")] public ulong Address { get; set; }
-		[JsonProperty("length")] public int Length { get; set; }
-		[JsonProperty("data_base64", NullValueHandling=NullValueHandling.Ignore)] public string? DataBase64 { get; set; }
-		[JsonProperty("written")] public bool Written { get; set; }
-		[JsonProperty("causes_side_effects")] public bool CausesSideEffects { get; set; }
-		[JsonProperty("capability")] public string Capability { get; set; }="memory_access";
+		[JsonPropertyName("address")] public ulong Address { get; set; }
+		[JsonPropertyName("length")] public int Length { get; set; }
+		[JsonPropertyName("data_base64"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? DataBase64 { get; set; }
+		[JsonPropertyName("written")] public bool Written { get; set; }
+		[JsonPropertyName("causes_side_effects")] public bool CausesSideEffects { get; set; }
+		[JsonPropertyName("capability")] public string Capability { get; set; }="memory_access";
 	}
 	public sealed class MutationResult {
-		[JsonProperty("completed")] public bool Completed { get; set; }
-		[JsonProperty("causes_side_effects")] public bool CausesSideEffects { get; set; }=true;
-		[JsonProperty("audit_id")] public string AuditId { get; set; }="";
-		[JsonProperty("value", NullValueHandling=NullValueHandling.Ignore)] public EvaluatedValue? Value { get; set; }
-		[JsonProperty("error", NullValueHandling=NullValueHandling.Ignore)] public string? Error { get; set; }
-		[JsonProperty("capability")] public string Capability { get; set; }="";
+		[JsonPropertyName("completed")] public bool Completed { get; set; }
+		[JsonPropertyName("causes_side_effects")] public bool CausesSideEffects { get; set; }=true;
+		[JsonPropertyName("audit_id")] public string AuditId { get; set; }="";
+		[JsonPropertyName("value"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public EvaluatedValue? Value { get; set; }
+		[JsonPropertyName("error"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Error { get; set; }
+		[JsonPropertyName("capability")] public string Capability { get; set; }="";
 	}
 	/// <summary>A stored expression, re-evaluated on demand. Deliberately not a retained value handle:
 	/// a handle goes stale on the next resume, an expression does not.</summary>
 	public sealed class WatchInfo {
-		[JsonProperty("watch_id")] public int WatchId { get; set; }
-		[JsonProperty("expression")] public string Expression { get; set; }="";
-		[JsonProperty("value", NullValueHandling=NullValueHandling.Ignore)] public EvaluatedValue? Value { get; set; }
+		[JsonPropertyName("watch_id")] public int WatchId { get; set; }
+		[JsonPropertyName("expression")] public string Expression { get; set; }="";
+		[JsonPropertyName("value"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public EvaluatedValue? Value { get; set; }
 	}
 	public sealed class WatchRemovalResult {
-		[JsonProperty("watch_id")] public int WatchId { get; set; }
-		[JsonProperty("removed")] public bool Removed { get; set; }
+		[JsonPropertyName("watch_id")] public int WatchId { get; set; }
+		[JsonPropertyName("removed")] public bool Removed { get; set; }
 	}
 	public sealed class ModuleInfo {
-		[JsonProperty("name")] public string Name { get; set; }="";
-		[JsonProperty("filename")] public string Filename { get; set; }="";
-		[JsonProperty("process_id")] public int ProcessId { get; set; }
-		[JsonProperty("runtime_guid")] public string RuntimeGuid { get; set; }="";
-		[JsonProperty("is_dynamic")] public bool IsDynamic { get; set; }
-		[JsonProperty("is_in_memory")] public bool IsInMemory { get; set; }
-		[JsonProperty("is_optimized", NullValueHandling=NullValueHandling.Ignore)] public bool? IsOptimized { get; set; }
-		[JsonProperty("order")] public int Order { get; set; }
-		[JsonProperty("address")] public ulong Address { get; set; }
-		[JsonProperty("size")] public uint Size { get; set; }
-		[JsonProperty("version", NullValueHandling=NullValueHandling.Ignore)] public string? Version { get; set; }
+		[JsonPropertyName("name")] public string Name { get; set; }="";
+		[JsonPropertyName("filename")] public string Filename { get; set; }="";
+		[JsonPropertyName("process_id")] public int ProcessId { get; set; }
+		[JsonPropertyName("runtime_guid")] public string RuntimeGuid { get; set; }="";
+		[JsonPropertyName("is_dynamic")] public bool IsDynamic { get; set; }
+		[JsonPropertyName("is_in_memory")] public bool IsInMemory { get; set; }
+		[JsonPropertyName("is_optimized"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? IsOptimized { get; set; }
+		[JsonPropertyName("order")] public int Order { get; set; }
+		[JsonPropertyName("address")] public ulong Address { get; set; }
+		[JsonPropertyName("size")] public uint Size { get; set; }
+		[JsonPropertyName("version"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Version { get; set; }
 		/// <summary>False for a module <c>set_il_breakpoint</c> cannot address, because it takes a module
 		/// path and this module has none. Reported per module rather than left to be discovered from a
 		/// breakpoint that never binds. Phase 6 owns in-memory module identity.</summary>
-		[JsonProperty("can_set_breakpoint")] public bool CanSetBreakpoint { get; set; }
+		[JsonPropertyName("can_set_breakpoint")] public bool CanSetBreakpoint { get; set; }
 	}
 	/// <summary>A type or member, identified the way a breakpoint takes it. Display text is never the
 	/// identity: module plus token is, so a caller never has to parse a name back into one.</summary>
 	public sealed class SymbolInfo {
 		/// <summary><c>type</c>, <c>method</c>, <c>field</c>, <c>property</c> or <c>event</c>.</summary>
-		[JsonProperty("kind")] public string Kind { get; set; }="";
-		[JsonProperty("module")] public string Module { get; set; }="";
+		[JsonPropertyName("kind")] public string Kind { get; set; }="";
+		[JsonPropertyName("module")] public string Module { get; set; }="";
 		/// <summary>Metadata token. For a method this is exactly what <c>set_il_breakpoint</c> takes.</summary>
-		[JsonProperty("method_token")] public uint MethodToken { get; set; }
-		[JsonProperty("name")] public string Name { get; set; }="";
-		[JsonProperty("full_name")] public string FullName { get; set; }="";
-		[JsonProperty("declaring_type", NullValueHandling=NullValueHandling.Ignore)] public string? DeclaringType { get; set; }
-		[JsonProperty("namespace", NullValueHandling=NullValueHandling.Ignore)] public string? Namespace { get; set; }
+		[JsonPropertyName("method_token")] public uint MethodToken { get; set; }
+		[JsonPropertyName("name")] public string Name { get; set; }="";
+		[JsonPropertyName("full_name")] public string FullName { get; set; }="";
+		[JsonPropertyName("declaring_type"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? DeclaringType { get; set; }
+		[JsonPropertyName("namespace"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Namespace { get; set; }
 	}
 	public sealed class SymbolList {
-		[JsonProperty("symbols")] public SymbolInfo[] Symbols { get; set; }=Array.Empty<SymbolInfo>();
-		[JsonProperty("total")] public int Total { get; set; }
-		[JsonProperty("offset")] public int Offset { get; set; }
-		[JsonProperty("truncated")] public bool Truncated { get; set; }
+		[JsonPropertyName("symbols")] public SymbolInfo[] Symbols { get; set; }=Array.Empty<SymbolInfo>();
+		[JsonPropertyName("total")] public int Total { get; set; }
+		[JsonPropertyName("offset")] public int Offset { get; set; }
+		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
 	}
 	public sealed class DocumentInfo {
-		[JsonProperty("name")] public string Name { get; set; }="";
-		[JsonProperty("filename")] public string Filename { get; set; }="";
-		[JsonProperty("process_id")] public int ProcessId { get; set; }
-		[JsonProperty("is_dynamic")] public bool IsDynamic { get; set; }
-		[JsonProperty("is_in_memory")] public bool IsInMemory { get; set; }
+		[JsonPropertyName("name")] public string Name { get; set; }="";
+		[JsonPropertyName("filename")] public string Filename { get; set; }="";
+		[JsonPropertyName("process_id")] public int ProcessId { get; set; }
+		[JsonPropertyName("is_dynamic")] public bool IsDynamic { get; set; }
+		[JsonPropertyName("is_in_memory")] public bool IsInMemory { get; set; }
 		/// <summary>False for a module whose metadata dnSpy cannot load. Reported rather than the module
 		/// being omitted, because a silently missing module makes a type that exists look like it does not.</summary>
-		[JsonProperty("has_metadata")] public bool HasMetadata { get; set; }
-		[JsonProperty("assembly_full_name", NullValueHandling=NullValueHandling.Ignore)] public string? AssemblyFullName { get; set; }
-		[JsonProperty("type_count", NullValueHandling=NullValueHandling.Ignore)] public int? TypeCount { get; set; }
+		[JsonPropertyName("has_metadata")] public bool HasMetadata { get; set; }
+		[JsonPropertyName("assembly_full_name"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? AssemblyFullName { get; set; }
+		[JsonPropertyName("type_count"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? TypeCount { get; set; }
 	}
 	public sealed class IlInstruction {
-		[JsonProperty("offset")] public uint Offset { get; set; }
-		[JsonProperty("opcode")] public string OpCode { get; set; }="";
-		[JsonProperty("operand", NullValueHandling=NullValueHandling.Ignore)] public string? Operand { get; set; }
+		[JsonPropertyName("offset")] public uint Offset { get; set; }
+		[JsonPropertyName("opcode")] public string OpCode { get; set; }="";
+		[JsonPropertyName("operand"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Operand { get; set; }
 		/// <summary>True when a breakpoint may sit here on Mono. Mono rejects every other offset with
 		/// <c>NO_SEQ_POINT_AT_IL_OFFSET</c>, which dnSpy turns into a silently unbound breakpoint;
 		/// CorDebug accepts any offset.</summary>
-		[JsonProperty("is_sequence_point")] public bool IsSequencePoint { get; set; }
-		[JsonProperty("line", NullValueHandling=NullValueHandling.Ignore)] public int? Line { get; set; }
+		[JsonPropertyName("is_sequence_point")] public bool IsSequencePoint { get; set; }
+		[JsonPropertyName("line"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? Line { get; set; }
 	}
 	public sealed class MethodBodyInfo {
-		[JsonProperty("module")] public string Module { get; set; }="";
-		[JsonProperty("method_token")] public uint MethodToken { get; set; }
-		[JsonProperty("full_name")] public string FullName { get; set; }="";
-		[JsonProperty("declaring_type", NullValueHandling=NullValueHandling.Ignore)] public string? DeclaringType { get; set; }
-		[JsonProperty("max_stack")] public ushort MaxStack { get; set; }
-		[JsonProperty("code_size")] public uint CodeSize { get; set; }
-		[JsonProperty("local_count")] public int LocalCount { get; set; }
-		[JsonProperty("exception_handler_count")] public int ExceptionHandlerCount { get; set; }
+		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("method_token")] public uint MethodToken { get; set; }
+		[JsonPropertyName("full_name")] public string FullName { get; set; }="";
+		[JsonPropertyName("declaring_type"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? DeclaringType { get; set; }
+		[JsonPropertyName("max_stack")] public ushort MaxStack { get; set; }
+		[JsonPropertyName("code_size")] public uint CodeSize { get; set; }
+		[JsonPropertyName("local_count")] public int LocalCount { get; set; }
+		[JsonPropertyName("exception_handler_count")] public int ExceptionHandlerCount { get; set; }
 		/// <summary>False means no PDB was available — <em>not</em> that there are no legal breakpoint
 		/// offsets. Those are very different answers for a Mono caller.</summary>
-		[JsonProperty("has_sequence_points")] public bool HasSequencePoints { get; set; }
-		[JsonProperty("instructions")] public IlInstruction[] Instructions { get; set; }=Array.Empty<IlInstruction>();
+		[JsonPropertyName("has_sequence_points")] public bool HasSequencePoints { get; set; }
+		[JsonPropertyName("instructions")] public IlInstruction[] Instructions { get; set; }=Array.Empty<IlInstruction>();
 	}
 	public sealed class DecompiledCode {
-		[JsonProperty("module")] public string Module { get; set; }="";
-		[JsonProperty("name")] public string Name { get; set; }="";
-		[JsonProperty("language")] public string Language { get; set; }="";
-		[JsonProperty("code")] public string Code { get; set; }="";
+		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("name")] public string Name { get; set; }="";
+		[JsonPropertyName("language")] public string Language { get; set; }="";
+		[JsonPropertyName("code")] public string Code { get; set; }="";
 	}
 	public sealed class TextSearchHit {
-		[JsonProperty("module")] public string Module { get; set; }="";
-		[JsonProperty("type")] public string Type { get; set; }="";
-		[JsonProperty("method_token")] public uint MethodToken { get; set; }
-		[JsonProperty("method")] public string Method { get; set; }="";
-		[JsonProperty("line")] public int Line { get; set; }
-		[JsonProperty("text")] public string Text { get; set; }="";
+		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("type")] public string Type { get; set; }="";
+		[JsonPropertyName("method_token")] public uint MethodToken { get; set; }
+		[JsonPropertyName("method")] public string Method { get; set; }="";
+		[JsonPropertyName("line")] public int Line { get; set; }
+		[JsonPropertyName("text")] public string Text { get; set; }="";
 	}
 	public sealed class TextSearchResult {
-		[JsonProperty("hits")] public TextSearchHit[] Hits { get; set; }=Array.Empty<TextSearchHit>();
-		[JsonProperty("total")] public int Total { get; set; }
-		[JsonProperty("truncated")] public bool Truncated { get; set; }
-		[JsonProperty("scanned_methods")] public int ScannedMethods { get; set; }
-		[JsonProperty("scan_truncated")] public bool ScanTruncated { get; set; }
+		[JsonPropertyName("hits")] public TextSearchHit[] Hits { get; set; }=Array.Empty<TextSearchHit>();
+		[JsonPropertyName("total")] public int Total { get; set; }
+		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
+		[JsonPropertyName("scanned_methods")] public int ScannedMethods { get; set; }
+		[JsonPropertyName("scan_truncated")] public bool ScanTruncated { get; set; }
 	}
 	public sealed class MetadataInfo {
-		[JsonProperty("module")] public string Module { get; set; }="";
-		[JsonProperty("assembly_full_name", NullValueHandling=NullValueHandling.Ignore)] public string? AssemblyFullName { get; set; }
-		[JsonProperty("mvid")] public string Mvid { get; set; }="";
-		[JsonProperty("runtime_version")] public string RuntimeVersion { get; set; }="";
-		[JsonProperty("type_count")] public int TypeCount { get; set; }
-		[JsonProperty("method_count")] public int MethodCount { get; set; }
-		[JsonProperty("field_count")] public int FieldCount { get; set; }
-		[JsonProperty("assembly_reference_count")] public int AssemblyReferenceCount { get; set; }
-		[JsonProperty("table_row_counts")] public Dictionary<string,int> TableRowCounts { get; set; }=new Dictionary<string,int>();
-		[JsonProperty("token", NullValueHandling=NullValueHandling.Ignore)] public uint? Token { get; set; }
-		[JsonProperty("token_kind", NullValueHandling=NullValueHandling.Ignore)] public string? TokenKind { get; set; }
-		[JsonProperty("token_full_name", NullValueHandling=NullValueHandling.Ignore)] public string? TokenFullName { get; set; }
+		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("assembly_full_name"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? AssemblyFullName { get; set; }
+		[JsonPropertyName("mvid")] public string Mvid { get; set; }="";
+		[JsonPropertyName("runtime_version")] public string RuntimeVersion { get; set; }="";
+		[JsonPropertyName("type_count")] public int TypeCount { get; set; }
+		[JsonPropertyName("method_count")] public int MethodCount { get; set; }
+		[JsonPropertyName("field_count")] public int FieldCount { get; set; }
+		[JsonPropertyName("assembly_reference_count")] public int AssemblyReferenceCount { get; set; }
+		[JsonPropertyName("table_row_counts")] public Dictionary<string,int> TableRowCounts { get; set; }=new Dictionary<string,int>();
+		[JsonPropertyName("token"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public uint? Token { get; set; }
+		[JsonPropertyName("token_kind"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? TokenKind { get; set; }
+		[JsonPropertyName("token_full_name"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? TokenFullName { get; set; }
 	}
 	public sealed class RawModuleChunk {
-		[JsonProperty("module")] public string Module { get; set; }="";
-		[JsonProperty("offset")] public int Offset { get; set; }
-		[JsonProperty("count")] public int Count { get; set; }
-		[JsonProperty("total_size")] public int TotalSize { get; set; }
-		[JsonProperty("truncated")] public bool Truncated { get; set; }
-		[JsonProperty("sha256")] public string Sha256 { get; set; }="";
-		[JsonProperty("data_base64")] public string DataBase64 { get; set; }="";
+		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("offset")] public int Offset { get; set; }
+		[JsonPropertyName("count")] public int Count { get; set; }
+		[JsonPropertyName("total_size")] public int TotalSize { get; set; }
+		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
+		[JsonPropertyName("sha256")] public string Sha256 { get; set; }="";
+		[JsonPropertyName("data_base64")] public string DataBase64 { get; set; }="";
 	}
 	/// <summary>Bounded listing of exception stop settings. Bounded on purpose: dnSpy stops on second
 	/// chance for essentially every .NET exception it knows, so an unfiltered listing is thousands of
 	/// entries that are identical on every machine.</summary>
 	public sealed class ExceptionBreakpointList {
-		[JsonProperty("entries")] public ExceptionBreakpointInfo[] Entries { get; set; }=Array.Empty<ExceptionBreakpointInfo>();
+		[JsonPropertyName("entries")] public ExceptionBreakpointInfo[] Entries { get; set; }=Array.Empty<ExceptionBreakpointInfo>();
 		/// <summary>How many matched before <c>max_results</c> was applied.</summary>
-		[JsonProperty("total")] public int Total { get; set; }
-		[JsonProperty("truncated")] public bool Truncated { get; set; }
+		[JsonPropertyName("total")] public int Total { get; set; }
+		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
 		/// <summary>False by default. When false the listing is the set someone deliberately configured to
 		/// break on throw, rather than dnSpy's stock second-chance defaults.</summary>
-		[JsonProperty("included_second_chance")] public bool IncludedSecondChance { get; set; }
-		[JsonProperty("state_version")] public long StateVersion { get; set; }
+		[JsonPropertyName("included_second_chance")] public bool IncludedSecondChance { get; set; }
+		[JsonPropertyName("state_version")] public long StateVersion { get; set; }
 	}
 	public sealed class ClearBreakpointsResult {
-		[JsonProperty("removed")] public int Removed { get; set; } [JsonProperty("state_version")] public long StateVersion { get; set; }
+		[JsonPropertyName("removed")] public int Removed { get; set; } [JsonPropertyName("state_version")] public long StateVersion { get; set; }
 	}
 	public sealed class RemoveBreakpointResult {
-		[JsonProperty("breakpoint_id")] public int BreakpointId { get; set; }
-		[JsonProperty("removed")] public bool Removed { get; set; }
-		[JsonProperty("state_version")] public long StateVersion { get; set; }
+		[JsonPropertyName("breakpoint_id")] public int BreakpointId { get; set; }
+		[JsonPropertyName("removed")] public bool Removed { get; set; }
+		[JsonPropertyName("state_version")] public long StateVersion { get; set; }
 	}
 }
