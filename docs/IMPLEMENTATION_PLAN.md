@@ -40,48 +40,70 @@ This is the next product expansion. Do not expose the current extension RPC dire
 
 Progress:
 
-- **Complete:** stable extension `host_id`, authenticated gateway-to-extension RPC, and central-Gateway
-  registration/discovery/routing through loopback tunnel endpoints. Requests fail closed on missing or
-  invalid credentials, ambiguous/unknown hosts, mismatched identity, and non-loopback registry addresses.
+- **Complete:** stable extension `host_id`, authenticated local gateway-to-extension RPC, and
+  Gateway-local host selection. Requests fail closed on missing or invalid credentials,
+  ambiguous/unknown hosts, and mismatched identity.
 - **Complete:** self-contained x64 remote-host packing with bundle-local launcher state and a deterministic
   SHA-256 manifest.
-- **Open:** clean-host and live SSH-tunnel acceptance, MCP client identity, leases,
-  permissions, disconnect policy, audit records, client-to-Gateway HTTPS, and any direct encrypted
-  listener.
+- **Next:** extension-initiated Gateway registration using centrally provisioned deploy ZIPs, followed by
+  pinned self-signed mutual TLS on that connection.
+- **Open:** clean-host acceptance, MCP client identity, leases, permissions, disconnect policy, audit
+  records, and encrypted client-to-Gateway transport.
 
-1. **Complete.** Produce a self-contained x64 remote debugger-host bundle built on the central development machine:
-   dnSpyEx, a compatible dgSpy extension target, protocol/runtime dependencies, and a process-scoped
-   launcher. A remote Windows host must not need Git, an SDK, Visual Studio/MSBuild, a separately
-   installed .NET runtime, a VC++ redistributable installer, or a local Gateway. Include any required
-   managed and native runtime files in the bundle and publish a deterministic manifest with hashes.
-2. **Partial.** A file-deployed bundle on Windows Server 2019 proved manifest-valid extraction, MEF
+1. Add minimal outbound remote registration. The central machine produces a per-host ZIP containing a
+   stable `host_id`, strong shared credential, Gateway endpoint, self-contained dnSpy host, extension,
+   launcher, and deterministic manifest. After extract-and-run, the extension opens one persistent
+   outbound connection, authenticates and registers its expected identity, receives routed RPC requests
+   on that connection, reconnects with bounded backoff, and never exposes an inbound remote debugger
+   listener. The Gateway keeps MCP on loopback, rejects unknown/duplicate/mismatched hosts, and reports
+   connection state through `list_hosts`. Prove one and multiple packaged hosts, disconnect/reconnect
+   with preserved dnSpy session state and event cursors, and removal by deleting the extracted package.
+2. Add minimal mutual TLS to the outbound host connection. Generate one self-signed Gateway server
+   certificate and one unique self-signed client certificate per package on the central machine. Load
+   certificate files directly without modifying OS trust stores; the remote pins the exact Gateway
+   certificate and the Gateway pins each client certificate to its configured `host_id`. Require TLS 1.2
+   or later, reject every unpinned certificate or identity mismatch, and prove certificate replacement
+   and revocation by explicit pin updates. Keep MCP authentication and transport independent.
+3. **Complete.** Produce a self-contained x64 remote debugger-host bundle built on the central development
+   machine: dnSpyEx, a compatible dgSpy extension target, protocol/runtime dependencies, and a
+   process-scoped launcher. A remote Windows host must not need Git, an SDK, Visual Studio/MSBuild, a
+   separately installed .NET runtime, a VC++ redistributable installer, or a local Gateway. Include any
+   required managed and native runtime files in the bundle and publish a deterministic manifest with hashes.
+4. **Partial.** A file-deployed bundle on Windows Server 2019 proved manifest-valid extraction, MEF
    composition, authenticated port 7351 startup, identity persistence across host launches,
    attach/pause/inspect/resume/safe-detach against an x64 .NET Framework worker, and target/host liveness
-   after detach. Finish on a genuinely clean supported Windows Server host with an explicit prerequisite
+   after detach. Finish on a genuinely clean supported Windows host with an explicit prerequisite
    inventory, then prove restart and complete removal leave no machine-wide configuration behind.
-3. Verify multi-host registration, discovery, and routing over live SSH tunnels.
-4. **Complete.** Retain authenticated extension RPC and loopback binding as the default endpoint boundary.
 5. Complete MCP Streamable HTTP session behavior required by strict clients.
 6. Define session ownership or leases before supporting competing clients or independent sessions.
 7. Add per-client and per-target permissions for discovery, inspection, execution control, mutation,
    termination, host export, target-code execution, artifact editing, live patching, and host scripting.
 8. Define disconnect behavior that never silently resumes, detaches, or terminates a paused target.
 9. Add bounded, redacted audit records for side-effecting operations.
-10. Document SSH or WireGuard tunnels as the default remote path. Direct exposure additionally requires
-   TLS, mutual client authentication, request/rate limits, and explicit capability policies.
 
 Exit criteria:
 
 - An authenticated remote client can select a host and debug a target through the supported path.
 - A supported remote Windows host can run the published debugger bundle after file deployment alone,
   without installing development tools, frameworks, runtimes, redistributables, or the Gateway.
-- The debugger is unreachable from the VM or LAN except through that path.
+- The remote host opens no network-reachable debugger listener; only its authenticated outbound Gateway
+  connection carries remote debugger traffic. The existing loopback listener may remain for local use.
+- Gateway and host mutually authenticate with exact certificate pins without OS trust-store setup.
 - Reconnection preserves session state and event cursors when dnSpy survives.
 - Authorization tests prove an inspection-only client cannot control, mutate, terminate, export,
   execute, edit, patch, or script.
 - Ownership tests cover contention, disconnect, expiry, and recovery without implicit target control.
 
-## 2. Close compatibility and quality gaps
+## 2. Optional high-risk capabilities
+
+Target-code execution, artifact editing/project export/live patching, and dnSpy-host scripting remain
+unscheduled. Their trust boundaries, prerequisites, and exit criteria are consolidated in
+[future capabilities](FUTURE_CAPABILITIES.md).
+
+Do not implement one merely to make the tool surface broader. Start only for a concrete workflow, after
+the remote permission and audit model can represent its risk independently.
+
+## 3. Optional compatibility and quality gaps
 
 Take these as independent, fixture-led projects rather than one compatibility phase:
 
@@ -99,15 +121,6 @@ Take these as independent, fixture-led projects rather than one compatibility ph
 
 Each item needs explicit capability changes, engine-specific fixtures, bounded live checks where
 applicable, and documentation updates. None should be bundled into routine dnSpyEx synchronization.
-
-## 3. Optional high-risk capabilities
-
-Target-code execution, artifact editing/project export/live patching, and dnSpy-host scripting remain
-unscheduled. Their trust boundaries, prerequisites, and exit criteria are consolidated in
-[future capabilities](FUTURE_CAPABILITIES.md).
-
-Do not implement one merely to make the tool surface broader. Start only for a concrete workflow, after
-the remote permission and audit model can represent its risk independently.
 
 ## Documentation rule
 

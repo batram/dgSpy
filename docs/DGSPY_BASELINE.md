@@ -7,7 +7,7 @@
 | Architecture | x64 only |
 | dnSpy build | `net48` and `net10.0-windows`, Release |
 | Debug engines | .NET Framework CorDebug (`CLR v4.0.30319`, covering 4.0–4.8) and Mono/Unity (UCH) |
-| Out of scope for now | x86, CoreCLR, clean-host/SSH remote acceptance, multi-session |
+| Out of scope for now | x86, CoreCLR, outbound remote registration, clean-host remote acceptance, multi-session |
 
 ## Toolchain
 

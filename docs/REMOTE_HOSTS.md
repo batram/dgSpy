@@ -1,74 +1,112 @@
-# Central Gateway remote hosts
+# Remote hosts
 
-Build a deploy-only x64 host with `.\pack-remote-host.ps1`. The resulting archive includes the
-self-contained net10 dnSpy runtime, matching dgSpy extension, process-scoped launcher, and hash
-manifest; it deliberately excludes the Gateway. See the [build baseline](DGSPY_BASELINE.md) for bundle
-deployment and state handling.
+Remote deployment is package-based. A user receives one centrally provisioned ZIP, extracts it on the
+debugger host, and runs its launcher in an interactive Windows session. The remote does not run a local
+Gateway or MCP endpoint, and ordinary operation must not depend on an additional transport product or
+long-running setup command.
 
-The supported routing shape keeps every dgSpy extension on `127.0.0.1`. A central Gateway connects to
-remote extensions through local SSH tunnel ports and routes MCP tools by stable `host_id`.
+## Current status
 
-This currently secures the Gateway-to-extension hop. The Gateway itself still accepts only loopback MCP
-clients; client identity, leases, permissions, audit, and HTTPS remain roadmap work.
+The repository can build a self-contained x64 host ZIP containing dnSpy, the compatible dgSpy extension,
+private dependencies, a process-scoped launcher, bundle-local identity/credential state, and a sorted
+SHA-256 manifest. The delivered RPC transport is still the authenticated local connection between a
+Gateway and extension. Extension-initiated remote registration described below is the next implementation
+step, not current behavior.
 
-## Configure a debugger host
-
-Set a stable identity and RPC credential in the environment that starts dnSpy:
-
-```powershell
-$env:DGSPY_HOST_ID = 'uch-dev'
-$env:DGSPY_RPC_TOKEN = '<random per-host secret>'
-```
-
-The extension continues to listen only on `127.0.0.1:7351`.
-
-## Open the tunnel on the Gateway machine
+Build and verify the portable baseline on the central development machine:
 
 ```powershell
-ssh -N -L 127.0.0.1:7451:127.0.0.1:7351 user@debug-host
+.\pack-remote-host.ps1
+.\tests\verify-remote-host-package.ps1
 ```
 
-Use a different local port for every host. SSH supplies encryption and server authentication; configure
-normal SSH host-key verification and key-based user authentication rather than disabling either.
+## Target minimal flow
 
-## Register hosts
-
-Create a registry such as `hosts.json`. Credentials stay in environment variables or separate files;
-do not put token values directly in the registry.
-
-```json
-{
-  "hosts": [
-    {
-      "host_id": "local-dev",
-      "display_name": "Local dnSpy",
-      "address": "127.0.0.1",
-      "port": 7351,
-      "token_environment": "DGSPY_RPC_TOKEN_LOCAL"
-    },
-    {
-      "host_id": "uch-dev",
-      "display_name": "UCH debugger host",
-      "address": "127.0.0.1",
-      "port": 7451,
-      "token_environment": "DGSPY_RPC_TOKEN_UCH"
-    }
-  ]
-}
+```text
+AI agent
+    |
+    | MCP at 127.0.0.1:7350/mcp
+    v
+central dgSpy.Gateway
+    ^
+    | persistent authenticated outbound host connection
+    |
+remote dnSpy + dgSpy extension
+    |
+    v
+debug target
 ```
 
-Start the central Gateway with the registry and referenced credentials:
+Only `dgSpy.Gateway` accepts MCP. The remote extension opens the host connection, registers its
+centrally provisioned `host_id`, and carries routed RPC requests and responses on that same connection.
+The remote exposes no network-reachable debugger listener; the existing loopback listener may remain for
+local use. The Gateway keeps MCP bound to loopback and listens for remote hosts on a separately configured
+local interface and port.
+
+## Per-host provisioning
+
+The central machine creates a package for one expected remote. It generates and records the same stable
+identity and strong credential on both sides, and writes the Gateway endpoint into the package. The
+intended command shape is:
 
 ```powershell
-$env:DGSPY_HOSTS_FILE = 'C:\path\to\hosts.json'
-$env:DGSPY_RPC_TOKEN_LOCAL = '<local host secret>'
-$env:DGSPY_RPC_TOKEN_UCH = '<UCH host secret>'
-dotnet run --project .\dgSpy.Gateway\dgSpy.Gateway.csproj -c Release
+.\pack-remote-host.ps1 -HostId 'win11-clean' -GatewayAddress '192.168.250.1' -GatewayPort 7352
 ```
 
-`token_file` may replace `token_environment`; relative paths resolve beside the registry. The Gateway
-rejects non-loopback addresses, duplicate identities, missing credentials, invalid ports, unknown hosts,
-and host identities that do not match the authenticated extension handshake.
+The output contains no Gateway executable:
 
-Call `list_hosts` to inspect configured connection state. Pass `host_id` to every other tool. When exactly
-one host is registered, omitting it retains the local single-host convenience behavior.
+```text
+dgSpy-remote-host-win11-clean.zip
+|-- dnSpy.exe
+|-- bin\Extensions\dgSpy\
+|-- launcher\
+|-- remote-host.json
+|-- state\host.id
+|-- state\gateway.token
+`-- manifest.json
+```
+
+The same provisioning operation adds the expected `host_id` and credential to the central Gateway
+configuration. The remote user only extracts the ZIP and runs:
+
+```powershell
+.\launcher\Start-dgSpyRemoteHost.cmd
+```
+
+On startup, the extension connects outward, authenticates, registers, and becomes visible through
+`list_hosts`. Unknown identities, invalid credentials, duplicate live connections, protocol mismatch,
+and a certificate/identity mismatch fail closed. Disconnect uses bounded reconnect backoff and never
+implicitly resumes, detaches, or terminates a paused target.
+
+## Minimal mutual TLS
+
+After plain authenticated reverse registration works, protect that same host connection with pinned
+self-signed mutual TLS:
+
+- The central machine owns one self-signed Gateway server certificate.
+- Every remote package receives its own self-signed client certificate.
+- The package pins the exact Gateway certificate.
+- The Gateway pins each exact client certificate to one configured `host_id`.
+- Certificates load from package/configuration files; provisioning does not modify OS trust stores.
+- TLS 1.2 or later is required.
+
+The Gateway exposes two independent boundaries:
+
+```text
+127.0.0.1:7350       MCP clients
+configured-IP:7352   mutually authenticated remote hosts
+```
+
+The remote-host listener accepts only registration and the versioned host RPC transport; it never
+accepts MCP. Removing a client-certificate pin revokes that package. Replacing either certificate
+requires an explicit matching pin update.
+
+## Responsibilities
+
+- The AI agent knows only the local MCP endpoint and selects a `host_id` in tool calls.
+- The central Gateway owns MCP, expected host identities, credentials/certificate pins, active host
+  connections, and routing.
+- The remote package owns dnSpy, the extension, its provisioned identity/private credential, launcher,
+  manifest, and reconnection behavior.
+- The remote target remains under dnSpy's debugger engine. Safe detach is mandatory before closing a host
+  with an active attachment.

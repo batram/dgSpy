@@ -3,8 +3,8 @@
 ## Purpose
 
 dgSpy exposes dnSpy's debugger, decompiler, metadata, and search capabilities to AI agents through MCP,
-without automating the WPF UI. The extension owns debugger state; the gateway translates MCP requests,
-enforces the local HTTP boundary, and is the future home of remote-host routing and authorization.
+without automating the WPF UI. The extension owns debugger state; the Gateway translates MCP requests,
+enforces the local HTTP boundary, and will accept and route provisioned outbound remote-host connections.
 
 ```text
 AI agent / MCP client
@@ -41,8 +41,10 @@ dgSpy dnSpy Extension
   services, session state, handles, events, evaluation queues, and transport lifetime.
 - The extension binds RPC to `127.0.0.1` and authenticates every request with a generated or explicitly
   configured shared credential. The gateway verifies the extension's stable `host_id` during handshake.
-  The central Gateway routes registered `host_id` values only to loopback endpoints, including local
-  ports created by SSH tunnels. Client-to-Gateway encrypted transport remains roadmap work.
+  This is the delivered local transport. The next remote transport reverses that connection: a centrally
+  provisioned extension opens one persistent outbound connection and registers its expected identity with
+  the Gateway. See [remote hosts](REMOTE_HOSTS.md). Client-to-Gateway encrypted transport remains roadmap
+  work.
 
 Keep tool families in focused `RpcHost.<Family>.cs` partials under `Debugger/`, `Decompiler/`,
 `Evaluation/`, `Events/`, `Handles/`, or `Identity/`. Keep shared dnSpy objects and shutdown ownership in
@@ -51,9 +53,10 @@ project can exercise it.
 
 ## State and identity model
 
-A host identity represents one reachable extension endpoint. The central Gateway registry maps each
-identity to an authenticated loopback endpoint and rejects ambiguous or unknown selection. A session
-represents one logical attachment or launch and reports `attaching`,
+A host identity represents one trusted extension instance. The delivered local registry maps each
+identity to an authenticated endpoint. The planned remote registry maps a provisioned identity to its
+authenticated live outbound connection. Both reject ambiguous, unknown, duplicate, or mismatched
+selection. A session represents one logical attachment or launch and reports `attaching`,
 `running`, `paused`, `mixed`, `detaching`, `exited`, or `faulted`, plus a monotonic `state_version` and
 event cursor.
 
@@ -82,9 +85,11 @@ The delivered local boundary therefore requires loopback listeners, gateway `Ori
 local shared secret. It does not claim that loopback alone is authentication or that function evaluation
 is sandboxed.
 
-Before remote or multi-client use, add client identity, encrypted client-to-Gateway transport,
-per-client/per-target permissions, request and response limits, side-effect audit records,
-and defined disconnect behavior. Keep inspect, execution control, mutation, termination, host export,
+Remote host transport will use centrally provisioned packages and pinned self-signed mutual TLS: the
+remote pins the Gateway certificate, and the Gateway pins one client certificate to each `host_id`, with
+no OS trust-store changes. Before multi-client use, add client identity, encrypted client-to-Gateway
+transport, per-client/per-target permissions, request and response limits, side-effect audit records, and
+defined disconnect behavior. Keep inspect, execution control, mutation, termination, host export,
 target-code execution, artifact editing, live patching, and dnSpy-host scripting as separate permissions.
 
 ## Verification rule

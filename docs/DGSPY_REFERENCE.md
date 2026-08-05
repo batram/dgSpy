@@ -23,7 +23,7 @@ dotnet run --project .\dgSpy.Gateway\dgSpy.Gateway.csproj -c Release
 The MCP endpoint is `http://127.0.0.1:7350/mcp`; `GET /health` is unauthenticated for process checks.
 `DGSPY_URL` overrides the address.
 
-For central-Gateway host registration and SSH tunnel setup, see
+For packaged-host status and the planned extension-initiated Gateway registration flow, see
 [remote hosts](REMOTE_HOSTS.md).
 
 ## Authentication
