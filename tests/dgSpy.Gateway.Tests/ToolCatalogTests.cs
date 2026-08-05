@@ -12,6 +12,7 @@ namespace dgSpy.Gateway.Tests;
 /// bounds and the gateway derives deadlines from them; these tests are what keeps the two from drifting
 /// apart again.</summary>
 public sealed class ToolCatalogTests {
+	static readonly HashSet<string> GatewayOperations=new(StringComparer.Ordinal) { "list_hosts","get_session_controller","claim_session","release_session" };
 	static string Name(object tool) => (string)tool.GetType().GetProperty("name", BindingFlags.Public | BindingFlags.Instance)!.GetValue(tool)!;
 	static string Description(object tool) => (string)tool.GetType().GetProperty("description", BindingFlags.Public | BindingFlags.Instance)!.GetValue(tool)!;
 	static IReadOnlyDictionary<string,object> InputProperties(object tool) {
@@ -25,12 +26,12 @@ public sealed class ToolCatalogTests {
 	[Theory]
 	[MemberData(nameof(ToolNames))]
 	public void Every_advertised_tool_is_an_operation_the_extension_implements(string tool) =>
-		Assert.True(tool=="list_hosts" || CapabilityCatalog.IsKnownOperation(tool), $"tools/list advertises '{tool}', which is neither a Gateway operation nor in CapabilityCatalog.Operations.");
+		Assert.True(GatewayOperations.Contains(tool) || CapabilityCatalog.IsKnownOperation(tool), $"tools/list advertises '{tool}', which is neither a Gateway operation nor in CapabilityCatalog.Operations.");
 
 	[Theory]
 	[MemberData(nameof(ToolNames))]
 	public void Every_gateway_deadline_outlasts_the_extension_bound(string tool) {
-		if (tool=="list_hosts") return;
+		if (GatewayOperations.Contains(tool)) return;
 		var bound=CapabilityCatalog.BoundMs(tool);
 
 		Assert.True(ToolCatalog.DeadlineSeconds(tool)*1000 > bound, $"'{tool}' deadline {ToolCatalog.DeadlineSeconds(tool)}s does not outlast its {bound}ms bound.");

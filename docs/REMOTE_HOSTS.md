@@ -118,8 +118,8 @@ certificate requires repackaging and an explicit matching pin update.
 ## Responsibilities
 
 - The AI agent knows only the local MCP endpoint and selects a `host_id` in tool calls.
-- The central Gateway owns MCP, expected host identities, credentials/certificate pins, active host
-  connections, and routing.
+- The central Gateway owns MCP controller identity, coarse access mode, redacted audit records, expected
+  host identities, credentials/certificate pins, active host connections, and routing.
 - The remote package owns dnSpy, the extension, its provisioned identity/private credential, launcher,
   manifest, and reconnection behavior.
 - The remote target remains under dnSpy's debugger engine. Safe detach is mandatory before closing a host

@@ -6,6 +6,11 @@ using Newtonsoft.Json.Linq;
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls(builder.Configuration["DGSPY_URL"] ?? "http://127.0.0.1:7350");
 builder.Services.AddSingleton<HostRouter>();
+builder.Services.AddSingleton<McpClientSessions>();
+builder.Services.AddSingleton<SessionControllers>();
+builder.Services.AddSingleton<GatewayAccessPolicy>();
+builder.Services.AddSingleton<GatewayAuditLog>();
+builder.Services.AddSingleton<GatewayToolExecutor>();
 builder.Services.AddHostedService<RemoteHostListener>();
 var app = builder.Build();
 
@@ -25,7 +30,7 @@ app.MapGet("/health", () => Results.Json(new { status="ok", protocol_version=Pro
 // dgSpy has no server-initiated MCP messages. Streamable HTTP requires GET to exist, but explicitly
 // permits 405 when a server offers no SSE stream.
 app.MapGet("/mcp", () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed));
-app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, CancellationToken cancellationToken) => {
+app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, GatewayToolExecutor executor, McpClientSessions clients, CancellationToken cancellationToken) => {
 	var rejection = RequestGuard.Reject(http.Request.Headers.Origin, http.Request.Headers[RequestGuard.TokenHeader], token, http.Connection.RemoteIpAddress);
 	if (rejection is not null) return Results.Json(new { jsonrpc="2.0", id=(JToken?)null, error=new { code=-32600, message=rejection } }, statusCode: StatusCodes.Status403Forbidden);
 	using var reader = new StreamReader(http.Request.Body);
@@ -35,12 +40,14 @@ app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, CancellationToken c
 		var method = (string?)root["method"];
 		if (method == "initialize") {
 			var negotiated=McpProtocol.Negotiate((string?)root["params"]?["protocolVersion"]);
+			var clientId=clients.Create(); http.Response.Headers[McpClientSessions.Header]=clientId;
 			return Results.Json(new { jsonrpc="2.0", id, result=new { protocolVersion=negotiated, capabilities=new { tools=new { listChanged=false } }, serverInfo=new { name="dgSpy", version="0.1.0" } } });
 		}
 		if (!McpProtocol.IsValidRequestVersion(http.Request.Headers[McpProtocol.VersionHeader]))
 			return Results.BadRequest(new { jsonrpc="2.0", id, error=new { code=-32600, message=$"Unsupported {McpProtocol.VersionHeader}. Supported: {string.Join(", ",McpProtocol.Supported)}." } });
 		// Accepted JSON-RPC notifications have no response body and use 202 in Streamable HTTP.
 		if (id is null) return Results.Accepted();
+		var client=clients.Resolve(http.Request.Headers[McpClientSessions.Header]);
 		if (method == "tools/list") return Results.Json(new { jsonrpc="2.0", id, result=new { tools=ToolCatalog.All } });
 		if (method != "tools/call") return McpError(id, -32601, "Method not found");
 		var name=(string?)root["params"]?["name"] ?? ""; var args=(JObject?)root["params"]?["arguments"] ?? new JObject();
@@ -48,7 +55,7 @@ app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, CancellationToken c
 			var hosts=await rpc.ListHostsAsync(cancellationToken);
 			return Results.Json(new { jsonrpc="2.0",id,result=new { structuredContent=new { hosts },content=new[] { new { type="text",text=JsonConvert.SerializeObject(hosts) } } } });
 		}
-		var response=await rpc.CallAsync(new RpcRequest { Operation=name, Arguments=args, DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds(name)) }, cancellationToken);
+		var response=await executor.ExecuteAsync(name,args,client,cancellationToken);
 		if (response.Error is not null) return Results.Json(new { jsonrpc="2.0", id, result=new { isError=true, structuredContent=new { error=response.Error }, content=new[] { new { type="text", text=response.Error.Message } } } });
 		// ASP.NET uses System.Text.Json for the HTTP envelope, while the local protocol uses Newtonsoft.
 		// Passing a JValue through directly exposes its object model for UInt64 values instead of the JSON
@@ -72,7 +79,12 @@ public static class ToolCatalog {
 		var routedProperties=new Dictionary<string,object>();
 		if (routed) routedProperties["host_id"]=new { type="string",description="Registered debugger host. Optional only when exactly one host is configured." };
 		foreach (var property in properties.GetType().GetProperties()) routedProperties[property.Name]=property.GetValue(properties)!;
-		return new { name,description,inputSchema=new { type="object",properties=routedProperties,required=required ?? Array.Empty<string>() } };
+		var requiredProperties=(required ?? Array.Empty<string>()).ToList();
+		if (CapabilityCatalog.Operations.Any(item=>item.Operation==name && item.MutatesSession) && routedProperties.ContainsKey("session_id")) {
+			if(!routedProperties.ContainsKey("expected_state_version")) routedProperties["expected_state_version"]=new { type="integer",description="Required exact state_version for every session mutation." };
+			if(!requiredProperties.Contains("expected_state_version")) requiredProperties.Add("expected_state_version");
+		}
+		return new { name,description,inputSchema=new { type="object",properties=routedProperties,required=requiredProperties.ToArray() } };
 	}
 	static object EvalMutationSchema() => new { session_id=new { type="string" },expression=new { type="string",description="Complete call or new-expression." },thread_id=new { type="string" },frame_index=new { type="integer",minimum=0 },timeout_ms=new { type="integer",minimum=1,maximum=10000,description="Hard engine func-eval timeout; default 1000." } };
 	/// <summary>Margin between the extension's own bound for an operation and the gateway's deadline for
@@ -95,6 +107,9 @@ public static class ToolCatalog {
 		Tool("launch", "Launch a target through dnSpy's debugger engine. Unlike attach, dnSpy owns the process, so terminate and restart have deterministic semantics.", new { filename=new { type="string" }, engine=new { type="string", @enum=new[]{"cordebug","unity"}, description="Default cordebug." }, command_line=new { type="string" }, working_directory=new { type="string" }, break_at=new { type="string", @enum=new[]{"none","create_process","entry_point"} }, environment=new { type="object", additionalProperties=new { type="string" } }, connection_timeout_ms=new { type="integer", minimum=1, maximum=300000 } }, new[]{"filename"}),
 		Tool("get_session_state", "Get current debugger session state.", new { session_id=new { type="string" } }, new[]{"session_id"}),
 		Tool("list_sessions", "List active debugger sessions. Use this to recover a session_id.", new {}),
+		Tool("get_session_controller", "Report whether a debugger session currently has an MCP controller. Inspection never claims it or changes target state.", new { session_id=new { type="string" } },new[]{"session_id"}),
+		Tool("claim_session", "Explicitly claim an unowned or expired debugger session after caller or Gateway recovery. Never changes target state.", new { session_id=new { type="string" } },new[]{"session_id"}),
+		Tool("release_session", "Release controller ownership without resuming, detaching, terminating, or otherwise changing the target.", new { session_id=new { type="string" } },new[]{"session_id"}),
 		Tool("detach", "Detach one selected process or all targets. Fails with detach_would_terminate unless allow_terminate is explicit. If the engine does not actually remove the target within 10 seconds, returns detach_timed_out and preserves the session instead of claiming success.", new { session_id=new { type="string" },process_id=new { type="integer" }, allow_terminate=new { type="boolean", description="Stop debugging even if that terminates the selected target." } }, new[]{"session_id"}),
 		Tool("terminate", "Terminate one selected process or every active target explicitly.", new { session_id=new { type="string" },process_id=new { type="integer" } }, new[]{"session_id"}),
 		Tool("restart", "Restart a target previously launched through dgSpy. Attached targets cannot be restarted because dgSpy does not own their launch options.", new { session_id=new { type="string" } }, new[]{"session_id"}),

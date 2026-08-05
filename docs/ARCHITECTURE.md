@@ -36,7 +36,7 @@ dgSpy dnSpy Extension
 - `dgSpy.Protocol` contains DTOs and the shared capability catalog. It targets `netstandard2.0` and has no
   dnSpy or WPF dependency.
 - `dgSpy.Gateway` exposes the MCP tools, validates `Origin` and `X-dgSpy-Token`, derives deadlines from the
-  shared capability catalog, and talks to the extension over loopback TCP.
+  shared capability catalog, owns local MCP controller identity/policy/auditing, and routes to extensions.
 - `Extensions/dgSpy.Extension` is a net48 MEF extension deployed as `dgSpy.Extension.x.dll`. It owns dnSpy
   services, session state, handles, events, evaluation queues, and transport lifetime.
 - The extension binds RPC to `127.0.0.1` and authenticates every request with a generated or explicitly
@@ -63,7 +63,10 @@ event cursor.
 Programs, processes, runtimes, modules, threads, frames, values, symbols, breakpoints, and object IDs use
 typed or opaque identities. Display strings and dnSpy `RuntimeId.ToString()` are never durable identity.
 Frame/value snapshots are invalid after resume unless an engine-backed object ID explicitly provides
-persistence. Mutations may carry `expected_state_version`; ambiguity must fail without acting.
+persistence. An initialized MCP session controls a debugger session created by its `attach` or `launch`.
+Inspection is shared; every session mutation requires that controller plus the exact
+`expected_state_version`. A Gateway restart intentionally recovers debugger sessions as unowned, and
+`claim_session` is the only recovery action. Ownership changes never change target state.
 
 ## Concurrency and lifetime invariants
 
@@ -77,6 +80,8 @@ persistence. Mutations may carry `expected_state_version`; ambiguity must fail w
   Func-eval uses the engine's harder timeout where available. This limitation is advertised.
 - Breakpoints are dnSpy-global and survive detach. Closing dnSpy while attached may terminate the target;
   `detach` is the safe exit and `terminate` is always explicit.
+- MCP, Gateway, controller-expiry, and remote-host disconnects preserve the target's exact state. They
+  never imply resume, detach, terminate, or restart.
 
 ## Security and trust boundary
 
@@ -87,10 +92,11 @@ is sandboxed.
 
 Remote host transport uses centrally provisioned packages and optionally uses pinned self-signed mutual TLS: the
 remote pins the Gateway certificate, and the Gateway pins one client certificate to each `host_id`, with
-no OS trust-store changes. Before multi-client use, add client identity, encrypted client-to-Gateway
-transport, per-client/per-target permissions, request and response limits, side-effect audit records, and
-defined disconnect behavior. Keep inspect, execution control, mutation, termination, host export,
-target-code execution, artifact editing, live patching, and dnSpy-host scripting as separate permissions.
+no OS trust-store changes. The authenticated loopback MCP boundary defaults to `full-control` and may be
+started `inspect-only`; side effects are recorded in a bounded redacted local JSONL audit. Per-user and
+per-target ACLs plus encrypted client-to-Gateway transport remain deferred while MCP is loopback-only and
+all local callers share one trust level. Require those controls before remotely enabling artifact editing,
+live patching, or dnSpy-host scripting.
 
 ## Verification rule
 

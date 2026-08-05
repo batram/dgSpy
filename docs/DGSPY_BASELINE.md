@@ -125,6 +125,9 @@ acceptance with `.\tests\run-remote-registration-smoke.ps1`; add `-UseTls` to ex
 target through the outbound connection, restarts the Gateway, proves the same session and event cursor
 remain available, terminates the target, and removes the deployment.
 
+Run `.\tests\run-gateway-control-smoke.ps1` for the real HTTP boundary: MCP controller issuance,
+ownership-tool discovery, inspect-only denial, and redacted audit output.
+
 ### Do not substitute `dotnet build` for the dnSpy baseline
 
 `build.ps1` uses MSBuild because dnSpy has COM references, and that is not the only reason to leave it

@@ -50,8 +50,11 @@ Progress:
 - **Complete:** optional pinned self-signed mutual TLS on that connection, with plaintext and TLS selected
   per deployment. Windows Server 2019 live acceptance covered routed launch, routed attach to an x64
   .NET Framework worker, and session/cursor preservation across a central Gateway restart.
-- **Open:** MCP client identity, leases, permissions, disconnect policy, audit
-  records, and encrypted client-to-Gateway transport.
+- **Complete:** the trusted-local-agent control plane has MCP-session controller identity,
+  one controller per debugger session, optimistic mutation guards, explicit orphan reclaim, invariant
+  disconnect behavior, a coarse inspect-only mode, and bounded redacted local audit records.
+- **Deferred until the trust boundary changes:** per-user/per-target ACLs and encrypted
+  client-to-Gateway transport. MCP remains authenticated and loopback-only.
 
 1. **Complete.** Add minimal outbound remote registration. The central machine produces a per-host ZIP containing a
    stable `host_id`, strong shared credential, Gateway endpoint, self-contained dnSpy host, extension,
@@ -84,12 +87,22 @@ Progress:
    Gateway restart, and terminated only the disposable target. After closing dnSpy and deleting the
    extracted package, seven observations across 35 seconds stayed `host_unavailable` with no reconnect;
    the process-scoped launcher had installed no machine-wide configuration.
-5. Complete MCP Streamable HTTP session behavior required by strict clients.
-6. Define session ownership or leases before supporting competing clients or independent sessions.
-7. Add per-client and per-target permissions for discovery, inspection, execution control, mutation,
-   termination, host export, target-code execution, artifact editing, live patching, and host scripting.
-8. Define disconnect behavior that never silently resumes, detaches, or terminates a paused target.
-9. Add bounded, redacted audit records for side-effecting operations.
+5. **Complete.** MCP Streamable HTTP negotiates supported protocol revisions, accepts notifications,
+   rejects unsupported revisions, and explicitly returns 405 because dgSpy has no server SSE stream.
+6. **Complete.** For the authenticated loopback deployment, assign each initialized MCP session a controller identity.
+   `attach` and `launch` claim one debugger session; inspection remains shared, while session mutations
+   require the controller and an exact `expected_state_version`. Expiry releases only controller
+   ownership and never changes the target. Gateway restart leaves recovered debugger sessions unowned;
+   `claim_session` explicitly recovers them. `release_session` relinquishes control without detach.
+7. **Complete for the delivered trust model.** Provide a coarse `full-control` (default) or `inspect-only` Gateway profile. Defer per-user and
+   per-target ACLs until MCP leaves loopback or differently trusted callers share the Gateway; require
+   that model before remotely enabling artifact editing, live patching, or host scripting.
+8. **Complete.** Codify and test the invariant disconnect policy: MCP, Gateway, or remote-host disconnect preserves
+   the target's exact running/paused state. No timeout, ownership expiry, or reconnect may implicitly
+   resume, detach, terminate, or restart a target.
+9. **Complete.** Write bounded JSONL audit records for side-effecting requests with timestamp, audit ID, controller,
+   host/session identifiers, operation, state-version guard, outcome, and error code. Never record
+   credentials, expressions, evaluated values, memory, exported bytes, or artifact contents.
 
 Exit criteria:
 
@@ -103,6 +116,16 @@ Exit criteria:
 - Authorization tests prove an inspection-only client cannot control, mutate, terminate, export,
   execute, edit, patch, or script.
 - Ownership tests cover contention, disconnect, expiry, and recovery without implicit target control.
+
+Trusted-local control-plane acceptance used two initialized MCP sessions against the TLS Windows Server
+host. The non-controller received `session_owned`; missing and stale guards received
+`state_version_required` and `stale_state`; refreshed pause/continue succeeded; release and explicit
+claim transferred control. After central Gateway restart the same running debugger session returned
+unowned, mutation failed `session_unowned`, explicit claim recovered it, and only the disposable target
+was terminated. Packaged plaintext and TLS restart smokes passed the same unowned/claim/version path.
+The HTTP smoke proved session-header issuance, inspect-only denial, ownership-tool discovery, and audit
+redaction. Per-user/per-target ACLs and MCP-side TLS are not Section 1 exit criteria while MCP remains
+authenticated, loopback-only, and shared by equally trusted local callers.
 
 ## 2. Optional high-risk capabilities
 

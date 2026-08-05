@@ -23,6 +23,12 @@ dotnet run --project .\dgSpy.Gateway\dgSpy.Gateway.csproj -c Release
 The MCP endpoint is `http://127.0.0.1:7350/mcp`; `GET /health` is unauthenticated for process checks.
 `DGSPY_URL` overrides the address.
 
+`initialize` returns `Mcp-Session-Id`; clients send it on later requests. Legacy local callers without
+the header share the compatibility identity `legacy-local`. `DGSPY_ACCESS_MODE` is `full-control`
+(default) or `inspect-only`. `DGSPY_CONTROLLER_IDLE_SECONDS` defaults to 300 (minimum 30), and expiry
+releases only ownership. `DGSPY_AUDIT_FILE` overrides the rotating 5 MiB redacted JSONL audit at
+`%LOCALAPPDATA%\dgSpy\gateway-audit.jsonl`.
+
 For packaged-host status and the planned extension-initiated Gateway registration flow, see
 [remote hosts](REMOTE_HOSTS.md).
 
@@ -45,8 +51,8 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 ## Tools
 
 - Host, discovery, and lifecycle: `list_hosts`, `get_host_info`, `get_capabilities`, `list_programs`, `attach`,
-  `attach_endpoint`, `launch`, `list_sessions`, `get_session_state`, `pause`, `continue`, `detach`,
-  `terminate`, `restart`.
+  `attach_endpoint`, `launch`, `list_sessions`, `get_session_state`, `get_session_controller`,
+  `claim_session`, `release_session`, `pause`, `continue`, `detach`, `terminate`, `restart`.
 
 Every tool in these extension-backed families accepts `host_id`. It may be omitted only when the Gateway
 registry contains exactly one host. `list_hosts` is Gateway-local and needs no host selection.
@@ -68,6 +74,14 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   `write_memory`, `get_disassembly`, `get_registers`, `set_instruction_pointer`.
 
 ## State and lifetime rules
+
+- `attach` and `launch` assign their initialized MCP session as controller. Other controllers may inspect
+  but cannot mutate that debugger session. Every session mutation requires its current exact
+  `expected_state_version`; stale or missing versions fail before acting. `release_session` changes only
+  ownership. An idle owner or Gateway restart leaves the target untouched and requires explicit
+  `claim_session` before further mutations.
+- MCP disconnect, controller expiry, Gateway disconnect/restart, and remote-host disconnect never resume,
+  detach, terminate, or restart a target. Recovery is selection plus ownership, not implicit target control.
 
 - `get_host_info` identifies the host: dnSpy/dgSpy versions, machine, architecture, supported engines,
   and the live `session_id` if there is one. `get_capabilities` reports per-operation time bounds,

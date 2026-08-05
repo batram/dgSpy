@@ -1,9 +1,8 @@
 namespace dgSpy.Gateway;
 
 /// <summary>Pure Streamable HTTP version policy, kept outside Program.cs so compatibility cannot
-/// silently regress when the transport changes. dgSpy is stateless at the MCP transport layer, so it
-/// deliberately does not mint MCP-Session-Id values; debugger ownership remains in session_id tool
-/// arguments.</summary>
+/// silently regress when the transport changes. The HTTP layer mints MCP-Session-Id controller
+/// identities, while debugger selection remains explicit in session_id tool arguments.</summary>
 public static class McpProtocol {
 	public const string Current = "2025-11-25";
 	public const string LegacyDefault = "2025-03-26";

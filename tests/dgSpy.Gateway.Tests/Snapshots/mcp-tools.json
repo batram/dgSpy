@@ -218,6 +218,63 @@
       }
     },
     {
+      "name": "get_session_controller",
+      "description": "Report whether a debugger session currently has an MCP controller. Inspection never claims it or changes target state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    },
+    {
+      "name": "claim_session",
+      "description": "Explicitly claim an unowned or expired debugger session after caller or Gateway recovery. Never changes target state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    },
+    {
+      "name": "release_session",
+      "description": "Release controller ownership without resuming, detaching, terminating, or otherwise changing the target.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    },
+    {
       "name": "detach",
       "description": "Detach one selected process or all targets. Fails with detach_would_terminate unless allow_terminate is explicit. If the engine does not actually remove the target within 10 seconds, returns detach_timed_out and preserves the session instead of claiming success.",
       "inputSchema": {
@@ -236,10 +293,15 @@
           "allow_terminate": {
             "type": "boolean",
             "description": "Stop debugging even if that terminates the selected target."
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
-          "session_id"
+          "session_id",
+          "expected_state_version"
         ]
       }
     },
@@ -258,10 +320,15 @@
           },
           "process_id": {
             "type": "integer"
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
-          "session_id"
+          "session_id",
+          "expected_state_version"
         ]
       }
     },
@@ -277,10 +344,15 @@
           },
           "session_id": {
             "type": "string"
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
-          "session_id"
+          "session_id",
+          "expected_state_version"
         ]
       }
     },
@@ -305,7 +377,8 @@
           }
         },
         "required": [
-          "session_id"
+          "session_id",
+          "expected_state_version"
         ]
       }
     },
@@ -330,7 +403,8 @@
           }
         },
         "required": [
-          "session_id"
+          "session_id",
+          "expected_state_version"
         ]
       }
     },
@@ -359,13 +433,18 @@
           "snap_to_sequence_point": {
             "type": "boolean",
             "description": "Default true. Retry at method entry when the engine refuses the requested offset."
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
           "module",
           "method_token",
-          "il_offset"
+          "il_offset",
+          "expected_state_version"
         ]
       }
     },
@@ -803,7 +882,8 @@
           }
         },
         "required": [
-          "session_id"
+          "session_id",
+          "expected_state_version"
         ]
       }
     },
@@ -828,7 +908,8 @@
           }
         },
         "required": [
-          "session_id"
+          "session_id",
+          "expected_state_version"
         ]
       }
     },
@@ -853,7 +934,8 @@
           }
         },
         "required": [
-          "session_id"
+          "session_id",
+          "expected_state_version"
         ]
       }
     },
@@ -926,11 +1008,16 @@
             "minimum": 1,
             "maximum": 10000,
             "description": "Hard engine func-eval timeout; default 1000."
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
-          "expression"
+          "expression",
+          "expected_state_version"
         ]
       }
     },
@@ -963,11 +1050,16 @@
             "minimum": 1,
             "maximum": 10000,
             "description": "Hard engine func-eval timeout; default 1000."
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
-          "expression"
+          "expression",
+          "expected_state_version"
         ]
       }
     },
@@ -1026,12 +1118,17 @@
           },
           "data_base64": {
             "type": "string"
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
           "address",
-          "data_base64"
+          "data_base64",
+          "expected_state_version"
         ]
       }
     },
@@ -1127,13 +1224,18 @@
           "il_offset": {
             "type": "integer",
             "minimum": 0
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
           "module",
           "method_token",
-          "il_offset"
+          "il_offset",
+          "expected_state_version"
         ]
       }
     },
@@ -1213,12 +1315,17 @@
           "allow_func_eval": {
             "type": "boolean",
             "description": "Default false."
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
           "expression",
-          "value"
+          "value",
+          "expected_state_version"
         ]
       }
     },
@@ -1597,13 +1704,18 @@
           "snap_to_sequence_point": {
             "type": "boolean",
             "description": "Default true."
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
           "module",
           "type",
-          "method"
+          "method",
+          "expected_state_version"
         ]
       }
     },
@@ -1777,11 +1889,16 @@
           },
           "allow_func_eval": {
             "type": "boolean"
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
-          "expression"
+          "expression",
+          "expected_state_version"
         ]
       }
     },
@@ -1872,11 +1989,16 @@
           },
           "runtime_id": {
             "type": "string"
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
-          "object_id"
+          "object_id",
+          "expected_state_version"
         ]
       }
     },
@@ -2006,10 +2128,15 @@
           },
           "app_domain_name": {
             "type": "string"
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
-          "session_id"
+          "session_id",
+          "expected_state_version"
         ]
       }
     },
@@ -2072,11 +2199,16 @@
           },
           "app_domain_name": {
             "type": "string"
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
-          "breakpoint_id"
+          "breakpoint_id",
+          "expected_state_version"
         ]
       }
     },
@@ -2095,11 +2227,16 @@
           },
           "breakpoint_id": {
             "type": "integer"
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
-          "breakpoint_id"
+          "breakpoint_id",
+          "expected_state_version"
         ]
       }
     },
@@ -2152,11 +2289,16 @@
           },
           "dry_run": {
             "type": "boolean"
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
-          "document"
+          "document",
+          "expected_state_version"
         ]
       }
     },
@@ -2233,10 +2375,15 @@
             "items": {
               "type": "object"
             }
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
-          "session_id"
+          "session_id",
+          "expected_state_version"
         ]
       }
     },
@@ -2258,10 +2405,15 @@
           },
           "name": {
             "type": "string"
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
-          "session_id"
+          "session_id",
+          "expected_state_version"
         ]
       }
     },
@@ -2277,10 +2429,15 @@
           },
           "session_id": {
             "type": "string"
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
-          "session_id"
+          "session_id",
+          "expected_state_version"
         ]
       }
     },
@@ -2363,12 +2520,17 @@
           "frame_index": {
             "type": "integer",
             "minimum": 0
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Required exact state_version for every session mutation."
           }
         },
         "required": [
           "session_id",
           "expression",
-          "path"
+          "path",
+          "expected_state_version"
         ]
       }
     },
