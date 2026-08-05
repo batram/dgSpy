@@ -33,11 +33,12 @@ namespace dgSpy.Extension {
 		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DebuggerSettings debuggerSettings; readonly DbgCodeBreakpointsService breakpoints; readonly DbgModuleBreakpointsService moduleBreakpoints; readonly DbgObjectIdService objectIds; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions; readonly DbgMetadataService metadataService; readonly Lazy<DbgModuleIdProvider>[] moduleIdProviders; readonly IDecompilerService decompilers;
 		readonly EvaluationQueue evaluations=new EvaluationQueue(); readonly SemaphoreSlim targetControl=new SemaphoreSlim(1,1);
 		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>();
-		long lifecycleVersion,executionVersion,breakpointsVersion; string? stopId;
+		long lifecycleVersion,executionVersion,breakpointsVersion; string? stopId; string? connectionState; DateTime lastGatewayHeartbeatUtc;
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		readonly RpcSecuritySettings rpcSecurity=RpcSecuritySettings.Load();
 		TcpListener? tcpListener;
-		Task? listener; Task? outbound; string? sessionId; string? attachedProgramId; string? sessionKind; string? lifecycleAction; long stateVersion; bool attaching; bool faulted; string? faultMessage; string? lastUserMessage; int? terminalExitCode; string? terminalReason;
+		Task? listener; Task? outbound; Timer? connectionStateTimer; string? sessionId; string? attachedProgramId; string? sessionKind; string? lifecycleAction; long stateVersion; bool attaching; bool faulted; bool outboundGatewayConnected; string? faultMessage; string? lastUserMessage; int? terminalExitCode; string? terminalReason;
+		public event Action<string>? ConnectionStateChanged;
 		bool IsMonoEndpoint => attachedProgramId?.StartsWith("endpoint:unity:",StringComparison.Ordinal)==true ||
 			attachedProgramId?.StartsWith("endpoint:mono:",StringComparison.Ordinal)==true;
 		bool? IsTargetRunning => IsMonoEndpoint ? manager.IsRunning :
@@ -54,7 +55,7 @@ namespace dgSpy.Extension {
 		}
 		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers) {
 			this.programs=programs; this.manager=manager; this.debuggerSettings=debuggerSettings; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.moduleIdProviders=moduleIdProviders.ToArray(); this.decompilers=decompilers;
-			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { if (IsTargetRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded);
+			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { NotifyConnectionStateChanged(); if (IsTargetRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => { NotifyConnectionStateChanged(); Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded); };
 			breakpoints.BreakpointsChanged += (_,__) => IncrementBreakpointsVersion(); breakpoints.BreakpointsModified += (_,__) => IncrementBreakpointsVersion();
 			moduleBreakpoints.BreakpointsChanged += (_,__) => IncrementBreakpointsVersion(); moduleBreakpoints.BreakpointsModified += (_,__) => IncrementBreakpointsVersion();
 			exceptions.ExceptionsChanged += (_,__) => IncrementBreakpointsVersion(); exceptions.ExceptionSettingsModified += (_,__) => IncrementBreakpointsVersion();
@@ -65,8 +66,38 @@ namespace dgSpy.Extension {
 			// RPC, but it does leave a dialog nobody headless will dismiss.
 			manager.MessageUserMessage += (_,e) => { lock(sync) lastUserMessage=e.Message; };
 			manager.DbgManagerMessage += (_,e) => output.Add(e.MessageKind,e.Message);
+			NotifyConnectionStateChanged();
 		}
-		public void Start() { if (listener is not null) return; manager.WriteMessage($"dgSpy {Version} host {rpcSecurity.HostId} listening on authenticated RPC 127.0.0.1:{rpcPort}"); listener=Task.Run(ListenAsync); if (RemoteGatewaySettings.TryLoad(out var remote)) outbound=Task.Run(()=>ConnectOutboundAsync(remote)); }
+		public string ConnectionState => GetConnectionState();
+
+		string GetConnectionState() {
+			string? id;
+			bool isFaulted,isAttaching,gatewayConnected;
+			lock(sync) {
+				id=sessionId; isFaulted=faulted; isAttaching=attaching;
+				gatewayConnected=outboundGatewayConnected || DateTime.UtcNow-lastGatewayHeartbeatUtc<TimeSpan.FromSeconds(5);
+			}
+			var gatewayState=gatewayConnected ? "gateway connected" : "gateway disconnected";
+			if (id is null)
+				return gatewayState;
+			if (isFaulted)
+				return gatewayState+"; target faulted";
+			if (isAttaching)
+				return gatewayState+"; target connecting";
+			if (!manager.IsDebugging)
+				return gatewayState+"; target disconnected";
+			return gatewayState+"; target "+SessionStateCalculator.Get(isFaulted,isAttaching,manager.IsDebugging,AggregateRunningState);
+		}
+		void NotifyConnectionStateChanged() {
+			var newState=GetConnectionState();
+			lock(sync) {
+				if (newState==connectionState)
+					return;
+				connectionState=newState;
+			}
+			ConnectionStateChanged?.Invoke(newState);
+		}
+		public void Start() { if (listener is not null) return; manager.WriteMessage($"dgSpy {Version} host {rpcSecurity.HostId} listening on authenticated RPC 127.0.0.1:{rpcPort}"); listener=Task.Run(ListenAsync); connectionStateTimer=new Timer(_=>NotifyConnectionStateChanged(),null,1000,1000); if (RemoteGatewaySettings.TryLoad(out var remote)) outbound=Task.Run(()=>ConnectOutboundAsync(remote)); }
 		async Task ListenAsync() { try { tcpListener=new TcpListener(IPAddress.Loopback,rpcPort); tcpListener.Start(8); while(!shutdown.IsCancellationRequested) { var client=await tcpListener.AcceptTcpClientAsync().ConfigureAwait(false); _=HandleClientAsync(client); } } catch(ObjectDisposedException) when(shutdown.IsCancellationRequested) { } catch(Exception ex) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.ErrorUser,"dgSpy TCP listener: "+ex.Message); } }
 		async Task HandleClientAsync(TcpClient client) { using(client) try { using var stream=client.GetStream(); using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); using var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true}; string? line; while ((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null) { var req=ProtocolJson.Deserialize<RpcRequest>(line); var response=req is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(req).ConfigureAwait(false); await writer.WriteLineAsync(ProtocolJson.Serialize(response)).ConfigureAwait(false); } } 		// A client going away is routine, not an error: the gateway opens a fresh connection per request
 		// and drops it whenever a request is cancelled or hits its deadline. Reporting those through
@@ -86,9 +117,11 @@ namespace dgSpy.Extension {
 					if (registered.Error is not null || registered.Version!=ProtocolVersion.Current) throw new IOException(registered.Error?.Message ?? "Gateway protocol mismatch.");
 					var accepted=ProtocolJson.FromNode<HostRegistration>(registered.Result as JsonObject) ?? throw new IOException("Gateway returned an invalid registration response.");
 					if (!string.Equals(accepted.HostId,rpcSecurity.HostId,StringComparison.Ordinal)) throw new IOException($"Gateway registered '{accepted.HostId}', expected '{rpcSecurity.HostId}'.");
+					lock(sync) outboundGatewayConnected=true; NotifyConnectionStateChanged();
 					manager.WriteMessage($"dgSpy host {rpcSecurity.HostId} registered with {remote.Address}:{remote.Port}"); delay=TimeSpan.FromSeconds(1);
 					string? line; while((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null && !shutdown.IsCancellationRequested) { var request=ProtocolJson.Deserialize<RpcRequest>(line); var response=request is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(request).ConfigureAwait(false); await writer.WriteLineAsync(ProtocolJson.Serialize(response)).ConfigureAwait(false); }
 				} catch(Exception ex) when(!shutdown.IsCancellationRequested) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.Output,"dgSpy outbound gateway: "+ex.Message); }
+				finally { lock(sync) outboundGatewayConnected=false; NotifyConnectionStateChanged(); }
 				try { await Task.Delay(delay,shutdown.Token).ConfigureAwait(false); } catch(OperationCanceledException) { return; }
 				delay=TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds*2,30));
 			}
@@ -115,6 +148,7 @@ namespace dgSpy.Extension {
 			if (req.DeadlineUtc is DateTime requestDeadline) requestCancellation.CancelAfter(requestDeadline-DateTime.UtcNow > TimeSpan.Zero ? requestDeadline-DateTime.UtcNow : TimeSpan.FromMilliseconds(1));
 			switch (req.Operation) {
 			case "ping": return RpcResponse.Success(req.RequestId,new Handshake { ExtensionVersion=Version,HostId=rpcSecurity.HostId });
+			case "gateway_heartbeat": lock(sync) lastGatewayHeartbeatUtc=DateTime.UtcNow; NotifyConnectionStateChanged(); return RpcResponse.Success(req.RequestId,new { connected=true });
 			case "get_host_info": return RpcResponse.Success(req.RequestId,Host());
 			case "get_capabilities": return RpcResponse.Success(req.RequestId,CapabilityCatalog.Describe(Version,rpcSecurity.HostId));
 			case "list_programs": return RpcResponse.Success(req.RequestId,await ListProgramsAsync(req,requestCancellation.Token).ConfigureAwait(false));
@@ -267,6 +301,7 @@ namespace dgSpy.Extension {
 				else if(!adding) lock(sync) attaching=false;
 				return failure;
 			}).ConfigureAwait(false);
+			NotifyConnectionStateChanged();
 			// DbgManager.Start rejects options it cannot build an engine from synchronously. That is a
 			// caller error, not a session that came up and then died, so it never becomes a session.
 			if (rejected is not null) throw new RpcException("attach_failed",rejected);
@@ -285,6 +320,7 @@ namespace dgSpy.Extension {
 			}
 			else if(!connected) throw new RpcException("attach_failed",lastUserMessage ?? "The additional debug target did not connect before the attach deadline.");
 			else lock(sync) { attachedProgramId=adding ? (attachedProgramId+";"+programId) : programId; faultMessage=null; }
+			NotifyConnectionStateChanged();
 			return await OnDebuggerAsync(State,cancellationToken).ConfigureAwait(false);
 		}
 		string? UserMessage() { lock(sync) return lastUserMessage; }
@@ -306,6 +342,7 @@ namespace dgSpy.Extension {
 				var active=await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false);
 				var selectedSessionId=sessionId!;
 				if(!active) lock(sync) { sessionId=null; attachedProgramId=null; sessionKind=null; lifecycleAction=null; attaching=false; faulted=false; faultMessage=null; lastUserMessage=null; terminalExitCode=null; terminalReason=null; }
+				NotifyConnectionStateChanged();
 				return new DetachResult { SessionId=selectedSessionId,ProcessId=process.Id,Detached=selectedCanDetach,Terminated=!selectedCanDetach,SessionActive=active,StateVersion=stateVersion,LifecycleVersion=lifecycleVersion };
 			}
 			var wasDebugging=await OnDebuggerAsync(()=>manager.IsDebugging,cancellationToken).ConfigureAwait(false);
@@ -320,6 +357,7 @@ namespace dgSpy.Extension {
 			// A real process removal records the detached event in OnProcessExited. A faulted connection
 			// never created a process, so it needs the event here after the session is cleared.
 			if(!wasDebugging) Record(EventKinds.Detached);
+			NotifyConnectionStateChanged();
 			return new DetachResult { SessionId=id,Detached=!stillDebugging && canDetach,Terminated=!stillDebugging && !canDetach,SessionActive=stillDebugging,StateVersion=stateVersion,LifecycleVersion=lifecycleVersion };
 		}
 		async Task<SessionSummary[]> ListSessionsAsync(CancellationToken cancellationToken) => await OnDebuggerAsync(()=>{
@@ -327,7 +365,13 @@ namespace dgSpy.Extension {
 			var state=State();
 			return new[] { new SessionSummary { SessionId=state.SessionId,State=state.State,ProgramId=attachedProgramId ?? "",StateVersion=state.StateVersion,LastEventId=state.LastEventId,ProcessIds=state.ProcessIds,LifecycleVersion=state.LifecycleVersion,ExecutionVersion=state.ExecutionVersion,BreakpointsVersion=state.BreakpointsVersion,StopId=state.StopId,CanDetachWithoutTerminating=manager.IsDebugging && manager.CanDetachWithoutTerminating } };
 		},cancellationToken).ConfigureAwait(false);
-		SessionState State() { if (sessionId is null) throw new RpcException("session_not_found","No active dgSpy session."); if (attaching && manager.IsDebugging && manager.Processes.Length!=0) attaching=false; return new SessionState { SessionId=sessionId,State=SessionStateCalculator.Get(faulted,attaching,manager.IsDebugging,AggregateRunningState),StateVersion=stateVersion,LastEventId=events.LastEventId,ProcessIds=manager.Processes.Select(p=>p.Id).ToArray(),LifecycleVersion=lifecycleVersion,ExecutionVersion=executionVersion,BreakpointsVersion=breakpointsVersion,StopId=stopId,FaultMessage=faulted ? faultMessage : null,ExitCode=terminalExitCode,TerminalReason=terminalReason }; }
+		SessionState State() {
+			if (sessionId is null) throw new RpcException("session_not_found","No active dgSpy session.");
+			if (attaching && manager.IsDebugging && manager.Processes.Length!=0) { attaching=false; NotifyConnectionStateChanged(); }
+			return new SessionState {
+				SessionId=sessionId,State=SessionStateCalculator.Get(faulted,attaching,manager.IsDebugging,AggregateRunningState),StateVersion=stateVersion,LastEventId=events.LastEventId,ProcessIds=manager.Processes.Select(p=>p.Id).ToArray(),LifecycleVersion=lifecycleVersion,ExecutionVersion=executionVersion,BreakpointsVersion=breakpointsVersion,StopId=stopId,FaultMessage=faulted ? faultMessage : null,ExitCode=terminalExitCode,TerminalReason=terminalReason
+			};
+		}
 		// Polls on the dispatcher so callers observe the state the operation actually produced. Bounded
 		// by the request deadline; a timeout returns the current state rather than throwing, so the
 		// caller still learns where the session got to.
@@ -546,7 +590,7 @@ namespace dgSpy.Extension {
 		// stalls event delivery for every session. See docs/DGSPY_BASELINE.md.
 		// The token abandons the *wait*, not the queued work; dnSpy gives us no way to cancel a
 		// dispatcher callback, so the callback still runs and its result is dropped.
-		public void Dispose() { shutdown.Cancel(); tcpListener?.Stop(); evaluations.Dispose(); targetControl.Dispose(); shutdown.Dispose(); }
+		public void Dispose() { shutdown.Cancel(); tcpListener?.Stop(); connectionStateTimer?.Dispose(); evaluations.Dispose(); targetControl.Dispose(); shutdown.Dispose(); }
 	}
 
 	/// <summary>

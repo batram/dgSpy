@@ -157,6 +157,26 @@ public sealed class HostRouter {
 		}
 		return hosts.ToArray();
 	}
+
+	public async Task SendHeartbeatAsync(CancellationToken cancellationToken) {
+		await Task.WhenAll(clients.Values.Select(client=>SendHeartbeatAsync(client,cancellationToken)));
+	}
+	static async Task SendHeartbeatAsync(IHostRpcClient client,CancellationToken cancellationToken) {
+		try { await client.CallAsync(new RpcRequest { Operation="gateway_heartbeat",DeadlineUtc=DateTime.UtcNow.AddSeconds(3) },cancellationToken); }
+		catch (Exception ex) when (ex is IOException || ex is SocketException || ex is OperationCanceledException) { }
+	}
+}
+
+public sealed class GatewayHeartbeat : BackgroundService {
+	readonly HostRouter router;
+	public GatewayHeartbeat(HostRouter router) { this.router=router; }
+	protected override async Task ExecuteAsync(CancellationToken stoppingToken) {
+		while (!stoppingToken.IsCancellationRequested) {
+			await router.SendHeartbeatAsync(stoppingToken);
+			try { await Task.Delay(TimeSpan.FromSeconds(2),stoppingToken); }
+			catch (OperationCanceledException) { return; }
+		}
+	}
 }
 
 interface IHostRpcClient { Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken); }

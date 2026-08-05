@@ -12,6 +12,7 @@ builder.Services.AddSingleton<GatewayAccessPolicy>();
 builder.Services.AddSingleton<GatewayAuditLog>();
 builder.Services.AddSingleton<GatewayToolExecutor>();
 builder.Services.AddHostedService<RemoteHostListener>();
+builder.Services.AddHostedService<GatewayHeartbeat>();
 var app = builder.Build();
 
 // Clients authenticate with a local secret. Take it from the environment when set, otherwise mint

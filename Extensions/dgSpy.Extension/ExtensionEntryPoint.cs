@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using dnSpy.Contracts.App;
 using dnSpy.Contracts.Debugger;
 using dnSpy.Contracts.Debugger.Attach;
 using dnSpy.Contracts.Debugger.Breakpoints.Code;
@@ -17,16 +18,43 @@ namespace dgSpy.Extension {
 	[ExportExtension]
 	sealed class ExtensionEntryPoint : IExtension {
 		readonly RpcHost host;
+		readonly IAppWindow appWindow;
+		string? connectionStateInfo;
+		bool shuttingDown;
 
 		[ImportingConstructor]
-		ExtensionEntryPoint(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, [ImportMany] IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers) =>
+		ExtensionEntryPoint(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, [ImportMany] IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers, IAppWindow appWindow) {
 			host=new RpcHost(programs,manager,debuggerSettings,breakpoints,moduleBreakpoints,objectIds,locations,callStack,languages,exceptions,metadataService,moduleIdProviders,decompilers);
+			this.appWindow=appWindow;
+		}
 
 		public IEnumerable<string> MergedResourceDictionaries { get { yield break; } }
 		public ExtensionInfo ExtensionInfo => new ExtensionInfo { ShortDescription="dgSpy MCP debugger bridge 0.1.0" };
 		public void OnEvent(ExtensionEvent @event,object? obj) {
-			if (@event==ExtensionEvent.AppLoaded) host.Start();
-			else if (@event==ExtensionEvent.AppExit) host.Dispose();
+			if (@event==ExtensionEvent.AppLoaded) {
+				host.ConnectionStateChanged += Host_ConnectionStateChanged;
+				host.Start();
+				Host_ConnectionStateChanged(host.ConnectionState);
+			}
+			else if (@event==ExtensionEvent.AppExit) {
+				shuttingDown=true;
+				host.ConnectionStateChanged -= Host_ConnectionStateChanged;
+				if (connectionStateInfo is not null) appWindow.RemoveTitleInfo(connectionStateInfo);
+				host.Dispose();
+			}
+		}
+		void Host_ConnectionStateChanged(string state) {
+			var info=$"dgSpy [{state}]";
+			appWindow.MainWindow.Dispatcher.BeginInvoke(() => {
+				// A queued debugger notification can outlive AppExit. Never put title text back
+				// after the extension has started shutting down.
+				if (shuttingDown)
+					return;
+				if (connectionStateInfo is not null)
+					appWindow.RemoveTitleInfo(connectionStateInfo);
+				connectionStateInfo=info;
+				appWindow.AddTitleInfo(info);
+			});
 		}
 	}
 }
