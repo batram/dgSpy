@@ -45,12 +45,14 @@ Progress:
   ambiguous/unknown hosts, and mismatched identity.
 - **Complete:** self-contained x64 remote-host packing with bundle-local launcher state and a deterministic
   SHA-256 manifest.
-- **Next:** extension-initiated Gateway registration using centrally provisioned deploy ZIPs, followed by
-  pinned self-signed mutual TLS on that connection.
+- **Complete:** extension-initiated Gateway registration using centrally provisioned deploy ZIPs,
+  including local packaged-host debugger and Gateway-restart acceptance. Clean multi-machine acceptance
+  remains part of item 4.
+- **Next:** pinned self-signed mutual TLS on that connection.
 - **Open:** clean-host acceptance, MCP client identity, leases, permissions, disconnect policy, audit
   records, and encrypted client-to-Gateway transport.
 
-1. Add minimal outbound remote registration. The central machine produces a per-host ZIP containing a
+1. **Complete.** Add minimal outbound remote registration. The central machine produces a per-host ZIP containing a
    stable `host_id`, strong shared credential, Gateway endpoint, self-contained dnSpy host, extension,
    launcher, and deterministic manifest. After extract-and-run, the extension opens one persistent
    outbound connection, authenticates and registers its expected identity, receives routed RPC requests

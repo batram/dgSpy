@@ -2,6 +2,10 @@ using System;
 using System.Net;
 using System.IO;
 using System.Linq;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading.Tasks;
+using dgSpy.Protocol;
 using Newtonsoft.Json;
 using dgSpy.Gateway;
 using Xunit;
@@ -115,6 +119,41 @@ public class HostRegistryTests {
 			Assert.Throws<InvalidOperationException>(()=>HostRegistry.FromJson(RegistryJson(("host-a",7451,"a.token"),("host-a",7452,"b.token")),directory));
 			var json=JsonConvert.SerializeObject(new { hosts=new[]{new { host_id="host-a",address="10.0.0.5",port=7451,token_file="a.token" }} });
 			Assert.Throws<InvalidOperationException>(()=>HostRegistry.FromJson(json,directory));
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	[Fact]
+	public void Outbound_hosts_have_no_dialable_endpoint_and_authenticate_exactly() {
+		var directory=CreateRegistryDirectory();
+		try {
+			var json=JsonConvert.SerializeObject(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} });
+			var registry=HostRegistry.FromJson(json,directory);
+			var endpoint=registry.Select("host-a");
+			Assert.True(endpoint.IsOutbound);
+			var router=new HostRouter(registry);
+			Assert.True(router.TryAuthenticate("host-a","token-a",out _));
+			Assert.False(router.TryAuthenticate("host-a","token-b",out _));
+			Assert.False(router.TryAuthenticate("host-b","token-a",out _));
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	[Fact]
+	public async Task Outbound_connection_routes_requests_and_rejects_a_duplicate() {
+		var directory=CreateRegistryDirectory();
+		try {
+			var json=JsonConvert.SerializeObject(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} });
+			var router=new HostRouter(HostRegistry.FromJson(json,directory));
+			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start();
+			using var remote=new TcpClient(); var accept=listener.AcceptTcpClientAsync(); await remote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var gateway=await accept;
+			var gatewayReader=new StreamReader(gateway.GetStream(),Encoding.UTF8,false,4096,true); var gatewayWriter=new StreamWriter(gateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true};
+			Assert.True(router.TryRegister("host-a",gateway,gatewayReader,gatewayWriter,out _));
+			Assert.False(router.TryRegister("host-a",new TcpClient(),new StreamReader(Stream.Null),new StreamWriter(Stream.Null),out _));
+			var remoteReader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true); var remoteWriter=new StreamWriter(remote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true};
+			var responder=Task.Run(async ()=>{ var request=JsonConvert.DeserializeObject<RpcRequest>((await remoteReader.ReadLineAsync())!)!; await remoteWriter.WriteLineAsync(JsonConvert.SerializeObject(RpcResponse.Success(request.RequestId,new { ok=true }))); });
+			var response=await router.CallAsync(new RpcRequest { Operation="get_host_info",Arguments=new Newtonsoft.Json.Linq.JObject { ["host_id"]="host-a" } },default);
+			await responder; listener.Stop(); Assert.Null(response.Error); Assert.Equal(true,(bool?)Newtonsoft.Json.Linq.JObject.FromObject(response.Result!)["ok"]);
 		}
 		finally { Directory.Delete(directory,true); }
 	}

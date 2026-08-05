@@ -3,14 +3,18 @@ param(
 	[string]$OutputDirectory = "$PSScriptRoot\artifacts\remote-host",
 	[switch]$SkipBuild,
 	[string]$HostPublishDirectory = "$PSScriptRoot\dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish"
+	,[Parameter(Mandatory=$true)][ValidatePattern('^[A-Za-z0-9._-]+$')][string]$HostId
+	,[Parameter(Mandatory=$true)][string]$GatewayAddress
+	,[ValidateRange(1,65535)][int]$GatewayPort = 7352
+	,[string]$GatewayHostsFile = "$OutputDirectory\gateway-hosts.json"
 )
 
 $ErrorActionPreference = 'Stop'
 $targetFramework = 'net10.0-windows'
 $runtimeIdentifier = 'win-x64'
-$bundleName = 'dgSpy-remote-host-win-x64'
+$bundleName = "dgSpy-remote-host-$HostId-win-x64"
 $bundleDirectory = Join-Path $OutputDirectory $bundleName
-$archivePath = Join-Path $OutputDirectory "$bundleName.zip"
+$archivePath = [IO.Path]::GetFullPath((Join-Path $OutputDirectory "$bundleName.zip"))
 $extensionProject = Join-Path $PSScriptRoot 'Extensions\dgSpy.Extension\dgSpy.Extension.csproj'
 $extensionOutput = Join-Path $PSScriptRoot "Extensions\dgSpy.Extension\bin\$Configuration\$targetFramework"
 
@@ -46,6 +50,25 @@ New-Item -ItemType Directory -Path $launcherDirectory -Force | Out-Null
 foreach ($launcher in 'Start-dgSpyRemoteHost.ps1', 'Start-dgSpyRemoteHost.cmd') {
 	Copy-Item -LiteralPath (Join-Path $PSScriptRoot "packaging\remote-host\$launcher") -Destination $launcherDirectory
 }
+$stateDirectory = Join-Path $resolvedBundle 'state'
+New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
+$credentialBytes = [byte[]]::new(32)
+$credentialGenerator = [Security.Cryptography.RandomNumberGenerator]::Create()
+try { $credentialGenerator.GetBytes($credentialBytes) }
+finally { $credentialGenerator.Dispose() }
+$credential = [Convert]::ToBase64String($credentialBytes)
+[IO.File]::WriteAllText((Join-Path $stateDirectory 'host.id'),$HostId,[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $stateDirectory 'rpc.token'),$credential,[Text.UTF8Encoding]::new($false))
+$remoteConfiguration = [pscustomobject][ordered]@{ format_version=1; host_id=$HostId; gateway_address=$GatewayAddress; gateway_port=$GatewayPort }
+[IO.File]::WriteAllText((Join-Path $resolvedBundle 'remote-host.json'),(($remoteConfiguration | ConvertTo-Json) + "`n"),[Text.UTF8Encoding]::new($false))
+$gatewayDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($GatewayHostsFile))
+New-Item -ItemType Directory -Path $gatewayDirectory -Force | Out-Null
+$centralTokenFile = Join-Path $gatewayDirectory "$HostId.token"
+[IO.File]::WriteAllText($centralTokenFile,$credential,[Text.UTF8Encoding]::new($false))
+$gatewayDocument = if (Test-Path -LiteralPath $GatewayHostsFile) { Get-Content -LiteralPath $GatewayHostsFile -Raw | ConvertFrom-Json } else { [pscustomobject]@{ hosts=@() } }
+if (@($gatewayDocument.hosts | Where-Object host_id -eq $HostId).Count) { throw "Gateway configuration already contains host_id '$HostId'." }
+$gatewayDocument.hosts = @($gatewayDocument.hosts) + [pscustomobject][ordered]@{ host_id=$HostId; display_name=$HostId; transport='outbound'; token_file=(Split-Path -Leaf $centralTokenFile) }
+[IO.File]::WriteAllText([IO.Path]::GetFullPath($GatewayHostsFile),(($gatewayDocument | ConvertTo-Json -Depth 4) + "`n"),[Text.UTF8Encoding]::new($false))
 
 # Mutable state and the manifest itself are excluded. Fixed ordering makes identical staged bytes
 # produce identical manifest bytes.

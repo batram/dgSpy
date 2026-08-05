@@ -7,7 +7,7 @@
 | Architecture | x64 only |
 | dnSpy build | `net48` and `net10.0-windows`, Release |
 | Debug engines | .NET Framework CorDebug (`CLR v4.0.30319`, covering 4.0–4.8) and Mono/Unity (UCH) |
-| Out of scope for now | x86, CoreCLR, outbound remote registration, clean-host remote acceptance, multi-session |
+| Out of scope for now | x86, CoreCLR, clean-host remote acceptance, multi-session |
 
 ## Toolchain
 
@@ -97,10 +97,10 @@ that is a build-driver limitation, not a source failure.
 Build the deploy-only remote host archive on the development machine:
 
 ```powershell
-.\pack-remote-host.ps1
+.\pack-remote-host.ps1 -HostId 'win11-clean' -GatewayAddress '192.168.250.1'
 ```
 
-This publishes `artifacts\remote-host\dgSpy-remote-host-win-x64.zip`. It contains the self-contained
+This publishes `artifacts\remote-host\dgSpy-remote-host-win11-clean-win-x64.zip`. It contains the self-contained
 net10 x64 dnSpy host, the matching dgSpy extension and its private dependencies, a process-scoped
 launcher, and `manifest.json` with a stable sorted SHA-256 inventory. The Gateway is intentionally not
 included. On the remote machine, extract the archive and run:
@@ -117,7 +117,10 @@ the central Gateway. Use `-InitializeOnly` to create or inspect the paths withou
 Removing the extracted directory removes the host and its state.
 
 Validate an archive's complete hash inventory and launcher-state persistence with
-`.\tests\verify-remote-host-package.ps1`.
+`.\tests\verify-remote-host-package.ps1 -ArchivePath <zip>`. Run the local reverse-registration
+acceptance with `.\tests\run-remote-registration-smoke.ps1`; it deploys a package, launches a CorDebug
+target through the outbound connection, restarts the Gateway, proves the same session and event cursor
+remain available, terminates the target, and removes the deployment.
 
 ### Do not substitute `dotnet build` for the dnSpy baseline
 

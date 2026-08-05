@@ -28,6 +28,10 @@ namespace dgSpy.Protocol {
 		[JsonProperty("extension_version")] public string ExtensionVersion { get; set; }="0.1.0";
 		[JsonProperty("host_id")] public string HostId { get; set; }="";
 	}
+	public sealed class HostRegistration {
+		[JsonProperty("protocol_version")] public int ProtocolVersion { get; set; }=Protocol.ProtocolVersion.Current;
+		[JsonProperty("host_id")] public string HostId { get; set; }="";
+	}
 	public sealed class ProgramInfo {
 		[JsonProperty("program_id")] public string ProgramId { get; set; }=""; [JsonProperty("pid")] public int ProcessId { get; set; }
 		[JsonProperty("executable")] public string Executable { get; set; }=""; [JsonProperty("title")] public string Title { get; set; }="";

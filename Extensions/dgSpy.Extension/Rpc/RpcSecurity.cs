@@ -37,6 +37,18 @@ namespace dgSpy.Extension {
 		}
 	}
 
+	sealed class RemoteGatewaySettings {
+		public string Address { get; } public int Port { get; }
+		RemoteGatewaySettings(string address,int port) { Address=address; Port=port; }
+		public static bool TryLoad(out RemoteGatewaySettings settings) {
+			var address=Environment.GetEnvironmentVariable("DGSPY_GATEWAY_ADDRESS");
+			if (string.IsNullOrWhiteSpace(address)) { settings=null!; return false; }
+			if (!int.TryParse(Environment.GetEnvironmentVariable("DGSPY_GATEWAY_PORT"),out var port)) port=7352;
+			if (port<1 || port>65535) throw new InvalidOperationException("DGSPY_GATEWAY_PORT is invalid.");
+			settings=new RemoteGatewaySettings(address.Trim(),port); return true;
+		}
+	}
+
 	static class RpcRequestAuthenticator {
 		public static string? Reject(string operation,string? requestedHostId,string? presentedToken,string hostId,string expectedToken) {
 			if (string.IsNullOrEmpty(expectedToken)) return "RPC authentication is not configured.";

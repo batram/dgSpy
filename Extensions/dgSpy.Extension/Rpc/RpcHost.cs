@@ -33,7 +33,7 @@ namespace dgSpy.Extension {
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		readonly RpcSecuritySettings rpcSecurity=RpcSecuritySettings.Load();
 		TcpListener? tcpListener;
-		Task? listener; string? sessionId; string? attachedProgramId; string? sessionKind; string? lifecycleAction; long stateVersion; bool attaching; bool faulted; string? faultMessage; string? lastUserMessage; int? terminalExitCode; string? terminalReason;
+		Task? listener; Task? outbound; string? sessionId; string? attachedProgramId; string? sessionKind; string? lifecycleAction; long stateVersion; bool attaching; bool faulted; string? faultMessage; string? lastUserMessage; int? terminalExitCode; string? terminalReason;
 		bool IsMonoEndpoint => attachedProgramId?.StartsWith("endpoint:unity:",StringComparison.Ordinal)==true ||
 			attachedProgramId?.StartsWith("endpoint:mono:",StringComparison.Ordinal)==true;
 		bool? IsTargetRunning => IsMonoEndpoint ? manager.IsRunning :
@@ -59,7 +59,7 @@ namespace dgSpy.Extension {
 			manager.MessageUserMessage += (_,e) => { lock(sync) lastUserMessage=e.Message; };
 			manager.DbgManagerMessage += (_,e) => output.Add(e.MessageKind,e.Message);
 		}
-		public void Start() { if (listener is not null) return; manager.WriteMessage($"dgSpy {Version} host {rpcSecurity.HostId} listening on authenticated RPC 127.0.0.1:{rpcPort}"); listener=Task.Run(ListenAsync); }
+		public void Start() { if (listener is not null) return; manager.WriteMessage($"dgSpy {Version} host {rpcSecurity.HostId} listening on authenticated RPC 127.0.0.1:{rpcPort}"); listener=Task.Run(ListenAsync); if (RemoteGatewaySettings.TryLoad(out var remote)) outbound=Task.Run(()=>ConnectOutboundAsync(remote)); }
 		async Task ListenAsync() { try { tcpListener=new TcpListener(IPAddress.Loopback,rpcPort); tcpListener.Start(8); while(!shutdown.IsCancellationRequested) { var client=await tcpListener.AcceptTcpClientAsync().ConfigureAwait(false); _=HandleClientAsync(client); } } catch(ObjectDisposedException) when(shutdown.IsCancellationRequested) { } catch(Exception ex) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.ErrorUser,"dgSpy TCP listener: "+ex.Message); } }
 		async Task HandleClientAsync(TcpClient client) { using(client) try { using var stream=client.GetStream(); using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); using var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true}; string? line; while ((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null) { var req=JsonConvert.DeserializeObject<RpcRequest>(line); var response=req is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(req).ConfigureAwait(false); await writer.WriteLineAsync(JsonConvert.SerializeObject(response)).ConfigureAwait(false); } } 		// A client going away is routine, not an error: the gateway opens a fresh connection per request
 		// and drops it whenever a request is cancelled or hits its deadline. Reporting those through
@@ -67,6 +67,25 @@ namespace dgSpy.Extension {
 		// window, which is not modal.
 		catch(Exception ex) when (ex is IOException || ex is SocketException || ex is ObjectDisposedException || ex is OperationCanceledException) { }
 		catch(Exception ex) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.Output,"dgSpy TCP client: "+ex.Message); } }
+		async Task ConnectOutboundAsync(RemoteGatewaySettings remote) {
+			var delay=TimeSpan.FromSeconds(1);
+			while(!shutdown.IsCancellationRequested) {
+				try {
+					using var client=new TcpClient(); await client.ConnectAsync(remote.Address,remote.Port).ConfigureAwait(false);
+					using var stream=client.GetStream(); using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); using var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true};
+					var registration=new RpcRequest { Operation="register_host",HostId=rpcSecurity.HostId,AuthenticationToken=rpcSecurity.Token,DeadlineUtc=DateTime.UtcNow.AddSeconds(10) };
+					await writer.WriteLineAsync(JsonConvert.SerializeObject(registration)).ConfigureAwait(false);
+					var registered=JsonConvert.DeserializeObject<RpcResponse>(await reader.ReadLineAsync().ConfigureAwait(false) ?? "") ?? throw new IOException("Gateway closed during registration.");
+					if (registered.Error is not null || registered.Version!=ProtocolVersion.Current) throw new IOException(registered.Error?.Message ?? "Gateway protocol mismatch.");
+					var accepted=(registered.Result as JObject)?.ToObject<HostRegistration>() ?? throw new IOException("Gateway returned an invalid registration response.");
+					if (!string.Equals(accepted.HostId,rpcSecurity.HostId,StringComparison.Ordinal)) throw new IOException($"Gateway registered '{accepted.HostId}', expected '{rpcSecurity.HostId}'.");
+					manager.WriteMessage($"dgSpy host {rpcSecurity.HostId} registered with {remote.Address}:{remote.Port}"); delay=TimeSpan.FromSeconds(1);
+					string? line; while((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null && !shutdown.IsCancellationRequested) { var request=JsonConvert.DeserializeObject<RpcRequest>(line); var response=request is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(request).ConfigureAwait(false); await writer.WriteLineAsync(JsonConvert.SerializeObject(response)).ConfigureAwait(false); }
+				} catch(Exception ex) when(!shutdown.IsCancellationRequested) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.Output,"dgSpy outbound gateway: "+ex.Message); }
+				try { await Task.Delay(delay,shutdown.Token).ConfigureAwait(false); } catch(OperationCanceledException) { return; }
+				delay=TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds*2,30));
+			}
+		}
 		async Task<RpcResponse> DispatchAsync(RpcRequest req) { try {
 			if (req.Version!=ProtocolVersion.Current) return RpcResponse.Failure(req.RequestId,"incompatible_protocol",$"Protocol {req.Version} is unsupported; expected {ProtocolVersion.Current}.");
 			var authenticationError=RpcRequestAuthenticator.Reject(req.Operation,req.HostId,req.AuthenticationToken,rpcSecurity.HostId,rpcSecurity.Token);

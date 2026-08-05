@@ -6,6 +6,7 @@ using Newtonsoft.Json.Linq;
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls(builder.Configuration["DGSPY_URL"] ?? "http://127.0.0.1:7350");
 builder.Services.AddSingleton<HostRouter>();
+builder.Services.AddHostedService<RemoteHostListener>();
 var app = builder.Build();
 
 // Clients authenticate with a local secret. Take it from the environment when set, otherwise mint

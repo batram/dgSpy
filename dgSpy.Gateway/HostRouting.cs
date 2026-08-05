@@ -13,9 +13,10 @@ public sealed class HostEndpoint {
 	public IPAddress Address { get; }
 	public int Port { get; }
 	internal string Token { get; }
+	public bool IsOutbound { get; }
 
-	internal HostEndpoint(string hostId,string displayName,IPAddress address,int port,string token) {
-		HostId=hostId; DisplayName=displayName; Address=address; Port=port; Token=token;
+	internal HostEndpoint(string hostId,string displayName,IPAddress address,int port,string token,bool isOutbound=false) {
+		HostId=hostId; DisplayName=displayName; Address=address; Port=port; Token=token; IsOutbound=isOutbound;
 	}
 }
 
@@ -40,11 +41,13 @@ public sealed class HostRegistry {
 		foreach (var host in document.Hosts) {
 			if (string.IsNullOrWhiteSpace(host.HostId)) throw new InvalidOperationException("Every registered host requires host_id.");
 			if (!ids.Add(host.HostId)) throw new InvalidOperationException($"Duplicate host_id '{host.HostId}'.");
-			if (!IPAddress.TryParse(host.Address,out var address) || !IPAddress.IsLoopback(address))
+			var outbound=string.Equals(host.Transport,"outbound",StringComparison.Ordinal);
+			if (!outbound && (!IPAddress.TryParse(host.Address,out var parsed) || !IPAddress.IsLoopback(parsed)))
 				throw new InvalidOperationException($"Host '{host.HostId}' must use a loopback tunnel endpoint, not '{host.Address}'.");
-			if (host.Port is <1 or >65535) throw new InvalidOperationException($"Host '{host.HostId}' has an invalid port.");
+			var address=outbound ? IPAddress.None : IPAddress.Parse(host.Address);
+			if (!outbound && host.Port is <1 or >65535) throw new InvalidOperationException($"Host '{host.HostId}' has an invalid port.");
 			var token=ResolveToken(host,baseDirectory);
-			endpoints.Add(new HostEndpoint(host.HostId,host.DisplayName ?? host.HostId,address,host.Port,token));
+			endpoints.Add(new HostEndpoint(host.HostId,host.DisplayName ?? host.HostId,address,host.Port,token,outbound));
 		}
 		return new HostRegistry(endpoints);
 	}
@@ -94,6 +97,7 @@ public sealed class HostRegistry {
 		[JsonProperty("display_name")] public string? DisplayName { get; set; }
 		[JsonProperty("address")] public string Address { get; set; }="127.0.0.1";
 		[JsonProperty("port")] public int Port { get; set; }
+		[JsonProperty("transport")] public string? Transport { get; set; }
 		[JsonProperty("token_environment")] public string? TokenEnvironment { get; set; }
 		[JsonProperty("token_file")] public string? TokenFile { get; set; }
 	}
@@ -101,11 +105,20 @@ public sealed class HostRegistry {
 
 public sealed class HostRouter {
 	readonly HostRegistry registry;
-	readonly Dictionary<string,EndpointRpcClient> clients;
+	readonly Dictionary<string,IHostRpcClient> clients;
 	public HostRouter() : this(HostRegistry.Load()) { }
 	internal HostRouter(HostRegistry registry) {
 		this.registry=registry;
-		clients=registry.Endpoints.ToDictionary(endpoint=>endpoint.HostId,endpoint=>new EndpointRpcClient(endpoint),StringComparer.Ordinal);
+		clients=registry.Endpoints.ToDictionary(endpoint=>endpoint.HostId,endpoint=>endpoint.IsOutbound ? (IHostRpcClient)new RegisteredRpcClient(endpoint) : new EndpointRpcClient(endpoint),StringComparer.Ordinal);
+	}
+	internal bool TryAuthenticate(string hostId,string token,out string error) {
+		if (!registry.TryGet(hostId,out var endpoint) || !endpoint.IsOutbound) { error="Unknown outbound host."; return false; }
+		if (!RpcCredential.FixedTimeEquals(token,endpoint.Token)) { error="Invalid host credential."; return false; }
+		error=""; return true;
+	}
+	internal bool TryRegister(string hostId,TcpClient client,StreamReader reader,StreamWriter writer,out string error) {
+		if (!clients.TryGetValue(hostId,out var value) || value is not RegisteredRpcClient registered) { error="Unknown outbound host."; return false; }
+		return registered.TryRegister(client,reader,writer,out error);
 	}
 
 	public async Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken) {
@@ -133,7 +146,9 @@ public sealed class HostRouter {
 	}
 }
 
-sealed class EndpointRpcClient {
+interface IHostRpcClient { Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken); }
+
+sealed class EndpointRpcClient : IHostRpcClient {
 	readonly HostEndpoint endpoint;
 	public EndpointRpcClient(HostEndpoint endpoint) { this.endpoint=endpoint; }
 
@@ -159,6 +174,73 @@ sealed class EndpointRpcClient {
 		await writer.WriteLineAsync(JsonConvert.SerializeObject(request));
 		var line=await reader.ReadLineAsync(cancellationToken) ?? throw new IOException("The dgSpy extension closed the pipe.");
 		return JsonConvert.DeserializeObject<RpcResponse>(line) ?? throw new IOException("Invalid RPC response.");
+	}
+}
+
+sealed class RegisteredRpcClient : IHostRpcClient {
+	readonly HostEndpoint endpoint; readonly object sync=new(); ReverseConnection? connection;
+	public RegisteredRpcClient(HostEndpoint endpoint) { this.endpoint=endpoint; }
+	public bool TryRegister(TcpClient client,StreamReader reader,StreamWriter writer,out string error) {
+		lock(sync) {
+			if (connection is { IsAlive:true }) { error=$"Host '{endpoint.HostId}' already has a live connection."; return false; }
+			connection?.Dispose(); connection=new ReverseConnection(client,reader,writer); error=""; return true;
+		}
+	}
+	public Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken) {
+		ReverseConnection? active; lock(sync) active=connection;
+		if (active is null || !active.IsAlive) throw new IOException($"Host '{endpoint.HostId}' is not connected.");
+		request.HostId=endpoint.HostId; request.AuthenticationToken=endpoint.Token;
+		return active.CallAsync(request,cancellationToken);
+	}
+}
+
+sealed class ReverseConnection : IDisposable {
+	readonly TcpClient client; readonly StreamReader reader; readonly StreamWriter writer; readonly SemaphoreSlim calls=new(1,1);
+	public bool IsAlive { get { try { return client.Connected && !(client.Client.Poll(0,SelectMode.SelectRead) && client.Available==0); } catch { return false; } } }
+	public ReverseConnection(TcpClient client,StreamReader reader,StreamWriter writer) { this.client=client; this.reader=reader; this.writer=writer; }
+	public async Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken) {
+		await calls.WaitAsync(cancellationToken);
+		try {
+			await writer.WriteLineAsync(JsonConvert.SerializeObject(request));
+			var line=await reader.ReadLineAsync(cancellationToken) ?? throw new IOException("The remote host disconnected.");
+			return JsonConvert.DeserializeObject<RpcResponse>(line) ?? throw new IOException("Invalid remote host response.");
+		} catch { Dispose(); throw; } finally { calls.Release(); }
+	}
+	public void Dispose() { client.Dispose(); }
+}
+
+public sealed class RemoteHostListener : BackgroundService {
+	readonly HostRouter router; TcpListener? listener;
+	public RemoteHostListener(HostRouter router) { this.router=router; }
+	protected override async Task ExecuteAsync(CancellationToken stoppingToken) {
+		var addressText=Environment.GetEnvironmentVariable("DGSPY_REMOTE_ADDRESS");
+		if (string.IsNullOrWhiteSpace(addressText)) return;
+		if (!IPAddress.TryParse(addressText,out var address)) throw new InvalidOperationException("DGSPY_REMOTE_ADDRESS must be an IP address.");
+		var port=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_REMOTE_PORT"),out var configured) ? configured : 7352;
+		listener=new TcpListener(address,port); listener.Start(16);
+		while (!stoppingToken.IsCancellationRequested) {
+			var client=await listener.AcceptTcpClientAsync(stoppingToken);
+			_=RegisterAsync(client,stoppingToken);
+		}
+	}
+	async Task RegisterAsync(TcpClient client,CancellationToken token) {
+		try {
+			var stream=client.GetStream(); var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true};
+			var line=await reader.ReadLineAsync(token); var request=line is null ? null : JsonConvert.DeserializeObject<RpcRequest>(line); string error="Invalid registration.";
+			if (request is null || request.Operation!="register_host" || request.Version!=ProtocolVersion.Current || string.IsNullOrWhiteSpace(request.HostId) || !router.TryAuthenticate(request.HostId,request.AuthenticationToken ?? "",out error) || !router.TryRegister(request.HostId,client,reader,writer,out error)) {
+				await writer.WriteLineAsync(JsonConvert.SerializeObject(RpcResponse.Failure(request?.RequestId ?? "","registration_rejected",error))); client.Dispose(); return;
+			}
+			await writer.WriteLineAsync(JsonConvert.SerializeObject(RpcResponse.Success(request.RequestId,new HostRegistration { HostId=request.HostId })));
+		} catch { client.Dispose(); }
+	}
+	public override void Dispose() { listener?.Stop(); base.Dispose(); }
+}
+
+static class RpcCredential {
+	public static bool FixedTimeEquals(string presented,string expected) {
+		var different=presented.Length^expected.Length; var count=Math.Max(presented.Length,expected.Length);
+		for(var index=0;index<count;index++) different|=(index<presented.Length?presented[index]:0)^(index<expected.Length?expected[index]:0);
+		return different==0;
 	}
 }
 

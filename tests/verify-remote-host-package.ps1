@@ -1,4 +1,4 @@
-param([string]$ArchivePath = "$PSScriptRoot\..\artifacts\remote-host\dgSpy-remote-host-win-x64.zip")
+param([Parameter(Mandatory=$true)][string]$ArchivePath)
 
 $ErrorActionPreference = 'Stop'
 $ArchivePath = [IO.Path]::GetFullPath($ArchivePath)
@@ -17,6 +17,8 @@ try {
 		$actualHash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
 		if ($actualHash -ne $entry.sha256 -or (Get-Item -LiteralPath $file).Length -ne $entry.size) { throw "Manifest mismatch: $($entry.path)" }
 	}
+	$remote = Get-Content -LiteralPath (Join-Path $extractRoot 'remote-host.json') -Raw | ConvertFrom-Json
+	if ([string]::IsNullOrWhiteSpace($remote.host_id) -or [string]::IsNullOrWhiteSpace($remote.gateway_address) -or $remote.gateway_port -lt 1) { throw 'Remote host configuration is incomplete.' }
 	$launcher = Join-Path $extractRoot 'launcher\Start-dgSpyRemoteHost.ps1'
 	& $launcher -InitializeOnly
 	$hostId = Get-Content -LiteralPath (Join-Path $extractRoot 'state\host.id') -Raw
