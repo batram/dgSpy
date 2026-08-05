@@ -48,7 +48,7 @@ Progress:
 - **Complete:** extension-initiated Gateway registration using centrally provisioned deploy ZIPs,
   including local packaged-host debugger and Gateway-restart acceptance. Clean multi-machine acceptance
   remains part of item 4.
-- **Next:** pinned self-signed mutual TLS on that connection.
+- **Complete:** optional pinned self-signed mutual TLS on that connection, with plaintext and TLS selected per deployment.
 - **Open:** clean-host acceptance, MCP client identity, leases, permissions, disconnect policy, audit
   records, and encrypted client-to-Gateway transport.
 
@@ -60,7 +60,7 @@ Progress:
    listener. The Gateway keeps MCP on loopback, rejects unknown/duplicate/mismatched hosts, and reports
    connection state through `list_hosts`. Prove one and multiple packaged hosts, disconnect/reconnect
    with preserved dnSpy session state and event cursors, and removal by deleting the extracted package.
-2. Add minimal mutual TLS to the outbound host connection. Generate one self-signed Gateway server
+2. **Complete.** Add minimal mutual TLS to the outbound host connection. Generate one self-signed Gateway server
    certificate and one unique self-signed client certificate per package on the central machine. Load
    certificate files directly without modifying OS trust stores; the remote pins the exact Gateway
    certificate and the Gateway pins each client certificate to its configured `host_id`. Require TLS 1.2

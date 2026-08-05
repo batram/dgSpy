@@ -21,6 +21,12 @@ if (Test-Path -LiteralPath $configurationFile -PathType Leaf) {
 	if ([string]::IsNullOrWhiteSpace($HostId)) { $HostId = $configuration.host_id }
 	$env:DGSPY_GATEWAY_ADDRESS = $configuration.gateway_address
 	$env:DGSPY_GATEWAY_PORT = ([int]$configuration.gateway_port).ToString([Globalization.CultureInfo]::InvariantCulture)
+	$env:DGSPY_GATEWAY_TRANSPORT = $configuration.transport
+	if ($configuration.transport -eq 'tls') {
+		$env:DGSPY_CLIENT_CERTIFICATE_FILE = Join-Path $bundleRoot $configuration.client_certificate_file
+		$env:DGSPY_CLIENT_CERTIFICATE_PASSWORD_FILE = Join-Path $bundleRoot $configuration.client_certificate_password_file
+		$env:DGSPY_GATEWAY_CERTIFICATE_FILE = Join-Path $bundleRoot $configuration.gateway_certificate_file
+	}
 }
 if ($ResetIdentity) { Remove-Item -LiteralPath $hostIdFile, $tokenFile -Force -ErrorAction SilentlyContinue }
 

@@ -43,8 +43,8 @@ dgSpy dnSpy Extension
   configured shared credential. The gateway verifies the extension's stable `host_id` during handshake.
   This remains the delivered local transport. For remote hosts, a centrally provisioned extension opens
   one persistent outbound connection and registers its expected identity with the Gateway; the same RPC
-  messages then travel over that reverse stream. See [remote hosts](REMOTE_HOSTS.md). Pinned mutual TLS and client-to-Gateway encrypted transport remain roadmap
-  work.
+  messages then travel over that reverse stream. See [remote hosts](REMOTE_HOSTS.md). Each deployment
+  selects plaintext or pinned mutual TLS; the separate MCP client-to-Gateway encrypted transport remains roadmap work.
 
 Keep tool families in focused `RpcHost.<Family>.cs` partials under `Debugger/`, `Decompiler/`,
 `Evaluation/`, `Events/`, `Handles/`, or `Identity/`. Keep shared dnSpy objects and shutdown ownership in
@@ -85,7 +85,7 @@ The delivered local boundary therefore requires loopback listeners, gateway `Ori
 local shared secret. It does not claim that loopback alone is authentication or that function evaluation
 is sandboxed.
 
-Remote host transport uses centrally provisioned packages and will add pinned self-signed mutual TLS: the
+Remote host transport uses centrally provisioned packages and optionally uses pinned self-signed mutual TLS: the
 remote pins the Gateway certificate, and the Gateway pins one client certificate to each `host_id`, with
 no OS trust-store changes. Before multi-client use, add client identity, encrypted client-to-Gateway
 transport, per-client/per-target permissions, request and response limits, side-effect audit records, and

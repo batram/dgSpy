@@ -38,14 +38,17 @@ namespace dgSpy.Extension {
 	}
 
 	sealed class RemoteGatewaySettings {
-		public string Address { get; } public int Port { get; }
-		RemoteGatewaySettings(string address,int port) { Address=address; Port=port; }
+		public string Address { get; } public int Port { get; } public bool UseTls { get; } public string? ClientCertificateFile { get; } public string? ClientCertificatePasswordFile { get; } public string? GatewayCertificateFile { get; }
+		RemoteGatewaySettings(string address,int port,bool useTls,string? clientCertificateFile,string? clientCertificatePasswordFile,string? gatewayCertificateFile) { Address=address; Port=port; UseTls=useTls; ClientCertificateFile=clientCertificateFile; ClientCertificatePasswordFile=clientCertificatePasswordFile; GatewayCertificateFile=gatewayCertificateFile; }
 		public static bool TryLoad(out RemoteGatewaySettings settings) {
 			var address=Environment.GetEnvironmentVariable("DGSPY_GATEWAY_ADDRESS");
 			if (string.IsNullOrWhiteSpace(address)) { settings=null!; return false; }
 			if (!int.TryParse(Environment.GetEnvironmentVariable("DGSPY_GATEWAY_PORT"),out var port)) port=7352;
 			if (port<1 || port>65535) throw new InvalidOperationException("DGSPY_GATEWAY_PORT is invalid.");
-			settings=new RemoteGatewaySettings(address.Trim(),port); return true;
+			var useTls=string.Equals(Environment.GetEnvironmentVariable("DGSPY_GATEWAY_TRANSPORT"),"tls",StringComparison.OrdinalIgnoreCase);
+			var clientCertificateFile=Environment.GetEnvironmentVariable("DGSPY_CLIENT_CERTIFICATE_FILE"); var clientCertificatePasswordFile=Environment.GetEnvironmentVariable("DGSPY_CLIENT_CERTIFICATE_PASSWORD_FILE"); var gatewayCertificateFile=Environment.GetEnvironmentVariable("DGSPY_GATEWAY_CERTIFICATE_FILE");
+			if (useTls && (string.IsNullOrWhiteSpace(clientCertificateFile) || string.IsNullOrWhiteSpace(clientCertificatePasswordFile) || string.IsNullOrWhiteSpace(gatewayCertificateFile))) throw new InvalidOperationException("TLS requires client certificate, password, and pinned Gateway certificate files.");
+			settings=new RemoteGatewaySettings(address.Trim(),port,useTls,clientCertificateFile,clientCertificatePasswordFile,gatewayCertificateFile); return true;
 		}
 	}
 

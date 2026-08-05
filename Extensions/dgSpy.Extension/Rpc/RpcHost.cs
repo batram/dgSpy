@@ -4,6 +4,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -72,7 +75,7 @@ namespace dgSpy.Extension {
 			while(!shutdown.IsCancellationRequested) {
 				try {
 					using var client=new TcpClient(); await client.ConnectAsync(remote.Address,remote.Port).ConfigureAwait(false);
-					using var stream=client.GetStream(); using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); using var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true};
+					using var stream=await OpenGatewayStreamAsync(client,remote).ConfigureAwait(false); using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); using var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true};
 					var registration=new RpcRequest { Operation="register_host",HostId=rpcSecurity.HostId,AuthenticationToken=rpcSecurity.Token,DeadlineUtc=DateTime.UtcNow.AddSeconds(10) };
 					await writer.WriteLineAsync(JsonConvert.SerializeObject(registration)).ConfigureAwait(false);
 					var registered=JsonConvert.DeserializeObject<RpcResponse>(await reader.ReadLineAsync().ConfigureAwait(false) ?? "") ?? throw new IOException("Gateway closed during registration.");
@@ -85,6 +88,18 @@ namespace dgSpy.Extension {
 				try { await Task.Delay(delay,shutdown.Token).ConfigureAwait(false); } catch(OperationCanceledException) { return; }
 				delay=TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds*2,30));
 			}
+		}
+		static async Task<Stream> OpenGatewayStreamAsync(TcpClient client,RemoteGatewaySettings remote) {
+			if (!remote.UseTls) return client.GetStream();
+			var pinned=new X509Certificate2(remote.GatewayCertificateFile!); var password=File.ReadAllText(remote.ClientCertificatePasswordFile!).Trim(); var clientCertificate=new X509Certificate2(remote.ClientCertificateFile!,password,X509KeyStorageFlags.DefaultKeySet);
+			var tls=new SslStream(client.GetStream(),false,(_,certificate,__,___)=>certificate is not null && CertificateMatches(certificate,pinned));
+			await tls.AuthenticateAsClientAsync(remote.Address,new X509CertificateCollection { clientCertificate },SslProtocols.Tls12,false).ConfigureAwait(false);
+			return tls;
+		}
+		static bool CertificateMatches(X509Certificate left,X509Certificate right) {
+			var a=left.GetCertHash(); var b=right.GetCertHash(); var different=a.Length^b.Length; var count=Math.Max(a.Length,b.Length);
+			for(var index=0;index<count;index++) different|=(index<a.Length?a[index]:0)^(index<b.Length?b[index]:0);
+			return different==0;
 		}
 		async Task<RpcResponse> DispatchAsync(RpcRequest req) { try {
 			if (req.Version!=ProtocolVersion.Current) return RpcResponse.Failure(req.RequestId,"incompatible_protocol",$"Protocol {req.Version} is unsupported; expected {ProtocolVersion.Current}.");

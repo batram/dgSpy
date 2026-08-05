@@ -57,7 +57,14 @@ app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, CancellationToken c
 		return Results.Json(new { jsonrpc="2.0", id, result=new { structuredContent=structured, content=new[] { new { type="text", text=JsonConvert.SerializeObject(response.Result) } } } });
 	} catch (Exception ex) { return McpError(id, -32603, ex.Message); }
 });
-app.Run();
+try { app.Run(); }
+catch (Exception ex) {
+	var fatalLog=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy","gateway-fatal.log");
+	var detail=$"[{DateTime.UtcNow:O}] {ex}\n"; var saved=false;
+	try { Directory.CreateDirectory(Path.GetDirectoryName(fatalLog)!); File.AppendAllText(fatalLog,detail); saved=true; } catch { }
+	Console.Error.WriteLine(saved ? $"dgSpy Gateway stopped: {ex.Message}. Details: {fatalLog}" : $"dgSpy Gateway stopped: {ex}");
+	Environment.ExitCode=1;
+}
 static IResult McpError(JToken? id, int code, string message) => Results.Json(new { jsonrpc="2.0", id, error=new { code, message } });
 
 public static class ToolCatalog {

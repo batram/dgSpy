@@ -100,6 +100,9 @@ Build the deploy-only remote host archive on the development machine:
 .\pack-remote-host.ps1 -HostId 'win11-clean' -GatewayAddress '192.168.250.1'
 ```
 
+Add `-UseTls -GatewayTlsPort 7353` for a pinned mutual-TLS package. Omitting `-UseTls` deliberately
+keeps the authenticated plaintext deployment option.
+
 This publishes `artifacts\remote-host\dgSpy-remote-host-win11-clean-win-x64.zip`. It contains the self-contained
 net10 x64 dnSpy host, the matching dgSpy extension and its private dependencies, a process-scoped
 launcher, and `manifest.json` with a stable sorted SHA-256 inventory. The Gateway is intentionally not
@@ -118,7 +121,7 @@ Removing the extracted directory removes the host and its state.
 
 Validate an archive's complete hash inventory and launcher-state persistence with
 `.\tests\verify-remote-host-package.ps1 -ArchivePath <zip>`. Run the local reverse-registration
-acceptance with `.\tests\run-remote-registration-smoke.ps1`; it deploys a package, launches a CorDebug
+acceptance with `.\tests\run-remote-registration-smoke.ps1`; add `-UseTls` to exercise TLS. It deploys a package, launches a CorDebug
 target through the outbound connection, restarts the Gateway, proves the same session and event cursor
 remain available, terminates the target, and removes the deployment.
 

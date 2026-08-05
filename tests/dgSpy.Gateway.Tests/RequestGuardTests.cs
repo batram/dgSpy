@@ -3,6 +3,8 @@ using System.Net;
 using System.IO;
 using System.Linq;
 using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading.Tasks;
 using dgSpy.Protocol;
@@ -132,9 +134,27 @@ public class HostRegistryTests {
 			var endpoint=registry.Select("host-a");
 			Assert.True(endpoint.IsOutbound);
 			var router=new HostRouter(registry);
-			Assert.True(router.TryAuthenticate("host-a","token-a",out _));
-			Assert.False(router.TryAuthenticate("host-a","token-b",out _));
-			Assert.False(router.TryAuthenticate("host-b","token-a",out _));
+			Assert.True(router.TryAuthenticate("host-a","token-a",false,null,out _));
+			Assert.False(router.TryAuthenticate("host-a","token-b",false,null,out _));
+			Assert.False(router.TryAuthenticate("host-b","token-a",false,null,out _));
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	[Fact]
+	public void Tls_outbound_host_requires_the_pinned_certificate_and_tls_transport() {
+		var directory=CreateRegistryDirectory();
+		try {
+			using var key=RSA.Create(2048); var request=new CertificateRequest("CN=host-a",key,HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1);
+			using var certificate=request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1),DateTimeOffset.UtcNow.AddDays(1));
+			File.WriteAllBytes(Path.Combine(directory,"host-a.cer"),certificate.Export(X509ContentType.Cert));
+			var json=JsonConvert.SerializeObject(new { hosts=new[]{new { host_id="host-a",transport="outbound_tls",token_file="a.token",client_certificate_file="host-a.cer" }} });
+			var router=new HostRouter(HostRegistry.FromJson(json,directory)); var expected=certificate.GetCertHash(); var wrong=(byte[])expected.Clone(); wrong[0]^=0xff;
+			Assert.False(router.TryAuthenticate("host-a","token-a",false,expected,out _));
+			Assert.False(router.TryAuthenticate("host-a","token-a",true,null,out _));
+			Assert.False(router.TryAuthenticate("host-a","token-a",true,wrong,out _));
+			Assert.False(router.TryAuthenticate("host-a","token-b",true,expected,out _));
+			Assert.True(router.TryAuthenticate("host-a","token-a",true,expected,out _));
 		}
 		finally { Directory.Delete(directory,true); }
 	}

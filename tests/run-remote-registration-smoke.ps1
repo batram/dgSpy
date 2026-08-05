@@ -2,6 +2,7 @@ param(
 	[string]$HostId = 'local-remote-smoke',
 	[int]$GatewayPort = 18350,
 	[int]$RemotePort = 18352,
+	[switch]$UseTls,
 	[string]$KeepDeployment
 )
 
@@ -9,9 +10,6 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $dotnetExe=(Get-Command dotnet).Source
 $powershellExe=(Get-Command powershell).Source
-# Some automated shells inject both Path and PATH. Windows PowerShell's Start-Process rejects that
-# duplicate case-insensitive key. Remove only the process-local uppercase alias before launching.
-[Environment]::SetEnvironmentVariable('PATH',$null,[EnvironmentVariableTarget]::Process)
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $runRoot = Join-Path $repoRoot 'artifacts\remote-registration-smoke'
 $packageRoot = Join-Path $runRoot 'package'
@@ -25,6 +23,7 @@ $script:requestId = 0
 $gatewayProcess = $null
 $dnSpyProcess = $null
 $sessionId = $null
+$succeeded = $false
 
 function Wait-Until {
 	param([scriptblock]$Condition,[int]$TimeoutSeconds=30)
@@ -49,6 +48,12 @@ function Start-Gateway {
 	$env:DGSPY_HOSTS_FILE=Join-Path $packageRoot 'gateway-hosts.json'
 	$env:DGSPY_REMOTE_ADDRESS='127.0.0.1'
 	$env:DGSPY_REMOTE_PORT=[string]$RemotePort
+	$gatewayConfiguration=Get-Content -LiteralPath $env:DGSPY_HOSTS_FILE -Raw | ConvertFrom-Json
+	if ($gatewayConfiguration.tls) { $env:DGSPY_REMOTE_TLS_PORT=[string]$gatewayConfiguration.tls.port; $env:DGSPY_GATEWAY_SERVER_CERTIFICATE_FILE=Join-Path $packageRoot $gatewayConfiguration.tls.server_certificate_file; $env:DGSPY_GATEWAY_SERVER_CERTIFICATE_PASSWORD_FILE=Join-Path $packageRoot $gatewayConfiguration.tls.server_certificate_password_file; $env:DGSPY_REMOTE_DISABLE_PLAINTEXT='true' }
+	else { Remove-Item Env:DGSPY_REMOTE_TLS_PORT,Env:DGSPY_GATEWAY_SERVER_CERTIFICATE_FILE,Env:DGSPY_REMOTE_DISABLE_PLAINTEXT -ErrorAction SilentlyContinue }
+	# Some automated shells inject both Path and PATH. Windows PowerShell's Start-Process rejects that
+	# duplicate case-insensitive key. Tool-driven work is complete before this process-local cleanup.
+	[Environment]::SetEnvironmentVariable('PATH',$null,[EnvironmentVariableTarget]::Process)
 	$script:gatewayProcess=Start-Process -FilePath $dotnetExe -ArgumentList ('"'+$gatewayDll+'"') -WorkingDirectory (Split-Path $gatewayDll) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runRoot 'gateway.out') -RedirectStandardError (Join-Path $runRoot 'gateway.err')
 	if (-not (Wait-Until { try { (Invoke-RestMethod "$gatewayUrl/health" -TimeoutSec 1).status -eq 'ok' } catch { $false } } 30)) { throw 'Gateway did not become healthy.' }
 }
@@ -56,7 +61,8 @@ function Start-Gateway {
 try {
 	if (Test-Path -LiteralPath $runRoot) { Remove-Item -LiteralPath $runRoot -Recurse -Force }
 	New-Item -ItemType Directory -Path $packageRoot,$deploymentRoot -Force | Out-Null
-	& (Join-Path $repoRoot 'pack-remote-host.ps1') -SkipBuild -HostId $HostId -GatewayAddress '127.0.0.1' -GatewayPort $RemotePort -OutputDirectory $packageRoot
+	if ($UseTls) { & (Join-Path $repoRoot 'pack-remote-host.ps1') -SkipBuild -HostId $HostId -GatewayAddress '127.0.0.1' -GatewayTlsPort $RemotePort -OutputDirectory $packageRoot -UseTls }
+	else { & (Join-Path $repoRoot 'pack-remote-host.ps1') -SkipBuild -HostId $HostId -GatewayAddress '127.0.0.1' -GatewayPort $RemotePort -OutputDirectory $packageRoot }
 	$archive=Join-Path $packageRoot "dgSpy-remote-host-$HostId-win-x64.zip"
 	& (Join-Path $PSScriptRoot 'verify-remote-host-package.ps1') -ArchivePath $archive
 	& tar.exe -xf $archive -C $deploymentRoot
@@ -70,6 +76,8 @@ try {
 	$env:DGSPY_RPC_TOKEN=(Get-Content -LiteralPath (Join-Path $deploymentRoot 'state\rpc.token') -Raw).Trim()
 	$env:DGSPY_GATEWAY_ADDRESS=$remoteConfiguration.gateway_address
 	$env:DGSPY_GATEWAY_PORT=[string]$remoteConfiguration.gateway_port
+	$env:DGSPY_GATEWAY_TRANSPORT=$remoteConfiguration.transport
+	if ($remoteConfiguration.transport -eq 'tls') { $env:DGSPY_CLIENT_CERTIFICATE_FILE=Join-Path $deploymentRoot $remoteConfiguration.client_certificate_file; $env:DGSPY_CLIENT_CERTIFICATE_PASSWORD_FILE=Join-Path $deploymentRoot $remoteConfiguration.client_certificate_password_file; $env:DGSPY_GATEWAY_CERTIFICATE_FILE=Join-Path $deploymentRoot $remoteConfiguration.gateway_certificate_file }
 	$dnSpyExe=Join-Path $deploymentRoot 'dnSpy.exe'
 	$dnSpyProcess=Start-Process -FilePath $dnSpyExe -ArgumentList '--dgspy-no-window-activation' -WorkingDirectory $deploymentRoot -WindowStyle Hidden -PassThru
 	if (-not (Wait-Until { try { @((Invoke-Tool 'list_hosts' @{}) | Where-Object { $_.host_id -eq $HostId -and $_.state -eq 'connected' }).Count -eq 1 } catch { $false } } 60)) { throw 'Packaged host did not register.' }
@@ -87,11 +95,13 @@ try {
 	if ($after.session_id -ne $before.session_id -or $after.last_event_id -lt $before.last_event_id) { throw 'Session identity or event cursor was not preserved.' }
 	$null=Invoke-Tool 'terminate' @{host_id=$HostId;session_id=$sessionId}
 	$sessionId=$null
-	Write-Host "PASS: packaged plaintext host registered, routed RPC, and preserved session/cursor across Gateway restart."
+	Write-Host "PASS: packaged $($remoteConfiguration.transport) host registered, routed RPC, and preserved session/cursor across Gateway restart."
+	$succeeded=$true
 }
 finally {
 	if ($sessionId) { try { $null=Invoke-Tool 'terminate' @{host_id=$HostId;session_id=$sessionId} } catch {} }
 	if ($gatewayProcess -and -not $gatewayProcess.HasExited) { Stop-Process -Id $gatewayProcess.Id -Force -ErrorAction SilentlyContinue }
 	if ($dnSpyProcess -and -not $dnSpyProcess.HasExited) { Stop-Process -Id $dnSpyProcess.Id -Force -ErrorAction SilentlyContinue; $dnSpyProcess.WaitForExit(10000) | Out-Null }
-	if (-not $KeepDeployment -and (Test-Path -LiteralPath $runRoot)) { Remove-Item -LiteralPath $runRoot -Recurse -Force }
+	if (-not $succeeded) { Get-Content (Join-Path $runRoot 'gateway.err') -ErrorAction SilentlyContinue; Get-Content (Join-Path $runRoot 'gateway.out') -Tail 40 -ErrorAction SilentlyContinue }
+	if ($succeeded -and -not $KeepDeployment -and (Test-Path -LiteralPath $runRoot)) { Remove-Item -LiteralPath $runRoot -Recurse -Force }
 }

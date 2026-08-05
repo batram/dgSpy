@@ -9,9 +9,8 @@ long-running setup command.
 
 The repository builds a centrally provisioned self-contained x64 host ZIP. The extension opens one
 persistent authenticated outbound connection, the Gateway routes RPC over it, and `list_hosts` reports
-connected, unavailable, and error states. The local loopback RPC path remains available. The outbound
-connection is not encrypted yet; use it only on a trusted isolated network until the pinned mutual-TLS
-step below is complete.
+connected, unavailable, and error states. The local loopback RPC path remains available. Provisioning
+selects authenticated plaintext for trusted isolated networks or pinned mutual TLS per package.
 
 Build and verify the portable baseline on the central development machine:
 
@@ -53,6 +52,12 @@ intended command shape is:
 .\pack-remote-host.ps1 -HostId 'win11-clean' -GatewayAddress '192.168.250.1' -GatewayPort 7352
 ```
 
+For mutual TLS, provision the package on a separate listener port:
+
+```powershell
+.\pack-remote-host.ps1 -HostId 'win11-clean-tls' -GatewayAddress '192.168.250.1' -UseTls -GatewayTlsPort 7353
+```
+
 The output contains no Gateway executable:
 
 ```text
@@ -86,26 +91,29 @@ implicitly resumes, detaches, or terminates a paused target.
 
 ## Minimal mutual TLS
 
-After plain authenticated reverse registration works, protect that same host connection with pinned
-self-signed mutual TLS:
+TLS packages protect the host connection with pinned self-signed mutual TLS:
 
 - The central machine owns one self-signed Gateway server certificate.
 - Every remote package receives its own self-signed client certificate.
 - The package pins the exact Gateway certificate.
 - The Gateway pins each exact client certificate to one configured `host_id`.
-- Certificates load from package/configuration files; provisioning does not modify OS trust stores.
+- Certificates and generated PFX password files load from package/configuration files; provisioning
+  does not modify OS trust stores.
 - TLS 1.2 or later is required.
 
 The Gateway exposes two independent boundaries:
 
 ```text
 127.0.0.1:7350       MCP clients
-configured-IP:7352   mutually authenticated remote hosts
+configured-IP:7352   optional plaintext remote hosts
+configured-IP:7353   optional mutually authenticated TLS remote hosts
 ```
 
-The remote-host listener accepts only registration and the versioned host RPC transport; it never
-accepts MCP. Removing a client-certificate pin revokes that package. Replacing either certificate
-requires an explicit matching pin update.
+The host listeners may be enabled together or separately. Set `DGSPY_REMOTE_DISABLE_PLAINTEXT=true` to
+disable plaintext. TLS additionally requires `DGSPY_REMOTE_TLS_PORT`,
+`DGSPY_GATEWAY_SERVER_CERTIFICATE_FILE`, and `DGSPY_GATEWAY_SERVER_CERTIFICATE_PASSWORD_FILE`.
+Neither listener accepts MCP. Removing a client-certificate pin revokes that package. Replacing either
+certificate requires repackaging and an explicit matching pin update.
 
 ## Responsibilities
 

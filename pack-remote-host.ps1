@@ -7,9 +7,15 @@ param(
 	,[Parameter(Mandatory=$true)][string]$GatewayAddress
 	,[ValidateRange(1,65535)][int]$GatewayPort = 7352
 	,[string]$GatewayHostsFile = "$OutputDirectory\gateway-hosts.json"
+	,[switch]$UseTls
+	,[ValidateRange(1,65535)][int]$GatewayTlsPort = 7353
 )
 
 $ErrorActionPreference = 'Stop'
+function New-RandomSecret {
+	$bytes=[byte[]]::new(32); $generator=[Security.Cryptography.RandomNumberGenerator]::Create()
+	try { $generator.GetBytes($bytes); [Convert]::ToBase64String($bytes) } finally { $generator.Dispose() }
+}
 $targetFramework = 'net10.0-windows'
 $runtimeIdentifier = 'win-x64'
 $bundleName = "dgSpy-remote-host-$HostId-win-x64"
@@ -59,7 +65,8 @@ finally { $credentialGenerator.Dispose() }
 $credential = [Convert]::ToBase64String($credentialBytes)
 [IO.File]::WriteAllText((Join-Path $stateDirectory 'host.id'),$HostId,[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $stateDirectory 'rpc.token'),$credential,[Text.UTF8Encoding]::new($false))
-$remoteConfiguration = [pscustomobject][ordered]@{ format_version=1; host_id=$HostId; gateway_address=$GatewayAddress; gateway_port=$GatewayPort }
+$transport = if ($UseTls) { 'tls' } else { 'plaintext' }
+$remoteConfiguration = [ordered]@{ format_version=1; host_id=$HostId; gateway_address=$GatewayAddress; gateway_port=if($UseTls){$GatewayTlsPort}else{$GatewayPort}; transport=$transport }
 [IO.File]::WriteAllText((Join-Path $resolvedBundle 'remote-host.json'),(($remoteConfiguration | ConvertTo-Json) + "`n"),[Text.UTF8Encoding]::new($false))
 $gatewayDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($GatewayHostsFile))
 New-Item -ItemType Directory -Path $gatewayDirectory -Force | Out-Null
@@ -67,7 +74,28 @@ $centralTokenFile = Join-Path $gatewayDirectory "$HostId.token"
 [IO.File]::WriteAllText($centralTokenFile,$credential,[Text.UTF8Encoding]::new($false))
 $gatewayDocument = if (Test-Path -LiteralPath $GatewayHostsFile) { Get-Content -LiteralPath $GatewayHostsFile -Raw | ConvertFrom-Json } else { [pscustomobject]@{ hosts=@() } }
 if (@($gatewayDocument.hosts | Where-Object host_id -eq $HostId).Count) { throw "Gateway configuration already contains host_id '$HostId'." }
-$gatewayDocument.hosts = @($gatewayDocument.hosts) + [pscustomobject][ordered]@{ host_id=$HostId; display_name=$HostId; transport='outbound'; token_file=(Split-Path -Leaf $centralTokenFile) }
+$gatewayHost = [ordered]@{ host_id=$HostId; display_name=$HostId; transport=if($UseTls){'outbound_tls'}else{'outbound'}; token_file=(Split-Path -Leaf $centralTokenFile) }
+if ($UseTls) {
+	$certificateTool=Join-Path $PSScriptRoot 'Build\RemoteCertificateTool\RemoteCertificateTool.csproj'
+	$gatewayPfx=Join-Path $gatewayDirectory 'gateway-server.pfx'; $gatewayCer=Join-Path $gatewayDirectory 'gateway-server.cer'; $gatewayPasswordFile=Join-Path $gatewayDirectory 'gateway-server.password'
+	if (-not (Test-Path -LiteralPath $gatewayPfx -PathType Leaf) -or -not (Test-Path -LiteralPath $gatewayCer -PathType Leaf)) {
+		$gatewayPassword=New-RandomSecret; [IO.File]::WriteAllText($gatewayPasswordFile,$gatewayPassword,[Text.UTF8Encoding]::new($false))
+		& dotnet run --project $certificateTool --configuration Release -- server $GatewayAddress $gatewayPfx $gatewayCer $gatewayPasswordFile
+		if ($LASTEXITCODE) { throw "Gateway certificate generation failed: $LASTEXITCODE" }
+	}
+	if (-not (Test-Path -LiteralPath $gatewayPasswordFile -PathType Leaf)) { throw 'The existing Gateway certificate has no password file; remove the Gateway certificate files and package again.' }
+	$certificateDirectory=Join-Path $resolvedBundle 'certificates'; New-Item -ItemType Directory -Path $certificateDirectory -Force | Out-Null
+	$clientPfx=Join-Path $certificateDirectory 'client.pfx'; $clientPasswordFile=Join-Path $certificateDirectory 'client.password'; $centralClientCer=Join-Path $gatewayDirectory "$HostId-client.cer"
+	$clientPassword=New-RandomSecret; [IO.File]::WriteAllText($clientPasswordFile,$clientPassword,[Text.UTF8Encoding]::new($false))
+	& dotnet run --project $certificateTool --configuration Release -- client $HostId $clientPfx $centralClientCer $clientPasswordFile
+	if ($LASTEXITCODE) { throw "Client certificate generation failed: $LASTEXITCODE" }
+	Copy-Item -LiteralPath $gatewayCer -Destination (Join-Path $certificateDirectory 'gateway-server.cer')
+	$remoteConfiguration.client_certificate_file='certificates/client.pfx'; $remoteConfiguration.client_certificate_password_file='certificates/client.password'; $remoteConfiguration.gateway_certificate_file='certificates/gateway-server.cer'
+	$gatewayHost.client_certificate_file=(Split-Path -Leaf $centralClientCer)
+	$gatewayDocument | Add-Member -NotePropertyName tls -NotePropertyValue ([pscustomobject][ordered]@{ server_certificate_file=(Split-Path -Leaf $gatewayPfx); server_certificate_password_file=(Split-Path -Leaf $gatewayPasswordFile); port=$GatewayTlsPort }) -Force
+}
+[IO.File]::WriteAllText((Join-Path $resolvedBundle 'remote-host.json'),(([pscustomobject]$remoteConfiguration | ConvertTo-Json) + "`n"),[Text.UTF8Encoding]::new($false))
+$gatewayDocument.hosts = @($gatewayDocument.hosts) + [pscustomobject]$gatewayHost
 [IO.File]::WriteAllText([IO.Path]::GetFullPath($GatewayHostsFile),(($gatewayDocument | ConvertTo-Json -Depth 4) + "`n"),[Text.UTF8Encoding]::new($false))
 
 # Mutable state and the manifest itself are excluded. Fixed ordering makes identical staged bytes
