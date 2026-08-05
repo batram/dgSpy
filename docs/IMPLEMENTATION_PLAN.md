@@ -46,12 +46,11 @@ Progress:
 - **Complete:** self-contained x64 remote-host packing with bundle-local launcher state and a deterministic
   SHA-256 manifest.
 - **Complete:** extension-initiated Gateway registration using centrally provisioned deploy ZIPs,
-  including local packaged-host and Windows Server 2019 debugger/Gateway-restart acceptance. Clean-host
-  acceptance remains part of item 4.
+  including local packaged-host, Windows Server 2019, and clean Windows 11 debugger/Gateway-restart acceptance.
 - **Complete:** optional pinned self-signed mutual TLS on that connection, with plaintext and TLS selected
   per deployment. Windows Server 2019 live acceptance covered routed launch, routed attach to an x64
   .NET Framework worker, and session/cursor preservation across a central Gateway restart.
-- **Open:** clean-host acceptance, MCP client identity, leases, permissions, disconnect policy, audit
+- **Open:** MCP client identity, leases, permissions, disconnect policy, audit
   records, and encrypted client-to-Gateway transport.
 
 1. **Complete.** Add minimal outbound remote registration. The central machine produces a per-host ZIP containing a
@@ -73,14 +72,18 @@ Progress:
    process-scoped launcher. A remote Windows host must not need Git, an SDK, Visual Studio/MSBuild, a
    separately installed .NET runtime, a VC++ redistributable installer, or a local Gateway. Include any
    required managed and native runtime files in the bundle and publish a deterministic manifest with hashes.
-4. **Partial.** File-deployed bundles on Windows Server 2019 proved manifest-valid extraction, MEF
+4. **Complete.** File-deployed bundles on Windows Server 2019 proved manifest-valid extraction, MEF
    composition, authenticated local port 7351 startup, identity persistence, and both plaintext and
    pinned mutual-TLS outbound registration. Live remote acceptance routed launch and attach operations,
    pause/inspect/resume/safe-detach against an x64 .NET Framework `w3wp.exe`, breakpoint lifecycle,
    metadata/IL/C# inspection, raw-module and memory reads, and central Gateway restart with the same
    session and non-regressing event cursor. The worker remained alive and attachable after detach.
-   Finish on a genuinely clean supported Windows host with an explicit prerequisite inventory, then
-   prove complete removal leaves no machine-wide configuration behind.
+   A user-designated clean Windows 11 x64 VM then ran a newly provisioned TLS package after file
+   deployment alone: it registered without a local Gateway or setup step, launched and inspected a
+   CorDebug target, recovered the same running session with cursor 11 advancing to 44 after a central
+   Gateway restart, and terminated only the disposable target. After closing dnSpy and deleting the
+   extracted package, seven observations across 35 seconds stayed `host_unavailable` with no reconnect;
+   the process-scoped launcher had installed no machine-wide configuration.
 5. Complete MCP Streamable HTTP session behavior required by strict clients.
 6. Define session ownership or leases before supporting competing clients or independent sessions.
 7. Add per-client and per-target permissions for discovery, inspection, execution control, mutation,
