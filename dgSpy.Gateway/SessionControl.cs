@@ -72,7 +72,7 @@ public sealed class GatewayAccessPolicy {
 
 public sealed class GatewayAuditLog {
 	readonly object sync=new(); readonly string path; readonly long maxBytes;
-	public GatewayAuditLog() : this(Environment.GetEnvironmentVariable("DGSPY_AUDIT_FILE") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy","gateway-audit.jsonl"),5*1024*1024) { }
+	public GatewayAuditLog() : this(Environment.GetEnvironmentVariable("DGSPY_AUDIT_FILE") ?? Path.Combine(Environment.GetEnvironmentVariable("DGSPY_STATE_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy"),"gateway-audit.jsonl"),5*1024*1024) { }
 	internal GatewayAuditLog(string path,long maxBytes) { this.path=path; this.maxBytes=maxBytes; }
 	public void Write(string auditId,string clientId,string? hostId,string? sessionId,string operation,long? expectedVersion,string outcome,string? errorCode) {
 		var record=new { timestamp_utc=DateTime.UtcNow.ToString("O"),audit_id=auditId,controller_id=clientId,host_id=hostId,session_id=sessionId,operation,expected_version_scope=MutationGuards.Scope(operation),expected_version=expectedVersion,outcome,error_code=errorCode };
@@ -82,13 +82,21 @@ public sealed class GatewayAuditLog {
 }
 
 public sealed class GatewayToolExecutor {
-	readonly HostRouter router; readonly SessionControllers controllers; readonly GatewayAccessPolicy access; readonly GatewayAuditLog audit;
-	public GatewayToolExecutor(HostRouter router,SessionControllers controllers,GatewayAccessPolicy access,GatewayAuditLog audit) { this.router=router; this.controllers=controllers; this.access=access; this.audit=audit; }
+	readonly HostRouter router; readonly SessionControllers controllers; readonly GatewayAccessPolicy access; readonly GatewayAuditLog audit; readonly DeploymentService deployments;
+	public GatewayToolExecutor(HostRouter router,SessionControllers controllers,GatewayAccessPolicy access,GatewayAuditLog audit,DeploymentService deployments) { this.router=router; this.controllers=controllers; this.access=access; this.audit=audit; this.deployments=deployments; }
+	internal GatewayToolExecutor(HostRouter router,SessionControllers controllers,GatewayAccessPolicy access,GatewayAuditLog audit) : this(router,controllers,access,audit,new DeploymentService()) { }
 	public async Task<RpcResponse> ExecuteAsync(string operation,JsonObject arguments,string clientId,CancellationToken token) {
 		var hostId=(string?)arguments["host_id"]; var sessionId=(string?)arguments["session_id"]; var guardArgument=MutationGuards.Argument(operation); var expected=(long?)arguments[guardArgument] ?? (long?)arguments["expected_state_version"];
 		var mutates=CapabilityCatalog.Operations.Any(item=>item.Operation==operation && item.MutatesSession); var controlMutation=operation is "claim_session" or "release_session";
 		var auditId=mutates || controlMutation ? Guid.NewGuid().ToString("N") : null;
 		try {
+			if(IsGuidedOperation(operation)) { var guided=await ExecuteGuidedAsync(operation,arguments,clientId,token); audit.Write(Guid.NewGuid().ToString("N"),clientId,hostId,sessionId,operation,expected,guided.Error is null?"succeeded":"failed",guided.Error?.Code); return guided; }
+			if(DeploymentService.IsGatewayOperation(operation)) {
+				if(DeploymentService.IsMutation(operation)) access.AuthorizeMutation(operation);
+				var result=await deployments.ExecuteAsync(operation,arguments,router,token);
+				if(auditId is not null || DeploymentService.IsMutation(operation)) audit.Write(auditId ?? Guid.NewGuid().ToString("N"),clientId,hostId,sessionId,operation,null,"succeeded",null);
+				return RpcResponse.Success(Guid.NewGuid().ToString("N"),result);
+			}
 			if(operation=="get_session_controller") { if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var current=controllers.Get(sessionId); return RpcResponse.Success(Guid.NewGuid().ToString("N"),current is null ? new { session_id=sessionId,owned=false,controller_id=(string?)null } : new { session_id=sessionId,owned=true,controller_id=(string?)current.ClientId }); }
 			if(operation=="claim_session") { access.AuthorizeMutation(operation); if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var state=await GetStateAsync(arguments,token); var claimed=controllers.Claim(sessionId,hostId,clientId); var node=ProtocolJson.ToNode(state)!; audit.Write(auditId!,clientId,hostId,sessionId,operation,null,"succeeded",null); return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,controller_id=claimed.ClientId,state_version=(long?)node["state_version"],lifecycle_version=(long?)node["lifecycle_version"],execution_version=(long?)node["execution_version"],breakpoints_version=(long?)node["breakpoints_version"],stop_id=(string?)node["stop_id"] }); }
 			if(operation=="release_session") { access.AuthorizeMutation(operation); if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var released=controllers.Release(sessionId,clientId); audit.Write(auditId!,clientId,hostId,sessionId,operation,null,"succeeded",null); return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,released=true,controller_id=released.ClientId }); }
@@ -115,4 +123,56 @@ public sealed class GatewayToolExecutor {
 	async Task<object> GetStateAsync(JsonObject source,CancellationToken token) { var args=new JsonObject(); if(source["host_id"] is not null) args["host_id"]=source["host_id"]!.DeepClone(); args["session_id"]=source["session_id"]!.DeepClone(); var response=await router.CallAsync(new RpcRequest { Operation="get_session_state",Arguments=args,DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds("get_session_state")) },token); if(response.Error is not null) throw new GatewayControlException(response.Error.Code,response.Error.Message); return response.Result!; }
 	static long StateVersion(object state) => Version(state,"state_version");
 	static long Version(object state,string property) => (long?)ProtocolJson.ToNode(state)![property] ?? throw new GatewayControlException("invalid_state",$"Host did not report {property}.");
+
+	static bool IsGuidedOperation(string operation) => operation is "step_and_inspect" or "trace_calls" or "run_to_method" or "run_to_location";
+	async Task<RpcResponse> ExecuteGuidedAsync(string operation,JsonObject arguments,string clientId,CancellationToken token) {
+		access.AuthorizeMutation(operation);
+		var sessionId=(string?)arguments["session_id"] ?? throw new GatewayControlException("invalid_arguments","session_id is required.");
+		controllers.Authorize(sessionId,clientId);
+		return operation switch {
+			"step_and_inspect" => await StepAndInspectAsync(arguments,clientId,token),
+			"trace_calls" => await TraceCallsAsync(arguments,clientId,token),
+			_ => await RunToAsync(operation,arguments,token)
+		};
+	}
+	async Task<RpcResponse> StepAndInspectAsync(JsonObject arguments,string clientId,CancellationToken token) {
+		var kind=(string?)arguments["kind"] ?? "into"; var stepOperation=kind switch { "into"=>"step_into","over"=>"step_over","out"=>"step_out",_=>throw new GatewayControlException("invalid_arguments","kind must be into, over, or out.") };
+		var stepArgs=BaseArgs(arguments); stepArgs["expected_execution_version"]=arguments["expected_execution_version"]?.DeepClone(); stepArgs["expected_stop_id"]=arguments["expected_stop_id"]?.DeepClone();
+		var step=await ExecuteAsync(stepOperation,stepArgs,clientId,token); if(step.Error is not null) return step;
+		var stepNode=ProtocolJson.ToNode(step.Result)!.AsObject(); var cursor=(long?)stepNode["cursor_event_id"] ?? 0; var timeout=Math.Clamp((int?)arguments["timeout_ms"] ?? 5000,1,10000);
+		var wait=await RouteAsync("wait_for_stop",BaseArgs(arguments,new JsonObject { ["after_event_id"]=cursor,["timeout_ms"]=timeout }),token); if(wait.Error is not null) return wait;
+		var waitNode=ProtocolJson.ToNode(wait.Result)!.AsObject(); var events=waitNode["events"]?.AsArray(); var stop=events?.LastOrDefault(); if((bool?)waitNode["timed_out"]==true||stop is null) return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { step=step.Result,wait=wait.Result,inspection=(object?)null });
+		var threadId=(string?)stop["thread_id"] ?? (string?)arguments["thread_id"];
+		var maxFrames=Math.Clamp((int?)arguments["max_frames"] ?? 10,1,25); var inspectArgs=BaseArgs(arguments); if(threadId is not null) inspectArgs["thread_id"]=threadId;
+		var stack=await RouteAsync("get_callstack",BaseArgs(inspectArgs,new JsonObject{{"max_frames",maxFrames}}),token);
+		var frame=threadId is null ? null : await RouteAsync("get_frame",BaseArgs(inspectArgs,new JsonObject{{"frame_index",0},{"include",new JsonArray("locals","this")}}),token);
+		var watches=await RouteAsync("list_watches",BaseArgs(inspectArgs,new JsonObject{{"frame_index",0}}),token); var exception=await RouteAsync("get_exception",BaseArgs(inspectArgs,new JsonObject{{"frame_index",0}}),token);
+		return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { step=step.Result,stop=ProtocolJson.ToNode(stop),callstack=ResultOrError(stack),frame=frame is null?null:ResultOrError(frame),watches=ResultOrError(watches),exception=ResultOrError(exception),limitations=new[]{"optimized or inlined calls may be skipped","native and runtime calls are not traced","async continuations can change threads"} });
+	}
+	async Task<RpcResponse> TraceCallsAsync(JsonObject arguments,string clientId,CancellationToken token) {
+		var maxSteps=Math.Clamp((int?)arguments["max_steps"] ?? 25,1,100); var duration=Math.Clamp((int?)arguments["duration_ms"] ?? 10000,1,30000); var maxDepth=Math.Clamp((int?)arguments["max_depth"] ?? 20,1,50); var started=DateTime.UtcNow; var entries=new JsonArray(); var current=(JsonObject)arguments.DeepClone();
+		for(var index=0;index<maxSteps && (DateTime.UtcNow-started).TotalMilliseconds<duration;index++) {
+			current["kind"]="into"; current["timeout_ms"]=Math.Min(5000,duration-(int)(DateTime.UtcNow-started).TotalMilliseconds); current["max_frames"]=maxDepth;
+			var result=await StepAndInspectAsync(current,clientId,token); if(result.Error is not null) return result; var node=ProtocolJson.ToNode(result.Result)!.AsObject(); var stop=node["stop"]; if(stop is null) return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { entries,completed=false,reason="step_timeout",steps=index+1,limitations=TraceLimitations });
+			var stack=node["callstack"]; var text=stack?.ToJsonString() ?? ""; if(Matches(arguments,text)) entries.Add(new JsonObject { ["step"]=index+1,["stop"]=stop.DeepClone(),["callstack"]=stack?.DeepClone() });
+			var state=await GetStateAsync(current,token); var stateNode=ProtocolJson.ToNode(state)!.AsObject(); current["expected_execution_version"]=stateNode["execution_version"]?.DeepClone(); current["expected_stop_id"]=stateNode["stop_id"]?.DeepClone();
+		}
+		return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { entries,completed=true,reason="bound_reached",steps=entries.Count,limitations=TraceLimitations });
+	}
+	static readonly string[] TraceLimitations={"best-effort managed sequence-point trace","optimized and inlined calls can be absent","native/runtime calls are unobservable","async continuations may move to another thread"};
+	static bool Matches(JsonObject arguments,string text) { foreach(var property in new[]{"module_filter","namespace_filter","type_filter"}) { var filter=(string?)arguments[property]; if(!string.IsNullOrWhiteSpace(filter)&&!text.Contains(filter,StringComparison.OrdinalIgnoreCase)) return false; } return true; }
+	async Task<RpcResponse> RunToAsync(string operation,JsonObject arguments,CancellationToken token) {
+		Require(arguments,"expected_execution_version"); Require(arguments,"expected_breakpoints_version"); Require(arguments,"expected_stop_id");
+		var setOperation=operation=="run_to_method"?"set_breakpoint":"set_il_breakpoint"; var breakpointArgs=BaseArgs(arguments); foreach(var name in new[]{"type","method","signature","method_token","il_offset"}) if(arguments[name] is not null) breakpointArgs[name]=arguments[name]!.DeepClone();
+		var created=await RouteAsync(setOperation,breakpointArgs,token); if(created.Error is not null) return created; var createdNode=ProtocolJson.ToNode(created.Result)!.AsObject(); var breakpointId=(int?)createdNode["breakpoint_id"] ?? throw new GatewayControlException("invalid_state","Host returned no temporary breakpoint id."); var cursor=(long?)createdNode["cursor_event_id"] ?? 0;
+		try {
+			var continueArgs=BaseArgs(arguments,new JsonObject { ["expected_state_version"]=arguments["expected_execution_version"]?.DeepClone() }); var continued=await RouteAsync("continue",continueArgs,token); if(continued.Error is not null) return continued;
+			var timeout=Math.Clamp((int?)arguments["timeout_ms"] ?? 10000,1,10000); var wait=await RouteAsync("wait_for_stop",BaseArgs(arguments,new JsonObject{{"after_event_id",cursor},{"timeout_ms",timeout}}),token);
+			return wait.Error is null ? RpcResponse.Success(Guid.NewGuid().ToString("N"),new { temporary_breakpoint=created.Result,wait=wait.Result }) : wait;
+		} finally { await RouteAsync("remove_breakpoint",BaseArgs(arguments,new JsonObject{{"breakpoint_id",breakpointId}}),CancellationToken.None); }
+	}
+	async Task<RpcResponse> RouteAsync(string operation,JsonObject args,CancellationToken token) => await router.CallAsync(new RpcRequest { Operation=operation,Arguments=args,DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds(operation)) },token);
+	static JsonObject BaseArgs(JsonObject source,JsonObject? additions=null) { var result=new JsonObject(); foreach(var name in new[]{"host_id","session_id","thread_id"}) if(source[name] is not null) result[name]=source[name]!.DeepClone(); if(additions is not null) foreach(var pair in additions) result[pair.Key]=pair.Value?.DeepClone(); return result; }
+	static object? ResultOrError(RpcResponse response) => response.Error is null?response.Result:new { error=response.Error };
+	static void Require(JsonObject args,string name) { if(args[name] is null) throw new GatewayControlException("invalid_arguments",$"{name} is required."); }
 }

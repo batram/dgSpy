@@ -11,6 +11,7 @@ builder.Services.AddSingleton<SessionControllers>();
 builder.Services.AddSingleton<GatewayAccessPolicy>();
 builder.Services.AddSingleton<GatewayAuditLog>();
 builder.Services.AddSingleton<GatewayToolExecutor>();
+builder.Services.AddSingleton<DeploymentService>();
 builder.Services.AddHostedService<RemoteHostListener>();
 builder.Services.AddHostedService<GatewayHeartbeat>();
 var app = builder.Build();
@@ -18,7 +19,11 @@ var app = builder.Build();
 // Clients authenticate with a local secret. Take it from the environment when set, otherwise mint
 // one and write it where a local client can read it — never derive it from anything guessable.
 var token = Environment.GetEnvironmentVariable("DGSPY_TOKEN");
-var tokenFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "dgSpy", "gateway.token");
+var stateRoot=Environment.GetEnvironmentVariable("DGSPY_STATE_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "dgSpy");
+var tokenFile = Path.Combine(stateRoot, "gateway.token");
+Directory.CreateDirectory(stateRoot);
+EnsureState(Path.Combine(stateRoot,"host.id"),()=>"local-"+Guid.NewGuid().ToString("N"));
+EnsureState(Path.Combine(stateRoot,"rpc.token"),()=>Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)));
 if (string.IsNullOrEmpty(token)) {
 	token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
 	Directory.CreateDirectory(Path.GetDirectoryName(tokenFile)!);
@@ -43,7 +48,7 @@ app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, GatewayToolExecutor
 		if (method == "initialize") {
 			var negotiated=McpProtocol.Negotiate(root["params"]?["protocolVersion"]?.GetValue<string>());
 			var clientId=clients.Create(); http.Response.Headers[McpClientSessions.Header]=clientId;
-			return Results.Json(new { jsonrpc="2.0", id, result=new { protocolVersion=negotiated, capabilities=new { tools=new { listChanged=false } }, serverInfo=new { name="dgSpy", version="0.1.0" } } });
+			return Results.Json(new { jsonrpc="2.0", id, result=new { protocolVersion=negotiated, capabilities=new { tools=new { listChanged=false }, resources=new { listChanged=false } }, serverInfo=new { name="dgSpy", version="0.2.0" }, instructions=ToolCatalog.Instructions } });
 		}
 		if (!McpProtocol.IsValidRequestVersion(http.Request.Headers[McpProtocol.VersionHeader]))
 			return Results.BadRequest(new { jsonrpc="2.0", id, error=new { code=-32600, message=$"Unsupported {McpProtocol.VersionHeader}. Supported: {string.Join(", ",McpProtocol.Supported)}." } });
@@ -51,6 +56,8 @@ app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, GatewayToolExecutor
 		if (id is null) return Results.Accepted();
 		var client=clients.Resolve(http.Request.Headers[McpClientSessions.Header]);
 		if (method == "tools/list") return Results.Json(new { jsonrpc="2.0", id, result=new { tools=ToolCatalog.All } });
+		if (method=="resources/list") return Results.Json(new { jsonrpc="2.0",id,result=new { resources=ToolCatalog.Resources } });
+		if (method=="resources/read") { var uri=(string?)root["params"]?["uri"]; var resource=ToolCatalog.ReadResource(uri); return resource is null ? McpError(id,-32002,"Resource not found") : Results.Json(new { jsonrpc="2.0",id,result=new { contents=new[]{resource} } }); }
 		if (method != "tools/call") return McpError(id, -32601, "Method not found");
 		var name=root["params"]?["name"]?.GetValue<string>() ?? ""; var args=root["params"]?["arguments"] as JsonObject ?? new JsonObject();
 		if (name=="list_hosts") {
@@ -58,7 +65,7 @@ app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, GatewayToolExecutor
 			return Results.Json(new { jsonrpc="2.0",id,result=new { structuredContent=new { hosts },content=new[] { new { type="text",text=ProtocolJson.Serialize(hosts) } } } });
 		}
 		var response=await executor.ExecuteAsync(name,args,client,cancellationToken);
-		if (response.Error is not null) return Results.Json(new { jsonrpc="2.0", id, result=new { isError=true, structuredContent=new { error=response.Error }, content=new[] { new { type="text", text=response.Error.Message } } } });
+		if (response.Error is not null) { var guidance=ToolCatalog.ErrorGuidance(response.Error.Code); return Results.Json(new { jsonrpc="2.0", id, result=new { isError=true, structuredContent=new { error=new { code=response.Error.Code,message=response.Error.Message,likely_cause=guidance.Cause,recovery_action=guidance.Recovery,suggested_tool=guidance.Tool } }, content=new[] { new { type="text", text=$"{response.Error.Code}: {response.Error.Message} Recovery: {guidance.Recovery}" } } } }); }
 		var structured=response.Result is null ? null : ProtocolJson.ToNode(response.Result);
 		return Results.Json(new { jsonrpc="2.0", id, result=new { structuredContent=structured, content=new[] { new { type="text", text=ProtocolJson.Serialize(response.Result) } } } });
 	} catch (Exception ex) { return McpError(id, -32603, ex.Message); }
@@ -72,9 +79,14 @@ catch (Exception ex) {
 	Environment.ExitCode=1;
 }
 static IResult McpError(object? id, int code, string message) => Results.Json(new { jsonrpc="2.0", id, error=new { code, message } });
+static void EnsureState(string path,Func<string> create) { if(File.Exists(path)&&!string.IsNullOrWhiteSpace(File.ReadAllText(path))) return; File.WriteAllText(path,create()); }
 
 public static class ToolCatalog {
-	static object Tool(string name,string description,object properties,string[]? required=null,bool routed=true) {
+	public const string Instructions="Start with get_started. Choose a local deployment or a provisioned remote host, then attach or launch, inspect capabilities, debug, and detach safely. Stepping and call tracing are best-effort and cannot expose optimized, native, runtime, or missing-sequence-point calls.";
+	public static readonly object[] Resources={ new { uri="dgspy://guide/getting-started",name="dgSpy getting started",mimeType="text/markdown" },new { uri="dgspy://guide/deployment",name="dgSpy deployment",mimeType="text/markdown" } };
+	public static (string Cause,string Recovery,string Tool) ErrorGuidance(string code) => code switch { "host_unavailable" or "unknown_host" => ("The selected debugger host is absent or disconnected.","Start the local host or reconnect the provisioned remote host.","doctor"), "stale_state" or "stale_execution" or "stale_lifecycle" or "stale_breakpoints" or "stale_stop" => ("Debugger state changed after the caller's last read.","Read get_session_state again and retry only if the intended target state still matches.","get_session_state"), "session_unowned" or "session_owned" => ("The MCP controller lease is absent or belongs to another active client.","Inspect controller ownership; claim only an unowned or expired session.","get_session_controller"), "invalid_plan" => ("The deployment plan expired, was consumed, or belongs to another workflow.","Create and review a new plan.","get_started"), "detach_timed_out" => ("The debugger engine did not confirm target removal within its bound.","Keep the session; inspect state and retry safe detach without closing dnSpy.","get_session_state"), _ => ("The requested operation could not be completed safely.","Run bounded diagnostics and review the returned message.","doctor") };
+	public static object? ReadResource(string? uri) => uri switch { "dgspy://guide/getting-started" => new { uri,mimeType="text/markdown",text=Instructions+"\n\nUse doctor when a host or Gateway is unavailable. Mutating debugger calls require current scoped versions and stop_id values." }, "dgspy://guide/deployment" => new { uri,mimeType="text/markdown",text="Local deployment installs a versioned per-user portable dnSpy host. Remote deployment creates a self-contained ZIP but never transfers or executes it. Always plan before creating either deployment." }, _=>null };
+	static object Tool(string name,string description,object properties,string[]? required=null,bool routed=true,bool readOnly=false,bool destructive=false,bool idempotent=false) {
 		var routedProperties=new Dictionary<string,object>();
 		if (routed) routedProperties["host_id"]=new { type="string",description="Registered debugger host. Optional only when exactly one host is configured." };
 		foreach (var property in properties.GetType().GetProperties()) routedProperties[property.Name]=property.GetValue(properties)!;
@@ -86,7 +98,8 @@ public static class ToolCatalog {
 			if(!requiredProperties.Contains(guard)) requiredProperties.Add(guard);
 			if(MutationGuards.RequiresStop(name)) { routedProperties["expected_stop_id"]=new { type="string",description="Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again." }; if(!requiredProperties.Contains("expected_stop_id")) requiredProperties.Add("expected_stop_id"); }
 		}
-		return new { name,description,inputSchema=new { type="object",properties=routedProperties,required=requiredProperties.ToArray() } };
+		var capability=CapabilityCatalog.Operations.FirstOrDefault(item=>item.Operation==name); var effectiveReadOnly=readOnly || (capability is not null && !capability.MutatesSession);
+		return new { name,description,inputSchema=new { type="object",properties=routedProperties,required=requiredProperties.ToArray() },annotations=new { readOnlyHint=effectiveReadOnly,destructiveHint=destructive,idempotentHint=idempotent } };
 	}
 	static object EvalMutationSchema() => new { session_id=new { type="string" },expression=new { type="string",description="Complete call or new-expression." },thread_id=new { type="string" },frame_index=new { type="integer",minimum=0 },timeout_ms=new { type="integer",minimum=1,maximum=10000,description="Hard engine func-eval timeout; default 1000." } };
 	/// <summary>Margin between the extension's own bound for an operation and the gateway's deadline for
@@ -100,7 +113,24 @@ public static class ToolCatalog {
 		return bound<=0 ? 8 : (int)Math.Ceiling(bound/1000.0)+MarginSeconds;
 	}
 	public static readonly object[] All = {
-		Tool("list_hosts", "List registered debugger hosts and their current connection state.", new {},routed:false),
+		Tool("get_started", "Summarize Gateway, deployment, and host state and recommend the next safe action.", new {},routed:false,readOnly:true),
+		Tool("doctor", "Run bounded read-only diagnostics for Gateway state, deployment roots, host registry, ports, and registered debugger hosts.", new {},routed:false,readOnly:true),
+		Tool("get_workflow_help", "Return focused guidance for setup, local_deployment, remote_deployment, attach, stepping, recovery, or shutdown.", new { topic=new { type="string", @enum=new[]{"setup","local_deployment","remote_deployment","attach","stepping","recovery","shutdown"} } },routed:false,readOnly:true),
+		Tool("plan_local_deployment", "Validate a versioned per-user local dnSpy deployment without writing files. The returned plan_id is required to deploy.", new { source_path=new { type="string" },version=new { type="string" },host_id=new { type="string" },desktop_shortcut=new { type="boolean" },start_menu_shortcut=new { type="boolean" } },routed:false,readOnly:true),
+		Tool("deploy_local_host", "SIDE EFFECTING and audited. Materialize a validated local deployment plan atomically and register the local host.", new { plan_id=new { type="string" } },new[]{"plan_id"},routed:false,idempotent:true),
+		Tool("get_local_deployment", "Report the active and previous managed local deployment.", new {},routed:false,readOnly:true),
+		Tool("launch_local_host", "SIDE EFFECTING. Launch the active managed dnSpy host in the interactive user session.", new {},routed:false,idempotent:true),
+		Tool("rollback_local_deployment", "SIDE EFFECTING. Atomically switch current back to the retained previous version.", new { confirm=new { type="boolean" } },new[]{"confirm"},routed:false),
+		Tool("uninstall_local_deployment", "DESTRUCTIVE and audited. Remove managed program versions after explicit confirmation; settings are preserved unless remove_settings is true.", new { confirm=new { type="boolean" },remove_settings=new { type="boolean" } },new[]{"confirm"},routed:false,destructive:true,idempotent:true),
+		Tool("plan_remote_host_package", "Validate remote package inputs without writing files or credentials.", new { host_id=new { type="string" },gateway_address=new { type="string" },use_tls=new { type="boolean" },output_root=new { type="string" } },new[]{"host_id","gateway_address"},routed:false,readOnly:true),
+		Tool("create_remote_host_package", "SIDE EFFECTING and audited. Build a self-contained remote ZIP from a validated plan; it is not transferred or executed.", new { plan_id=new { type="string" } },new[]{"plan_id"},routed:false),
+		Tool("get_remote_host_readiness", "Report registry and live connection readiness for a remote host.", new { host_id=new { type="string" } },new[]{"host_id"},routed:false,readOnly:true),
+		Tool("revoke_remote_host", "DESTRUCTIVE and audited. Remove a remote host from the central registry after explicit confirmation.", new { host_id=new { type="string" },confirm=new { type="boolean" } },new[]{"host_id","confirm"},routed:false,destructive:true,idempotent:true),
+		Tool("step_and_inspect", "Step once, wait for the resulting stop, and return the new location, compact stack, frame, watches, and exception in one bounded workflow.", new { session_id=new { type="string" },kind=new { type="string",@enum=new[]{"into","over","out"} },thread_id=new { type="string" },expected_execution_version=new { type="integer" },expected_stop_id=new { type="string" },timeout_ms=new { type="integer",minimum=1,maximum=10000 },max_frames=new { type="integer",minimum=1,maximum=25 } },new[]{"session_id","kind","expected_execution_version","expected_stop_id"}),
+		Tool("trace_calls", "SIDE EFFECTING and audited. Perform bounded best-effort managed step-into tracing. Optimized, native, runtime, async, and missing-sequence-point calls can be unobservable.", new { session_id=new { type="string" },thread_id=new { type="string" },expected_execution_version=new { type="integer" },expected_stop_id=new { type="string" },max_steps=new { type="integer",minimum=1,maximum=100 },duration_ms=new { type="integer",minimum=1,maximum=30000 },max_depth=new { type="integer",minimum=1,maximum=50 },module_filter=new { type="string" },namespace_filter=new { type="string" },type_filter=new { type="string" } },new[]{"session_id","expected_execution_version","expected_stop_id"}),
+		Tool("run_to_method", "SIDE EFFECTING and audited. Set a temporary method breakpoint, continue, wait boundedly, and always remove the temporary breakpoint.", new { session_id=new { type="string" },module=new { type="string" },type=new { type="string" },method=new { type="string" },signature=new { type="string" },expected_execution_version=new { type="integer" },expected_breakpoints_version=new { type="integer" },expected_stop_id=new { type="string" },timeout_ms=new { type="integer",minimum=1,maximum=10000 } },new[]{"session_id","module","type","method","expected_execution_version","expected_breakpoints_version","expected_stop_id"}),
+		Tool("run_to_location", "SIDE EFFECTING and audited. Set a temporary IL breakpoint, continue, wait boundedly, and always remove the temporary breakpoint.", new { session_id=new { type="string" },module=new { type="string" },method_token=new { type="integer" },il_offset=new { type="integer" },expected_execution_version=new { type="integer" },expected_breakpoints_version=new { type="integer" },expected_stop_id=new { type="string" },timeout_ms=new { type="integer",minimum=1,maximum=10000 } },new[]{"session_id","module","method_token","il_offset","expected_execution_version","expected_breakpoints_version","expected_stop_id"}),
+		Tool("list_hosts", "List registered debugger hosts and their current connection state.", new {},routed:false,readOnly:true),
 		Tool("get_host_info", "Identify the dnSpy host this gateway talks to: versions, machine, architecture, supported engines, and whether a session is live.", new {}),
 		Tool("get_capabilities", "Report what this host supports before relying on it: per-operation time bounds, per-engine behavior (notably that Mono/Unity binds breakpoints only at sequence points), limits, and the complete event_kinds and stop_reasons vocabularies. Engine differences are advertised here rather than assumed.", new {}),
 		Tool("list_programs", "List dnSpy-attachable managed runtimes. Unfiltered enumeration probes every process on the machine and takes seconds; pass process_ids or process_names when the target is known. Each call replaces the set of valid program_id values.", new { process_ids=new { type="array", items=new { type="integer" }, description="Only these PIDs." }, process_names=new { type="array", items=new { type="string" }, description="Process names, wildcards * and ? allowed, eg. UltimateChickenHorse*." }, provider_names=new { type="array", items=new { type="string" }, description="dnSpy attach providers to consult: DotNetFramework, DotNet, UnityEditor, UnityPlayer. Naming providers skips the rest. UnityPlayer runs a multicast scan and is skipped entirely unless named." } }),

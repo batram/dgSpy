@@ -3,6 +3,8 @@
 > This fork includes dgSpy, a local MCP debugger/decompiler extension and gateway. Start with the
 > [dgSpy documentation index](docs/README.md); the active work is in the
 > [dgSpy implementation plan](docs/IMPLEMENTATION_PLAN.md).
+> For first-run setup, client-spawned Gateway startup, and local or remote deployment, see the
+> [dgSpy quick start](docs/GETTING_STARTED.md).
 
 dnSpy is a debugger and .NET assembly editor. You can use it to edit and debug assemblies even if you don't have any source code available. Main features:
 

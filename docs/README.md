@@ -1,5 +1,7 @@
 # dgSpy documentation
 
+- [Quick start and local deployment](GETTING_STARTED.md)
+
 ## Start here
 
 - [Implementation plan](IMPLEMENTATION_PLAN.md) — open work and ordering.

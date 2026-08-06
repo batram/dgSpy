@@ -11,7 +11,7 @@ namespace dgSpy.Extension {
 		RpcSecuritySettings(string hostId,string token) { HostId=hostId; Token=token; }
 
 		public static RpcSecuritySettings Load() {
-			var root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy");
+			var root=Environment.GetEnvironmentVariable("DGSPY_STATE_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy");
 			Directory.CreateDirectory(root);
 			var hostId=ReadOrCreate("DGSPY_HOST_ID",Path.Combine(root,"host.id"),()=>"host-"+Guid.NewGuid().ToString("N"));
 			var token=ReadOrCreate("DGSPY_RPC_TOKEN",Path.Combine(root,"rpc.token"),CreateToken);

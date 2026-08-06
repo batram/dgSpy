@@ -36,7 +36,10 @@ public sealed class HostRegistry {
 
 	public static HostRegistry Load() {
 		var path=Environment.GetEnvironmentVariable("DGSPY_HOSTS_FILE");
-		return string.IsNullOrWhiteSpace(path) ? Local() : FromJson(File.ReadAllText(path),Path.GetDirectoryName(Path.GetFullPath(path))!);
+		if(string.IsNullOrWhiteSpace(path)) return Local();
+		var configured=FromJson(File.ReadAllText(path),Path.GetDirectoryName(Path.GetFullPath(path))!);
+		if(!string.Equals(Environment.GetEnvironmentVariable("DGSPY_INCLUDE_LOCAL_HOST"),"true",StringComparison.OrdinalIgnoreCase)) return configured;
+		var combined=configured.Endpoints.ToList(); var local=Local().Endpoints.Single(); if(combined.Any(endpoint=>endpoint.HostId==local.HostId)) throw new InvalidOperationException($"Configured host_id '{local.HostId}' conflicts with the managed local host."); combined.Add(local); return new HostRegistry(combined);
 	}
 
 	public static HostRegistry FromJson(string json,string baseDirectory) {
@@ -72,7 +75,7 @@ public sealed class HostRegistry {
 	}
 
 	static HostRegistry Local() {
-		var root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy");
+		var root=Environment.GetEnvironmentVariable("DGSPY_STATE_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy");
 		var configuredId=Environment.GetEnvironmentVariable("DGSPY_HOST_ID");
 		var hostId=!string.IsNullOrWhiteSpace(configuredId) ? configuredId.Trim() : ReadRequired(Path.Combine(root,"host.id"),"host identity");
 		var token=RpcClientSettings.LoadToken();
@@ -288,7 +291,8 @@ public static class RpcClientSettings {
 	public static string LoadToken() {
 		var configured=Environment.GetEnvironmentVariable("DGSPY_RPC_TOKEN");
 		if (!string.IsNullOrWhiteSpace(configured)) return configured.Trim();
-		var path=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy","rpc.token");
+		var root=Environment.GetEnvironmentVariable("DGSPY_STATE_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy");
+		var path=Path.Combine(root,"rpc.token");
 		if (!File.Exists(path)) throw new InvalidOperationException($"No extension RPC credential exists at '{path}'. Start dnSpy with dgSpy loaded or set DGSPY_RPC_TOKEN.");
 		var token=File.ReadAllText(path).Trim();
 		if (string.IsNullOrEmpty(token)) throw new InvalidOperationException($"The extension RPC credential at '{path}' is empty.");

@@ -1,5 +1,9 @@
 # Remote hosts
 
+For a debugger on this machine, use the managed per-user workflow in
+[quick start and local deployment](GETTING_STARTED.md). Remote packaging is the sibling workflow for a
+different Windows host.
+
 Remote deployment is package-based. A user receives one centrally provisioned ZIP, extracts it on the
 debugger host, and runs its launcher in an interactive Windows session. The remote does not run a local
 Gateway or MCP endpoint, and ordinary operation must not depend on an additional transport product or

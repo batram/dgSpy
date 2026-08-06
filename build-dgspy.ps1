@@ -10,12 +10,16 @@ $ErrorActionPreference = 'Stop'
 
 $extensionProject = Join-Path $PSScriptRoot 'Extensions\dgSpy.Extension\dgSpy.Extension.csproj'
 $gatewayProject = Join-Path $PSScriptRoot 'dgSpy.Gateway\dgSpy.Gateway.csproj'
+$cliProject = Join-Path $PSScriptRoot 'dgSpy.Cli\dgSpy.Cli.csproj'
 
 dotnet build $extensionProject -c $Configuration -f net48 --nologo -v:minimal
 if ($LASTEXITCODE) { throw "Extension build failed with exit code $LASTEXITCODE" }
 
 dotnet build $gatewayProject -c $Configuration --nologo -v:minimal
 if ($LASTEXITCODE) { throw "Gateway build failed with exit code $LASTEXITCODE" }
+
+dotnet build $cliProject -c $Configuration --nologo -v:minimal
+if ($LASTEXITCODE) { throw "CLI build failed with exit code $LASTEXITCODE" }
 
 if ($NoDeploy) { return }
 

@@ -11,6 +11,10 @@ The delivered product is a local x64 debugger bridge for .NET Framework CorDebug
 provides lifecycle control, events, breakpoints, inspection, evaluation, code and metadata navigation,
 analysis, export, memory access, and supported low-level debugger operations.
 
+The delivered distribution also includes client-spawned stdio MCP startup, diagnostics and workflow
+discovery, versioned per-user local deployment, MCP-driven remote provisioning, and bounded guided
+stepping/tracing. See the [acceptance history](history/AGENT_WORKFLOW_DEPLOYMENT.md).
+
 The host follows the bounded dnSpyEx 6.6 baseline and targets `net48` and `net10.0-windows`. dgSpy keeps
 its headless activation patch, bounded `Mono.Debugger.Soft` frame retrieval, proven Mono/shared-debugger
 orchestration, and engine-specific running-state behavior.

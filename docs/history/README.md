@@ -3,6 +3,8 @@
 These documents preserve completed work and dated evidence. They are useful when investigating a
 regression or reconstructing a decision, but they do not define the current roadmap or contract.
 
+- [Agent workflow and zero-configuration deployment](AGENT_WORKFLOW_DEPLOYMENT.md) — startup,
+  deployment, discovery, and guided-debugging acceptance.
 - [Delivered local core](DELIVERED_LOCAL_CORE.md) — completion boundary for the former phases 0–8.
 - [Status and verification ledger](DGSPY_STATUS.md) — detailed capability evidence and debugger findings
   from the local-core delivery.

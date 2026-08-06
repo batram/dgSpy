@@ -1,12 +1,509 @@
 {
   "tools": [
     {
+      "name": "get_started",
+      "description": "Summarize Gateway, deployment, and host state and recommend the next safe action.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "doctor",
+      "description": "Run bounded read-only diagnostics for Gateway state, deployment roots, host registry, ports, and registered debugger hosts.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "get_workflow_help",
+      "description": "Return focused guidance for setup, local_deployment, remote_deployment, attach, stepping, recovery, or shutdown.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string",
+            "enum": [
+              "setup",
+              "local_deployment",
+              "remote_deployment",
+              "attach",
+              "stepping",
+              "recovery",
+              "shutdown"
+            ]
+          }
+        },
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "plan_local_deployment",
+      "description": "Validate a versioned per-user local dnSpy deployment without writing files. The returned plan_id is required to deploy.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source_path": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "desktop_shortcut": {
+            "type": "boolean"
+          },
+          "start_menu_shortcut": {
+            "type": "boolean"
+          }
+        },
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "deploy_local_host",
+      "description": "SIDE EFFECTING and audited. Materialize a validated local deployment plan atomically and register the local host.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "plan_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "get_local_deployment",
+      "description": "Report the active and previous managed local deployment.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "launch_local_host",
+      "description": "SIDE EFFECTING. Launch the active managed dnSpy host in the interactive user session.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "rollback_local_deployment",
+      "description": "SIDE EFFECTING. Atomically switch current back to the retained previous version.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirm"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "uninstall_local_deployment",
+      "description": "DESTRUCTIVE and audited. Remove managed program versions after explicit confirmation; settings are preserved unless remove_settings is true.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "confirm": {
+            "type": "boolean"
+          },
+          "remove_settings": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirm"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "plan_remote_host_package",
+      "description": "Validate remote package inputs without writing files or credentials.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string"
+          },
+          "gateway_address": {
+            "type": "string"
+          },
+          "use_tls": {
+            "type": "boolean"
+          },
+          "output_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host_id",
+          "gateway_address"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "create_remote_host_package",
+      "description": "SIDE EFFECTING and audited. Build a self-contained remote ZIP from a validated plan; it is not transferred or executed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "plan_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "get_remote_host_readiness",
+      "description": "Report registry and live connection readiness for a remote host.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "revoke_remote_host",
+      "description": "DESTRUCTIVE and audited. Remove a remote host from the central registry after explicit confirmation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string"
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "host_id",
+          "confirm"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "step_and_inspect",
+      "description": "Step once, wait for the resulting stop, and return the new location, compact stack, frame, watches, and exception in one bounded workflow.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "into",
+              "over",
+              "out"
+            ]
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "expected_execution_version": {
+            "type": "integer"
+          },
+          "expected_stop_id": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "max_frames": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25
+          }
+        },
+        "required": [
+          "session_id",
+          "kind",
+          "expected_execution_version",
+          "expected_stop_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "trace_calls",
+      "description": "SIDE EFFECTING and audited. Perform bounded best-effort managed step-into tracing. Optimized, native, runtime, async, and missing-sequence-point calls can be unobservable.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "expected_execution_version": {
+            "type": "integer"
+          },
+          "expected_stop_id": {
+            "type": "string"
+          },
+          "max_steps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30000
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "module_filter": {
+            "type": "string"
+          },
+          "namespace_filter": {
+            "type": "string"
+          },
+          "type_filter": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "expected_execution_version",
+          "expected_stop_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "run_to_method",
+      "description": "SIDE EFFECTING and audited. Set a temporary method breakpoint, continue, wait boundedly, and always remove the temporary breakpoint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "module": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          },
+          "expected_execution_version": {
+            "type": "integer"
+          },
+          "expected_breakpoints_version": {
+            "type": "integer"
+          },
+          "expected_stop_id": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "session_id",
+          "module",
+          "type",
+          "method",
+          "expected_execution_version",
+          "expected_breakpoints_version",
+          "expected_stop_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "run_to_location",
+      "description": "SIDE EFFECTING and audited. Set a temporary IL breakpoint, continue, wait boundedly, and always remove the temporary breakpoint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "module": {
+            "type": "string"
+          },
+          "method_token": {
+            "type": "integer"
+          },
+          "il_offset": {
+            "type": "integer"
+          },
+          "expected_execution_version": {
+            "type": "integer"
+          },
+          "expected_breakpoints_version": {
+            "type": "integer"
+          },
+          "expected_stop_id": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "session_id",
+          "module",
+          "method_token",
+          "il_offset",
+          "expected_execution_version",
+          "expected_breakpoints_version",
+          "expected_stop_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
       "name": "list_hosts",
       "description": "List registered debugger hosts and their current connection state.",
       "inputSchema": {
         "type": "object",
         "properties": {},
         "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -21,6 +518,11 @@
           }
         },
         "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -35,6 +537,11 @@
           }
         },
         "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -70,6 +577,11 @@
           }
         },
         "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -89,6 +601,11 @@
         "required": [
           "program_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -130,6 +647,11 @@
         "required": [
           "port"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -182,6 +704,11 @@
         "required": [
           "filename"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -201,6 +728,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -215,6 +747,11 @@
           }
         },
         "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -234,6 +771,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -253,6 +795,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -272,6 +819,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -307,6 +859,11 @@
           "session_id",
           "expected_lifecycle_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -338,6 +895,11 @@
           "session_id",
           "expected_lifecycle_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -366,6 +928,11 @@
           "session_id",
           "expected_lifecycle_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -396,6 +963,11 @@
           "session_id",
           "expected_execution_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -426,6 +998,11 @@
           "session_id",
           "expected_execution_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -470,6 +1047,11 @@
           "il_offset",
           "expected_breakpoints_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -484,6 +1066,11 @@
           }
         },
         "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -503,6 +1090,11 @@
         "required": [
           "breakpoint_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -517,6 +1109,11 @@
           }
         },
         "required": []
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -545,6 +1142,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -606,6 +1208,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -661,6 +1268,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -683,6 +1295,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -702,6 +1319,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -729,6 +1351,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -773,6 +1400,11 @@
           "thread_id",
           "frame_index"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -828,6 +1460,11 @@
         "required": [
           "breakpoint_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -858,6 +1495,11 @@
           }
         },
         "required": []
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -882,6 +1524,11 @@
           }
         },
         "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -918,6 +1565,11 @@
           "expected_execution_version",
           "expected_stop_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -953,6 +1605,11 @@
           "expected_execution_version",
           "expected_stop_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -988,6 +1645,11 @@
           "expected_execution_version",
           "expected_stop_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1028,6 +1690,11 @@
           "session_id",
           "expression"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1079,6 +1746,11 @@
           "expected_execution_version",
           "expected_stop_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1130,6 +1802,11 @@
           "expected_execution_version",
           "expected_stop_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1163,6 +1840,11 @@
           "address",
           "length"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1203,6 +1885,11 @@
           "data_base64",
           "expected_execution_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1244,6 +1931,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1266,6 +1958,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1319,6 +2016,11 @@
           "expected_execution_version",
           "expected_stop_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1364,6 +2066,11 @@
           "session_id",
           "expression"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1418,6 +2125,11 @@
           "expected_execution_version",
           "expected_stop_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1447,6 +2159,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1470,6 +2187,11 @@
           "session_id",
           "expression"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1499,6 +2221,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1522,6 +2249,11 @@
           "session_id",
           "watch_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1541,6 +2273,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1560,6 +2297,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1598,6 +2340,11 @@
           "session_id",
           "module"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1639,6 +2386,11 @@
           "module",
           "type"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1685,6 +2437,11 @@
           "session_id",
           "pattern"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1721,6 +2478,11 @@
           "session_id",
           "module"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1760,6 +2522,11 @@
           "session_id",
           "module"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1812,6 +2579,11 @@
           "method",
           "expected_breakpoints_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1853,6 +2625,11 @@
           "session_id",
           "pattern"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1888,6 +2665,11 @@
           "module",
           "token"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1925,6 +2707,11 @@
           "session_id",
           "module"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -1951,6 +2738,11 @@
           "session_id",
           "module"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2004,6 +2796,11 @@
           "expected_execution_version",
           "expected_stop_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2029,6 +2826,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2069,6 +2871,11 @@
           "session_id",
           "object_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2108,6 +2915,11 @@
           "object_id",
           "expected_execution_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2143,6 +2955,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2166,6 +2983,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2194,6 +3016,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2250,6 +3077,11 @@
           "session_id",
           "expected_breakpoints_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2269,6 +3101,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2326,6 +3163,11 @@
           "breakpoint_id",
           "expected_breakpoints_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2358,6 +3200,11 @@
           "breakpoint_id",
           "expected_breakpoints_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2382,6 +3229,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2424,6 +3276,11 @@
           "document",
           "expected_breakpoints_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2443,6 +3300,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2467,6 +3329,11 @@
         "required": [
           "session_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2513,6 +3380,11 @@
           "session_id",
           "expected_breakpoints_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2547,6 +3419,11 @@
           "session_id",
           "expected_breakpoints_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2575,6 +3452,11 @@
           "session_id",
           "expected_breakpoints_version"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2620,6 +3502,11 @@
           "session_id",
           "expression"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2677,6 +3564,11 @@
           "expected_execution_version",
           "expected_stop_id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2717,6 +3609,11 @@
           "module",
           "token"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     },
     {
@@ -2749,6 +3646,11 @@
           "session_id",
           "module"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
       }
     }
   ]
