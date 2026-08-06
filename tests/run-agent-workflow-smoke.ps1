@@ -3,8 +3,8 @@ $ErrorActionPreference='Stop'
 $OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new()
 $scratch=Join-Path ([IO.Path]::GetTempPath()) ('dgspy-agent-workflow-'+[Guid]::NewGuid().ToString('N'))
 $state=Join-Path $scratch 'state'
-$cli=Join-Path $PSScriptRoot "..\dgSpy.Cli\bin\$Configuration\net7.0\dgspy.dll"
-$gateway=Join-Path $PSScriptRoot "..\dgSpy.Gateway\bin\$Configuration\net7.0\dgSpy.Gateway.dll"
+$cli=Join-Path $PSScriptRoot "..\dgSpy.Cli\bin\$Configuration\net10.0\dgspy.dll"
+$gateway=Join-Path $PSScriptRoot "..\dgSpy.Gateway\bin\$Configuration\net10.0\dgSpy.Gateway.dll"
 try {
   dotnet build (Join-Path $PSScriptRoot '..\dgSpy.Gateway\dgSpy.Gateway.csproj') -c $Configuration --nologo -v:minimal
   if($LASTEXITCODE){throw "Gateway build failed: $LASTEXITCODE"}
@@ -14,7 +14,6 @@ try {
   $env:DGSPY_INSTALL_ROOT=Join-Path $scratch 'install'
   $env:DGSPY_PACKAGE_ROOT=Join-Path $scratch 'packages'
   $env:DGSPY_GATEWAY_PATH=$gateway
-  $env:DGSPY_SOURCE_ROOT=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
   & dotnet $cli start
   if($LASTEXITCODE){throw "start failed: $LASTEXITCODE"}
   & dotnet $cli status

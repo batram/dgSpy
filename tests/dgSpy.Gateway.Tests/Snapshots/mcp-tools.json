@@ -56,56 +56,6 @@
       }
     },
     {
-      "name": "plan_local_deployment",
-      "description": "Validate a versioned per-user local dnSpy deployment without writing files. The returned plan_id is required to deploy.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "source_path": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          },
-          "host_id": {
-            "type": "string"
-          },
-          "desktop_shortcut": {
-            "type": "boolean"
-          },
-          "start_menu_shortcut": {
-            "type": "boolean"
-          }
-        },
-        "required": []
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "idempotentHint": false
-      }
-    },
-    {
-      "name": "deploy_local_host",
-      "description": "SIDE EFFECTING and audited. Materialize a validated local deployment plan atomically and register the local host.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "plan_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "plan_id"
-        ]
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": false,
-        "idempotentHint": true
-      }
-    },
-    {
       "name": "get_local_deployment",
       "description": "Report the active and previous managed local deployment.",
       "inputSchema": {
@@ -121,7 +71,7 @@
     },
     {
       "name": "launch_local_host",
-      "description": "SIDE EFFECTING. Launch the active managed dnSpy host in the interactive user session.",
+      "description": "SIDE EFFECTING. Install the bundled local host when needed, launch dnSpy, and wait briefly for registration.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -177,8 +127,8 @@
       }
     },
     {
-      "name": "plan_remote_host_package",
-      "description": "Validate remote package inputs without writing files or credentials.",
+      "name": "create_remote_host_package",
+      "description": "SIDE EFFECTING and audited. Personalize the bundled self-contained host payload and create a remote ZIP; it never builds, transfers, or executes the host.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -198,26 +148,6 @@
         "required": [
           "host_id",
           "gateway_address"
-        ]
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "idempotentHint": false
-      }
-    },
-    {
-      "name": "create_remote_host_package",
-      "description": "SIDE EFFECTING and audited. Build a self-contained remote ZIP from a validated plan; it is not transferred or executed.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "plan_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "plan_id"
         ]
       },
       "annotations": {

@@ -17,7 +17,7 @@ if ($RpcPort -eq 0) {
 }
 
 $dnSpyDir = Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net48'
-$gatewayDll = Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net7.0\dgSpy.Gateway.dll'
+$gatewayDll = Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net10.0\dgSpy.Gateway.dll'
 $targetProject = Join-Path $PSScriptRoot 'TestTargets\Milestone1Target\Milestone1Target.csproj'
 $targetExe = Join-Path $PSScriptRoot 'TestTargets\Milestone1Target\bin\Debug\net48\Milestone1Target.exe'
 $runDirectory = Join-Path ([IO.Path]::GetTempPath()) ('dgspy-smoke-' + [Guid]::NewGuid().ToString('N'))

@@ -11,16 +11,23 @@ long-running setup command.
 
 ## Current status
 
-The repository builds a centrally provisioned self-contained x64 host ZIP. The extension opens one
-persistent authenticated outbound connection, the Gateway routes RPC over it, and `list_hosts` reports
+The released dgSpy package contains one immutable self-contained x64 tree shared by dnSpy, the CLI, and
+the Gateway. The installed Gateway personalizes that tree into a per-host ZIP without a source checkout,
+SDK, restore, or build. The extension opens one persistent authenticated outbound connection, the
+Gateway routes RPC over it, and `list_hosts` reports
 connected, unavailable, and error states. The local loopback RPC path remains available. Provisioning
 selects authenticated plaintext for trusted isolated networks or pinned mutual TLS per package.
 
-Build and verify the portable baseline on the central development machine:
+Release engineering builds the portable payload once:
 
 ```powershell
-.\pack-remote-host.ps1 -HostId 'win11-clean' -GatewayAddress '192.168.250.1'
-.\tests\verify-remote-host-package.ps1 -ArchivePath .\artifacts\remote-host\dgSpy-remote-host-win11-clean-win-x64.zip
+.\pack-dgspy.ps1
+```
+
+An installed agent creates a personalized package with one MCP call:
+
+```text
+create_remote_host_package { host_id: "win11-clean", gateway_address: "192.168.250.1" }
 ```
 
 ## Target minimal flow
@@ -50,28 +57,31 @@ local interface and port.
 
 The central machine creates a package for one expected remote. It generates and records the same stable
 identity and strong credential on both sides, and writes the Gateway endpoint into the package. The
-intended command shape is:
+equivalent CLI command is:
 
 ```powershell
-.\pack-remote-host.ps1 -HostId 'win11-clean' -GatewayAddress '192.168.250.1' -GatewayPort 7352
+dgspy pack-host --host-id win11-clean --gateway-address 192.168.250.1
 ```
 
-For mutual TLS, provision the package on a separate listener port:
+Mutual TLS is the default. Use plaintext only for an explicitly trusted isolated network:
 
 ```powershell
-.\pack-remote-host.ps1 -HostId 'win11-clean-tls' -GatewayAddress '192.168.250.1' -UseTls -GatewayTlsPort 7353
+dgspy pack-host --host-id win11-clean --gateway-address 192.168.250.1 --plaintext
 ```
 
-The output contains no Gateway executable:
+The output reuses the unified release tree, so it contains the CLI and Gateway binaries as inert files;
+the remote launcher starts only `dnSpy.exe` and exposes no MCP endpoint:
 
 ```text
 dgSpy-remote-host-win11-clean.zip
 |-- dnSpy.exe
+|-- bin\dgspy.exe
+|-- bin\dgSpy.Gateway.exe
 |-- bin\Extensions\dgSpy\
 |-- launcher\
 |-- remote-host.json
 |-- state\host.id
-|-- state\gateway.token
+|-- state\rpc.token
 `-- manifest.json
 ```
 

@@ -1,44 +1,68 @@
 # dgSpy quick start
 
-Build and start from a checkout:
+Install dgSpy and connect it to your agent with one script. The agent starts the Gateway and dnSpy when
+you first ask it to use dgSpy.
+
+## From a GitHub release (fastest)
+
+1. Download `dgspy-win-x64.zip` from the
+   [latest release](https://github.com/batram/dgSpy/releases/latest).
+2. Extract it.
+3. In PowerShell, run one of:
 
 ```powershell
-.\build-dgspy.ps1 -NoDeploy
-.\Start-dgSpy.ps1 start
-.\Start-dgSpy.ps1 doctor
+.\install-dgspy.ps1 codex
 ```
-
-For normal use, publish `pack-dgspy.ps1`, extract the resulting ZIP, and register its `dgspy.exe mcp`
-command with the MCP client. `dgspy configure codex --apply` performs that one-time per-user registration;
-new sessions then start or reuse the loopback Gateway automatically. URL-only clients can use `dgspy start`
-and may need an MCP reconnect after a late start.
-
-## Deploy a debugger host
-
-Local deployment installs an immutable per-user dnSpy version and keeps one rollback version:
 
 ```powershell
-dgspy deploy-local --source C:\path\to\packaged\dnSpy --version 1.0.0
+.\install-dgspy.ps1 claude
 ```
 
-Add `--desktop-shortcut` or `--start-menu-shortcut` only when wanted. Installation does not change
-`PATH`, install a service, or create an autostart task.
+Restart the agent, then say:
 
-Remote deployment creates but does not transfer or execute a self-contained host ZIP:
+```text
+Use dgspy and go local.
+```
+
+The agent starts dnSpy automatically. You are ready to debug.
+
+## From a repository checkout
+
+Install the build prerequisites once: Windows x64, Git, .NET SDK 10, and the .NET Framework 4.8
+developer pack. Initialize the submodules, then run the same installer:
 
 ```powershell
-dgspy pack-host --host-id lab-pc --gateway-address 192.168.1.10
+git submodule update --init --recursive
+.\install-dgspy.ps1 codex
 ```
 
-Restart the Gateway after adding or revoking a remote host so it reloads the registry. The CLI output
-reports this explicitly; the next client-spawned start automatically includes both managed local and
-provisioned remote hosts.
+Use `claude` instead of `codex` for Claude Code. The installer builds the complete package first; no
+separate build, packaging, extraction, or MCP configuration command is needed.
 
-Agents should begin with `get_started`, use `doctor` for failures, and call the matching plan tool before
-either deployment mutation. Detach safely before closing dnSpy.
+## What the installer does
 
-## Debugging
+- Installs the unified self-contained dnSpy, CLI, and Gateway package under
+  `%LOCALAPPDATA%\Programs\dgSpyMcp`.
+- Registers the `dgspy` stdio MCP server for Codex or Claude Code.
+- Verifies that the installed CLI can start, but does not start the Gateway or dnSpy.
+- Leaves Gateway startup to the registered `dgspy mcp` command on first MCP use.
+- Keeps mutable credentials, host configuration, logs, and debugger deployment state outside the
+  immutable package tree.
 
-`step_into`, `step_over`, and `step_out` remain the primitives. `step_and_inspect` combines one step,
-the event wait, stack, frame, watches, and exception. `trace_calls` is bounded best-effort managed tracing:
-optimized/inlined code, native/runtime calls, missing sequence points, and async thread changes can hide calls.
+Downloaded releases need no SDK, Visual Studio, administrator rights, `PATH` change, service, or
+autostart task.
+
+## Check or repair the installation
+
+The installer intentionally does not run live diagnostics. After the agent has first used dgSpy—or
+when troubleshooting manually—run:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\dgSpyMcp\cli\bin\dgspy.exe" doctor
+```
+
+- If the agent does not show dgSpy tools, restart it or reconnect MCP.
+- If installation reports an incomplete package, download the complete `dgspy-win-x64.zip` again.
+- To update, extract a newer release and rerun the same installer command.
+
+For a debugger on another Windows machine, continue with [Remote hosts](REMOTE_HOSTS.md).

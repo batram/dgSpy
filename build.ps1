@@ -72,6 +72,17 @@ function Build-Net {
 	$rid = "win-$arch"
 	$outdir = "$net_baseoutput\$net_tfm\$rid"
 	$publishDir = "$outdir\publish"
+	$resolvedOutdir = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot $outdir))
+	$expectedOutdir = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "$net_baseoutput\$net_tfm\$rid"))
+	if (-not $resolvedOutdir.Equals($expectedOutdir, [StringComparison]::OrdinalIgnoreCase)) { throw "Refusing to clean unexpected .NET output: $resolvedOutdir" }
+	# Publish is a packaged layout, not an incremental compiler output. Remove it and the fixed-name
+	# staging directory used by older builds so interrupted runs are safe to retry.
+	foreach ($stale in $publishDir, "$outdir\tmpbin") {
+		if (Test-Path -LiteralPath $stale) { Remove-Item -LiteralPath $stale -Recurse -Force }
+	}
+	foreach ($stale in Get-ChildItem -LiteralPath $resolvedOutdir -Directory -Filter 'publish-layout-*' -ErrorAction SilentlyContinue) {
+		Remove-Item -LiteralPath $stale.FullName -Recurse -Force
+	}
 
 	if ($NoMsbuild) {
 		dotnet publish -v:m -c $configuration -f $net_tfm -r $rid --self-contained
@@ -83,11 +94,15 @@ function Build-Net {
 	}
 
 	# move all files to a bin sub dir but keep the exe apphosts
-	$tmpbin = 'tmpbin'
-	Rename-Item $publishDir $tmpbin
-	New-Item -ItemType Directory $publishDir > $null
-	Move-Item $outdir\$tmpbin $publishDir
-	Rename-Item $publishDir\$tmpbin bin
+	$staging = "$outdir\publish-layout-$([Guid]::NewGuid().ToString('N'))"
+	Move-Item -LiteralPath $publishDir -Destination $staging
+	New-Item -ItemType Directory -Path $publishDir > $null
+	$packagedBin = "$publishDir\bin"
+	New-Item -ItemType Directory -Path $packagedBin > $null
+	# Moving a generated directory can fail with Access denied on Windows even when its files are
+	# writable. Copy the completed publish tree into the final immutable layout instead.
+	Get-ChildItem -LiteralPath $staging -Force | Copy-Item -Destination $packagedBin -Recurse
+	Remove-Item -LiteralPath $staging -Recurse -Force
 	foreach ($exe in 'dnSpy.exe', 'dnSpy.Console.exe') {
 		Move-Item $publishDir\bin\$exe $publishDir
 		& $apphostpatcher_dir\bin\$configuration\$netframework_tfm\AppHostPatcher.exe $publishDir\$exe -d bin

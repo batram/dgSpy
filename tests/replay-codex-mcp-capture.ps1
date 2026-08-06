@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $runRoot = Join-Path $repoRoot 'artifacts\codex-mcp-replay'
-$gateway = Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net7.0\dgSpy.Gateway.dll'
+$gateway = Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net10.0\dgSpy.Gateway.dll'
 $dotnet = (Get-Command dotnet).Source
 $gatewayProcess = $null
 

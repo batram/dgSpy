@@ -20,9 +20,10 @@
 
 | Project | TFM | Notes |
 |---|---|---|
-| `dgSpy.Protocol` | `netstandard2.0` | DTOs only. Referenced by both sides, so it must stay loadable from net48 and net7.0. |
+| `dgSpy.Protocol` | `netstandard2.0` | DTOs only. Referenced by both sides, so it must stay loadable from net48 and the modern .NET host. |
 | `Extensions/dgSpy.Extension` | `net48`, `net10.0-windows` | The net48 target remains the local baseline; the net10 target is packed with the self-contained remote host. Output is `dgSpy.Extension.x.dll` — dnSpy's scanner only loads `*.x.dll`. |
-| `dgSpy.Gateway` | `net7.0` | Standalone process, not loaded into dnSpy. |
+| `dgSpy.Cli` | `net10.0` | Console entrypoint, packaged with the Gateway in one shared self-contained runtime. |
+| `dgSpy.Gateway` | `net10.0` | Standalone process, packaged with the CLI in one shared self-contained runtime. |
 | `tests/TestTargets/Milestone1Target` | `net48`, x64 | CorDebug smoke target; the project pins `PlatformTarget=x64` and the smoke test verifies dnSpy reports `X64`. |
 
 The dgSpy projects are intentionally **not** in `dnSpy.sln`, and dgSpy builds through `build-dgspy.ps1`.
@@ -93,6 +94,12 @@ that is a build-driver limitation, not a source failure.
 ```powershell
 .\build.ps1 net-x64 -NoMsbuild
 ```
+
+`pack-dgspy.ps1` starts with the self-contained dnSpy tree, then merges the CLI and Gateway publishes
+into its `cli\bin` runtime directory. All three applications therefore ship one .NET 10 runtime.
+Duplicate files must have identical SHA-256 hashes except for the explicit Windows Desktop framework
+variants retained from dnSpy at the same .NET servicing version. Packaging fails on every unknown or
+version-mismatched collision.
 
 Build the deploy-only remote host archive on the development machine:
 

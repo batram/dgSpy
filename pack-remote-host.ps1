@@ -37,7 +37,7 @@ foreach ($relativePath in $requiredHostFiles) {
 		throw "Self-contained host file is missing: $relativePath. Build with .\build.ps1 net-x64 -NoMsbuild."
 	}
 }
-$extensionFiles = @('dgSpy.Extension.x.dll', 'dgSpy.Extension.x.pdb', 'dgSpy.Protocol.dll', 'dgSpy.Protocol.pdb', 'Newtonsoft.Json.dll')
+$extensionFiles = @('dgSpy.Extension.x.dll', 'dgSpy.Extension.x.pdb', 'dgSpy.Protocol.dll', 'dgSpy.Protocol.pdb')
 foreach ($fileName in $extensionFiles) {
 	if (-not (Test-Path -LiteralPath (Join-Path $extensionOutput $fileName) -PathType Leaf)) { throw "Extension output is missing: $fileName." }
 }

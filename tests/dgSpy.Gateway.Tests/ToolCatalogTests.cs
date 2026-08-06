@@ -12,8 +12,8 @@ namespace dgSpy.Gateway.Tests;
 /// bounds and the gateway derives deadlines from them; these tests are what keeps the two from drifting
 /// apart again.</summary>
 public sealed class ToolCatalogTests {
-	static readonly HashSet<string> GatewayOperations=new(StringComparer.Ordinal) { "get_started","doctor","get_workflow_help","plan_local_deployment","deploy_local_host","get_local_deployment","launch_local_host","rollback_local_deployment","uninstall_local_deployment","plan_remote_host_package","create_remote_host_package","get_remote_host_readiness","revoke_remote_host","step_and_inspect","trace_calls","run_to_method","run_to_location","list_hosts","get_session_controller","claim_session","release_session" };
-	static readonly HashSet<string> UnroutedGatewayOperations=new(StringComparer.Ordinal) { "get_started","doctor","get_workflow_help","deploy_local_host","get_local_deployment","launch_local_host","rollback_local_deployment","uninstall_local_deployment","create_remote_host_package","list_hosts" };
+	static readonly HashSet<string> GatewayOperations=new(StringComparer.Ordinal) { "get_started","doctor","get_workflow_help","get_local_deployment","launch_local_host","rollback_local_deployment","uninstall_local_deployment","create_remote_host_package","get_remote_host_readiness","revoke_remote_host","step_and_inspect","trace_calls","run_to_method","run_to_location","list_hosts","get_session_controller","claim_session","release_session" };
+	static readonly HashSet<string> UnroutedGatewayOperations=new(StringComparer.Ordinal) { "get_started","doctor","get_workflow_help","get_local_deployment","launch_local_host","rollback_local_deployment","uninstall_local_deployment","create_remote_host_package","list_hosts" };
 	static string Name(object tool) => (string)tool.GetType().GetProperty("name", BindingFlags.Public | BindingFlags.Instance)!.GetValue(tool)!;
 	static string Description(object tool) => (string)tool.GetType().GetProperty("description", BindingFlags.Public | BindingFlags.Instance)!.GetValue(tool)!;
 	static IReadOnlyDictionary<string,object> InputProperties(object tool) {
@@ -75,7 +75,10 @@ public sealed class ToolCatalogTests {
 		foreach (var tool in ToolCatalog.All) {
 			var name=Name(tool);
 			var properties=InputProperties(tool);
-			if (UnroutedGatewayOperations.Contains(name)) Assert.False(properties.ContainsKey("host_id"));
+			if (UnroutedGatewayOperations.Contains(name)) {
+				if(name=="create_remote_host_package") Assert.True(properties.ContainsKey("host_id"));
+				else Assert.False(properties.ContainsKey("host_id"));
+			}
 			else {
 				Assert.True(properties.TryGetValue("host_id",out var host));
 				Assert.Equal("string",host.GetType().GetProperty("type")!.GetValue(host));
@@ -98,7 +101,8 @@ public sealed class ToolCatalogTests {
 	[Fact]
 	public void Onboarding_and_deployment_tools_are_discoverable_and_annotated() {
 		var names=ToolCatalog.All.Select(Name).ToHashSet(StringComparer.Ordinal);
-		foreach(var name in new[]{"get_started","doctor","get_workflow_help","plan_local_deployment","deploy_local_host","get_local_deployment","launch_local_host","rollback_local_deployment","uninstall_local_deployment","plan_remote_host_package","create_remote_host_package","get_remote_host_readiness","revoke_remote_host","step_and_inspect","trace_calls","run_to_method","run_to_location"}) Assert.Contains(name,names);
+		foreach(var name in new[]{"get_started","doctor","get_workflow_help","get_local_deployment","launch_local_host","rollback_local_deployment","uninstall_local_deployment","create_remote_host_package","get_remote_host_readiness","revoke_remote_host","step_and_inspect","trace_calls","run_to_method","run_to_location"}) Assert.Contains(name,names);
+		Assert.DoesNotContain("plan_local_deployment",names); Assert.DoesNotContain("deploy_local_host",names); Assert.DoesNotContain("plan_remote_host_package",names);
 		Assert.Contains("get_started",ToolCatalog.Instructions,StringComparison.Ordinal);
 		Assert.NotNull(ToolCatalog.ReadResource("dgspy://guide/getting-started"));
 		Assert.Null(ToolCatalog.ReadResource("dgspy://guide/missing"));

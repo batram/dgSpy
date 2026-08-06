@@ -48,7 +48,7 @@ dgSpy dnSpy Extension
 
 Keep tool families in focused `RpcHost.<Family>.cs` partials under `Debugger/`, `Decompiler/`,
 `Evaluation/`, `Events/`, `Handles/`, or `Identity/`. Keep shared dnSpy objects and shutdown ownership in
-`Rpc/RpcHost.cs`. Pure policy belongs outside WPF/dnSpy implementation dependencies so the net7 test
+`Rpc/RpcHost.cs`. Pure policy belongs outside WPF/dnSpy implementation dependencies so the .NET 10 test
 project can exercise it.
 
 ## State and identity model

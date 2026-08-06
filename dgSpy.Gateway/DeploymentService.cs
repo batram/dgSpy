@@ -1,14 +1,14 @@
 using System.Diagnostics;
+using System.IO.Compression;
+using System.Net;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json.Nodes;
 
 namespace dgSpy.Gateway;
 
 public sealed class DeploymentService {
-	sealed record Plan(string Kind,DateTime ExpiresUtc,JsonObject Data);
-	readonly Dictionary<string,Plan> plans=new(StringComparer.Ordinal);
-	readonly object sync=new();
 	readonly string stateRoot;
 	readonly string installRoot;
 	readonly string packageRoot;
@@ -17,21 +17,18 @@ public sealed class DeploymentService {
 		installRoot=Environment.GetEnvironmentVariable("DGSPY_INSTALL_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","dgSpy");
 		packageRoot=Path.GetFullPath(Environment.GetEnvironmentVariable("DGSPY_PACKAGE_ROOT") ?? Path.Combine(stateRoot,"packages"));
 	}
-	public static bool IsGatewayOperation(string operation) => operation is "get_started" or "doctor" or "get_workflow_help" or "plan_local_deployment" or "deploy_local_host" or "get_local_deployment" or "launch_local_host" or "rollback_local_deployment" or "uninstall_local_deployment" or "plan_remote_host_package" or "create_remote_host_package" or "get_remote_host_readiness" or "revoke_remote_host";
-	public static bool IsMutation(string operation) => operation is "deploy_local_host" or "launch_local_host" or "rollback_local_deployment" or "uninstall_local_deployment" or "create_remote_host_package" or "revoke_remote_host";
+	public static bool IsGatewayOperation(string operation) => operation is "get_started" or "doctor" or "get_workflow_help" or "get_local_deployment" or "launch_local_host" or "rollback_local_deployment" or "uninstall_local_deployment" or "create_remote_host_package" or "get_remote_host_readiness" or "revoke_remote_host";
+	public static bool IsMutation(string operation) => operation is "launch_local_host" or "rollback_local_deployment" or "uninstall_local_deployment" or "create_remote_host_package" or "revoke_remote_host";
 
 	public async Task<object> ExecuteAsync(string operation,JsonObject args,HostRouter router,CancellationToken token) => operation switch {
 		"get_started" => await GetStartedAsync(router,token),
 		"doctor" => await DoctorAsync(router,token),
 		"get_workflow_help" => Workflow((string?)args["topic"]),
-		"plan_local_deployment" => PlanLocal(args),
-		"deploy_local_host" => await DeployLocalAsync(Consume((string?)args["plan_id"],"local"),token),
 		"get_local_deployment" => GetLocal(),
 		"launch_local_host" => await LaunchLocalAsync(router,token),
 		"rollback_local_deployment" => Rollback(args),
 		"uninstall_local_deployment" => Uninstall(args),
-		"plan_remote_host_package" => PlanRemote(args),
-		"create_remote_host_package" => await CreateRemoteAsync(Consume((string?)args["plan_id"],"remote"),token),
+		"create_remote_host_package" => await CreateRemoteAsync(args,token),
 		"get_remote_host_readiness" => await RemoteReadinessAsync((string?)args["host_id"],router,token),
 		"revoke_remote_host" => RevokeRemote(args),
 		_ => throw new GatewayControlException("unknown_tool",$"Unknown Gateway operation '{operation}'.")
@@ -39,55 +36,109 @@ public sealed class DeploymentService {
 
 	async Task<object> GetStartedAsync(HostRouter router,CancellationToken token) {
 		var hosts=await router.ListHostsAsync(token); var local=GetLocal(); var connected=hosts.Any(item=>System.Text.Json.JsonSerializer.Serialize(item).Contains("\"state\":\"connected\"",StringComparison.Ordinal));
-		return new { gateway="ready",access_mode=Environment.GetEnvironmentVariable("DGSPY_ACCESS_MODE") ?? "full-control",local_deployment=local,hosts,recommended_next_action=connected ? "select a connected host, then attach or launch" : "deploy or start a local host, or connect a provisioned remote host" };
+		return new { gateway="ready",access_mode=Environment.GetEnvironmentVariable("DGSPY_ACCESS_MODE") ?? "full-control",local_deployment=local,hosts,recommended_next_action=connected ? "select a connected host, then attach or launch" : "call launch_local_host, or create one remote host package" };
 	}
 	async Task<object> DoctorAsync(HostRouter router,CancellationToken token) {
 		var checks=new List<object>();
 		checks.Add(Check("state_root",Directory.Exists(stateRoot),stateRoot,Directory.Exists(stateRoot)?null:"Created on first mutation."));
-		checks.Add(Check("local_deployment",true,Directory.Exists(installRoot)?installRoot:"not installed",Directory.Exists(installRoot)?null:"Optional: call plan_local_deployment, then deploy_local_host."));
+		checks.Add(Check("local_deployment",true,Directory.Exists(installRoot)?installRoot:"not installed",Directory.Exists(installRoot)?null:"Optional: call launch_local_host; it installs the bundled host automatically."));
+		var payload=RemotePayloadRoot(); try { ValidateRemotePayload(payload); checks.Add(Check("bundled_host_payload",true,payload,null)); } catch(GatewayControlException ex) { checks.Add(Check("bundled_host_payload",false,payload,ex.Message)); }
 		var registry=Environment.GetEnvironmentVariable("DGSPY_HOSTS_FILE"); checks.Add(Check("host_registry",string.IsNullOrWhiteSpace(registry)||File.Exists(registry),registry ?? "implicit local host",string.IsNullOrWhiteSpace(registry)||File.Exists(registry)?null:"Configured registry is missing."));
 		object[] hosts; try { hosts=await router.ListHostsAsync(token); var connected=hosts.Count(item=>System.Text.Json.JsonSerializer.Serialize(item).Contains("\"state\":\"connected\"",StringComparison.Ordinal)); checks.Add(Check("hosts",connected>0,$"{hosts.Length} registered, {connected} connected",connected>0?null:"Start dnSpy locally or connect a provisioned remote host.")); } catch(Exception ex) { hosts=Array.Empty<object>(); checks.Add(Check("hosts",false,ex.GetType().Name,"Repair the host registry or credentials.")); }
 		return new { healthy=checks.All(c=>(bool)c.GetType().GetProperty("ok")!.GetValue(c)!),state_root=stateRoot,install_root=installRoot,checks,hosts };
 	}
 	static object Check(string name,bool ok,string detail,string? recovery) => new { name,ok,detail,recovery };
 	static object Workflow(string? topic) {
-		var text=topic switch { "local_deployment"=>"Call plan_local_deployment, review paths and conflicts, then deploy_local_host with its plan_id. Call launch_local_host and wait for the host to connect.","remote_deployment"=>"Call plan_remote_host_package, then create_remote_host_package. Give the ZIP and SHA-256 to the user; do not transfer or run it automatically.","attach"=>"Use list_programs with narrow filters then attach, or attach_endpoint for a Mono/Unity server=y endpoint. Never TCP-probe a single-use Unity endpoint.","stepping"=>"Use current scoped versions and stop_id. step_and_inspect is the compact path. trace_calls is bounded best-effort and cannot observe optimized, native, runtime, async, or missing-sequence-point calls.","recovery"=>"Call doctor and list_hosts. Recover sessions with list_sessions and claim_session; refresh state after stale version errors. A disconnect never implies resume or detach.","shutdown"=>"Detach safely before closing dnSpy. A detach_timed_out result means the target remains attached and the session is preserved.",_=>"Run dgspy mcp for client-spawned startup, or dgspy start for URL clients. Begin with get_started and doctor." };
+		var text=topic switch { "local_deployment"=>"Call launch_local_host once. It installs the bundled host when needed, starts dnSpy, and waits briefly for registration.","remote_deployment"=>"Ask for host_id and the Gateway address reachable from that host, then call create_remote_host_package once. Give the ZIP and SHA-256 to the user; do not transfer or run it automatically.","attach"=>"Use list_programs with narrow filters then attach, or attach_endpoint for a Mono/Unity server=y endpoint. Never TCP-probe a single-use Unity endpoint.","stepping"=>"Use current scoped versions and stop_id. step_and_inspect is the compact path. trace_calls is bounded best-effort and cannot observe optimized, native, runtime, async, or missing-sequence-point calls.","recovery"=>"Call doctor and list_hosts. Recover sessions with list_sessions and claim_session; refresh state after stale version errors. A disconnect never implies resume or detach.","shutdown"=>"Detach safely before closing dnSpy. A detach_timed_out result means the target remains attached and the session is preserved.",_=>"Run dgspy mcp for client-spawned startup, or dgspy start for URL clients. Begin with get_started and doctor." };
 		return new { topic=topic ?? "setup",guidance=text };
 	}
 
-	object PlanLocal(JsonObject args) {
-		var source=(string?)args["source_path"] ?? Environment.GetEnvironmentVariable("DGSPY_DNSPY_SOURCE") ?? Path.Combine(FindSourceRoot(),"dnSpy","dnSpy","bin","Release","net48");
-		source=Path.GetFullPath(source); ValidateDnSpy(source);
-		var version=SafeSegment((string?)args["version"] ?? FileVersionInfo.GetVersionInfo(Path.Combine(source,"dnSpy.exe")).FileVersion ?? DateTime.UtcNow.ToString("yyyyMMddHHmmss"));
-		var hostId=SafeSegment((string?)args["host_id"] ?? DefaultHostId()); var destination=Path.Combine(installRoot,"versions",version);
-		var bytes=Directory.EnumerateFiles(source,"*",SearchOption.AllDirectories).Sum(path=>new FileInfo(path).Length);
-		var current=ReadCurrent(); var desktop=(bool?)args["desktop_shortcut"]??false; var startMenu=(bool?)args["start_menu_shortcut"]??false; var data=new JsonObject { ["source_path"]=source,["version"]=version,["host_id"]=hostId,["destination"]=destination,["required_bytes"]=bytes,["conflict"]=Directory.Exists(destination),["previous_version"]=(string?)current?["active_version"],["desktop_shortcut"]=desktop,["start_menu_shortcut"]=startMenu };
-		return AddPlan("local",data,new { source_path=source,version,host_id=hostId,destination,required_bytes=bytes,conflict=Directory.Exists(destination),previous_version=(string?)current?["active_version"],desktop_shortcut=desktop,start_menu_shortcut=startMenu,intended_changes=new[]{"copy immutable version","verify manifest","atomically switch current","register local host"} });
-	}
-	async Task<object> DeployLocalAsync(Plan plan,CancellationToken token) {
-		var data=plan.Data; var source=(string)data["source_path"]!; var version=(string)data["version"]!; var hostId=(string)data["host_id"]!; var destination=(string)data["destination"]!;
-		Directory.CreateDirectory(Path.Combine(installRoot,"versions"));
-		if(!Directory.Exists(destination)) { var temporary=destination+".staging-"+Guid.NewGuid().ToString("N"); try { CopyTree(source,temporary,token); ValidateDnSpy(temporary); File.WriteAllText(Path.Combine(temporary,"deployment-manifest.json"),System.Text.Json.JsonSerializer.Serialize(new { version,host_id=hostId,created_utc=DateTime.UtcNow,sha256=HashTree(temporary) })); Directory.Move(temporary,destination); } catch { if(Directory.Exists(temporary)) Directory.Delete(temporary,true); throw; } }
-		Directory.CreateDirectory(stateRoot); EnsureSecret(Path.Combine(stateRoot,"gateway.token")); EnsureSecret(Path.Combine(stateRoot,"rpc.token")); File.WriteAllText(Path.Combine(stateRoot,"host.id"),hostId);
-		var before=ReadCurrent(); WriteCurrent(new JsonObject { ["active_version"]=version,["previous_version"]=(string?)before?["active_version"],["host_id"]=hostId,["updated_utc"]=DateTime.UtcNow }); WriteCurrentLauncher(); if((bool)data["desktop_shortcut"]!) WriteShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"dgSpy.cmd")); if((bool)data["start_menu_shortcut"]!) WriteShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),"Programs","dgSpy.cmd"));
-		await Task.CompletedTask; return new { host_id=hostId,install_path=destination,version,sha256=HashTree(destination),rollback_available=before?["active_version"] is not null,launch_command=Path.Combine(installRoot,"current","Start-dgSpy.cmd") };
-	}
 	object GetLocal() { var current=ReadCurrent(); var active=(string?)current?["active_version"]; return new { installed=active is not null,active_version=active,previous_version=(string?)current?["previous_version"],host_id=(string?)current?["host_id"],install_path=active is null ? null : Path.Combine(installRoot,"versions",active),launcher=Path.Combine(installRoot,"current","Start-dgSpy.cmd") }; }
-	async Task<object> LaunchLocalAsync(HostRouter router,CancellationToken token) { var current=ReadCurrent() ?? throw new GatewayControlException("local_not_installed","No managed local deployment exists."); var version=(string)current["active_version"]!; var executable=Path.Combine(installRoot,"versions",version,"dnSpy.exe"); ValidateDnSpy(Path.GetDirectoryName(executable)!); var start=new ProcessStartInfo(executable) { UseShellExecute=false }; start.Environment["DGSPY_STATE_ROOT"]=stateRoot; var process=Process.Start(start) ?? throw new InvalidOperationException("dnSpy did not start."); for(var attempt=0;attempt<20;attempt++) { await Task.Delay(250,token); var hosts=await router.ListHostsAsync(token); if(hosts.Any(item=>System.Text.Json.JsonSerializer.Serialize(item).Contains("\"state\":\"connected\"",StringComparison.Ordinal))) return new { started=true,process_id=process.Id,connected=true,host_id=(string?)current["host_id"] }; } return new { started=true,process_id=process.Id,connected=false,host_id=(string?)current["host_id"],recovery="Call doctor; dnSpy may still be composing extensions." }; }
+	async Task<object> LaunchLocalAsync(HostRouter router,CancellationToken token) { var installed=EnsureBundledLocalHost(token); var current=ReadCurrent()!; var version=(string)current["active_version"]!; var executable=Path.Combine(installRoot,"versions",version,"dnSpy.exe"); ValidateDnSpy(Path.GetDirectoryName(executable)!); var start=new ProcessStartInfo(executable) { UseShellExecute=false }; start.Environment["DGSPY_STATE_ROOT"]=stateRoot; var process=Process.Start(start) ?? throw new InvalidOperationException("dnSpy did not start."); for(var attempt=0;attempt<20;attempt++) { await Task.Delay(250,token); var hosts=await router.ListHostsAsync(token); if(hosts.Any(item=>System.Text.Json.JsonSerializer.Serialize(item).Contains("\"state\":\"connected\"",StringComparison.Ordinal))) return new { started=true,installed,process_id=process.Id,connected=true,host_id=(string?)current["host_id"] }; } return new { started=true,installed,process_id=process.Id,connected=false,host_id=(string?)current["host_id"],recovery="Call doctor; dnSpy may still be composing extensions." }; }
 	object Rollback(JsonObject args) { RequireConfirm(args); var current=ReadCurrent() ?? throw new GatewayControlException("local_not_installed","No managed local deployment exists."); var previous=(string?)current["previous_version"] ?? throw new GatewayControlException("rollback_unavailable","No previous local version is retained."); var active=(string)current["active_version"]!; if(!Directory.Exists(Path.Combine(installRoot,"versions",previous))) throw new GatewayControlException("rollback_unavailable","The retained previous version directory is missing."); current["active_version"]=previous; current["previous_version"]=active; current["updated_utc"]=DateTime.UtcNow; WriteCurrent(current); WriteCurrentLauncher(); return new { rolled_back=true,active_version=previous,previous_version=active }; }
 	object Uninstall(JsonObject args) { RequireConfirm(args); if(Directory.Exists(installRoot)) Directory.Delete(installRoot,true); foreach(var shortcut in new[]{Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"dgSpy.cmd"),Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),"Programs","dgSpy.cmd")}) if(File.Exists(shortcut)&&File.ReadAllText(shortcut).Contains(installRoot,StringComparison.OrdinalIgnoreCase)) File.Delete(shortcut); if((bool?)args["remove_settings"]==true && Directory.Exists(stateRoot)) Directory.Delete(stateRoot,true); return new { uninstalled=true,settings_preserved=(bool?)args["remove_settings"]!=true }; }
 
-	object PlanRemote(JsonObject args) { var hostId=SafeSegment((string?)args["host_id"] ?? throw new GatewayControlException("invalid_arguments","host_id is required.")); var address=(string?)args["gateway_address"] ?? throw new GatewayControlException("invalid_arguments","gateway_address is required."); var useTls=(bool?)args["use_tls"] ?? true; var output=Path.GetFullPath((string?)args["output_root"] ?? packageRoot); if(output!=packageRoot&&!output.StartsWith(packageRoot+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)) throw new GatewayControlException("path_outside_package_root",$"output_root must stay below '{packageRoot}'."); var data=new JsonObject { ["host_id"]=hostId,["gateway_address"]=address,["use_tls"]=useTls,["output_root"]=output }; return AddPlan("remote",data,new { host_id=hostId,gateway_address=address,use_tls=useTls,output_root=output,intended_changes=new[]{"create per-host credentials","update central registry","build self-contained ZIP"} }); }
-	async Task<object> CreateRemoteAsync(Plan plan,CancellationToken token) { var source=FindSourceRoot(); var output=(string)plan.Data["output_root"]!; Directory.CreateDirectory(output); Directory.CreateDirectory(packageRoot); var registry=Path.Combine(packageRoot,"gateway-hosts.json"); var script=Path.Combine(source,"pack-remote-host.ps1"); var parameters=new List<string>{"-NoProfile","-File",script,"-HostId",(string)plan.Data["host_id"]!,"-GatewayAddress",(string)plan.Data["gateway_address"]!,"-OutputDirectory",output,"-GatewayHostsFile",registry}; if((bool)plan.Data["use_tls"]!) parameters.Add("-UseTls"); var start=new ProcessStartInfo("powershell.exe") { UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true,CreateNoWindow=true }; foreach(var item in parameters) start.ArgumentList.Add(item); using var process=Process.Start(start)!; var stdout=await process.StandardOutput.ReadToEndAsync(token); var stderr=await process.StandardError.ReadToEndAsync(token); await process.WaitForExitAsync(token); if(process.ExitCode!=0) throw new GatewayControlException("package_failed",string.IsNullOrWhiteSpace(stderr)?stdout:stderr); var hostId=(string)plan.Data["host_id"]!; var archive=Directory.EnumerateFiles(output,$"dgSpy-remote-host-{hostId}-*.zip").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault() ?? throw new GatewayControlException("package_missing","Packaging completed without producing an archive."); return new { host_id=hostId,archive_path=archive,sha256=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archive))),transport=(bool)plan.Data["use_tls"]! ? "mutual_tls":"authenticated_plaintext",launch_command=@".\launcher\Start-dgSpyRemoteHost.cmd",transferred=false,executed=false,gateway_restart_required=true,restart_command="dgspy stop; dgspy start" }; }
+	async Task<object> CreateRemoteAsync(JsonObject args,CancellationToken token) {
+		var hostId=SafeSegment((string?)args["host_id"] ?? throw new GatewayControlException("invalid_arguments","host_id is required."));
+		var address=((string?)args["gateway_address"] ?? throw new GatewayControlException("invalid_arguments","gateway_address is required.")).Trim();
+		if(string.IsNullOrWhiteSpace(address)) throw new GatewayControlException("invalid_arguments","gateway_address is required.");
+		var useTls=(bool?)args["use_tls"] ?? true; var output=Path.GetFullPath((string?)args["output_root"] ?? packageRoot);
+		if(output!=packageRoot&&!output.StartsWith(packageRoot+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)) throw new GatewayControlException("path_outside_package_root",$"output_root must stay below '{packageRoot}'.");
+		var payload=RemotePayloadRoot();
+		try { ValidateRemotePayload(payload); }
+		catch(GatewayControlException) { throw; }
+		catch(Exception ex) { throw new GatewayControlException("installation_incomplete",$"The installed remote-host payload is unusable: {ex.Message}. Reinstall dgSpy from a complete release package."); }
+		var registry=Path.Combine(packageRoot,"gateway-hosts.json"); var replacing=RegistryContainsHost(registry,hostId);
+		Directory.CreateDirectory(output); Directory.CreateDirectory(packageRoot);
+		var bundleName=$"dgSpy-remote-host-{hostId}-win-x64";
+		var staging=Path.Combine(packageRoot,".staging-"+Guid.NewGuid().ToString("N")); var archive=Path.Combine(output,bundleName+".zip"); var temporaryArchive=archive+".tmp-"+Guid.NewGuid().ToString("N");
+		try {
+			CopyTree(payload,staging,token); var state=Path.Combine(staging,"state"); Directory.CreateDirectory(state);
+			var credential=Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)); File.WriteAllText(Path.Combine(state,"host.id"),hostId,new UTF8Encoding(false)); File.WriteAllText(Path.Combine(state,"rpc.token"),credential,new UTF8Encoding(false));
+			var remote=new JsonObject { ["format_version"]=1,["host_id"]=hostId,["gateway_address"]=address,["gateway_port"]=useTls?7353:7352,["transport"]=useTls?"tls":"plaintext" };
+			var gatewayHost=new JsonObject { ["host_id"]=hostId,["display_name"]=hostId,["transport"]=useTls?"outbound_tls":"outbound",["token_file"]=hostId+".token" };
+			byte[]? serverPfx=null,serverCer=null,clientCer=null; string? serverPassword=null,clientPassword=null;
+			if(useTls) {
+				var serverPfxPath=Path.Combine(packageRoot,"gateway-server.pfx"); var serverCerPath=Path.Combine(packageRoot,"gateway-server.cer"); var serverPasswordPath=Path.Combine(packageRoot,"gateway-server.password");
+				if(File.Exists(serverPfxPath)&&File.Exists(serverCerPath)&&File.Exists(serverPasswordPath)) { serverPfx=File.ReadAllBytes(serverPfxPath); serverCer=File.ReadAllBytes(serverCerPath); serverPassword=File.ReadAllText(serverPasswordPath).Trim(); }
+				else { serverPassword=NewSecret(); (serverPfx,serverCer)=CreateCertificate(address,true,serverPassword); }
+				clientPassword=NewSecret(); var client=CreateCertificate(hostId,false,clientPassword); clientCer=client.Cer;
+				var certificates=Path.Combine(staging,"certificates"); Directory.CreateDirectory(certificates); File.WriteAllBytes(Path.Combine(certificates,"client.pfx"),client.Pfx); File.WriteAllText(Path.Combine(certificates,"client.password"),clientPassword,new UTF8Encoding(false)); File.WriteAllBytes(Path.Combine(certificates,"gateway-server.cer"),serverCer!);
+				remote["client_certificate_file"]="certificates/client.pfx"; remote["client_certificate_password_file"]="certificates/client.password"; remote["gateway_certificate_file"]="certificates/gateway-server.cer"; gatewayHost["client_certificate_file"]=hostId+"-client.cer";
+			}
+			File.WriteAllText(Path.Combine(staging,"remote-host.json"),remote.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })+"\n",new UTF8Encoding(false)); WriteRemoteManifest(staging,bundleName);
+			ZipFile.CreateFromDirectory(staging,temporaryArchive,CompressionLevel.Optimal,false);
+			File.WriteAllText(Path.Combine(packageRoot,hostId+".token"),credential,new UTF8Encoding(false));
+			if(useTls) { File.WriteAllBytes(Path.Combine(packageRoot,"gateway-server.pfx"),serverPfx!); File.WriteAllBytes(Path.Combine(packageRoot,"gateway-server.cer"),serverCer!); File.WriteAllText(Path.Combine(packageRoot,"gateway-server.password"),serverPassword!,new UTF8Encoding(false)); File.WriteAllBytes(Path.Combine(packageRoot,hostId+"-client.cer"),clientCer!); }
+			UpdateRemoteRegistry(registry,hostId,gatewayHost,useTls); File.Move(temporaryArchive,archive,true);
+			await Task.CompletedTask; return new { host_id=hostId,archive_path=archive,sha256=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archive))),transport=useTls?"mutual_tls":"authenticated_plaintext",replaced_existing_host=replacing,launch_command=@".\launcher\Start-dgSpyRemoteHost.cmd",transferred=false,executed=false,gateway_restart_required=true,restart_command="dgspy stop; dgspy start" };
+		} finally { if(Directory.Exists(staging)) Directory.Delete(staging,true); if(File.Exists(temporaryArchive)) File.Delete(temporaryArchive); }
+	}
 	async Task<object> RemoteReadinessAsync(string? hostId,HostRouter router,CancellationToken token) { if(string.IsNullOrWhiteSpace(hostId)) throw new GatewayControlException("invalid_arguments","host_id is required."); var hosts=await router.ListHostsAsync(token); var selected=hosts.Select(item=>System.Text.Json.JsonSerializer.Serialize(item)).FirstOrDefault(json=>json.Contains($"\"host_id\":\"{hostId}\"",StringComparison.Ordinal)); return new { host_id=hostId,registered=selected is not null,connected=selected?.Contains("\"state\":\"connected\"",StringComparison.Ordinal)==true,hosts }; }
 	object RevokeRemote(JsonObject args) { RequireConfirm(args); var hostId=(string?)args["host_id"] ?? throw new GatewayControlException("invalid_arguments","host_id is required."); var registry=Environment.GetEnvironmentVariable("DGSPY_HOSTS_FILE") ?? Path.Combine(packageRoot,"gateway-hosts.json"); if(!File.Exists(registry)) return new { host_id=hostId,revoked=false,already_absent=true }; var root=JsonNode.Parse(File.ReadAllText(registry))!.AsObject(); var hosts=root["hosts"]!.AsArray(); var removed=hosts.Where(node=>(string?)node?["host_id"]==hostId).ToArray(); foreach(var node in removed) hosts.Remove(node); AtomicWrite(registry,root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })); return new { host_id=hostId,revoked=removed.Length>0,credentials_retained=true,gateway_restart_required=removed.Length>0,recovery="Restart the Gateway to apply revocation, then delete retained credential files after confirming no rollback is required." }; }
 
-	object AddPlan(string kind,JsonObject data,object result) { var id=Guid.NewGuid().ToString("N"); var expires=DateTime.UtcNow.AddMinutes(10); lock(sync) { foreach(var expired in plans.Where(item=>item.Value.ExpiresUtc<DateTime.UtcNow).Select(item=>item.Key).ToArray()) plans.Remove(expired); plans[id]=new Plan(kind,expires,data); } var node=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(result))!.AsObject(); node["plan_id"]=id; node["expires_utc"]=expires; return node; }
-	Plan Consume(string? id,string kind) { if(string.IsNullOrWhiteSpace(id)) throw new GatewayControlException("invalid_arguments","plan_id is required."); lock(sync) { if(!plans.Remove(id,out var plan)||plan.Kind!=kind||plan.ExpiresUtc<DateTime.UtcNow) throw new GatewayControlException("invalid_plan","The deployment plan is missing, expired, already used, or has the wrong kind."); return plan; } }
+	internal bool EnsureBundledLocalHost(CancellationToken token) {
+		var payload=RemotePayloadRoot(); ValidateRemotePayload(payload); var hostId=DefaultHostId();
+		var fingerprint=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(payload,"dnSpy.exe")))).Substring(0,12).ToLowerInvariant();
+		var version="bundled-"+fingerprint; var current=ReadCurrent(); var active=(string?)current?["active_version"];
+		if(active==version) { ValidateDnSpy(Path.Combine(installRoot,"versions",version)); return false; }
+		var destination=Path.Combine(installRoot,"versions",version); Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+		if(!Directory.Exists(destination)) { var staging=destination+".staging-"+Guid.NewGuid().ToString("N"); try { CopyTree(payload,staging,token); ValidateDnSpy(staging); File.WriteAllText(Path.Combine(staging,"deployment-manifest.json"),System.Text.Json.JsonSerializer.Serialize(new { version,host_id=hostId,created_utc=DateTime.UtcNow,source="bundled_payload",sha256=HashTree(staging) })); Directory.Move(staging,destination); } catch { if(Directory.Exists(staging)) Directory.Delete(staging,true); throw; } }
+		Directory.CreateDirectory(stateRoot); EnsureSecret(Path.Combine(stateRoot,"gateway.token")); EnsureSecret(Path.Combine(stateRoot,"rpc.token")); File.WriteAllText(Path.Combine(stateRoot,"host.id"),hostId);
+		WriteCurrent(new JsonObject { ["active_version"]=version,["previous_version"]=active,["host_id"]=hostId,["updated_utc"]=DateTime.UtcNow }); WriteCurrentLauncher(); return true;
+	}
+	string RemotePayloadRoot() {
+		var configured=Environment.GetEnvironmentVariable("DGSPY_REMOTE_PAYLOAD_ROOT"); if(!string.IsNullOrWhiteSpace(configured)) return Path.GetFullPath(configured);
+		var shared=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..")); if(File.Exists(Path.Combine(shared,"dnSpy.exe"))) return shared;
+		return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"remote-host-payload","win-x64"));
+	}
+	static void ValidateRemotePayload(string payload) {
+		var required=new[]{"dnSpy.exe",Path.Combine("bin","dnSpy.dll"),Path.Combine("bin","dnSpy.Contracts.DnSpy.dll"),Path.Combine("bin","hostfxr.dll"),Path.Combine("bin","hostpolicy.dll"),Path.Combine("bin","coreclr.dll"),Path.Combine("bin","clrjit.dll"),Path.Combine("bin","Extensions","dgSpy","dgSpy.Extension.x.dll"),Path.Combine("launcher","Start-dgSpyRemoteHost.ps1"),Path.Combine("launcher","Start-dgSpyRemoteHost.cmd")};
+		var missing=required.Where(path=>!File.Exists(Path.Combine(payload,path))).ToArray(); if(missing.Length>0) throw new GatewayControlException("installation_incomplete",$"The installed remote-host payload is incomplete ({string.Join(", ",missing)}). Reinstall dgSpy from a complete release package; runtime builds are not supported.");
+	}
+	static bool RegistryContainsHost(string registry,string hostId) { if(!File.Exists(registry)) return false; var hosts=JsonNode.Parse(File.ReadAllText(registry))?["hosts"]?.AsArray(); return hosts?.Any(node=>(string?)node?["host_id"]==hostId)==true; }
+	static void UpdateRemoteRegistry(string registry,string hostId,JsonObject gatewayHost,bool useTls) {
+		var root=File.Exists(registry)?JsonNode.Parse(File.ReadAllText(registry))!.AsObject():new JsonObject { ["hosts"]=new JsonArray() }; var hosts=root["hosts"]?.AsArray() ?? new JsonArray(); root["hosts"]=hosts;
+		foreach(var existing in hosts.Where(node=>(string?)node?["host_id"]==hostId).ToArray()) hosts.Remove(existing); hosts.Add(gatewayHost);
+		if(useTls) root["tls"]=new JsonObject { ["server_certificate_file"]="gateway-server.pfx",["server_certificate_password_file"]="gateway-server.password",["port"]=7353 };
+		AtomicWrite(registry,root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true }));
+	}
+	static string NewSecret() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+	static (byte[] Pfx,byte[] Cer) CreateCertificate(string name,bool server,string password) {
+		using var key=RSA.Create(3072); var request=new CertificateRequest($"CN=dgSpy {(server?"Gateway":"host "+name)}",key,HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1);
+		request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false,false,0,true)); request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature|X509KeyUsageFlags.KeyEncipherment,true));
+		var eku=new OidCollection { new Oid(server?"1.3.6.1.5.5.7.3.1":"1.3.6.1.5.5.7.3.2") }; request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(eku,true));
+		if(server) { var san=new SubjectAlternativeNameBuilder(); if(IPAddress.TryParse(name,out var address)) san.AddIpAddress(address); else san.AddDnsName(name); request.CertificateExtensions.Add(san.Build()); }
+		using var certificate=request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5),DateTimeOffset.UtcNow.AddYears(5)); return (certificate.Export(X509ContentType.Pfx,password),certificate.Export(X509ContentType.Cert));
+	}
+	static void WriteRemoteManifest(string root,string bundleName) {
+		var files=new JsonArray(); foreach(var path in Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories).Where(path=>!Path.GetRelativePath(root,path).StartsWith("state"+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)&&!Path.GetFileName(path).Equals("manifest.json",StringComparison.OrdinalIgnoreCase)).OrderBy(path=>path,StringComparer.OrdinalIgnoreCase)) { var info=new FileInfo(path); files.Add(new JsonObject { ["path"]=Path.GetRelativePath(root,path).Replace('\\','/'),["size"]=info.Length,["sha256"]=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant() }); }
+		var manifest=new JsonObject { ["format_version"]=1,["bundle"]=bundleName,["target_framework"]="net10.0-windows",["runtime_identifier"]="win-x64",["self_contained"]=true,["files"]=files }; File.WriteAllText(Path.Combine(root,"manifest.json"),manifest.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })+"\n",new UTF8Encoding(false));
+	}
+
 	JsonObject? ReadCurrent() { var path=Path.Combine(installRoot,"current.json"); return File.Exists(path)?JsonNode.Parse(File.ReadAllText(path))!.AsObject():null; }
 	void WriteCurrent(JsonObject current) { Directory.CreateDirectory(installRoot); AtomicWrite(Path.Combine(installRoot,"current.json"),current.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })); }
 	void WriteCurrentLauncher() { var current=ReadCurrent()!; var directory=Path.Combine(installRoot,"current"); Directory.CreateDirectory(directory); var exe=Path.Combine(installRoot,"versions",(string)current["active_version"]!,"dnSpy.exe"); AtomicWrite(Path.Combine(directory,"Start-dgSpy.cmd"),$"@echo off\r\nset \"DGSPY_STATE_ROOT={stateRoot}\"\r\nstart \"dgSpy\" \"{exe}\" %*\r\n"); }
-	void WriteShortcut(string path) { AtomicWrite(path,$"@echo off\r\ncall \"{Path.Combine(installRoot,"current","Start-dgSpy.cmd")}\" %*\r\n"); }
 	static void AtomicWrite(string path,string content) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); var temporary=path+".tmp-"+Guid.NewGuid().ToString("N"); File.WriteAllText(temporary,content,new UTF8Encoding(false)); File.Move(temporary,path,true); }
 	static void CopyTree(string source,string destination,CancellationToken token) { foreach(var directory in Directory.EnumerateDirectories(source,"*",SearchOption.AllDirectories)) { token.ThrowIfCancellationRequested(); Directory.CreateDirectory(Path.Combine(destination,Path.GetRelativePath(source,directory))); } Directory.CreateDirectory(destination); foreach(var file in Directory.EnumerateFiles(source,"*",SearchOption.AllDirectories)) { token.ThrowIfCancellationRequested(); var target=Path.Combine(destination,Path.GetRelativePath(source,file)); Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file,target,false); } }
 	static void ValidateDnSpy(string path) { if(!File.Exists(Path.Combine(path,"dnSpy.exe"))||!File.Exists(Path.Combine(path,"bin","dnSpy.Contracts.DnSpy.dll"))||!File.Exists(Path.Combine(path,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll"))) throw new GatewayControlException("invalid_dnspy_source",$"'{path}' is not a packaged dnSpy directory containing the dgSpy extension."); }
@@ -96,5 +147,4 @@ public sealed class DeploymentService {
 	static string SafeSegment(string value) { value=value.Trim(); if(string.IsNullOrWhiteSpace(value)||value.IndexOfAny(Path.GetInvalidFileNameChars())>=0||value is "." or "..") throw new GatewayControlException("invalid_name",$"'{value}' is not a safe identifier."); return value; }
 	string DefaultHostId() { var path=Path.Combine(stateRoot,"host.id"); if(File.Exists(path)&&!string.IsNullOrWhiteSpace(File.ReadAllText(path))) return File.ReadAllText(path).Trim(); var value=$"{Environment.MachineName}\\{Environment.UserName}"; return "local-"+Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).Substring(0,12).ToLowerInvariant(); }
 	static void RequireConfirm(JsonObject args) { if((bool?)args["confirm"]!=true) throw new GatewayControlException("confirmation_required","Set confirm=true after reviewing the exact target."); }
-	static string FindSourceRoot() { var configured=Environment.GetEnvironmentVariable("DGSPY_SOURCE_ROOT"); if(!string.IsNullOrWhiteSpace(configured)&&File.Exists(Path.Combine(configured,"pack-remote-host.ps1"))) return Path.GetFullPath(configured); for(var directory=new DirectoryInfo(AppContext.BaseDirectory);directory is not null;directory=directory.Parent) if(File.Exists(Path.Combine(directory.FullName,"pack-remote-host.ps1"))) return directory.FullName; throw new GatewayControlException("source_root_missing","Set DGSPY_SOURCE_ROOT to a dgSpy checkout for source-based deployment and packaging."); }
 }

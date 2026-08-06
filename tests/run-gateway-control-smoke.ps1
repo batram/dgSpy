@@ -1,5 +1,5 @@
 param([ValidateRange(1024,65535)][int]$Port=18460)
-$ErrorActionPreference='Stop';$OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new();$repoRoot=Split-Path $PSScriptRoot -Parent;$runRoot=Join-Path $repoRoot 'artifacts\gateway-control-smoke';$dotnet=(Get-Command dotnet).Source;$gateway=Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net7.0\dgSpy.Gateway.dll';$process=$null
+$ErrorActionPreference='Stop';$OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new();$repoRoot=Split-Path $PSScriptRoot -Parent;$runRoot=Join-Path $repoRoot 'artifacts\gateway-control-smoke';$dotnet=(Get-Command dotnet).Source;$gateway=Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net10.0\dgSpy.Gateway.dll';$process=$null
 function Wait-Until([scriptblock]$Condition,[int]$Seconds=20){$deadline=[DateTime]::UtcNow.AddSeconds($Seconds);do{Start-Sleep -Milliseconds 200;if(& $Condition){return $true}}until([DateTime]::UtcNow-ge$deadline);return $false}
 try{
 	if(Test-Path -LiteralPath $runRoot){Remove-Item -LiteralPath $runRoot -Recurse -Force};New-Item -ItemType Directory -Path $runRoot|Out-Null;[IO.File]::WriteAllText((Join-Path $runRoot 'host.token'),'unused-host-token');[IO.File]::WriteAllText((Join-Path $runRoot 'hosts.json'),'{"hosts":[{"host_id":"host-a","address":"127.0.0.1","port":19999,"token_file":"host.token"}]}')
