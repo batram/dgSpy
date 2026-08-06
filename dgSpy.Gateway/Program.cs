@@ -100,14 +100,20 @@ public static class ToolCatalog {
 		if (routed) routedProperties["host_id"]=new { type="string",description="Registered debugger host. Optional only when exactly one host is configured." };
 		foreach (var property in properties.GetType().GetProperties()) routedProperties[property.Name]=property.GetValue(properties)!;
 		var requiredProperties=(required ?? Array.Empty<string>()).ToList();
-		if (CapabilityCatalog.Operations.Any(item=>item.Operation==name && item.MutatesSession) && routedProperties.ContainsKey("session_id")) {
+		var capability=CapabilityCatalog.Operations.FirstOrDefault(item=>item.Operation==name);
+		var sessionMutation=capability is not null && capability.MutatesSession && name is not ("attach" or "attach_endpoint" or "launch");
+		if(sessionMutation && !routedProperties.ContainsKey("session_id")) {
+			routedProperties["session_id"]=new { type="string",description="Active debugger session." };
+			if(!requiredProperties.Contains("session_id")) requiredProperties.Add("session_id");
+		}
+		if(sessionMutation) {
 			var guard=MutationGuards.Argument(name);
 			routedProperties[guard]=new { type="integer",description=$"Required exact {MutationGuards.StateProperty(name)}; unrelated debugger events do not invalidate it." };
 			if(!routedProperties.ContainsKey("expected_state_version")) routedProperties["expected_state_version"]=new { type="integer",description="Deprecated compatibility guard. Prefer the scoped version field." };
 			if(!requiredProperties.Contains(guard)) requiredProperties.Add(guard);
 			if(MutationGuards.RequiresStop(name)) { routedProperties["expected_stop_id"]=new { type="string",description="Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again." }; if(!requiredProperties.Contains("expected_stop_id")) requiredProperties.Add("expected_stop_id"); }
 		}
-		var capability=CapabilityCatalog.Operations.FirstOrDefault(item=>item.Operation==name); var effectiveReadOnly=readOnly || (capability is not null && !capability.MutatesSession);
+		var effectiveReadOnly=readOnly || (capability is not null && !capability.MutatesSession);
 		return new { name,description,inputSchema=new { type="object",properties=routedProperties,required=requiredProperties.ToArray() },annotations=new { readOnlyHint=effectiveReadOnly,destructiveHint=destructive,idempotentHint=idempotent } };
 	}
 	static object EvalMutationSchema() => new { session_id=new { type="string" },expression=new { type="string",description="Complete call or new-expression." },thread_id=new { type="string" },frame_index=new { type="integer",minimum=0 },timeout_ms=new { type="integer",minimum=1,maximum=10000,description="Hard engine func-eval timeout; default 1000." } };

@@ -71,6 +71,28 @@ function Invoke-Tool {
 	return $result.content[0].text | ConvertFrom-Json
 }
 
+# Mutations require an exact scoped version from a current state read. Keep that protocol ceremony
+# visible in the live harness without duplicating it at every call site. Tests that intentionally
+# exercise missing or stale guards must continue to call Invoke-Tool directly.
+function Invoke-MutatingTool {
+	param([string]$Name, [hashtable]$Arguments, [switch]$ExpectError, [switch]$AsText)
+	$callArguments = @{} + $Arguments
+	if (-not $callArguments.ContainsKey('session_id')) {
+		if ([string]::IsNullOrWhiteSpace($script:activeSessionId)) { throw "Mutation $Name has no session_id and no active smoke session." }
+		$callArguments.session_id = $script:activeSessionId
+	}
+	$state = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $callArguments.session_id }
+	if ($null -eq $script:toolDefinitions) { $script:toolDefinitions = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools) }
+	$definition = @($script:toolDefinitions | Where-Object { $_.name -eq $Name })[0]
+	$required = @($definition.inputSchema.required)
+	$guard = @($required | Where-Object { $_ -match '^expected_.+_version$' })[0]
+	if ([string]::IsNullOrWhiteSpace($guard)) { throw "Mutation $Name advertises no scoped version guard." }
+	$stateProperty = $guard.Substring('expected_'.Length)
+	if (-not $callArguments.ContainsKey($guard) -and -not $callArguments.ContainsKey('expected_state_version')) { $callArguments[$guard] = $state.$stateProperty }
+	if ($required -contains 'expected_stop_id' -and -not $callArguments.ContainsKey('expected_stop_id')) { $callArguments.expected_stop_id = $state.stop_id }
+	return Invoke-Tool -Name $Name -Arguments $callArguments -ExpectError:$ExpectError -AsText:$AsText
+}
+
 function Wait-Until {
 	param([scriptblock]$Condition, [int]$TimeoutSeconds = 30)
 	$deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -213,6 +235,7 @@ try {
 	Write-Host "== attach and session tracking ==" -ForegroundColor Cyan
 	$session = Invoke-Tool -Name 'attach' -Arguments @{ program_id = $program.program_id }
 	$sessionId = $session.session_id
+	$script:activeSessionId = $sessionId
 	Assert-That 'attach reports a live state, not exited' ($session.state -in @('running','paused')) "(was $($session.state))"
 	Assert-That 'attach reports the attached process' ($session.process_ids -contains $targetId)
 
@@ -226,17 +249,17 @@ try {
 	$secondPid = [int](@($second.process_ids | Where-Object { $_ -ne $targetId }) | Select-Object -First 1)
 	Assert-That 'launch adds a second process to the same logical session' ($second.session_id -eq $sessionId -and @($second.process_ids).Count -eq 2 -and $secondPid -gt 0) "(ids=$($second.process_ids -join ','))"
 	$beforeAmbiguous = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
-	$ambiguousPause = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId } -ExpectError
+	$ambiguousPause = Invoke-MutatingTool -Name 'pause' -Arguments @{ session_id = $sessionId } -ExpectError
 	$afterAmbiguous = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
 	Assert-That 'an unselected multi-target pause returns ambiguous_target' ($ambiguousPause -match 'More than one process|process_id') "(error='$ambiguousPause')"
 	Assert-That 'an ambiguous pause performs no debugger action' ($beforeAmbiguous.state -eq 'running' -and $afterAmbiguous.state -eq 'running') "(before=$($beforeAmbiguous.state) after=$($afterAmbiguous.state))"
-	$selectedPause = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId; process_id = $secondPid }
+	$selectedPause = Invoke-MutatingTool -Name 'pause' -Arguments @{ session_id = $sessionId; process_id = $secondPid }
 	Assert-That 'a selected process can pause independently' ($selectedPause.state -eq 'mixed' -and @($selectedPause.process_ids).Count -eq 2) "(state=$($selectedPause.state))"
-	$selectedContinue = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId; process_id = $secondPid }
+	$selectedContinue = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId; process_id = $secondPid }
 	Assert-That 'a selected process can continue independently' ($selectedContinue.state -eq 'running') "(state=$($selectedContinue.state))"
-	$multiRestart = Invoke-Tool -Name 'restart' -Arguments @{ session_id = $sessionId } -ExpectError
+	$multiRestart = Invoke-MutatingTool -Name 'restart' -Arguments @{ session_id = $sessionId } -ExpectError
 	Assert-That 'restart is refused while multiple targets are active' ($multiRestart -match 'restart|launched through dgSpy')
-	$afterSelectedTerminate = Invoke-Tool -Name 'terminate' -Arguments @{ session_id = $sessionId; process_id = $secondPid }
+	$afterSelectedTerminate = Invoke-MutatingTool -Name 'terminate' -Arguments @{ session_id = $sessionId; process_id = $secondPid }
 	Assert-That 'terminating one selected process leaves its sibling session active' ($afterSelectedTerminate.state -in @('running','paused') -and @($afterSelectedTerminate.process_ids).Count -eq 1 -and $afterSelectedTerminate.process_ids[0] -eq $targetId)
 	Start-Sleep -Milliseconds 500
 	Assert-That 'selected termination kills only the selected target' ($null -eq (Get-Process -Id $secondPid -ErrorAction SilentlyContinue) -and $null -ne (Get-Process -Id $targetId -ErrorAction SilentlyContinue))
@@ -254,7 +277,7 @@ try {
 	$attachedSibling = Invoke-Tool -Name 'attach' -Arguments @{ program_id = $detachProgram.program_id }
 	Assert-That 'attach adds an independently started process to the active session' (@($attachedSibling.process_ids).Count -eq 2 -and @($attachedSibling.process_ids) -contains $detachPid)
 	$beforeSelectedDetach = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
-	$selectedDetach = Invoke-Tool -Name 'detach' -Arguments @{ session_id = $sessionId; process_id = $detachPid }
+	$selectedDetach = Invoke-MutatingTool -Name 'detach' -Arguments @{ session_id = $sessionId; process_id = $detachPid }
 	Assert-That 'selected detach removes only the attached process' ($selectedDetach.detached -and -not $selectedDetach.terminated -and $selectedDetach.process_id -eq $detachPid -and $selectedDetach.session_active)
 	Start-Sleep -Milliseconds 500
 	Assert-That 'selected detach leaves both external process and sibling alive' ($null -ne (Get-Process -Id $detachPid -ErrorAction SilentlyContinue) -and $null -ne (Get-Process -Id $targetId -ErrorAction SilentlyContinue))
@@ -267,11 +290,11 @@ try {
 
 	$hostWithSession = Invoke-Tool -Name 'get_host_info' -Arguments @{}
 	Assert-That 'get_host_info reports the live session' ($hostWithSession.session_id -eq $sessionId)
-	$restartAttached = Invoke-Tool -Name 'restart' -Arguments @{ session_id = $sessionId } -ExpectError
+	$restartAttached = Invoke-MutatingTool -Name 'restart' -Arguments @{ session_id = $sessionId } -ExpectError
 	Assert-That 'restart refuses a target that dgSpy only attached to' ($restartAttached -match 'launched through dgSpy|restart support')
 
 	Write-Host "== pause, inspect, resume ==" -ForegroundColor Cyan
-	$paused = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId }
+	$paused = Invoke-MutatingTool -Name 'pause' -Arguments @{ session_id = $sessionId }
 	Assert-That 'pause reports paused, not the pre-pause state' ($paused.state -eq 'paused') "(was $($paused.state))"
 
 	# Windows PowerShell's ConvertFrom-Json emits a JSON array as one Object[] pipeline item when it
@@ -306,7 +329,7 @@ try {
 	}
 
 	Write-Host "== breakpoint and event cursor ==" -ForegroundColor Cyan
-	$breakpoint = Invoke-Tool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
+	$breakpoint = Invoke-MutatingTool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
 	Assert-That 'set_il_breakpoint returns an id' ($null -ne $breakpoint.breakpoint_id)
 	# The point of reporting binding state: an unbound breakpoint must not look like a bound one.
 	Assert-That 'set_il_breakpoint reports the breakpoint as bound' ($breakpoint.bound -and $breakpoint.bound_count -ge 1) "(bound=$($breakpoint.bound) severity=$($breakpoint.severity) msg='$($breakpoint.message)')"
@@ -314,16 +337,16 @@ try {
 	Assert-That 'CorDebug accepts the offset without snapping' (-not $breakpoint.snapped)
 	$listed = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{})
 	Assert-That 'list_breakpoints reports the breakpoint' (@($listed | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id }).Count -eq 1)
-	$missingBreakpoint = Invoke-Tool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = 2147483647 } -ExpectError
+	$missingBreakpoint = Invoke-MutatingTool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = 2147483647 } -ExpectError
 	Assert-That 'remove_breakpoint refuses an unknown id' ($missingBreakpoint -match 'does not exist|list_breakpoints')
-	$removed = Invoke-Tool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id }
+	$removed = Invoke-MutatingTool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id }
 	Assert-That 'remove_breakpoint reports the exact removed id' ($removed.removed -and $removed.breakpoint_id -eq $breakpoint.breakpoint_id)
 	$afterRemove = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{})
 	Assert-That 'remove_breakpoint leaves the removed breakpoint absent' (@($afterRemove | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id }).Count -eq 0)
-	$breakpoint = Invoke-Tool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
+	$breakpoint = Invoke-MutatingTool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
 	Assert-That 'a breakpoint can be recreated after targeted removal' ($breakpoint.bound)
 	$cursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
-	Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
+	Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
 	$stop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $cursor; timeout_ms = 8000 }
 	Assert-That 'wait_for_stop observes the breakpoint hit' (-not $stop.timed_out -and @($stop.events).Count -gt 0)
 	$firstStop = @($stop.events)[0]
@@ -358,7 +381,7 @@ try {
 	$waiter2 = Start-Job -ScriptBlock $waitScript -ArgumentList $gatewayUrl,$token,$sessionId,$firstStop.event_id
 	Start-Sleep -Milliseconds 300
 	$beforeResume = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
-	Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId; expected_state_version = $beforeResume.state_version } | Out-Null
+	Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId; expected_state_version = $beforeResume.state_version } | Out-Null
 	$concurrent1 = (Receive-Job -Job $waiter1 -Wait -AutoRemoveJob) | ConvertFrom-Json
 	$concurrent2 = (Receive-Job -Job $waiter2 -Wait -AutoRemoveJob) | ConvertFrom-Json
 	$secondStop1 = @($concurrent1.events)[0]
@@ -368,9 +391,9 @@ try {
 
 	Write-Host "== breakpoint settings ==" -ForegroundColor Cyan
 	# The target is paused at the breakpoint here, which is the only state in which stepping is legal.
-	$disabled = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
+	$disabled = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
 	Assert-That 'update_breakpoint disables a breakpoint' (-not $disabled.enabled)
-	$conditioned = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; condition = 'input == 41'; hit_count = 3; hit_count_kind = 'multiple_of' }
+	$conditioned = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; condition = 'input == 41'; hit_count = 3; hit_count_kind = 'multiple_of' }
 	Assert-That 'update_breakpoint stores the condition' ($conditioned.condition -eq 'input == 41' -and $conditioned.condition_kind -eq 'is_true')
 	Assert-That 'update_breakpoint stores the hit count and its kind' ($conditioned.hit_count -eq 3 -and $conditioned.hit_count_kind -eq 'multiple_of')
 	Assert-That 'update_breakpoint leaves untouched fields alone' (-not $conditioned.enabled)
@@ -378,23 +401,23 @@ try {
 	Assert-That 'list_breakpoints reports the stored settings' ($listedSettings.condition -eq 'input == 41' -and $listedSettings.hit_count -eq 3)
 	# A tracepoint that continues never stops, so wait_for_stop would wait forever on it. Saying so in a
 	# warning is the difference between a documented behaviour and a hang the caller has to diagnose.
-	$traced = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; trace_message = 'tick {input}'; trace_continue = $true }
+	$traced = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; trace_message = 'tick {input}'; trace_continue = $true }
 	Assert-That 'update_breakpoint stores a tracepoint' ($traced.trace_message -eq 'tick {input}' -and $traced.trace_continue)
 	Assert-That 'a continuing tracepoint warns that it produces no stop' ($traced.warning -match 'no stopped event|wait_for_stop')
-	$cleared1 = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; condition = ''; trace_message = '' }
+	$cleared1 = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; condition = ''; trace_message = '' }
 	Assert-That 'an empty string clears a condition rather than setting one' ($null -eq $cleared1.condition -and $null -eq $cleared1.trace_message)
-	$badKindArg = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; condition = 'x'; condition_kind = 'if_true' } -ExpectError
+	$badKindArg = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; condition = 'x'; condition_kind = 'if_true' } -ExpectError
 	Assert-That 'an unknown condition_kind is rejected with the valid set' ($badKindArg -match 'when_changed')
-	$noFields = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id } -ExpectError
+	$noFields = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id } -ExpectError
 	Assert-That 'update_breakpoint refuses a no-op' ($noFields -match 'at least one')
-	$missingBp = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = 2147483647; enabled = $true } -ExpectError
+	$missingBp = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = 2147483647; enabled = $true } -ExpectError
 	Assert-That 'update_breakpoint refuses an unknown id' ($missingBp -match 'does not exist')
 
 	Write-Host "== stepping ==" -ForegroundColor Cyan
 	# The breakpoint stays disabled across the step. Tick is hot enough that a re-arm would race the
 	# step and stop for the breakpoint instead, which would pass for the wrong reason.
 	$stepCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
-	$stepped = Invoke-Tool -Name 'step_over' -Arguments @{ session_id = $sessionId; thread_id = $secondStop1.thread_id }
+	$stepped = Invoke-MutatingTool -Name 'step_over' -Arguments @{ session_id = $sessionId; thread_id = $secondStop1.thread_id }
 	Assert-That 'step_over reports the thread it stepped' ($stepped.thread_id -eq $secondStop1.thread_id) "(was $($stepped.thread_id))"
 	Assert-That 'step_over reports its own kind' ($stepped.step_kind -eq 'over')
 	Assert-That 'step_over returns a cursor taken before the step' ($stepped.cursor_event_id -ge $stepCursor)
@@ -408,12 +431,12 @@ try {
 	Assert-That 'the step stop names the stepped thread' ($stepEvent.thread_id -eq $secondStop1.thread_id)
 	$stepEvents = Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $sessionId; after_event_id = $stepped.cursor_event_id; kinds = @('step_completed') }
 	Assert-That 'the raw step_completed event is recorded alongside the stop' (@($stepEvents.events).Count -ge 1)
-	$badThreadStep = Invoke-Tool -Name 'step_into' -Arguments @{ session_id = $sessionId; thread_id = 'not-a-thread' } -ExpectError
+	$badThreadStep = Invoke-MutatingTool -Name 'step_into' -Arguments @{ session_id = $sessionId; thread_id = 'not-a-thread' } -ExpectError
 	# The tool result carries the structured error's message, not its code. Match the message.
 	Assert-That 'stepping an unknown thread is refused rather than guessed' ($badThreadStep -match 'is not active') "(was '$badThreadStep')"
 
 	Write-Host "== exception breakpoints ==" -ForegroundColor Cyan
-	$exception = Invoke-Tool -Name 'set_exception_breakpoint' -Arguments @{ name = 'System.InvalidOperationException'; stop_first_chance = $true }
+	$exception = Invoke-MutatingTool -Name 'set_exception_breakpoint' -Arguments @{ name = 'System.InvalidOperationException'; stop_first_chance = $true }
 	Assert-That 'set_exception_breakpoint reports what it set' ($exception.name -eq 'System.InvalidOperationException' -and $exception.stop_first_chance)
 	Assert-That 'set_exception_breakpoint defaults to the DotNet category' ($exception.category -eq 'DotNet') "(was $($exception.category))"
 	$exceptionList = Invoke-Tool -Name 'list_exception_breakpoints' -Arguments @{}
@@ -425,13 +448,13 @@ try {
 	Assert-That 'the default listing says it excluded second chance' (-not $exceptionList.included_second_chance)
 	$stock = Invoke-Tool -Name 'list_exception_breakpoints' -Arguments @{ include_second_chance = $true; max_results = 10 }
 	Assert-That 'including second chance exposes dnSpy stock defaults, bounded' ($stock.truncated -and $stock.total -gt 100 -and @($stock.entries).Count -eq 10) "(total=$($stock.total))"
-	$exceptionOff = Invoke-Tool -Name 'set_exception_breakpoint' -Arguments @{ name = 'System.InvalidOperationException'; stop_first_chance = $false }
+	$exceptionOff = Invoke-MutatingTool -Name 'set_exception_breakpoint' -Arguments @{ name = 'System.InvalidOperationException'; stop_first_chance = $false }
 	Assert-That 'an exception breakpoint can be turned back off' (-not $exceptionOff.stop_first_chance)
 	$afterOff = Invoke-Tool -Name 'list_exception_breakpoints' -Arguments @{}
 	Assert-That 'a disabled exception entry leaves the first-chance list' (@($afterOff.entries | Where-Object { $_.name -eq 'System.InvalidOperationException' }).Count -eq 0)
-	$badCategory = Invoke-Tool -Name 'set_exception_breakpoint' -Arguments @{ category = 'Klingon'; name = 'X'; stop_first_chance = $true } -ExpectError
+	$badCategory = Invoke-MutatingTool -Name 'set_exception_breakpoint' -Arguments @{ category = 'Klingon'; name = 'X'; stop_first_chance = $true } -ExpectError
 	Assert-That 'an unknown exception category is refused with the known ones' ($badCategory -match 'DotNet')
-	$noChange = Invoke-Tool -Name 'set_exception_breakpoint' -Arguments @{ name = 'System.Exception' } -ExpectError
+	$noChange = Invoke-MutatingTool -Name 'set_exception_breakpoint' -Arguments @{ name = 'System.Exception' } -ExpectError
 	Assert-That 'set_exception_breakpoint refuses a no-op' ($noChange -match 'stop_first_chance')
 
 	Write-Host "== evaluation ==" -ForegroundColor Cyan
@@ -451,7 +474,7 @@ try {
 	Assert-That 'a reference local evaluates without a raw scalar or an error' ($null -eq $label.error) "(error='$($label.error)')"
 	# CorDebug cannot create an object ID for every reference kind (notably strings). Main's commandLine
 	# array is a stable heap object and exercises the actual persistent-reference path.
-	$objectId = Invoke-Tool -Name 'create_object_id' -Arguments @{ session_id = $sessionId; expression = 'commandLine'; process_id = $targetId; runtime_id = $program.runtime_guid; thread_id = $stepThread; frame_index = 1 }
+	$objectId = Invoke-MutatingTool -Name 'create_object_id' -Arguments @{ session_id = $sessionId; expression = 'commandLine'; process_id = $targetId; runtime_id = $program.runtime_guid; thread_id = $stepThread; frame_index = 1 }
 	Assert-That 'create_object_id returns runtime-scoped identity' ($objectId.object_id -ge 1 -and $objectId.process_id -eq $targetId)
 	$listedIds = @(Invoke-Tool -Name 'list_object_ids' -Arguments @{ session_id = $sessionId; process_id = $targetId; runtime_id = $objectId.runtime_id } | ForEach-Object { $_ })
 	Assert-That 'list_object_ids finds the created id' (@($listedIds | Where-Object { $_.object_id -eq $objectId.object_id }).Count -eq 1)
@@ -459,16 +482,16 @@ try {
 	Assert-That 'evaluate_object_id resolves the persistent value' ($readId.value.error -eq $null)
 	# Resume to a fresh breakpoint stop before reading the ID again. A same-stop read only proves lookup;
 	# this proves CorDebug kept the strong handle while the target ran.
-	$null = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true }
+	$null = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true }
 	$idResumeCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
-	$null = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId }
+	$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId }
 	$idResumeStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $idResumeCursor; timeout_ms = 8000 }
 	Assert-That 'the target resumes and stops again while an object ID is retained' (-not $idResumeStop.timed_out)
 	$stepThread = @($idResumeStop.events)[0].thread_id
 	$readAfterResume = Invoke-Tool -Name 'evaluate_object_id' -Arguments @{ session_id = $sessionId; object_id = $objectId.object_id; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 1 }
 	Assert-That 'an object ID survives target resume' ($readAfterResume.value.error -eq $null -and $readAfterResume.object_id -eq $objectId.object_id)
-	$null = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
-	$releasedId = Invoke-Tool -Name 'release_object_id' -Arguments @{ session_id = $sessionId; object_id = $objectId.object_id; process_id = $targetId; runtime_id = $objectId.runtime_id }
+	$null = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
+	$releasedId = Invoke-MutatingTool -Name 'release_object_id' -Arguments @{ session_id = $sessionId; object_id = $objectId.object_id; process_id = $targetId; runtime_id = $objectId.runtime_id }
 	Assert-That 'release_object_id releases exactly the selected id' ($releasedId.object_id -eq $objectId.object_id)
 	$releasedRead = Invoke-Tool -Name 'evaluate_object_id' -Arguments @{ session_id = $sessionId; object_id = $objectId.object_id; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 1 } -ExpectError
 	Assert-That 'a released object ID cannot be evaluated' ($releasedRead -match 'not active')
@@ -476,32 +499,32 @@ try {
 	Assert-That 'get_autos returns structured C# Autos entries' ($autos.Count -gt 0 -and @($autos | Where-Object { $null -eq $_.expression -or $null -eq $_.display }).Count -eq 0) "(count=$($autos.Count); entries=$(($autos | ConvertTo-Json -Compress -Depth 5)))"
 	$valueExport = Invoke-Tool -Name 'get_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'get_value_export returns hashed bounded bytes' ($valueExport.total_size -eq 4 -and $valueExport.sha256.Length -eq 64 -and [Convert]::FromBase64String($valueExport.data_base64).Length -eq 4)
-	$hostExport = Invoke-Tool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = 'input.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 }
+	$hostExport = Invoke-MutatingTool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = 'input.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'write_value_export writes below the configured root with the same hash' ((Test-Path -LiteralPath $hostExport.path) -and $hostExport.sha256 -eq $valueExport.sha256 -and -not [string]::IsNullOrWhiteSpace($hostExport.audit_id))
-	$pathEscape = Invoke-Tool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = '..\outside.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } -ExpectError
+	$pathEscape = Invoke-MutatingTool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = '..\outside.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } -ExpectError
 	Assert-That 'write_value_export rejects traversal outside the configured root' ($pathEscape -match 'outside DGSPY_EXPORT_ROOT')
-	$overwrite = Invoke-Tool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = 'input.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } -ExpectError
+	$overwrite = Invoke-MutatingTool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = 'input.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } -ExpectError
 	Assert-That 'write_value_export rejects overwrite by default' ($overwrite -match 'already exists')
-	$liveExceptionPolicy = Invoke-Tool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true; conditions = @(@{ kind = 'module_equals'; module = 'Milestone1Target.exe' }) }
-	$null = Invoke-Tool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'throwPhase8Exception'; value = 'true'; thread_id = $stepThread; frame_index = 0 }
+	$liveExceptionPolicy = Invoke-MutatingTool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true; conditions = @(@{ kind = 'module_equals'; module = 'Milestone1Target.exe' }) }
+	$null = Invoke-MutatingTool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'throwPhase8Exception'; value = 'true'; thread_id = $stepThread; frame_index = 0 }
 	$exceptionCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
-	$null = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId }
+	$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId }
 	$liveExceptionStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $exceptionCursor; timeout_ms = 8000 }
 	$exceptionEvent = @($liveExceptionStop.events)[0]
 	Assert-That 'a categorized thrown-exception policy causes an actual stop' (-not $liveExceptionStop.timed_out -and $exceptionEvent.stop_reason -eq 'exception') "(reason=$($exceptionEvent.stop_reason))"
 	$exceptionValues = Invoke-Tool -Name 'get_exception' -Arguments @{ session_id = $sessionId; thread_id = $exceptionEvent.thread_id; frame_index = 0 }
 	Assert-That 'get_exception exposes the stopped Phase 8 fixture exception' (@($exceptionValues).Count -gt 0 -and (($exceptionValues | ConvertTo-Json -Compress -Depth 5) -match 'Phase8FixtureException'))
-	$null = Invoke-Tool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' }
+	$null = Invoke-MutatingTool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' }
 	# The earlier settings checks intentionally left a hit-count rule on this breakpoint. Recreate it
 	# here so this recovery assertion tests exception-policy removal, not residual breakpoint settings.
-	$null = Invoke-Tool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id }
-	$breakpoint = Invoke-Tool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
+	$null = Invoke-MutatingTool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id }
+	$breakpoint = Invoke-MutatingTool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
 	$returnCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
-	$null = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId }
+	$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId }
 	$returnStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $returnCursor; timeout_ms = 8000 }
 	Assert-That 'the target resumes from the exception into the normal fixture breakpoint' (-not $returnStop.timed_out)
 	$stepThread = @($returnStop.events)[0].thread_id
-	$null = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
+	$null = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
 
 	$frameValues = Invoke-Tool -Name 'get_frame' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0; include = @('locals') }
 	Assert-That 'get_frame include returns the full value list, objects included' (@($frameValues.values).Count -ge 1) "(got $(@($frameValues.values).Count))"
@@ -522,10 +545,10 @@ try {
 	Assert-That 'expanding a bad expression fails loudly' ($memberFail.Length -gt 0)
 
 	# set_value executes in the target, so the read-back is the proof it took effect.
-	$assigned = Invoke-Tool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'input'; value = '99'; thread_id = $stepThread; frame_index = 0 }
+	$assigned = Invoke-MutatingTool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'input'; value = '99'; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'set_value assigns a local in the target' ($assigned.assigned) "(error='$($assigned.error)')"
 	Assert-That 'set_value reads the new value back' ($assigned.value.value -eq 99) "(was $($assigned.value.value))"
-	$badAssign = Invoke-Tool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'input'; value = '"not an int"'; thread_id = $stepThread; frame_index = 0 }
+	$badAssign = Invoke-MutatingTool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'input'; value = '"not an int"'; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'a type-mismatched assignment reports a compiler error and runs nothing' (-not $badAssign.assigned -and $badAssign.compiler_error) "(error='$($badAssign.error)' compiler=$($badAssign.compiler_error))"
 
 	$noException = Invoke-Tool -Name 'get_exception' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0 } -AsText
@@ -564,9 +587,9 @@ try {
 	Assert-That 'metadata-backed dynamic or in-memory fixture modules can carry breakpoints' (@($modules | Where-Object { ($_.is_dynamic -or $_.is_in_memory) -and $_.can_set_breakpoint }).Count -ge 2)
 
 	Write-Host "== advanced evaluation and low-level debugging ==" -ForegroundColor Cyan
-	$invoked = Invoke-Tool -Name 'invoke_method' -Arguments @{ session_id = $sessionId; expression = 'System.Math.Abs(-7)'; thread_id = $stepThread; frame_index = 0; timeout_ms = 2000 }
+	$invoked = Invoke-MutatingTool -Name 'invoke_method' -Arguments @{ session_id = $sessionId; expression = 'System.Math.Abs(-7)'; thread_id = $stepThread; frame_index = 0; timeout_ms = 2000 }
 	Assert-That 'invoke_method performs explicit audited func-eval' ($invoked.completed -and $invoked.causes_side_effects -and -not [string]::IsNullOrWhiteSpace($invoked.audit_id) -and $invoked.value.value -eq 7)
-	$created = Invoke-Tool -Name 'create_object' -Arguments @{ session_id = $sessionId; expression = 'new System.Text.StringBuilder()'; thread_id = $stepThread; frame_index = 0; timeout_ms = 2000 }
+	$created = Invoke-MutatingTool -Name 'create_object' -Arguments @{ session_id = $sessionId; expression = 'new System.Text.StringBuilder()'; thread_id = $stepThread; frame_index = 0; timeout_ms = 2000 }
 	Assert-That 'create_object is a separate audited side-effect boundary' ($created.completed -and $created.causes_side_effects -and $created.capability -eq 'object_construction')
 	$targetModule = $modules | Where-Object { $_.filename -like '*Milestone1Target.exe' } | Select-Object -First 1
 	# Use the OS process value here. Windows PowerShell 5.1 turns a UInt64 read back through
@@ -575,7 +598,7 @@ try {
 	$memory = Invoke-Tool -Name 'read_memory' -Arguments @{ session_id = $sessionId; process_id = $targetId; address = $moduleAddress; length = 2 }
 	$memoryBytes = [Convert]::FromBase64String($memory.data_base64)
 	Assert-That 'read_memory reads bounded target bytes' ($memoryBytes[0] -eq 0x4D -and $memoryBytes[1] -eq 0x5A -and -not $memory.causes_side_effects)
-	$written = Invoke-Tool -Name 'write_memory' -Arguments @{ session_id = $sessionId; process_id = $targetId; address = $moduleAddress; data_base64 = $memory.data_base64 }
+	$written = Invoke-MutatingTool -Name 'write_memory' -Arguments @{ session_id = $sessionId; process_id = $targetId; address = $moduleAddress; data_base64 = $memory.data_base64 }
 	Assert-That 'write_memory labels the idempotent fixture write as side effecting' ($written.written -and $written.causes_side_effects)
 	$managedDisassembly = Invoke-Tool -Name 'get_disassembly' -Arguments @{ session_id = $sessionId; mode = 'managed'; module = $targetExe; method_token = $methodToken }
 	Assert-That 'get_disassembly exposes managed IL with its capability' ($managedDisassembly.capability -eq 'managed_il' -and @($managedDisassembly.body.instructions).Count -gt 0)
@@ -584,47 +607,47 @@ try {
 	$registerFailure = Invoke-Tool -Name 'get_registers' -Arguments @{ session_id = $sessionId; thread_id = $stepThread } -ExpectError
 	Assert-That 'get_registers returns a structured unsupported capability failure' ($registerFailure -match 'not exposed|unsupported')
 	$currentFrame = Invoke-Tool -Name 'get_frame' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0 }
-	$setIp = Invoke-Tool -Name 'set_instruction_pointer' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0; module = $currentFrame.module; method_token = $currentFrame.method_token; il_offset = $currentFrame.il_offset }
+	$setIp = Invoke-MutatingTool -Name 'set_instruction_pointer' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0; module = $currentFrame.module; method_token = $currentFrame.method_token; il_offset = $currentFrame.il_offset }
 	Assert-That 'set_instruction_pointer validates and audits the selected frame' ($setIp.completed -and $setIp.causes_side_effects -and $setIp.capability -eq 'set_instruction_pointer')
 	$outputMessages = Invoke-Tool -Name 'get_output' -Arguments @{ session_id = $sessionId; after_output_id = 0 }
 	Assert-That 'get_output exposes bounded debugger messages including audits' (@($outputMessages.messages | Where-Object { $_.message -like '*dgSpy audit*' }).Count -ge 1)
-	$moduleBreak = Invoke-Tool -Name 'set_module_breakpoint' -Arguments @{ session_id = $sessionId; module_name = 'DeferredPayload*'; is_loaded = $true }
+	$moduleBreak = Invoke-MutatingTool -Name 'set_module_breakpoint' -Arguments @{ session_id = $sessionId; module_name = 'DeferredPayload*'; is_loaded = $true }
 	$moduleBreaks = @(Invoke-Tool -Name 'list_module_breakpoints' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
 	Assert-That 'module breakpoints round-trip dnSpy filters' (@($moduleBreaks | Where-Object { $_.breakpoint_id -eq $moduleBreak.breakpoint_id -and $_.is_loaded }).Count -eq 1)
 	$moduleCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
-	$null = Invoke-Tool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'loadDeferredModule'; value = 'true'; thread_id = $stepThread; frame_index = 0 }
-	$null = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId }
+	$null = Invoke-MutatingTool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'loadDeferredModule'; value = 'true'; thread_id = $stepThread; frame_index = 0 }
+	$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId }
 	$moduleStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $moduleCursor; timeout_ms = 8000 }
 	Assert-That 'a module-load breakpoint stops on an actual deferred Assembly.Load' (-not $moduleStop.timed_out -and @($moduleStop.events).Count -gt 0)
 	$stepThread = @($moduleStop.events)[0].thread_id
 	$loadedModules = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
 	Assert-That 'the deferred in-memory module is visible after the module breakpoint' (@($loadedModules | Where-Object { $_.name -like 'DeferredPayload*' }).Count -eq 1)
-	$null = Invoke-Tool -Name 'remove_module_breakpoint' -Arguments @{ session_id = $sessionId; breakpoint_id = $moduleBreak.breakpoint_id }
+	$null = Invoke-MutatingTool -Name 'remove_module_breakpoint' -Arguments @{ session_id = $sessionId; breakpoint_id = $moduleBreak.breakpoint_id }
 	$breakpointDocument = Invoke-Tool -Name 'export_breakpoints' -Arguments @{ session_id = $sessionId }
-	$breakpointDryRun = Invoke-Tool -Name 'import_breakpoints' -Arguments @{ session_id = $sessionId; document = $breakpointDocument; mode = 'merge'; dry_run = $true }
+	$breakpointDryRun = Invoke-MutatingTool -Name 'import_breakpoints' -Arguments @{ session_id = $sessionId; document = $breakpointDocument; mode = 'merge'; dry_run = $true }
 	Assert-That 'breakpoint interchange dry-run validates without mutation' ($breakpointDryRun.dry_run -and $breakpointDryRun.removed -eq 0)
 	$truncatedDocument = $breakpointDocument | ConvertTo-Json -Depth 20 | ConvertFrom-Json
 	$truncatedDocument.exception_truncated = $true
-	$truncatedReplace = Invoke-Tool -Name 'import_breakpoints' -Arguments @{ session_id = $sessionId; document = $truncatedDocument; mode = 'replace'; dry_run = $true } -ExpectError
+	$truncatedReplace = Invoke-MutatingTool -Name 'import_breakpoints' -Arguments @{ session_id = $sessionId; document = $truncatedDocument; mode = 'replace'; dry_run = $true } -ExpectError
 	Assert-That 'replace rejects a truncated breakpoint document' ($truncatedReplace -match 'truncated')
-	$sentinelModule = Invoke-Tool -Name 'set_module_breakpoint' -Arguments @{ session_id = $sessionId; module_name = 'Phase8.Replace.Sentinel'; is_loaded = $true }
-	$null = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true; condition = 'input == -1' }
+	$sentinelModule = Invoke-MutatingTool -Name 'set_module_breakpoint' -Arguments @{ session_id = $sessionId; module_name = 'Phase8.Replace.Sentinel'; is_loaded = $true }
+	$null = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true; condition = 'input == -1' }
 	$replaceDocument = $breakpointDocument | ConvertTo-Json -Depth 20 | ConvertFrom-Json
 	$replaceDocument.exceptions = @(); $replaceDocument.exception_total = 0; $replaceDocument.exception_truncated = $false
-	$replaceResult = Invoke-Tool -Name 'import_breakpoints' -Arguments @{ session_id = $sessionId; document = $replaceDocument; mode = 'replace' }
+	$replaceResult = Invoke-MutatingTool -Name 'import_breakpoints' -Arguments @{ session_id = $sessionId; document = $replaceDocument; mode = 'replace' }
 	$afterReplaceModules = @(Invoke-Tool -Name 'list_module_breakpoints' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
 	$afterReplaceCode = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{} | ForEach-Object { $_ }) | Where-Object { $_.method_token -eq $breakpoint.method_token -and $_.il_offset -eq $breakpoint.il_offset }
 	Assert-That 'replace removes breakpoints absent from the document' (@($afterReplaceModules | Where-Object { $_.breakpoint_id -eq $sentinelModule.breakpoint_id }).Count -eq 0 -and $replaceResult.removed -ge 1)
 	Assert-That 'replace restores settings on a breakpoint with the same stable identity' (@($afterReplaceCode).Count -eq 1 -and -not $afterReplaceCode.enabled -and $null -eq $afterReplaceCode.condition) "(entries=$(($afterReplaceCode | ConvertTo-Json -Compress -Depth 5)))"
 	$categories = @(Invoke-Tool -Name 'list_exception_categories' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
 	Assert-That 'exception categories expose DotNet' (@($categories | Where-Object { $_.category -eq 'DotNet' }).Count -eq 1)
-	$policy = Invoke-Tool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true; stop_unhandled = $false; conditions = @(@{ kind = 'module_equals'; module = 'Milestone1Target.exe' }) }
+	$policy = Invoke-MutatingTool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true; stop_unhandled = $false; conditions = @(@{ kind = 'module_equals'; module = 'Milestone1Target.exe' }) }
 	Assert-That 'exception policy mutation preserves flags and module conditions' ($policy.stop_thrown -and -not $policy.stop_unhandled -and @($policy.conditions).Count -eq 1 -and $policy.conditions[0].module -eq 'Milestone1Target.exe')
-	$removedPolicy = Invoke-Tool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' }
+	$removedPolicy = Invoke-MutatingTool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' }
 	Assert-That 'remove_exception_policy returns the policy it removed' ($removedPolicy.name -eq 'Milestone1Target.Phase8FixtureException')
-	$null = Invoke-Tool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true }
-	$null = Invoke-Tool -Name 'restore_exception_defaults' -Arguments @{ session_id = $sessionId }
-	$removedAfterReset = Invoke-Tool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' } -ExpectError
+	$null = Invoke-MutatingTool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true }
+	$null = Invoke-MutatingTool -Name 'restore_exception_defaults' -Arguments @{ session_id = $sessionId }
+	$removedAfterReset = Invoke-MutatingTool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' } -ExpectError
 	Assert-That 'restore_exception_defaults removes custom policies' ($removedAfterReset -match 'Phase8FixtureException') "(error='$removedAfterReset')"
 
 	Write-Host "== symbols, IL and decompilation ==" -ForegroundColor Cyan
@@ -717,18 +740,18 @@ try {
 	Assert-That 'get_raw_module hashes the complete image' ($raw.sha256 -eq $fileHash) "(rpc=$($raw.sha256) file=$fileHash)"
 
 	# set_breakpoint by name must be the same breakpoint set_il_breakpoint produces, not a parallel path.
-	Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
-	$named = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = 'Tick' }
+	Invoke-MutatingTool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
+	$named = Invoke-MutatingTool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = 'Tick' }
 	Assert-That 'set_breakpoint resolves a name to the right method token' ($named.method_token -eq $methodToken) "(was $($named.method_token))"
 	Assert-That 'set_breakpoint binds exactly as the token-based tool does' ($named.bound -and $named.severity -eq 'none') "(bound=$($named.bound) msg='$($named.message)')"
 	Assert-That 'set_breakpoint returns a cursor for wait_for_stop' ($null -ne $named.cursor_event_id)
-	$ambiguous = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = 'ReadInt' } -ExpectError:$false
+	$ambiguous = Invoke-MutatingTool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = 'ReadInt' } -ExpectError:$false
 	Assert-That 'a non-overloaded sibling method also resolves' ($ambiguous.method_token -gt 0)
-	$badType = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Nope.Missing'; method = 'Tick' } -ExpectError
+	$badType = Invoke-MutatingTool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Nope.Missing'; method = 'Tick' } -ExpectError
 	Assert-That 'an unknown type is refused with a pointer to list_types' ($badType -match 'list_types')
 	$badModule = Invoke-Tool -Name 'get_il' -Arguments @{ session_id = $sessionId; module = 'NotLoaded.dll'; method_token = $methodToken } -ExpectError
 	Assert-That 'an unloaded module is refused with a pointer to list_modules' ($badModule -match 'list_modules')
-	Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
+	Invoke-MutatingTool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
 
 	# The file-less module path was reasoned about rather than exercised: the only real specimen anyone
 	# had seen was a frame on a live UCH stack. The fixture now carries two of its own — an assembly
@@ -788,22 +811,22 @@ try {
 		Assert-That "get_raw_module hashes the whole serialized image" ($flRaw.sha256 -match '^[0-9a-f]{64}$') "(was '$($flRaw.sha256)')"
 
 		# The engine's own identity must produce a real binding and stop, not merely an accepted id.
-		$flBreakpoint = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = $flName; type = $flCase.Type; method = 'Call' }
+		$flBreakpoint = Invoke-MutatingTool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = $flName; type = $flCase.Type; method = 'Call' }
 		Assert-That "set_breakpoint binds inside $($flCase.Label) module" ($flBreakpoint.bound) "(bound=$($flBreakpoint.bound) severity=$($flBreakpoint.severity) msg='$($flBreakpoint.message)')"
-		Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
+		Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
 		$flOwnStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $flBreakpoint.cursor_event_id; timeout_ms = 8000 }
 		Assert-That "the breakpoint inside $($flCase.Label) module actually stops" (-not $flOwnStop.timed_out -and @($flOwnStop.events).Count -gt 0)
 		if (-not $flOwnStop.timed_out) {
 			$flOwnFrames = @(Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId; thread_id = @($flOwnStop.events)[0].thread_id; max_frames = 2 } | ForEach-Object { $_ })
 			Assert-That "the stop frame belongs to $($flCase.Label) module" ($flOwnFrames[0].module_name -eq $flName -and $flOwnFrames[0].name -match 'Call') "(module='$($flOwnFrames[0].module_name)' name='$($flOwnFrames[0].name)')"
 		}
-		Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
+		Invoke-MutatingTool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
 
 		# The original UCH observation was a *frame* naming a module with no file. Reproduce it: the
 		# callee is reached only through this module, so frame 1 belongs to it.
-		$flNamed = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = $flCase.Callee }
+		$flNamed = Invoke-MutatingTool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = $flCase.Callee }
 		Assert-That "a breakpoint binds in the method $($flCase.Label) module calls" ($flNamed.bound) "(msg='$($flNamed.message)')"
-		Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
+		Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
 		$flStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $flNamed.cursor_event_id; timeout_ms = 8000 }
 		Assert-That "the call through $($flCase.Label) module reaches the breakpoint" (-not $flStop.timed_out -and @($flStop.events).Count -gt 0)
 		if (-not $flStop.timed_out) {
@@ -816,33 +839,33 @@ try {
 			$flFrameIl = Invoke-Tool -Name 'get_il' -Arguments @{ session_id = $sessionId; module = $flFrames[1].module_name; method_token = $flFrames[1].method_token }
 			Assert-That "that frame's own identity is enough to fetch its IL" ($flFrameIl.method_token -eq $flFrames[1].method_token -and $flFrameIl.declaring_type -eq $flCase.Type) "(declaring_type='$($flFrameIl.declaring_type)')"
 		}
-		Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
+		Invoke-MutatingTool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
 	}
 
 	# Leave the session paused where the rest of the script found it: at Tick's entry. The later check
 	# that a running target refuses get_callstack resumes and asks immediately, so it needs Tick's 100ms
 	# body ahead of it — resuming from the trampolines instead lands on the next Tick hit in microseconds.
-	$flSettle = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = 'Tick' }
-	Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
+	$flSettle = Invoke-MutatingTool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = 'Tick' }
+	Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
 	$flSettled = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $flSettle.cursor_event_id; timeout_ms = 8000 }
 	Assert-That 'the session returns to a stop inside the fixture loop' (-not $flSettled.timed_out)
-	Invoke-Tool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
+	Invoke-MutatingTool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
 
 	# Exercise unload only after inspecting the long-lived dynamic module. CorDebug invalidates metadata
 	# for Reflection.Emit modules when an unrelated AppDomain unloads; that engine behavior should not
 	# make the independent file-less-module checks order-dependent.
 	$stepThread = @($flSettled.events)[0].thread_id
-	$moduleUnload = Invoke-Tool -Name 'set_module_breakpoint' -Arguments @{ session_id = $sessionId; module_name = 'DeferredPayload*'; is_loaded = $false }
+	$moduleUnload = Invoke-MutatingTool -Name 'set_module_breakpoint' -Arguments @{ session_id = $sessionId; module_name = 'DeferredPayload*'; is_loaded = $false }
 	$unloadCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
-	$null = Invoke-Tool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'unloadDeferredModule'; value = 'true'; thread_id = $stepThread; frame_index = 0 }
-	$null = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId }
+	$null = Invoke-MutatingTool -Name 'set_value' -Arguments @{ session_id = $sessionId; expression = 'unloadDeferredModule'; value = 'true'; thread_id = $stepThread; frame_index = 0 }
+	$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId }
 	$unloadStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $unloadCursor; timeout_ms = 8000 }
 	Assert-That 'a module-unload breakpoint stops on AppDomain unload' (-not $unloadStop.timed_out -and @($unloadStop.events).Count -gt 0)
-	$null = Invoke-Tool -Name 'remove_module_breakpoint' -Arguments @{ session_id = $sessionId; breakpoint_id = $moduleUnload.breakpoint_id }
+	$null = Invoke-MutatingTool -Name 'remove_module_breakpoint' -Arguments @{ session_id = $sessionId; breakpoint_id = $moduleUnload.breakpoint_id }
 
-	$breakpoint = Invoke-Tool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
+	$breakpoint = Invoke-MutatingTool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
 
-	$reenabled = Invoke-Tool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true }
+	$reenabled = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true }
 	Assert-That 'the code breakpoint can be re-enabled after stepping' ($reenabled.enabled)
 
 	$stale = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId; expected_state_version = 1 } -ExpectError
@@ -850,24 +873,24 @@ try {
 
 	# Evaluation runs off the dispatcher now, so a running target must be refused explicitly rather
 	# than racing against a stack that is being torn down.
-	Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
+	Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
 	$running = Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId } -ExpectError
 	Assert-That 'get_callstack on a running target is refused' ($running -match 'not_paused|Pause the session')
 
 	Write-Host "== clear_breakpoints ==" -ForegroundColor Cyan
-	$cleared = Invoke-Tool -Name 'clear_breakpoints' -Arguments @{}
+	$cleared = Invoke-MutatingTool -Name 'clear_breakpoints' -Arguments @{}
 	Assert-That 'clear_breakpoints reports what it removed' ($cleared.removed -ge 1) "(removed=$($cleared.removed))"
 	$after = Invoke-Tool -Name 'list_breakpoints' -Arguments @{} -AsText
 	Assert-That 'no breakpoints remain' ($after -eq '[]') "(payload $after)"
 
 	Write-Host "== detach leaves the target alive ==" -ForegroundColor Cyan
-	$cleanupStopPoint = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = 'Tick' }
-	$cleanupStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $cleanupStopPoint.cursor_event_id; timeout_ms = 8000 }
-	Assert-That 'the object-ID teardown probe stops at a frame with a stable Main argument' (-not $cleanupStop.timed_out)
-	$stepThread = @($cleanupStop.events)[0].thread_id
-	$cleanupObject = Invoke-Tool -Name 'create_object_id' -Arguments @{ session_id = $sessionId; expression = 'commandLine'; process_id = $targetId; runtime_id = $program.runtime_guid; thread_id = $stepThread; frame_index = 1 }
-	$null = Invoke-Tool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = $cleanupStopPoint.breakpoint_id }
-	$detach = Invoke-Tool -Name 'detach' -Arguments @{ session_id = $sessionId }
+	$cleanupPause = Invoke-MutatingTool -Name 'pause' -Arguments @{ session_id = $sessionId; process_id = $targetId }
+	$cleanupThread = @((Invoke-Tool -Name 'list_threads' -Arguments @{ session_id = $sessionId }) | ForEach-Object { $_ } | Where-Object { $_.process_id -eq $targetId -and $_.is_current } | Select-Object -First 1)[0]
+	$cleanupStack = @(Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId; thread_id = $cleanupThread.thread_id } | ForEach-Object { $_ })
+	$cleanupMainFrame = @($cleanupStack | Where-Object { $_.name -match '\.Main\(' } | Select-Object -First 1)[0]
+	Assert-That 'the object-ID teardown probe finds the stable Main argument frame' ($cleanupPause.state -eq 'paused' -and $null -ne $cleanupMainFrame) "(state=$($cleanupPause.state) stack=$($cleanupStack.name -join ' | '))"
+	$cleanupObject = Invoke-MutatingTool -Name 'create_object_id' -Arguments @{ session_id = $sessionId; expression = 'commandLine'; process_id = $targetId; runtime_id = $program.runtime_guid; thread_id = $cleanupThread.thread_id; frame_index = $cleanupMainFrame.frame_index }
+	$detach = Invoke-MutatingTool -Name 'detach' -Arguments @{ session_id = $sessionId }
 	Assert-That 'detach reports detached, not terminated' ($detach.detached -and -not $detach.terminated)
 	Start-Sleep -Milliseconds 750
 	Assert-That 'the target survives detach' ($null -ne (Get-Process -Id $targetId -ErrorAction SilentlyContinue))
@@ -875,7 +898,7 @@ try {
 	$reattached = Invoke-Tool -Name 'attach' -Arguments @{ program_id = $reattachProgram.program_id }
 	$idsAfterDetach = @(Invoke-Tool -Name 'list_object_ids' -Arguments @{ session_id = $reattached.session_id; process_id = $targetId; runtime_id = $reattachProgram.runtime_guid } | ForEach-Object { $_ })
 	Assert-That 'detach disposes runtime-scoped object IDs before reattach' (@($idsAfterDetach | Where-Object { $_.object_id -eq $cleanupObject.object_id }).Count -eq 0)
-	$null = Invoke-Tool -Name 'detach' -Arguments @{ session_id = $reattached.session_id }
+	$null = Invoke-MutatingTool -Name 'detach' -Arguments @{ session_id = $reattached.session_id }
 	$remaining = Invoke-Tool -Name 'list_sessions' -Arguments @{} -AsText
 	Assert-That 'no sessions remain' (-not $remaining.Contains($sessionId)) "(payload $remaining)"
 	$err = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId } -ExpectError
@@ -893,21 +916,24 @@ try {
 	Assert-That 'launch starts the target through dnSpy' ($launched.state -in @('running','paused') -and $launchedPid -gt 0)
 	Assert-That 'launch creates a different process from the attached fixture' ($launchedPid -ne $targetId)
 
-	$restarted = Invoke-Tool -Name 'restart' -Arguments @{ session_id = $launchedSessionId }
+	$restarted = Invoke-MutatingTool -Name 'restart' -Arguments @{ session_id = $launchedSessionId }
 	$restartedPid = [int]@($restarted.process_ids)[0]
 	Assert-That 'restart preserves the logical session' ($restarted.session_id -eq $launchedSessionId)
 	Assert-That 'restart replaces the target process' ($restartedPid -gt 0 -and $restartedPid -ne $launchedPid) "(old=$launchedPid new=$restartedPid)"
 	Start-Sleep -Milliseconds 500
 	Assert-That 'the pre-restart process is gone' ($null -eq (Get-Process -Id $launchedPid -ErrorAction SilentlyContinue))
 
-	$terminated = Invoke-Tool -Name 'terminate' -Arguments @{ session_id = $launchedSessionId }
+	$terminated = Invoke-MutatingTool -Name 'terminate' -Arguments @{ session_id = $launchedSessionId }
 	Assert-That 'terminate reports an exited session with explicit semantics' ($terminated.state -eq 'exited' -and $terminated.terminal_reason -eq 'terminated_by_client') "(state=$($terminated.state) reason=$($terminated.terminal_reason))"
 	Start-Sleep -Milliseconds 500
 	Assert-That 'terminate kills the launched target' ($null -eq (Get-Process -Id $restartedPid -ErrorAction SilentlyContinue))
 	$terminateEvents = @(Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $launchedSessionId; after_event_id = 0 }).events
 	$terminateEvent = $terminateEvents | Where-Object { $_.kind -eq 'terminated' } | Select-Object -Last 1
 	Assert-That 'terminate records a terminal event with the target PID' ($terminateEvent.terminal -and $terminateEvent.process_id -eq $restartedPid)
-	Invoke-Tool -Name 'detach' -Arguments @{ session_id = $launchedSessionId } | Out-Null
+	$terminatedController = Invoke-Tool -Name 'get_session_controller' -Arguments @{ session_id = $launchedSessionId }
+	Assert-That 'terminal termination releases controller ownership' (-not $terminatedController.owned)
+	$null = Invoke-Tool -Name 'claim_session' -Arguments @{ session_id = $launchedSessionId }
+	Invoke-MutatingTool -Name 'detach' -Arguments @{ session_id = $launchedSessionId } | Out-Null
 
 	$exiting = Invoke-Tool -Name 'launch' -Arguments @{ filename = $targetExe; engine = 'cordebug'; command_line = '--exit-after-ms 2500 --exit-code 23' }
 	$exitingSessionId = $exiting.session_id
@@ -920,7 +946,7 @@ try {
 	$exitEvent = $exitEvents | Where-Object { $_.kind -eq 'session_exited' } | Select-Object -Last 1
 	Assert-That 'unexpected exit produces a terminal event' ($exitEvent.terminal -and $exitEvent.process_id -eq $exitingPid -and $exitEvent.exit_code -eq 23 -and $exitEvent.reason -eq 'target_exited')
 	Assert-That 'the terminal event advances the session cursor' ($exitEvent.event_id -gt 0 -and $exited.last_event_id -ge $exitEvent.event_id)
-	Invoke-Tool -Name 'detach' -Arguments @{ session_id = $exitingSessionId } | Out-Null
+	Invoke-MutatingTool -Name 'detach' -Arguments @{ session_id = $exitingSessionId } | Out-Null
 
 	# The success path needs a Mono/Unity target, which this harness cannot produce; see the manual
 	# checklist in docs/DGSPY_UNITY_CHECKLIST.md. What is testable here is argument validation and the
@@ -944,7 +970,7 @@ try {
 	Assert-That 'a refused endpoint reports faulted' ($faulted.state -eq 'faulted') "(was $($faulted.state))"
 	Assert-That 'the fault carries dnSpy''s own reason' ($faulted.fault_message -match 'connect') "(was '$($faulted.fault_message)')"
 	Assert-That 'the fault is reported near the connection timeout' ($faultMs -lt 12000) "(took ${faultMs}ms)"
-	Invoke-Tool -Name 'detach' -Arguments @{ session_id = $faulted.session_id } | Out-Null
+	Invoke-MutatingTool -Name 'detach' -Arguments @{ session_id = $faulted.session_id } | Out-Null
 	$remaining = Invoke-Tool -Name 'list_sessions' -Arguments @{} -AsText
 	Assert-That 'a faulted session can be cleared with detach' (-not $remaining.Contains($faulted.session_id)) "(payload $remaining)"
 

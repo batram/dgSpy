@@ -390,7 +390,9 @@ namespace dgSpy.Extension {
 			},cancellationToken).ConfigureAwait(false);
 			var module=req.Arguments["module"]?.GetValue<string>()!;
 			req.Arguments["method_token"]=resolved;
-			if (req.Arguments["il_offset"] is null) req.Arguments["il_offset"]=0;
+			// JsonNode retains the CLR numeric type assigned here. SetBreakpointAsync reads UInt32, so an
+			// Int32 zero would throw instead of using the named-breakpoint default.
+			if (req.Arguments["il_offset"] is null) req.Arguments["il_offset"]=(uint)0;
 			return await SetBreakpointAsync(req,cancellationToken).ConfigureAwait(false);
 		}
 	}

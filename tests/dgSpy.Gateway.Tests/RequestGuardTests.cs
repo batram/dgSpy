@@ -91,6 +91,19 @@ public class RpcClientSettingsTests {
 
 public class SessionControlTests {
 	[Theory]
+	[InlineData("detach",false,true)]
+	[InlineData("detach",true,false)]
+	public void Controller_release_for_detach_requires_a_terminal_result(string operation,bool sessionActive,bool expected) {
+		Assert.Equal(expected,GatewayToolExecutor.IsTerminalLifecycleResult(operation,new DetachResult { SessionActive=sessionActive }));
+	}
+
+	[Fact]
+	public void Controller_release_for_terminate_requires_no_remaining_processes() {
+		Assert.False(GatewayToolExecutor.IsTerminalLifecycleResult("terminate",new SessionState { ProcessIds=new[] { 42 } }));
+		Assert.True(GatewayToolExecutor.IsTerminalLifecycleResult("terminate",new SessionState { ProcessIds=Array.Empty<int>() }));
+	}
+
+	[Theory]
 	[InlineData("detach","lifecycle","expected_lifecycle_version")]
 	[InlineData("continue","execution","expected_execution_version")]
 	[InlineData("set_value","execution","expected_execution_version")]

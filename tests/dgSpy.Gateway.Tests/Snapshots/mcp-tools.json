@@ -1015,10 +1015,24 @@
           },
           "breakpoint_id": {
             "type": "integer"
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Active debugger session."
+          },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
-          "breakpoint_id"
+          "breakpoint_id",
+          "session_id",
+          "expected_breakpoints_version"
         ]
       },
       "annotations": {
@@ -1036,9 +1050,24 @@
           "host_id": {
             "type": "string",
             "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Active debugger session."
+          },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
-        "required": []
+        "required": [
+          "session_id",
+          "expected_breakpoints_version"
+        ]
       },
       "annotations": {
         "readOnlyHint": false,
@@ -1385,10 +1414,24 @@
           "trace_continue": {
             "type": "boolean",
             "description": "Default true: print and keep running, which produces NO stopped event. Pass false to print and stop."
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Active debugger session."
+          },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
-          "breakpoint_id"
+          "breakpoint_id",
+          "session_id",
+          "expected_breakpoints_version"
         ]
       },
       "annotations": {
@@ -1422,9 +1465,24 @@
           "stop_second_chance": {
             "type": "boolean",
             "description": "Stop when it goes unhandled."
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Active debugger session."
+          },
+          "expected_breakpoints_version": {
+            "type": "integer",
+            "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
+          },
+          "expected_state_version": {
+            "type": "integer",
+            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
-        "required": []
+        "required": [
+          "session_id",
+          "expected_breakpoints_version"
+        ]
       },
       "annotations": {
         "readOnlyHint": false,

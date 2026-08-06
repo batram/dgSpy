@@ -23,7 +23,12 @@ namespace dgSpy.Extension {
 				var snapshot=events.Snapshot(after,kinds);
 				if (snapshot.Events.Length!=0 || snapshot.Truncated) return WaitResult(snapshot,false);
 				try { await events.WaitForChangeAsync(snapshot.LastEventId,wait.Token).ConfigureAwait(false); }
-				catch(OperationCanceledException) when(!cancellationToken.IsCancellationRequested) { return WaitResult(events.Snapshot(after,kinds),true); }
+				catch(OperationCanceledException) when(!cancellationToken.IsCancellationRequested) {
+					var finalSnapshot=events.Snapshot(after,kinds);
+					// The event can arrive concurrently with the wait deadline. Never report a timeout
+					// alongside the event that satisfied the wait.
+					return WaitResult(finalSnapshot,!finalSnapshot.SatisfiesWait);
+				}
 			}
 		}
 

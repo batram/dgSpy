@@ -113,7 +113,7 @@ public sealed class GatewayToolExecutor {
 			}
 			var response=await router.CallAsync(new RpcRequest { Operation=operation,Arguments=(JsonObject)arguments.DeepClone(),DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds(operation)) },token);
 			if(response.Error is null && (operation=="attach" || operation=="attach_endpoint" || operation=="launch")) { var started=ProtocolJson.ToNode(response.Result!)!.AsObject(); var created=(string?)started["session_id"]; if(!string.IsNullOrEmpty(created)) controllers.Claim(created,hostId,clientId); }
-			if(response.Error is null && !string.IsNullOrWhiteSpace(sessionId) && (operation=="detach" || operation=="terminate")) controllers.ReleaseTerminal(sessionId);
+			if(response.Error is null && !string.IsNullOrWhiteSpace(sessionId) && IsTerminalLifecycleResult(operation,response.Result)) controllers.ReleaseTerminal(sessionId);
 			if(auditId is not null) audit.Write(auditId,clientId,hostId,sessionId,operation,expected,response.Error is null ? "succeeded" : "failed",response.Error?.Code);
 			return response;
 		}
@@ -123,6 +123,13 @@ public sealed class GatewayToolExecutor {
 	async Task<object> GetStateAsync(JsonObject source,CancellationToken token) { var args=new JsonObject(); if(source["host_id"] is not null) args["host_id"]=source["host_id"]!.DeepClone(); args["session_id"]=source["session_id"]!.DeepClone(); var response=await router.CallAsync(new RpcRequest { Operation="get_session_state",Arguments=args,DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds("get_session_state")) },token); if(response.Error is not null) throw new GatewayControlException(response.Error.Code,response.Error.Message); return response.Result!; }
 	static long StateVersion(object state) => Version(state,"state_version");
 	static long Version(object state,string property) => (long?)ProtocolJson.ToNode(state)![property] ?? throw new GatewayControlException("invalid_state",$"Host did not report {property}.");
+	internal static bool IsTerminalLifecycleResult(string operation,object? result) {
+		var node=result is null ? null : ProtocolJson.ToNode(result) as JsonObject;
+		if(node is null) return false;
+		if(operation=="detach") return (bool?)node["session_active"]==false;
+		if(operation=="terminate") return node["process_ids"] is JsonArray processIds && processIds.Count==0;
+		return false;
+	}
 
 	static bool IsGuidedOperation(string operation) => operation is "step_and_inspect" or "trace_calls" or "run_to_method" or "run_to_location";
 	async Task<RpcResponse> ExecuteGuidedAsync(string operation,JsonObject arguments,string clientId,CancellationToken token) {

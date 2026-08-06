@@ -140,6 +140,13 @@ public sealed class ExtensionCoreTests {
 	}
 
 	[Fact]
+	public void FinalWaitSnapshotWithAnEventIsNotATimeout() {
+		Assert.True(new EventBufferSnapshot { Events=new[] { new DebugEvent() } }.SatisfiesWait);
+		Assert.True(new EventBufferSnapshot { Truncated=true }.SatisfiesWait);
+		Assert.False(new EventBufferSnapshot().SatisfiesWait);
+	}
+
+	[Fact]
 	public void EventBufferPreservesTerminalDetailsAndResetsBetweenSessions() {
 		var buffer=new DebugEventBuffer();
 		buffer.Add("session_exited",7,terminal:true,processId:4242,exitCode:23,reason:"target_exited");

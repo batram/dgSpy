@@ -87,5 +87,6 @@ namespace dgSpy.Extension {
 		public long OldestAvailableCursor { get; set; }
 		public long LastEventId { get; set; }
 		public bool Truncated { get; set; }
+		public bool SatisfiesWait => Events.Length!=0 || Truncated;
 	}
 }
