@@ -247,7 +247,8 @@ ship without being filterable and advertised in the same edit.
 - **`get_members` expands one level and never recurses.** A member carries the `expression` that reaches
   it, so the caller spends and cancels its own depth. Server-side recursion is unbounded on a cyclic
   object graph. Paged with `offset`/`count`, capped at 200 and clamped to the remaining dnSpy child
-  count, reporting `total` and `truncated`.
+  count, reporting `total` and `truncated`. Children whose property getter is blocked by the default
+  no-func-eval policy still report their member name alongside the evaluation error.
 - **Watches are stored expressions, not value handles.** A handle goes stale on the next resume; an
   expression is re-evaluated against whatever frame you name. A watch whose expression fails reports its
   own error instead of failing the whole call.

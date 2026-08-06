@@ -1204,7 +1204,13 @@ namespace dnSpy.Debugger.Impl {
 			bool start;
 			lock (objsToClose) {
 				int origCount = objsToClose.Count;
-				objsToClose.AddRange(objs);
+				// Engine error paths can return sparse object arrays. Cleanup must tolerate those entries:
+				// dereferencing one on the debugger thread prevents later objects from being closed and
+				// surfaces a modal NullReferenceException while the target is paused.
+				foreach (var obj in objs) {
+					if (obj is not null)
+						objsToClose.Add(obj);
+				}
 				start = origCount == 0 && objsToClose.Count > 0;
 			}
 			if (start)
@@ -1218,8 +1224,10 @@ namespace dnSpy.Debugger.Impl {
 				objs = objsToClose.ToArray();
 				objsToClose.Clear();
 			}
-			foreach (var obj in objs)
-				obj.Close(Dispatcher);
+			foreach (var obj in objs) {
+				if (obj is not null)
+					obj.Close(Dispatcher);
+			}
 		}
 
 		public override event EventHandler<DbgManagerMessageEventArgs>? DbgManagerMessage;

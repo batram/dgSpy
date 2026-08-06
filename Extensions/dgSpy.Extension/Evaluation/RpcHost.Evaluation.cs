@@ -78,8 +78,11 @@ namespace dgSpy.Extension {
 
 		EvaluatedValue DescribeNode(DbgValueNode node,DbgEvaluationInfo eval,string expression) {
 			var name=new DbgStringBuilderTextWriter(); var type=new DbgStringBuilderTextWriter(); var display=new DbgStringBuilderTextWriter();
+			// Error nodes still carry useful identity. In particular, a property blocked by NoFuncEval has
+			// an error value but FormatName reports the property name; skipping it made every such child
+			// fall back to the parent expression (eg. every property under `this` was named `this`).
+			node.FormatName(eval,name,DbgValueFormatterOptions.None);
 			if (node.ErrorMessage is null) {
-				node.FormatName(eval,name,DbgValueFormatterOptions.None);
 				node.FormatActualType(eval,type,DbgValueFormatterTypeOptions.None,DbgValueFormatterOptions.None,null);
 				node.FormatValue(eval,display,DbgValueFormatterOptions.None,null);
 			}
