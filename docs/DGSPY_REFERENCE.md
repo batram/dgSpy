@@ -137,7 +137,8 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
 - `list_threads` requires a paused session and returns stable `thread_id` values as
   `process_id:os_thread_id`, including managed ID, name and state. It deliberately does not fetch every
   stack: Unity threads can exit during frame retrieval, and some Mono runtimes never answer that raced
-  request. Pass an ID to `get_callstack` for bounded, deterministic selection; omit it to retain the
+  request. Pass an ID to `get_callstack` for a caller-owned stack walk of that exact thread; this does
+  not depend on dnSpy's UI callstack asynchronously following `CurrentThread`. Omit it to retain the
   best-effort managed-frame probe. `get_frame(thread_id, frame_index)` inspects exactly one frame.
 - Frame identity is `thread_id` + `frame_index` for paused selection, and `module` + `method_token` +
   `il_offset` for code identity and `set_il_breakpoint`. `name` is display-only and must not be parsed.
@@ -259,6 +260,11 @@ ship without being filterable and advertised in the same edit.
   somewhere unrelated, which is worse than an error.
 - The gateway opens a new loopback TCP connection per request, so restarting dnSpy needs no gateway
   restart; calls fail while dnSpy is down and succeed again once the extension is listening.
+- The debugger dispatcher contains and records exceptions from individual asynchronous callbacks so
+  one bad cleanup/event callback cannot terminate the debugger thread and strand a paused target behind
+  a modal dialog. `get_host_info` reports dispatcher fault count/detail plus evaluation queue state,
+  active time, and pending work. A dispatcher fault or evaluation active beyond 130 seconds marks the
+  host `degraded`; `doctor` then reports `healthy: false` and directs recovery to those fields.
 - Per-tool gateway deadlines are derived from the bounds the extension advertises in
   `get_capabilities` (`dgSpy.Protocol.CapabilityCatalog`), plus a margin, rather than guessed. A
   gateway deadline shorter than the inner bound abandons work that was about to succeed; a unit test

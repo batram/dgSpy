@@ -496,6 +496,8 @@ namespace dgSpy.Extension {
 			CheckSession(req);
 			int max=Math.Min(100,Math.Max(1,(int?)req.Arguments["max_frames"] ?? 50));
 			var requestedThreadId=(string?)req.Arguments["thread_id"];
+			if (!string.IsNullOrEmpty(requestedThreadId))
+				return await GetSelectedThreadCallStackAsync(requestedThreadId!,max,cancellationToken).ConfigureAwait(false);
 			// The call stack is built from DbgManager.CurrentThread, which dnSpy sets from the UI or
 			// from a stop that carries a thread. A pause issued right after attach has neither, and
 			// the engine may not have enumerated any threads yet either. So: wait for a thread to
@@ -548,6 +550,29 @@ namespace dgSpy.Extension {
 			},cancellationToken).ConfigureAwait(false);
 			using var evaluation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token,cancellationToken);
 			return await evaluations.RunAsync(()=>captured.Select(c=>DescribeFrame(c,evaluation.Token)).ToArray(),cancellationToken).ConfigureAwait(false);
+		}
+		async Task<FrameInfo[]> GetSelectedThreadCallStackAsync(string selectedThreadId,int max,CancellationToken cancellationToken) {
+			var captured=await OnDebuggerAsync(()=>{
+				if(IsTargetRunning!=false) throw new RpcException("not_paused","Pause the session before requesting its call stack.");
+				var thread=manager.Processes.SelectMany(process=>process.Threads).FirstOrDefault(value=>ThreadId(value)==selectedThreadId)
+					?? throw new RpcException("thread_not_found",$"Thread {selectedThreadId} is not active. Refresh list_threads and use an exact thread_id.");
+				var walker=thread.CreateStackWalker();
+				DbgStackFrame[]? frames=null;
+				try {
+					frames=walker.GetNextStackFrames(max);
+					return frames.Select((frame,index)=>new CapturedFrame(frame,languages.GetCurrentLanguage(frame.Runtime.RuntimeKindGuid),new FrameInfo {
+						FrameId=$"{sessionId}:{stateVersion}:{selectedThreadId}:{index}",ThreadId=selectedThreadId,FrameIndex=index,Module=frame.Module?.Filename ?? "",ModuleName=frame.Module?.Name ?? "",
+						MethodToken=frame.FunctionToken,IlOffset=frame.FunctionOffset,Name=$"0x{frame.FunctionToken:X8}+0x{frame.FunctionOffset:X}",
+					})).ToArray();
+				}
+				catch { if(frames is not null) manager.Close(frames); throw; }
+				finally { walker.Close(); }
+			},cancellationToken).ConfigureAwait(false);
+			using var evaluation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token,cancellationToken);
+			return await evaluations.RunAsync(()=>{
+				try { return captured.Select(value=>DescribeFrame(value,evaluation.Token)).ToArray(); }
+				finally { manager.Close(captured.Select(value=>value.Frame).ToArray()); }
+			},cancellationToken).ConfigureAwait(false);
 		}
 		async Task<FrameInfo> GetFrameAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
@@ -602,12 +627,18 @@ namespace dgSpy.Extension {
 	/// </summary>
 	sealed class EvaluationQueue : IDisposable {
 		readonly BlockingCollection<Action> work=new BlockingCollection<Action>();
+		int pending;
+		long activeSinceUtcTicks;
+		public int Pending => Math.Max(0,Volatile.Read(ref pending));
+		public DateTime? ActiveSinceUtc { get { var ticks=Interlocked.Read(ref activeSinceUtcTicks); return ticks==0 ? null : new DateTime(ticks,DateTimeKind.Utc); } }
+		public string State { get { var active=ActiveSinceUtc; if(active is null) return Pending==0 ? "idle" : "queued"; return DateTime.UtcNow-active.Value>TimeSpan.FromSeconds(130) ? "degraded" : "busy"; } }
 		public EvaluationQueue() { var thread=new Thread(Loop) { IsBackground=true,Name="dgSpy evaluation" }; thread.Start(); }
 		void Loop() { foreach (var item in work.GetConsumingEnumerable()) { try { item(); } catch { /* per-item faults are reported through the item's own task */ } } }
 		public Task<T> RunAsync<T>(Func<T> callback,CancellationToken cancellationToken) {
 			var tcs=new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-			try { work.Add(()=>{ if (cancellationToken.IsCancellationRequested) { tcs.TrySetCanceled(cancellationToken); return; } try { tcs.TrySetResult(callback()); } catch (Exception ex) { tcs.TrySetException(ex); } }); }
-			catch (InvalidOperationException) { tcs.TrySetCanceled(); return tcs.Task; }
+			Interlocked.Increment(ref pending);
+			try { work.Add(()=>{ Interlocked.Decrement(ref pending); Interlocked.Exchange(ref activeSinceUtcTicks,DateTime.UtcNow.Ticks); try { if (cancellationToken.IsCancellationRequested) { tcs.TrySetCanceled(cancellationToken); return; } try { tcs.TrySetResult(callback()); } catch (Exception ex) { tcs.TrySetException(ex); } } finally { Interlocked.Exchange(ref activeSinceUtcTicks,0); } }); }
+			catch (InvalidOperationException) { Interlocked.Decrement(ref pending); tcs.TrySetCanceled(); return tcs.Task; }
 			if (!cancellationToken.CanBeCanceled) return tcs.Task;
 			// Cancellation abandons the wait; the queued evaluation still runs to completion because
 			// dnSpy cannot abort one mid-flight. It no longer holds the dispatcher while it does.

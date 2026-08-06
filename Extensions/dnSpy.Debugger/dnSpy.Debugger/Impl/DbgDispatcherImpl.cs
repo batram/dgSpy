@@ -24,10 +24,13 @@ using dnSpy.Debugger.Shared;
 
 namespace dnSpy.Debugger.Impl {
 	[Export(typeof(DbgDispatcher))]
-	sealed class DbgDispatcherImpl : DbgDispatcher {
+	sealed class DbgDispatcherImpl : DbgDispatcher, IDbgDispatcherDiagnostics {
 		readonly DebuggerThread debuggerThread;
 
 		internal Dispatcher Dispatcher => debuggerThread.Dispatcher;
+		public long FaultCount => debuggerThread.FaultCount;
+		public DateTime? LastFaultUtc => debuggerThread.LastFaultUtc;
+		public string? LastFault => debuggerThread.LastFault;
 
 		public DbgDispatcherImpl() {
 			debuggerThread = new DebuggerThread("Debugger");

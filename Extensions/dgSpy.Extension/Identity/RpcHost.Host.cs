@@ -12,6 +12,12 @@ namespace dgSpy.Extension {
 		public const string Version = "0.1.0";
 		HostInfo Host() {
 			string? session; lock(sync) session=sessionId;
+			var dispatcher=manager.Dispatcher as dnSpy.Contracts.Debugger.IDbgDispatcherDiagnostics;
+			var dispatcherState=dispatcher is null || dispatcher.FaultCount==0 ? "healthy" : "degraded";
+			var evaluationState=evaluations.State;
+			var connectionState=dispatcherState=="healthy" && evaluationState!="degraded" ? "connected" : "degraded";
+			var lastFault=dispatcher?.LastFault;
+			if(lastFault?.Length>4096) lastFault=lastFault.Substring(0,4096);
 			return new HostInfo {
 				HostId=rpcSecurity.HostId,
 				DisplayName=$"dgSpy on {Environment.MachineName}",
@@ -21,7 +27,14 @@ namespace dgSpy.Extension {
 				OperatingSystem=Environment.OSVersion.VersionString,
 				Architecture=Environment.Is64BitProcess ? "X64" : "X86",
 				DnSpyProcessId=System.Diagnostics.Process.GetCurrentProcess().Id,
-				ConnectionState="connected",
+				ConnectionState=connectionState,
+				DispatcherState=dispatcherState,
+				DispatcherFaultCount=dispatcher?.FaultCount ?? 0,
+				LastDispatcherFaultUtc=dispatcher?.LastFaultUtc,
+				LastDispatcherFault=lastFault,
+				EvaluationQueueState=evaluationState,
+				EvaluationActiveSinceUtc=evaluations.ActiveSinceUtc,
+				EvaluationPending=evaluations.Pending,
 				Engines=Array.ConvertAll(CapabilityCatalog.Engines,engine=>engine.Engine),
 				Authentication="shared-token (loopback-only transport)",
 				SessionId=session,

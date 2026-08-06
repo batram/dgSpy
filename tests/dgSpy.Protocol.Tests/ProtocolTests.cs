@@ -210,14 +210,17 @@ public class CapabilityContractTests {
 	[Fact]
 	public void Capabilities_and_host_info_round_trip_with_snake_case_wire_names() {
 		var capabilities = ProtocolJson.ParseObject(ProtocolJson.Serialize(CapabilityCatalog.Describe("0.1.0")));
-		var host = ProtocolJson.ParseObject(ProtocolJson.Serialize(new HostInfo { HostId = CapabilityCatalog.HostId, MachineName = "TESTBOX" }));
+		var host = ProtocolJson.ParseObject(ProtocolJson.Serialize(new HostInfo { HostId = CapabilityCatalog.HostId, MachineName = "TESTBOX", ConnectionState="degraded",DispatcherState="degraded",DispatcherFaultCount=2,LastDispatcherFault="injected",EvaluationQueueState="busy",EvaluationPending=1 }));
 
 		Assert.Equal("local", (string?)capabilities["host_id"]);
 		Assert.Equal(ProtocolVersion.Current, (int?)capabilities["protocol_version"]);
 		Assert.Equal(1, (int?)capabilities["limits"]!["max_concurrent_sessions"]);
 		Assert.Equal("attach_endpoint", (string?)capabilities["engines"]![1]!["acquisition"]![0]);
 		Assert.Equal("TESTBOX", (string?)host["machine_name"]);
-		Assert.Equal("connected", (string?)host["connection_state"]);
+		Assert.Equal("degraded", (string?)host["connection_state"]);
+		Assert.Equal(2L,(long?)host["dispatcher_fault_count"]);
+		Assert.Equal("injected",(string?)host["last_dispatcher_fault"]);
+		Assert.Equal("busy",(string?)host["evaluation_queue_state"]);
 	}
 
 	[Fact]

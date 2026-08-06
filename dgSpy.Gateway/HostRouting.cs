@@ -162,7 +162,9 @@ public sealed class HostRouter {
 		foreach (var endpoint in registry.Endpoints.OrderBy(endpoint=>endpoint.HostId,StringComparer.Ordinal)) {
 			try {
 				var response=await clients[endpoint.HostId].CallAsync(new RpcRequest { Operation="get_host_info",DeadlineUtc=DateTime.UtcNow.AddSeconds(5) },cancellationToken);
-				hosts.Add(new { host_id=endpoint.HostId,display_name=endpoint.DisplayName,state=response.Error is null ? "connected" : "error",host=response.Result,error=response.Error });
+				var info=response.Error is null ? ProtocolJson.ToObject(response.Result!) : null;
+				var state=response.Error is null ? (string?)info?["connection_state"] ?? "connected" : "error";
+				hosts.Add(new { host_id=endpoint.HostId,display_name=endpoint.DisplayName,state,host=response.Result,error=response.Error });
 			}
 			catch (Exception ex) when (ex is IOException || ex is SocketException || ex is OperationCanceledException) {
 				hosts.Add(new { host_id=endpoint.HostId,display_name=endpoint.DisplayName,state="unavailable",host=(object?)null,error=new RpcError { Code="host_unavailable",Message=ex.Message } });

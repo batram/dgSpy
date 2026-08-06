@@ -281,9 +281,10 @@ public class HostRegistryTests {
 			Assert.True(router.TryRegister("host-a",gateway,gatewayReader,gatewayWriter,out _));
 			Assert.False(router.TryRegister("host-a",new TcpClient(),new StreamReader(Stream.Null),new StreamWriter(Stream.Null),out _));
 			var remoteReader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true); var remoteWriter=new StreamWriter(remote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true};
-			var responder=Task.Run(async ()=>{ var request=ProtocolJson.Deserialize<RpcRequest>((await remoteReader.ReadLineAsync())!)!; await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,new { ok=true }))); });
+			var responder=Task.Run(async ()=>{ for(var i=0;i<2;i++){ var request=ProtocolJson.Deserialize<RpcRequest>((await remoteReader.ReadLineAsync())!)!; object result=i==0 ? new { ok=true } : new HostInfo { HostId="host-a",ConnectionState="degraded",DispatcherState="degraded",DispatcherFaultCount=1 }; await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,result))); } });
 			var response=await router.CallAsync(new RpcRequest { Operation="get_host_info",Arguments=new JsonObject { ["host_id"]="host-a" } },default);
-			await responder; listener.Stop(); Assert.Null(response.Error); Assert.Equal(true,(bool?)ProtocolJson.ToObject(response.Result!)["ok"]);
+			var hosts=await router.ListHostsAsync(default);
+			await responder; listener.Stop(); Assert.Null(response.Error); Assert.Equal(true,(bool?)ProtocolJson.ToObject(response.Result!)["ok"]); Assert.Contains("\"state\":\"degraded\"",System.Text.Json.JsonSerializer.Serialize(hosts));
 		}
 		finally { Directory.Delete(directory,true); }
 	}

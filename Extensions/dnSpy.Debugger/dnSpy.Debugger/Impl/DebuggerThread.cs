@@ -29,6 +29,12 @@ namespace dnSpy.Debugger.Impl {
 		volatile bool terminate;
 		AutoResetEvent? callDispatcherRunEvent;
 		readonly string threadName;
+		long faultCount;
+		long lastFaultUtcTicks;
+		string? lastFault;
+		public long FaultCount => Interlocked.Read(ref faultCount);
+		public DateTime? LastFaultUtc { get { var ticks=Interlocked.Read(ref lastFaultUtcTicks); return ticks==0 ? null : new DateTime(ticks,DateTimeKind.Utc); } }
+		public string? LastFault => Volatile.Read(ref lastFault);
 
 		public DebuggerThread(string threadName) {
 			Dispatcher = null!;
@@ -51,7 +57,7 @@ namespace dnSpy.Debugger.Impl {
 
 		void DebuggerThreadProc(AutoResetEvent autoResetEvent) {
 			Thread.CurrentThread.Name = threadName;
-			Dispatcher = new Dispatcher();
+			Dispatcher = new Dispatcher(RecordFault);
 			autoResetEvent.Set();
 
 			callDispatcherRunEvent!.WaitOne();
@@ -60,6 +66,12 @@ namespace dnSpy.Debugger.Impl {
 
 			if (!terminate)
 				Dispatcher.Run();
+		}
+
+		void RecordFault(Exception exception) {
+			Volatile.Write(ref lastFault,exception.ToString());
+			Interlocked.Exchange(ref lastFaultUtcTicks,DateTime.UtcNow.Ticks);
+			Interlocked.Increment(ref faultCount);
 		}
 
 		internal void CallDispatcherRun() => callDispatcherRunEvent!.Set();

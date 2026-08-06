@@ -20,6 +20,14 @@
 using System;
 
 namespace dnSpy.Contracts.Debugger {
+	/// <summary>Optional diagnostics implemented by dispatcher hosts that contain asynchronous callback
+	/// faults instead of terminating the debugger thread.</summary>
+	public interface IDbgDispatcherDiagnostics {
+		long FaultCount { get; }
+		DateTime? LastFaultUtc { get; }
+		string? LastFault { get; }
+	}
+
 	/// <summary>
 	/// Invokes code on another thread.
 	/// </summary>

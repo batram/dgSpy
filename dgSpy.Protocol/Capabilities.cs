@@ -78,6 +78,13 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("architecture")] public string Architecture { get; set; }="";
 		[JsonPropertyName("dnspy_process_id")] public int DnSpyProcessId { get; set; }
 		[JsonPropertyName("connection_state")] public string ConnectionState { get; set; }="connected";
+		[JsonPropertyName("dispatcher_state")] public string DispatcherState { get; set; }="healthy";
+		[JsonPropertyName("dispatcher_fault_count")] public long DispatcherFaultCount { get; set; }
+		[JsonPropertyName("last_dispatcher_fault_utc"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public DateTime? LastDispatcherFaultUtc { get; set; }
+		[JsonPropertyName("last_dispatcher_fault"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? LastDispatcherFault { get; set; }
+		[JsonPropertyName("evaluation_queue_state")] public string EvaluationQueueState { get; set; }="idle";
+		[JsonPropertyName("evaluation_active_since_utc"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public DateTime? EvaluationActiveSinceUtc { get; set; }
+		[JsonPropertyName("evaluation_pending")] public int EvaluationPending { get; set; }
 		[JsonPropertyName("engines")] public string[] Engines { get; set; }=Array.Empty<string>();
 		/// <summary>How this endpoint authenticates gateway RPC callers.</summary>
 		[JsonPropertyName("authentication")] public string Authentication { get; set; }="";

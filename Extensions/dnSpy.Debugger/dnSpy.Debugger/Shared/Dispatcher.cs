@@ -20,6 +20,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -35,8 +36,10 @@ namespace dnSpy.Debugger.Shared {
 		volatile bool beginShutdownCalled;
 		volatile bool hasShutdownStarted;
 		volatile bool hasShutdownFinished;
+		readonly Action<Exception>? faultHandler;
 
-		public Dispatcher() {
+		public Dispatcher(Action<Exception>? faultHandler=null) {
+			this.faultHandler = faultHandler;
 			lockObj = new object();
 			thread = Thread.CurrentThread;
 			queue = new Queue<Action>();
@@ -93,11 +96,15 @@ namespace dnSpy.Debugger.Shared {
 			else {
 				using (var ev = new ManualResetEvent(false)) {
 					TResult result = default!;
+					Exception? fault = null;
 					BeginInvoke(() => {
-						result = callback();
-						ev.Set();
+						try { result = callback(); }
+						catch (Exception ex) { fault = ex; }
+						finally { ev.Set(); }
 					}, throwIfShutdownStarted: true);
 					ev.WaitOne();
+					if (fault is not null)
+						ExceptionDispatchInfo.Capture(fault).Throw();
 					return result;
 				}
 			}
@@ -143,8 +150,15 @@ namespace dnSpy.Debugger.Shared {
 			var prevContext = SynchronizationContext.Current;
 			SynchronizationContext.SetSynchronizationContext(new SynchronizationContextImpl(this));
 			try {
-				while (TryDequeue(out var callback))
-					callback();
+				while (TryDequeue(out var callback)) {
+					try { callback(); }
+					catch (Exception ex) {
+						// One asynchronous callback must never terminate the debugger thread. A dead
+						// dispatcher strands paused targets and turns the UI exception dialog into a
+						// remote deadlock. Diagnostics are best-effort and must not become a second fault.
+						try { faultHandler?.Invoke(ex); } catch { }
+					}
+				}
 			}
 			finally {
 				SynchronizationContext.SetSynchronizationContext(prevContext);

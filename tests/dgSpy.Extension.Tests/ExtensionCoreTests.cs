@@ -5,6 +5,31 @@ using Xunit;
 namespace dgSpy.Extension.Tests;
 
 public sealed class ExtensionCoreTests {
+	[Fact]
+	public void Dispatcher_contains_async_fault_and_runs_the_next_callback() {
+		dnSpy.Debugger.Shared.Dispatcher? dispatcher=null; Exception? recorded=null;
+		using var ready=new ManualResetEvent(false); using var after=new ManualResetEvent(false);
+		var thread=new Thread(()=>{ dispatcher=new dnSpy.Debugger.Shared.Dispatcher(ex=>recorded=ex); ready.Set(); dispatcher.Run(); }) { IsBackground=true };
+		thread.Start(); Assert.True(ready.WaitOne(TimeSpan.FromSeconds(2)));
+		dispatcher!.BeginInvoke(()=>throw new InvalidOperationException("injected dispatcher fault"));
+		dispatcher.BeginInvoke(()=>after.Set());
+		Assert.True(after.WaitOne(TimeSpan.FromSeconds(2)));
+		Assert.Equal("injected dispatcher fault",recorded?.Message);
+		dispatcher.BeginInvokeShutdown(); Assert.True(thread.Join(TimeSpan.FromSeconds(2)));
+	}
+
+	[Fact]
+	public void Dispatcher_invoke_propagates_fault_without_killing_dispatcher() {
+		dnSpy.Debugger.Shared.Dispatcher? dispatcher=null;
+		using var ready=new ManualResetEvent(false); using var after=new ManualResetEvent(false);
+		var thread=new Thread(()=>{ dispatcher=new dnSpy.Debugger.Shared.Dispatcher(); ready.Set(); dispatcher.Run(); }) { IsBackground=true };
+		thread.Start(); Assert.True(ready.WaitOne(TimeSpan.FromSeconds(2)));
+		var fault=Assert.Throws<InvalidOperationException>(()=>dispatcher!.Invoke<int>(()=>throw new InvalidOperationException("sync fault")));
+		Assert.Equal("sync fault",fault.Message);
+		dispatcher!.BeginInvoke(()=>after.Set()); Assert.True(after.WaitOne(TimeSpan.FromSeconds(2)));
+		dispatcher.BeginInvokeShutdown(); Assert.True(thread.Join(TimeSpan.FromSeconds(2)));
+	}
+
 	[Theory]
 	[InlineData(5ul,0,10,5)]
 	[InlineData(5ul,3,10,2)]
