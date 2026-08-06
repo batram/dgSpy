@@ -6,6 +6,14 @@ namespace dgSpy.Extension.Tests;
 
 public sealed class ExtensionCoreTests {
 	[Theory]
+	[InlineData(5ul,0,10,5)]
+	[InlineData(5ul,3,10,2)]
+	[InlineData(5ul,5,10,0)]
+	[InlineData(100ul,10,20,20)]
+	public void Member_pages_never_request_past_dnSpy_child_count(ulong total,int offset,int requested,int expected) =>
+		Assert.Equal(expected,MemberPagination.Count(total,offset,requested));
+
+	[Theory]
 	[InlineData(EventKinds.ThreadCreated,false,false)]
 	[InlineData(EventKinds.ThreadExited,false,false)]
 	[InlineData(EventKinds.ModuleLoaded,false,false)]

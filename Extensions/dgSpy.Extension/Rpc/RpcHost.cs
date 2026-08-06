@@ -247,7 +247,7 @@ namespace dgSpy.Extension {
 				// engine's own discriminator, which is the CLR version for CorDebug.
 				var id=ProgramIdentity.Create(p.ProcessId,p.RuntimeGuid,p.RuntimeName);
 				programCache[id]=p;
-				return new ProgramInfo { ProgramId=id,ProcessId=p.ProcessId,Executable=p.Filename,Title=p.Title,Architecture=p.Architecture.ToString(),RuntimeId=p.RuntimeName,RuntimeName=p.RuntimeName,RuntimeGuid=p.RuntimeGuid.ToString("D"),RuntimeKindGuid=p.RuntimeKindGuid.ToString("D"),AttachProviders=AttachProviders(p.RuntimeGuid) }; }).ToArray(); }
+				return new ProgramInfo { ProgramId=id,ProcessId=p.ProcessId,Executable=p.Filename,Title=p.Title,CommandLine=p.CommandLine,Architecture=p.Architecture.ToString(),RuntimeName=p.RuntimeName,RuntimeGuid=p.RuntimeGuid.ToString("D"),RuntimeKindGuid=p.RuntimeKindGuid.ToString("D"),AttachProviders=AttachProviders(p.RuntimeGuid) }; }).ToArray(); }
 		}
 		// AttachableProcess does not say which provider produced it, so report the providers that can:
 		// the runtime GUID identifies the engine, and Unity's runtime is reachable through either of
@@ -258,7 +258,7 @@ namespace dgSpy.Extension {
 			runtimeGuid==PredefinedDbgRuntimeGuids.DotNetUnity_Guid ? new[]{PredefinedAttachProgramOptionsProviderNames.UnityEditor,PredefinedAttachProgramOptionsProviderNames.UnityPlayer} :
 			Array.Empty<string>();
 		async Task<SessionState> AttachAsync(string id,CancellationToken cancellationToken) {
-			AttachableProcess p; lock(sync) if (!programCache.TryGetValue(id,out p!)) throw new RpcException("program_not_found","Refresh list_programs and use an exact program_id.");
+			AttachableProcess p; lock(sync) if (!programCache.TryGetValue(id,out p!)) throw new RpcException("program_not_found","The program_id is not in the current listing cache. Every list_programs call replaces that cache; refresh list_programs and use an exact returned program_id.");
 			// AttachableProcess.Attach() is exactly DbgManager.Start(GetOptions()) with the returned error
 			// string discarded. Calling Start directly is the same attach, except a refused engine says why.
 			return await StartSessionAsync(id,"attach",()=>manager.Start(p.GetOptions()),default,cancellationToken).ConfigureAwait(false);

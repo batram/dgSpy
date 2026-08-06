@@ -516,7 +516,7 @@
     },
     {
       "name": "attach",
-      "description": "Attach using a program_id returned by list_programs.",
+      "description": "Attach using a program_id returned by list_programs. When the user supplies a PID, call list_programs with process_ids:[PID] first, then attach the exact returned runtime.",
       "inputSchema": {
         "type": "object",
         "properties": {

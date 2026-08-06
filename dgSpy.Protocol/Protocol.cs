@@ -35,10 +35,9 @@ namespace dgSpy.Protocol {
 	public sealed class ProgramInfo {
 		[JsonPropertyName("program_id")] public string ProgramId { get; set; }=""; [JsonPropertyName("pid")] public int ProcessId { get; set; }
 		[JsonPropertyName("executable")] public string Executable { get; set; }=""; [JsonPropertyName("title")] public string Title { get; set; }="";
+		[JsonPropertyName("command_line")] public string CommandLine { get; set; }="";
 		[JsonPropertyName("architecture")] public string Architecture { get; set; }="";
-		/// <summary>Engine discriminator, eg. "CLR v4.0.30319". RuntimeId itself has no string form —
-		/// it implements only Equals/GetHashCode — so this is composed from typed fields.</summary>
-		[JsonPropertyName("runtime_id")] public string RuntimeId { get; set; }="";
+		/// <summary>Engine discriminator, eg. "CLR v4.0.30319".</summary>
 		[JsonPropertyName("runtime_name")] public string RuntimeName { get; set; }="";
 		/// <summary>Distinguishes .NET Framework from Unity/Mono. Both share one runtime *kind* GUID,
 		/// so only this tells the engines apart.</summary>

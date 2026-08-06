@@ -218,6 +218,8 @@ try {
 	$program = $programs[0]
 	Assert-That 'the .NET Framework test target is x64' ($program.architecture -eq 'X64') "(was $($program.architecture))"
 	Assert-That 'program_id carries no dnSpy type name' (-not $program.program_id.Contains('RuntimeId')) "(was $($program.program_id))"
+	Assert-That 'list_programs omits duplicate runtime_id' (-not ($program.PSObject.Properties.Name -contains 'runtime_id'))
+	Assert-That 'list_programs reports command_line' ($program.PSObject.Properties.Name -contains 'command_line')
 	Assert-That 'runtime_guid is distinct from runtime_kind_guid' ($program.runtime_guid -ne $program.runtime_kind_guid)
 	Assert-That 'the entry names an attach provider a caller can pass back' (@($program.attach_providers) -contains 'DotNetFramework') "(was $($program.attach_providers -join ','))"
 
@@ -227,6 +229,8 @@ try {
 	Assert-That 'a provider-filtered listing still finds the target' (@($byProvider | Where-Object { $_.pid -eq $targetId }).Count -ge 1)
 	$wrongProvider = Invoke-Tool -Name 'list_programs' -Arguments @{ process_ids = @($targetId); provider_names = @('UnityEditor') } -AsText
 	Assert-That 'selecting only Unity providers excludes a .NET Framework target' (-not $wrongProvider.Contains("`"pid`":$targetId")) "(payload $wrongProvider)"
+	$replacedCacheAttach = Invoke-Tool -Name 'attach' -Arguments @{ program_id = $program.program_id } -ExpectError
+	Assert-That 'attach explains a program_id removed by a later listing' ($replacedCacheAttach -match 'program_not_found' -and $replacedCacheAttach -match 'current listing cache') "(was $replacedCacheAttach)"
 
 	# Each listing replaces the set of valid program_id values, and the one above deliberately returned
 	# none. Re-establish the cache from a listing that contains the target before attaching to it.

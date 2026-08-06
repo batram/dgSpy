@@ -31,6 +31,7 @@ namespace dnSpy.Debugger.Attach {
 		public override string Name => attachableProcessInfo.Name;
 		public override string Title => attachableProcessInfo.Title;
 		public override string Filename => attachableProcessInfo.Filename;
+		public override string CommandLine => attachableProcessInfo.CommandLine;
 		public override DbgArchitecture Architecture => attachableProcessInfo.Architecture;
 		public override DbgOperatingSystem OperatingSystem => attachableProcessInfo.OperatingSystem;
 

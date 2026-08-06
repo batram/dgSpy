@@ -138,13 +138,23 @@ public sealed class HostRouter {
 	}
 
 	public async Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken) {
+		HostEndpoint? endpoint=null;
 		try {
 			var requestedHostId=(string?)request.Arguments["host_id"];
-			var endpoint=registry.Select(requestedHostId);
+			endpoint=registry.Select(requestedHostId);
 			request.Arguments.Remove("host_id");
 			return await clients[endpoint.HostId].CallAsync(request,cancellationToken);
 		}
 		catch (HostRoutingException ex) { return RpcResponse.Failure(request.RequestId,ex.Code,ex.Message); }
+		catch (OperationCanceledException) {
+			return RpcResponse.Failure(request.RequestId,"deadline_exceeded","The debugger operation exceeded its deadline. Narrow the query or filters, then retry.");
+		}
+		catch (Exception ex) when (ex is IOException || ex is SocketException) {
+			var recovery=endpoint is not null && !endpoint.IsOutbound
+				? "Call launch_local_host, then retry the original tool."
+				: $"Reconnect provisioned host '{endpoint?.HostId ?? "unknown"}', then retry the original tool.";
+			return RpcResponse.Failure(request.RequestId,"host_unavailable",$"Debugger host '{endpoint?.HostId ?? "unknown"}' is unavailable: {ex.Message} {recovery}");
+		}
 	}
 
 	public async Task<object[]> ListHostsAsync(CancellationToken cancellationToken) {

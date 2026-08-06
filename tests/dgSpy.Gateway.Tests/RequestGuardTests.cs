@@ -6,6 +6,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using dgSpy.Protocol;
 using System.Text.Json;
@@ -217,6 +218,35 @@ public class HostRegistryTests {
 			Assert.True(router.TryAuthenticate("host-a","token-a",false,null,out _));
 			Assert.False(router.TryAuthenticate("host-a","token-b",false,null,out _));
 			Assert.False(router.TryAuthenticate("host-b","token-a",false,null,out _));
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	[Fact]
+	public async Task Refused_local_host_is_reported_as_host_unavailable_with_launch_recovery() {
+		var directory=CreateRegistryDirectory();
+		try {
+			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start(); var port=((IPEndPoint)listener.LocalEndpoint).Port;
+			var disconnect=Task.Run(async ()=>{ using var connection=await listener.AcceptTcpClientAsync(); });
+			var router=new HostRouter(HostRegistry.FromJson(RegistryJson(("host-a",port,"a.token")),directory));
+			var response=await router.CallAsync(new RpcRequest { Operation="list_programs",Arguments=new JsonObject { ["host_id"]="host-a" },DeadlineUtc=DateTime.UtcNow.AddSeconds(2) },default);
+			await disconnect; listener.Stop();
+
+			Assert.Equal("host_unavailable",response.Error?.Code);
+			Assert.Contains("launch_local_host",response.Error?.Message);
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	[Fact]
+	public async Task Canceled_host_call_is_reported_as_deadline_exceeded_not_host_unavailable() {
+		var directory=CreateRegistryDirectory();
+		try {
+			var router=new HostRouter(HostRegistry.FromJson(RegistryJson(("host-a",1,"a.token")),directory));
+			using var canceled=new CancellationTokenSource(); canceled.Cancel();
+			var response=await router.CallAsync(new RpcRequest { Operation="search_symbols",Arguments=new JsonObject { ["host_id"]="host-a" } },canceled.Token);
+
+			Assert.Equal("deadline_exceeded",response.Error?.Code);
 		}
 		finally { Directory.Delete(directory,true); }
 	}

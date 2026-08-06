@@ -65,6 +65,11 @@ namespace dnSpy.Contracts.Debugger.Attach {
 		public abstract string Filename { get; }
 
 		/// <summary>
+		/// Process command line
+		/// </summary>
+		public abstract string CommandLine { get; }
+
+		/// <summary>
 		/// Processor architecture
 		/// </summary>
 		public abstract DbgArchitecture Architecture { get; }

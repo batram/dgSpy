@@ -100,8 +100,13 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   named. Each call replaces the set of valid `program_id` values — including a filtered call that
   returns nothing.
 - `program_id` is composed from PID, runtime GUID, and the engine's discriminator (CLR version for
-  CorDebug). `runtime_guid` is what separates .NET Framework from Unity/Mono; they share a kind GUID.
-- `attach` waits until the engine has enumerated threads before returning, avoiding a threadless stop.
+  CorDebug). `runtime_name` reports that discriminator; there is no duplicate string `runtime_id`.
+  `runtime_guid` is what separates .NET Framework from Unity/Mono; they share a kind GUID.
+- `command_line` is the command line dnSpy reads while enumerating the process. Use it with `pid`,
+  `executable`, and `title` to distinguish otherwise-identical host and worker processes.
+- When a user supplies only a PID, resolve it with `list_programs(process_ids: [PID])`, then pass the
+  exact returned `program_id` to `attach`. A PID can contain multiple managed runtimes, so `attach`
+  deliberately does not guess one. `attach` waits until the engine has enumerated threads before returning, avoiding a threadless stop.
   An arbitrary Unity pause can still expose only native/unavailable stacks; inspect a caller-selected
   thread or stop at a known managed breakpoint. It refuses a second session while one is live.
 - `attach_endpoint` connects to a Mono/Unity soft-debugger endpoint by address and port. Use it for a
@@ -241,7 +246,8 @@ ship without being filterable and advertised in the same edit.
   anything actually ran.
 - **`get_members` expands one level and never recurses.** A member carries the `expression` that reaches
   it, so the caller spends and cancels its own depth. Server-side recursion is unbounded on a cyclic
-  object graph. Paged with `offset`/`count`, capped at 200, reporting `total` and `truncated`.
+  object graph. Paged with `offset`/`count`, capped at 200 and clamped to the remaining dnSpy child
+  count, reporting `total` and `truncated`.
 - **Watches are stored expressions, not value handles.** A handle goes stale on the next resume; an
   expression is re-evaluated against whatever frame you name. A watch whose expression fails reports its
   own error instead of failing the whole call.
@@ -255,7 +261,8 @@ ship without being filterable and advertised in the same edit.
 - Per-tool gateway deadlines are derived from the bounds the extension advertises in
   `get_capabilities` (`dgSpy.Protocol.CapabilityCatalog`), plus a margin, rather than guessed. A
   gateway deadline shorter than the inner bound abandons work that was about to succeed; a unit test
-  keeps the two sides from drifting.
+  keeps the two sides from drifting. An expired or canceled routed call reports `deadline_exceeded`,
+  not `internal_error` or `host_unavailable`; narrow symbol/module/result filters before retrying.
 
 ## Tests
 

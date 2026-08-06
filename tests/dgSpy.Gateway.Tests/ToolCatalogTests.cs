@@ -42,6 +42,20 @@ public sealed class ToolCatalogTests {
 	public void An_unknown_tool_still_gets_a_usable_deadline() => Assert.Equal(8, ToolCatalog.DeadlineSeconds("not_a_tool"));
 
 	[Fact]
+	public void Host_unavailable_recovery_directs_local_clients_to_the_launcher() {
+		var guidance=ToolCatalog.ErrorGuidance("host_unavailable");
+		Assert.Equal("launch_local_host",guidance.Tool);
+		Assert.Contains("launch_local_host",guidance.Recovery);
+	}
+
+	[Fact]
+	public void Deadline_recovery_recommends_narrowing_the_query() {
+		var guidance=ToolCatalog.ErrorGuidance("deadline_exceeded");
+		Assert.Contains("Narrow",guidance.Recovery);
+		Assert.NotEqual("doctor",guidance.Tool);
+	}
+
+	[Fact]
 	public void The_slowest_operation_keeps_its_full_connection_timeout() =>
 		Assert.True(ToolCatalog.DeadlineSeconds("attach_endpoint")*1000 > CapabilityCatalog.Limits.MaxConnectionTimeoutMs,
 			"attach_endpoint must outlast the largest connection timeout a caller can ask for.");

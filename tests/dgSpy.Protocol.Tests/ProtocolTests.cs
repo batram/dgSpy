@@ -100,12 +100,15 @@ public class IdentityContractTests {
 		// .NET Framework and Unity share one runtime *kind* GUID. Without the runtime GUID an agent
 		// cannot tell the two supported engines apart.
 		var program = new ProgramInfo {
+			CommandLine = @"dotnet C:\apps\worker.dll --queue jobs",
 			RuntimeGuid = "1b1e3f4e-0000-0000-0000-000000000001",
 			RuntimeKindGuid = "03cfde68-877e-4dd7-9a14-5c100b37a01a",
 		};
 
 		var wire = ProtocolJson.ParseObject(ProtocolJson.Serialize(program));
 
+		Assert.False(wire.ContainsKey("runtime_id"));
+		Assert.Equal(@"dotnet C:\apps\worker.dll --queue jobs",(string?)wire["command_line"]);
 		Assert.NotEqual((string?)wire["runtime_kind_guid"], (string?)wire["runtime_guid"]);
 	}
 

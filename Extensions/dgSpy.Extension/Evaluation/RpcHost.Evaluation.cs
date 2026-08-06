@@ -159,7 +159,8 @@ namespace dgSpy.Extension {
 					if (root.ErrorMessage is not null) throw new RpcException("evaluation_failed",root.ErrorMessage);
 					if (root.HasChildren==false) return new MemberList { Expression=expression!,Total=0,Offset=offset,Members=Array.Empty<EvaluatedValue>(),SessionId=sessionId,StateVersion=stateVersion };
 					var total=root.GetChildCount(eval);
-					var children=total<=(ulong)offset ? Array.Empty<DbgValueNode>() : root.GetChildren(eval,(ulong)offset,count,NodeOptions(allowFuncEval));
+					var pageCount=MemberPagination.Count(total,offset,count);
+					var children=pageCount==0 ? Array.Empty<DbgValueNode>() : root.GetChildren(eval,(ulong)offset,pageCount,NodeOptions(allowFuncEval));
 					try {
 						return new MemberList {
 							Expression=expression!,
