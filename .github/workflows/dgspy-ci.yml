@@ -1,0 +1,77 @@
+name: dgSpy CI
+
+on:
+  push:
+    branches: [dgspy]
+  pull_request:
+    branches: [dgspy]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dgspy-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-and-contract:
+    name: Unit tests and contracts
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install .NET SDKs
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            10.0.x
+            7.0.x
+
+      - name: Protocol tests
+        shell: pwsh
+        run: dotnet test tests/dgSpy.Protocol.Tests/dgSpy.Protocol.Tests.csproj --configuration Release --nologo --verbosity minimal
+
+      - name: Gateway tests and contract snapshots
+        shell: pwsh
+        run: dotnet test tests/dgSpy.Gateway.Tests/dgSpy.Gateway.Tests.csproj --configuration Release --nologo --verbosity minimal
+
+      - name: Extension tests
+        shell: pwsh
+        run: dotnet test tests/dgSpy.Extension.Tests/dgSpy.Extension.Tests.csproj --configuration Release --nologo --verbosity minimal
+
+  cordebug-live:
+    name: CorDebug live smoke
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install .NET SDKs
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            10.0.x
+            7.0.x
+
+      - name: Build, test, and run live CorDebug smoke
+        shell: pwsh
+        run: .\tests\run-modernization-gate.ps1 -Stage CorDebug
+
+      - name: Upload smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cordebug-smoke-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/dgspy-smoke-*
+          if-no-files-found: warn
+          retention-days: 7

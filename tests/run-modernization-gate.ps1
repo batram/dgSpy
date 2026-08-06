@@ -30,9 +30,17 @@ try {
 	if (-not $SkipHostBuild) {
 		$msbuildCandidates = @(
 			'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe',
+			'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\amd64\MSBuild.exe',
+			'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe',
 			'C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
 		)
 		$msbuildPath = $msbuildCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+		if (-not $msbuildPath) {
+			$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+			if (Test-Path -LiteralPath $vswhere) {
+				$msbuildPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' | Select-Object -First 1
+			}
+		}
 		if (-not $msbuildPath) { throw 'No supported Visual Studio MSBuild installation was found.' }
 		$previousSdksPath = $env:MSBuildSDKsPath
 		$previousWorkloadResolver = $env:MSBuildEnableWorkloadResolver
