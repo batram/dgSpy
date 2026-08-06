@@ -55,7 +55,8 @@ function Invoke-Mcp {
 	return $response.result
 }
 
-# Tools return their payload as JSON text; parse that rather than relying on structuredContent shape.
+# Tools retain a JSON text fallback for compatibility. Protocol-shape checks below separately verify
+# that structuredContent is an object, as required by MCP, including when the tool payload is an array.
 function Invoke-Tool {
 	# -AsText returns the raw JSON. Prefer it for emptiness checks: ConvertFrom-Json collapses an
 	# empty array in ways that make .Count unreliable in Windows PowerShell.
@@ -188,6 +189,8 @@ try {
 	$watch = [Diagnostics.Stopwatch]::StartNew()
 	$programs = @(Invoke-Tool -Name 'list_programs' -Arguments @{ process_ids = @($targetId) })
 	$filteredMs = $watch.ElapsedMilliseconds
+	$programsEnvelope = Invoke-Mcp -Method 'tools/call' -Parameters @{ name = 'list_programs'; arguments = @{ process_ids = @($targetId) } }
+	Assert-That 'list_programs structuredContent is an object wrapper' ($programsEnvelope.structuredContent -is [PSCustomObject] -and $null -ne $programsEnvelope.structuredContent.result)
 	Assert-That 'a pid-filtered listing finds the target' ($programs.Count -ge 1 -and $programs[0].pid -eq $targetId)
 	Assert-That 'a pid-filtered listing is fast' ($filteredMs -lt 1000) "(took ${filteredMs}ms)"
 	$program = $programs[0]

@@ -66,7 +66,7 @@ app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, GatewayToolExecutor
 		}
 		var response=await executor.ExecuteAsync(name,args,client,cancellationToken);
 		if (response.Error is not null) { var guidance=ToolCatalog.ErrorGuidance(response.Error.Code); return Results.Json(new { jsonrpc="2.0", id, result=new { isError=true, structuredContent=new { error=new { code=response.Error.Code,message=response.Error.Message,likely_cause=guidance.Cause,recovery_action=guidance.Recovery,suggested_tool=guidance.Tool } }, content=new[] { new { type="text", text=$"{response.Error.Code}: {response.Error.Message} Recovery: {guidance.Recovery}" } } } }); }
-		var structured=response.Result is null ? null : ProtocolJson.ToNode(response.Result);
+		var structured=McpToolResult.StructuredContent(response.Result);
 		return Results.Json(new { jsonrpc="2.0", id, result=new { structuredContent=structured, content=new[] { new { type="text", text=ProtocolJson.Serialize(response.Result) } } } });
 	} catch (Exception ex) { return McpError(id, -32603, ex.Message); }
 });
@@ -80,6 +80,15 @@ catch (Exception ex) {
 }
 static IResult McpError(object? id, int code, string message) => Results.Json(new { jsonrpc="2.0", id, error=new { code, message } });
 static void EnsureState(string path,Func<string> create) { if(File.Exists(path)&&!string.IsNullOrWhiteSpace(File.ReadAllText(path))) return; File.WriteAllText(path,create()); }
+
+internal static class McpToolResult {
+	// MCP CallToolResult.structuredContent is an object. Preserve object-shaped RPC results and put
+	// arrays, scalars, and null under a stable property instead of emitting an invalid root value.
+	public static JsonObject StructuredContent(object? result) {
+		var node=result is null ? null : ProtocolJson.ToNode(result);
+		return node as JsonObject ?? new JsonObject { ["result"]=node };
+	}
+}
 
 public static class ToolCatalog {
 	public const string Instructions="Start with get_started. Choose a local deployment or a provisioned remote host, then attach or launch, inspect capabilities, debug, and detach safely. Stepping and call tracing are best-effort and cannot expose optimized, native, runtime, or missing-sequence-point calls.";
