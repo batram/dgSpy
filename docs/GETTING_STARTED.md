@@ -65,4 +65,17 @@ when troubleshooting manually—run:
 - If installation reports an incomplete package, download the complete `dgspy-win-x64.zip` again.
 - To update, extract a newer release and rerun the same installer command.
 
+## Watching what the agent does
+
+dnSpy has a **dgSpy MCP Activity** tool window (View menu, or `Ctrl+Alt+M`) that lists every operation
+the agent triggered, in order, with its parameters, its result or error code, and how long it took.
+Select a row to read the full JSON of both sides in the pane below. It sits with Output and Locals in
+the bottom tool window group.
+
+The window is a view onto a buffer the extension always fills, so opening it mid-session shows the
+calls that already happened, not just the next one. The buffer holds the last 1000 calls and each
+recorded payload is capped, so a `get_raw_module` result appears truncated rather than in full. The
+shared secret that authenticates the Gateway is never part of an operation's parameters and is never
+recorded.
+
 For a debugger on another Windows machine, continue with [Remote hosts](REMOTE_HOSTS.md).

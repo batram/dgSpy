@@ -11,6 +11,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using dgSpy.Extension.ToolWindows;
 using dgSpy.Protocol;
 using dnSpy.Contracts.Debugger;
 using dnSpy.Contracts.Debugger.Attach;
@@ -139,7 +140,20 @@ namespace dgSpy.Extension {
 			for(var index=0;index<count;index++) different|=(index<a.Length?a[index]:0)^(index<b.Length?b[index]:0);
 			return different==0;
 		}
-		async Task<RpcResponse> DispatchAsync(RpcRequest req) { try {
+		// Every RPC operation, whichever transport carried it, funnels through here, so this is the one
+		// place that can show a human what an agent actually did. DispatchCoreAsync turns every failure
+		// into a response, so the log sees exactly what the caller sees.
+		async Task<RpcResponse> DispatchAsync(RpcRequest req) {
+			// Fully qualified: a `using System.Diagnostics` here would collide with dnSpy.Contracts.Debugger.
+			var started=System.Diagnostics.Stopwatch.StartNew();
+			var response=await DispatchCoreAsync(req).ConfigureAwait(false);
+			started.Stop();
+			try { McpActivityLog.Instance.Record(req,response,started.Elapsed); }
+			// The activity window is a diagnostic. It must never be able to fail an RPC call.
+			catch (Exception) { }
+			return response;
+		}
+		async Task<RpcResponse> DispatchCoreAsync(RpcRequest req) { try {
 			if (req.Version!=ProtocolVersion.Current) return RpcResponse.Failure(req.RequestId,"incompatible_protocol",$"Protocol {req.Version} is unsupported; expected {ProtocolVersion.Current}.");
 			var authenticationError=RpcRequestAuthenticator.Reject(req.Operation,req.HostId,req.AuthenticationToken,rpcSecurity.HostId,rpcSecurity.Token);
 			if (authenticationError is not null) return RpcResponse.Failure(req.RequestId,"unauthorized",authenticationError);
