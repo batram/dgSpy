@@ -349,6 +349,27 @@ try {
 	$allTotal = @(@($all.hits) | Where-Object { $_.name -eq 'Level4' }).Count
 	Assert-That 'scope all reports the shared symbol exactly once' ($allTotal -eq 1) "count=$allTotal"
 
+	Write-Section 'in_session is a fact about the module, not about the scope'
+	# The documents-scope check near the top runs before anything is attached, where in_session:false is
+	# correct for every hit and therefore proves nothing. Attaching changes the answer: dnSpy adds the
+	# debugged modules to the Assembly Explorer, so the same module is now held by both views. Deriving
+	# the flag from which branch found it reported false here, for a module the session tools accept.
+	$documentsAttached = Invoke-Tool -Name 'search' -Arguments @{ pattern = 'UchDebugTarget.Level4.Child'; kinds = @('field'); scope = 'documents'; module = $moduleFilter }
+	$documentsHit = Select-Hit $documentsAttached 'Child' 'field'
+	Assert-That 'documents scope finds a session module once attached' ($null -ne $documentsHit) "total=$($documentsAttached.total)"
+	Assert-That 'a module held by both views reports in_session true in documents scope' ($documentsHit.in_session -eq $true)
+	# And the flag must still be false for something only the Assembly Explorer has, or it has stopped
+	# discriminating and merely says true everywhere.
+	$sessionModuleNames = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $session_id } | ForEach-Object { $_.name })
+	$explorerOnly = Invoke-Tool -Name 'search' -Arguments @{ pattern = '/./'; kinds = @('module'); scope = 'documents'; count = 500 }
+	$outside = @(@($explorerOnly.hits) | Where-Object { $_.module -notin $sessionModuleNames })
+	if ($outside.Count -gt 0) {
+		Assert-That 'a module only the Assembly Explorer holds reports in_session false' ((@($outside | Where-Object { $_.in_session -eq $true }).Count) -eq 0) "mislabelled=$(@($outside | Where-Object { $_.in_session -eq $true }).Count)"
+	}
+	else {
+		Write-Host '        skipped: the Assembly Explorer holds nothing outside the session' -ForegroundColor DarkGray
+	}
+
 	Write-Section 'resume and detach'
 	$state = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $script:activeSessionId }
 	$detached = Invoke-Tool -Name 'detach' -Arguments @{ session_id = $script:activeSessionId; expected_lifecycle_version = $state.lifecycle_version }

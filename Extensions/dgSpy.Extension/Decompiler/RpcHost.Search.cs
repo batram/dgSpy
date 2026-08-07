@@ -87,9 +87,11 @@ namespace dgSpy.Extension {
 				Max=Math.Min(MaxSearchScan,Math.Max(1,(int?)req.Arguments["max_scan"] ?? DefaultSearchScan)),
 			};
 
-			var sessionModules=scope=="documents"
-				? Array.Empty<DbgModule>()
-				: await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules).ToArray(),cancellationToken).ConfigureAwait(false);
+			// Read the session's modules for every scope, documents included. That scope does not *search*
+			// them, but it still has to answer in_session truthfully, and it cannot do that without knowing
+			// what the session holds. When nothing is being debugged this is an empty enumeration, which is
+			// what makes the scope usable with no session at all.
+			var sessionModules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules).ToArray(),cancellationToken).ConfigureAwait(false);
 
 			return await evaluations.RunAsync(()=>{
 				var modules=CollectSearchModules(scope,sessionModules,moduleFilter);
@@ -140,17 +142,40 @@ namespace dgSpy.Extension {
 				var nameIsNew=seenNames.Add(name);
 				return mvidIsNew && nameIsNew;
 			}
+			// Resolve the session's metadata once, before walking anything. Two things need it: the session
+			// branch below, and in_session, which is a fact about the module rather than about which loop
+			// happened to find it. Deriving the flag from the branch reported in_session:false under
+			// `scope: "documents"` for a module the session tools accept without complaint -- a tool saying
+			// a symbol is out of reach when it is not, which is the class of wrong answer this exists to end.
+			var resolvedSession=new List<(ModuleDef Metadata,string Name,string? Path)>();
+			foreach (var dbgModule in sessionModules.OrderBy(m=>m.Name,StringComparer.OrdinalIgnoreCase).ThenBy(m=>m.Filename,StringComparer.OrdinalIgnoreCase)) {
+				ModuleDef? metadata=null;
+				try { metadata=metadataService.TryGetMetadata(dbgModule); } catch (Exception) { }
+				if (metadata is null) continue;
+				resolvedSession.Add((metadata,metadata.Name?.ToString() ?? dbgModule.Name,dbgModule.Filename));
+			}
+			// Same keys as the dedup, for the same reason: the two views agree on a name, and not reliably
+			// on anything else.
+			var sessionNames=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			var sessionMvids=new HashSet<Guid>();
+			foreach (var entry in resolvedSession) {
+				sessionNames.Add(entry.Name);
+				var mvid=entry.Metadata.Mvid;
+				if (mvid.HasValue && mvid.Value!=Guid.Empty) sessionMvids.Add(mvid.Value);
+			}
+			bool IsInSession(ModuleDef metadata,string name) {
+				if (sessionNames.Contains(name)) return true;
+				var mvid=metadata.Mvid;
+				return mvid.HasValue && mvid.Value!=Guid.Empty && sessionMvids.Contains(mvid.Value);
+			}
+
 			if (scope is "session" or "all") {
-				foreach (var dbgModule in sessionModules.OrderBy(m=>m.Name,StringComparer.OrdinalIgnoreCase).ThenBy(m=>m.Filename,StringComparer.OrdinalIgnoreCase)) {
-					ModuleDef? metadata=null;
-					try { metadata=metadataService.TryGetMetadata(dbgModule); } catch (Exception) { }
-					if (metadata is null) continue;
-					var name=metadata.Name?.ToString() ?? dbgModule.Name;
+				foreach (var entry in resolvedSession) {
 					// Filter before claiming a dedup slot, so a module excluded here cannot suppress the
 					// other view's copy of itself.
-					if (!MatchesModuleFilter(name,dbgModule.Filename,moduleFilter)) continue;
-					if (!IsNew(metadata,name)) continue;
-					result.Add(new SearchModule { Metadata=metadata,Name=name,Path=dbgModule.Filename,InSession=true });
+					if (!MatchesModuleFilter(entry.Name,entry.Path,moduleFilter)) continue;
+					if (!IsNew(entry.Metadata,entry.Name)) continue;
+					result.Add(new SearchModule { Metadata=entry.Metadata,Name=entry.Name,Path=entry.Path,InSession=true });
 				}
 			}
 			if (scope is "documents" or "all") {
@@ -159,10 +184,10 @@ namespace dgSpy.Extension {
 					if (metadata is null) continue;
 					var name=metadata.Name?.ToString() ?? document.Filename ?? "";
 					if (!MatchesModuleFilter(name,document.Filename,moduleFilter)) continue;
-					// Session first, so when both views hold a module the caller gets in_session: true and
-					// the identifiers that the session-scoped tools will actually accept.
+					// Session first, so under `all` a shared module is walked once, as the session copy,
+					// carrying the identifiers the session-scoped tools actually accept.
 					if (!IsNew(metadata,name)) continue;
-					result.Add(new SearchModule { Metadata=metadata,Name=name,Path=document.Filename,InSession=false });
+					result.Add(new SearchModule { Metadata=metadata,Name=name,Path=document.Filename,InSession=IsInSession(metadata,name) });
 				}
 			}
 			return result;
