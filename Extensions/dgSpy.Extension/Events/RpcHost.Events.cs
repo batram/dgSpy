@@ -7,6 +7,7 @@ using dgSpy.Protocol;
 using dnSpy.Contracts.Debugger;
 using dnSpy.Contracts.Debugger.Breakpoints.Code;
 using dnSpy.Contracts.Debugger.DotNet.Code;
+using dnSpy.Contracts.Documents;
 
 namespace dgSpy.Extension {
 	sealed partial class RpcHost {
@@ -62,6 +63,66 @@ namespace dgSpy.Extension {
 		static EventResult EventResult(EventBufferSnapshot snapshot) => new EventResult { Events=snapshot.Events,OldestEventId=snapshot.OldestEventId,OldestAvailableCursor=snapshot.OldestAvailableCursor,LastEventId=snapshot.LastEventId,Truncated=snapshot.Truncated };
 		static WaitResult WaitResult(EventBufferSnapshot snapshot,bool timedOut) => new WaitResult { Events=snapshot.Events,OldestEventId=snapshot.OldestEventId,OldestAvailableCursor=snapshot.OldestAvailableCursor,LastEventId=snapshot.LastEventId,Truncated=snapshot.Truncated,TimedOut=timedOut };
 
+		// dnSpy caches loaded assemblies in IDsDocumentService under a FilenameKey, whose entire identity is
+		// the file path compared case-insensitively. Nothing invalidates that entry, so rebuilding a target
+		// between two sessions of one dnSpy leaves the debugger resolving metadata for the previous build:
+		// method tokens come fresh from the live process but debug info comes from the stale document, and
+		// since the new tokens do not exist there, every frame reports zero locals and evaluation fails with
+		// "Internal debugger error". The dnSpy GUI hides this because clicking a call stack frame navigates
+		// the active tab, which decompiles the live module; nothing in a headless host ever does that.
+		//
+		// Drop the entry when it demonstrably describes a different image, by comparing the PE
+		// TimeDateStamp the cached document was loaded with against the one in the file now on disk.
+		//
+		// Deliberately not DbgModule.Timestamp. Roslyn sets bit 31 of TimeDateStamp under /deterministic
+		// and fills the rest with a content hash rather than a time, so ModuleCreator treats the whole
+		// field as unusable and reports null. Every modern build is deterministic, so that property is
+		// null for exactly the assemblies this has to work on - while the raw field it discards is a
+		// content hash, which is a better staleness discriminator than a timestamp ever was.
+		//
+		// Matching modules are left alone: evicting every module on every load would re-read the whole
+		// framework on the next request for no benefit.
+		void DropStaleModuleDocument(DbgModule module) {
+			try {
+				// In-memory and dynamic modules never reach the document cache: DbgMetadataService reads
+				// them straight out of the debuggee, so they cannot go stale and have no file to key on.
+				if (module.IsDynamic || module.IsInMemory) return;
+				var filename=module.Filename;
+				if (string.IsNullOrEmpty(filename)) return;
+				var key=new FilenameKey(filename);
+				var cached=documentService.Find(key);
+				if (cached?.PEImage is not { } image) return;
+				var onDisk=FileTimeDateStamp(filename);
+				if (onDisk is null || onDisk.Value==image.ImageNTHeaders.FileHeader.TimeDateStamp) return;
+				documentService.Remove(key);
+				staleModuleDocumentsDropped++;
+				manager.WriteMessage(PredefinedDbgManagerMessageKinds.Output,$"dgSpy: dropped a stale cached assembly for '{filename}'; it described a different build than the one now running.");
+			}
+			// Never let cache maintenance break module-load handling: a missed eviction degrades symbols,
+			// an exception here would lose the event entirely.
+			catch (Exception) { }
+		}
+		/// <summary>The PE header's TimeDateStamp, read straight from the file. Only the COFF header is
+		/// touched, and the file is opened with full sharing because the debuggee has it mapped.</summary>
+		static uint? FileTimeDateStamp(string path) {
+			try {
+				using var stream=new System.IO.FileStream(path,System.IO.FileMode.Open,System.IO.FileAccess.Read,System.IO.FileShare.ReadWrite|System.IO.FileShare.Delete);
+				using var reader=new System.IO.BinaryReader(stream);
+				if (stream.Length<0x40) return null;
+				stream.Position=0x3C;
+				var peOffset=reader.ReadUInt32();
+				if (peOffset+8>stream.Length) return null;
+				stream.Position=peOffset;
+				if (reader.ReadUInt32()!=0x00004550) return null; // "PE\0\0"
+				reader.ReadUInt16(); // Machine
+				reader.ReadUInt16(); // NumberOfSections
+				return reader.ReadUInt32(); // TimeDateStamp
+			}
+			catch (Exception) { return null; }
+		}
+		long staleModuleDocumentsDropped;
+		public long StaleModuleDocumentsDropped { get { lock(sync) return staleModuleDocumentsDropped; } }
+
 		void OnDebuggerMessage(DbgMessageEventArgs message) {
 			lock(sync) if (sessionId is null) return;
 			switch(message) {
@@ -69,7 +130,7 @@ namespace dgSpy.Extension {
 			case DbgMessageProcessExitedEventArgs e: OnProcessExited(e); break;
 			case DbgMessageRuntimeCreatedEventArgs e: Record(RuntimeEvent(EventKinds.RuntimeCreated,e.Runtime)); break;
 			case DbgMessageRuntimeExitedEventArgs e: Record(RuntimeEvent(EventKinds.RuntimeExited,e.Runtime)); break;
-			case DbgMessageModuleLoadedEventArgs e: Record(ModuleEvent(EventKinds.ModuleLoaded,e.Module)); break;
+			case DbgMessageModuleLoadedEventArgs e: DropStaleModuleDocument(e.Module); Record(ModuleEvent(EventKinds.ModuleLoaded,e.Module)); break;
 			case DbgMessageModuleUnloadedEventArgs e: Record(ModuleEvent(EventKinds.ModuleUnloaded,e.Module)); break;
 			case DbgMessageThreadCreatedEventArgs e: Record(ThreadEvent(EventKinds.ThreadCreated,e.Thread)); break;
 			case DbgMessageThreadExitedEventArgs e: var thread=ThreadEvent(EventKinds.ThreadExited,e.Thread); thread.ExitCode=e.ExitCode; Record(thread); break;

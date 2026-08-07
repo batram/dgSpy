@@ -12,6 +12,7 @@ using dnSpy.Contracts.Debugger.Evaluation;
 using dnSpy.Contracts.Debugger.DotNet.Metadata;
 using dnSpy.Contracts.Debugger.Exceptions;
 using dnSpy.Contracts.Decompiler;
+using dnSpy.Contracts.Documents;
 using dnSpy.Contracts.Extension;
 
 namespace dgSpy.Extension {
@@ -23,8 +24,8 @@ namespace dgSpy.Extension {
 		bool shuttingDown;
 
 		[ImportingConstructor]
-		ExtensionEntryPoint(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, [ImportMany] IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers, IAppWindow appWindow) {
-			host=new RpcHost(programs,manager,debuggerSettings,breakpoints,moduleBreakpoints,objectIds,locations,callStack,languages,exceptions,metadataService,moduleIdProviders,decompilers);
+		ExtensionEntryPoint(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDsDocumentService documentService, [ImportMany] IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers, IAppWindow appWindow) {
+			host=new RpcHost(programs,manager,debuggerSettings,breakpoints,moduleBreakpoints,objectIds,locations,callStack,languages,exceptions,metadataService,documentService,moduleIdProviders,decompilers);
 			this.appWindow=appWindow;
 		}
 

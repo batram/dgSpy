@@ -34,6 +34,7 @@ require the debugger to share the target's runtime.
 | `Extensions/dgSpy.Extension` | `net10.0-windows` (default), `net48` | The net10 target is the default everywhere and is what `pack-dgspy.ps1` ships; net48 is the retained fallback. Output is `dgSpy.Extension.x.dll` — dnSpy's scanner only loads `*.x.dll`. |
 | `dgSpy.Cli` | `net10.0` | Console entrypoint, packaged with the Gateway in one shared self-contained runtime. |
 | `dgSpy.Gateway` | `net10.0` | Standalone process, packaged with the CLI in one shared self-contained runtime. |
+| `tests/TestTargets/NoPdbTarget` | `net48`, x64 | Built with `DebugType=none`. Shipped game assemblies almost never carry a PDB, so decompiled debug info is the normal case in the wild; this fixture keeps that path covered, including across a rebuild under one long-lived dnSpy. |
 | `tests/TestTargets/Milestone1Target` | `net48`, x64 | Stays .NET Framework permanently: it is a *debuggee*, and CorDebug `CLR v4` is an in-scope engine that needs a Framework process to debug. CorDebug smoke target; the project pins `PlatformTarget=x64` and the smoke test verifies dnSpy reports `X64`. |
 
 The dgSpy projects are intentionally **not** in `dnSpy.sln`, and dgSpy builds through `build-dgspy.ps1`.

@@ -32,6 +32,7 @@ namespace dgSpy.Extension {
 				DgSpyVersion=Version,
 				ExtensionSha256=ExtensionSha256,
 				ExtensionPath=ExtensionPath,
+				StaleModuleDocumentsDropped=StaleModuleDocumentsDropped,
 				OperatingSystem=Environment.OSVersion.VersionString,
 				Architecture=Environment.Is64BitProcess ? "X64" : "X86",
 				DnSpyProcessId=System.Diagnostics.Process.GetCurrentProcess().Id,

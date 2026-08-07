@@ -80,6 +80,10 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("extension_sha256")] public string ExtensionSha256 { get; set; }="";
 		/// <summary>Where that assembly was loaded from, so a mismatch names the tree to replace.</summary>
 		[JsonPropertyName("extension_path")] public string ExtensionPath { get; set; }="";
+		/// <summary>How many cached assemblies were evicted because they described a different build than
+		/// the one running. Non-zero means a target was rebuilt while this dnSpy stayed up; the symbols are
+		/// correct because they were re-read, but it is the signal that this host is not freshly started.</summary>
+		[JsonPropertyName("stale_module_documents_dropped")] public long StaleModuleDocumentsDropped { get; set; }
 		[JsonPropertyName("protocol_version")] public int ProtocolVersion { get; set; }=dgSpy.Protocol.ProtocolVersion.Current;
 		[JsonPropertyName("operating_system")] public string OperatingSystem { get; set; }="";
 		[JsonPropertyName("architecture")] public string Architecture { get; set; }="";

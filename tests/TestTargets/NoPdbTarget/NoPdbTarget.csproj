@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <!-- The point of this fixture. Shipped game assemblies almost never carry a PDB, so the debugger has
+         to work from decompiled debug info, and that is the path dgSpy must keep working across a rebuild.
+         Milestone1Target covers the with-PDB case; this one covers the case users actually hit. -->
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <AssemblyName>NoPdbTarget</AssemblyName>
+    <RootNamespace>NoPdbTarget</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+</Project>

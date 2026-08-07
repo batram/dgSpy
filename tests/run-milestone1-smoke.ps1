@@ -1101,6 +1101,85 @@ try {
 	Assert-That 'the terminal event advances the session cursor' ($exitEvent.event_id -gt 0 -and $exited.last_event_id -ge $exitEvent.event_id)
 	Invoke-MutatingTool -Name 'detach' -Arguments @{ session_id = $exitingSessionId } | Out-Null
 
+	# Rebuilding a target while dnSpy stays up used to leave every frame reporting zero locals and every
+	# expression failing with "Internal debugger error": dnSpy caches assemblies in IDsDocumentService
+	# under a FilenameKey that is only the file path, nothing invalidates it, and after a rebuild the
+	# method tokens come fresh from the live process while debug info still comes from the previous
+	# build. The dnSpy GUI hides this because clicking a call stack frame decompiles the live module;
+	# a headless host never does that, so it stayed broken until the host was restarted.
+	#
+	# This runs against NoPdbTarget on purpose. Shipped game assemblies carry no PDB, so decompiled
+	# debug info is the normal case in the wild and the one that has to survive a rebuild. Both attaches
+	# below share this run's single dnSpy, which is the condition that reproduces it.
+	Write-Section 'stale module documents after a rebuild'
+	$noPdbProject = Join-Path $PSScriptRoot 'TestTargets\NoPdbTarget\NoPdbTarget.csproj'
+	$noPdbExe = Join-Path $PSScriptRoot 'TestTargets\NoPdbTarget\bin\Debug\net48\NoPdbTarget.exe'
+
+	function Start-NoPdbTarget {
+		param([string[]]$BuildArguments)
+		& dotnet build $noPdbProject -c Debug --nologo -v:quiet @BuildArguments
+		if ($LASTEXITCODE) { throw "NoPdbTarget build failed with exit code $LASTEXITCODE" }
+		$out = Join-Path $runDirectory ('nopdb-' + [Guid]::NewGuid().ToString('N') + '.out')
+		$process = Start-Process -FilePath $noPdbExe -WindowStyle Hidden -PassThru -RedirectStandardOutput $out
+		if (-not (Wait-Until { @(Get-Content $out -ErrorAction SilentlyContinue).Count -ge 2 } 15)) {
+			throw 'NoPdbTarget did not publish its PID and variant.'
+		}
+		$lines = Get-Content $out
+		return [pscustomobject]@{
+			Process = $process
+			Pid     = [int](($lines | Where-Object { $_ -like 'PID=*' }) -replace '^PID=', '')
+			Variant = (($lines | Where-Object { $_ -like 'VARIANT=*' }) -replace '^VARIANT=', '')
+		}
+	}
+	function Get-NoPdbTickFrame {
+		param([string]$SessionId, [int]$TargetPid)
+		$thread = @(Invoke-Tool -Name 'list_threads' -Arguments @{ session_id = $SessionId } | Where-Object { $_.kind -eq 'Main' })[0]
+		$stack = @(Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $SessionId; thread_id = $thread.thread_id; max_frames = 4 })
+		return @($stack | Where-Object { $_.name -like '*Program.Tick*' })[0]
+	}
+
+	Assert-That 'the no-PDB fixture really ships without symbols' (-not (Test-Path -LiteralPath ($noPdbExe -replace '\.exe$', '.pdb')))
+
+	$baseTarget = Start-NoPdbTarget -BuildArguments @()
+	Assert-That 'the no-PDB fixture starts on its base build' ($baseTarget.Variant -eq 'base') "(was '$($baseTarget.Variant)')"
+	$baseProgram = @(Invoke-Tool -Name 'list_programs' -Arguments @{ process_ids = @($baseTarget.Pid) })[0]
+	$baseSession = Invoke-Tool -Name 'attach' -Arguments @{ program_id = $baseProgram.program_id }
+	$null = Invoke-MutatingTool -Name 'pause' -Arguments @{ session_id = $baseSession.session_id }
+	$baseFrame = Get-NoPdbTickFrame -SessionId $baseSession.session_id -TargetPid $baseTarget.Pid
+	# Without a PDB these names come from the decompiler, not from source: `answer` reads back as `num`.
+	$baseNames = @($baseFrame.locals.name)
+	Assert-That 'a no-PDB target reports decompiled locals before any rebuild' ($baseNames -contains 'num' -and $baseNames -contains 'text') "(got $($baseNames -join ', '))"
+	Invoke-MutatingTool -Name 'detach' -Arguments @{ session_id = $baseSession.session_id } | Out-Null
+	Stop-Process -Id $baseTarget.Pid -Force -ErrorAction SilentlyContinue
+	$baseTarget.Process.WaitForExit(10000) | Out-Null
+
+	# The rebuild adds a type ahead of Program, which shifts every later method token. That shift is what
+	# made a cached document from the previous build stop matching, so it is the trigger, not incidental.
+	$rebuiltTarget = Start-NoPdbTarget -BuildArguments @('-p:DefineConstants=DGSPY_REBUILD_VARIANT')
+	Assert-That 'the no-PDB fixture restarts on its rebuilt variant' ($rebuiltTarget.Variant -eq 'rebuild') "(was '$($rebuiltTarget.Variant)')"
+	$rebuiltProgram = @(Invoke-Tool -Name 'list_programs' -Arguments @{ process_ids = @($rebuiltTarget.Pid) })[0]
+	$rebuiltSession = Invoke-Tool -Name 'attach' -Arguments @{ program_id = $rebuiltProgram.program_id }
+	$null = Invoke-MutatingTool -Name 'pause' -Arguments @{ session_id = $rebuiltSession.session_id }
+	$rebuiltFrame = Get-NoPdbTickFrame -SessionId $rebuiltSession.session_id -TargetPid $rebuiltTarget.Pid
+
+	Assert-That 'the rebuild actually moved the method token, so the stale case is exercised' ($rebuiltFrame.method_token -ne $baseFrame.method_token) "(both $($baseFrame.method_token))"
+	$rebuiltNames = @($rebuiltFrame.locals.name)
+	Assert-That 'locals survive a rebuild under the same dnSpy' ($rebuiltNames -contains 'num' -and $rebuiltNames -contains 'text') "(got $($rebuiltNames -join ', '))"
+	$hostAfterRebuild = Invoke-Tool -Name 'get_host_info' -Arguments @{}
+	Assert-That 'the host reports evicting the stale cached assembly' ($hostAfterRebuild.stale_module_documents_dropped -ge 1) "(was $($hostAfterRebuild.stale_module_documents_dropped))"
+
+	# The other half of the original failure: expansion returned a page of "Internal debugger error"
+	# rows. NoPdbFixture is an aggregate (instance members plus a Static members row), so this also
+	# covers the aggregate paging path with no PDB present.
+	$mainFrameIndex = $rebuiltFrame.frame_index + 1
+	$rebuiltMembers = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $rebuiltSession.session_id; expression = 'noPdbFixture'; thread_id = $rebuiltFrame.thread_id; frame_index = $mainFrameIndex; count = 50 }
+	Assert-That 'expanding an object after a rebuild reports no internal debugger error' (@($rebuiltMembers.members | Where-Object { $_.error -and $_.error -match 'nternal debugger error' }).Count -eq 0)
+	Assert-That 'the expansion is an aggregate and returns one row per member' (@($rebuiltMembers.members).Count -eq $rebuiltMembers.total -and @($rebuiltMembers.members | Where-Object { $_.name -eq 'Static members' }).Count -eq 1) "(names $((@($rebuiltMembers.members).name) -join ', '))"
+
+	Invoke-MutatingTool -Name 'detach' -Arguments @{ session_id = $rebuiltSession.session_id } | Out-Null
+	Stop-Process -Id $rebuiltTarget.Pid -Force -ErrorAction SilentlyContinue
+	$rebuiltTarget.Process.WaitForExit(10000) | Out-Null
+
 	# The success path needs a Mono/Unity target, which this harness cannot produce; see the manual
 	# checklist in docs/DGSPY_UNITY_CHECKLIST.md. What is testable here is argument validation and the
 	# failure path — that a refused endpoint faults with dnSpy's own reason instead of hanging or
