@@ -219,6 +219,18 @@ public sealed class ExtensionCoreTests {
 	}
 
 	[Fact]
+	public void Failed_child_expansion_is_one_error_not_a_page_of_members() {
+		// The regression this guards: DbgEngineValueNodeImpl used to answer a failed expansion with `count`
+		// identical error nodes, so get_members returned a full page of fabricated members. It now throws,
+		// and get_members turns that into exactly one error naming the parent expression and the reason.
+		var error=ChildExpansionFailure.ToRpcException("this.items","Internal debugger error (InvalidOperationException: engine went away)");
+
+		Assert.Equal("evaluation_failed",error.Code);
+		Assert.Contains("this.items",error.Message);
+		Assert.Contains("InvalidOperationException: engine went away",error.Message);
+	}
+
+	[Fact]
 	public void Incomplete_detach_is_never_reported_as_success() {
 		DetachCompletionGuard.EnsureRemoved(false,4242);
 

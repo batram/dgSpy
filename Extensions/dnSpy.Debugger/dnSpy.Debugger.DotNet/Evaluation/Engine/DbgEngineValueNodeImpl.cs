@@ -99,12 +99,19 @@ namespace dnSpy.Debugger.DotNet.Evaluation.Engine {
 					evalInfo.Runtime.Process.DbgManager.Close(dnNodes);
 				if (!ExceptionUtils.IsInternalDebuggerError(ex))
 					throw;
-				// dgSpy: upstream replaced every failure here with the localized string "Internal debugger
-				// error" against the literal expression "<expression>", discarding the only description of
-				// what actually went wrong. In the GUI that is a row someone can shrug at; over RPC it is
-				// the entire answer, and it names neither the member that failed nor the reason. Keep the
-				// per-slot shape upstream's callers expect, but carry the real exception and the parent
-				// expression so the failure can be diagnosed instead of merely observed.
+				// dgSpy: upstream answered every failure here with `count` identical error nodes carrying the
+				// localized string "Internal debugger error" against the literal expression "<expression>",
+				// discarding the only description of what actually went wrong. Two problems, fixed together.
+				//
+				// The message now carries the real exception type/message and the parent expression, and the
+				// full exception goes to debugger output.
+				//
+				// The shape is now a throw rather than a fabricated page. A page of placeholders is fine for
+				// a treeview — the GUI's only two call sites (DbgValueNodeReader) ask for a single child and
+				// index [0] — but over RPC it is fabricated data: get_members would hand the caller N rows
+				// that look like members, so nothing downstream can tell "this object has N broken members"
+				// from "expansion failed once". Each consumer now decides its own shape: DbgValueNodeReader
+				// builds the one placeholder row it needs, RpcHost raises a single evaluation_failed error.
 				var detail = ex.GetType().Name + ": " + ex.Message;
 				if (detail.Length > 1024)
 					detail = detail.Substring(0, 1024);
@@ -116,10 +123,7 @@ namespace dnSpy.Debugger.DotNet.Evaluation.Engine {
 				var expression = dnValueNode.Expression is { Length: > 0 } parent ? parent : "<expression>";
 				evalInfo.Runtime.Process.DbgManager.WriteMessage(PredefinedDbgManagerMessageKinds.Output,
 					"dgSpy: expanding '" + expression + "' failed: " + ex);
-				res = new DbgEngineValueNode[count];
-				for (int i = 0; i < res.Length; i++)
-					res[i] = owner.CreateError(evalInfo, DbgDotNetEngineValueNodeFactoryExtensions.errorName, message, expression, false);
-				return res;
+				throw new DbgValueNodeExpansionException(expression, message, ex);
 			}
 			return res;
 		}

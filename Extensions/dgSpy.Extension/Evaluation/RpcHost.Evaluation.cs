@@ -163,7 +163,10 @@ namespace dgSpy.Extension {
 					if (root.HasChildren==false) return new MemberList { Expression=expression!,Total=0,Offset=offset,Members=Array.Empty<EvaluatedValue>(),SessionId=sessionId,StateVersion=stateVersion };
 					var total=root.GetChildCount(eval);
 					var pageCount=MemberPagination.Count(total,offset,count);
-					var children=pageCount==0 ? Array.Empty<DbgValueNode>() : root.GetChildren(eval,(ulong)offset,pageCount,NodeOptions(allowFuncEval));
+					DbgValueNode[] children;
+					// One failed expansion is one error, not a page of rows. See ChildExpansionFailure.
+					try { children=pageCount==0 ? Array.Empty<DbgValueNode>() : root.GetChildren(eval,(ulong)offset,pageCount,NodeOptions(allowFuncEval)); }
+					catch (DbgValueNodeExpansionException ex) { throw ChildExpansionFailure.ToRpcException(ex.ParentExpression,ex.ErrorMessage); }
 					try {
 						return new MemberList {
 							Expression=expression!,

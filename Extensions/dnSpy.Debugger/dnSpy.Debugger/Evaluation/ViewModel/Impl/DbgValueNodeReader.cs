@@ -45,18 +45,31 @@ namespace dnSpy.Debugger.Evaluation.ViewModel.Impl {
 			Debug2.Assert(evalInfo is not null);
 			var parent = valueNode.Parent;
 			uint startIndex = valueNode.DbgValueNodeChildIndex;
-			const int count = 1;
-			var newNodes = parent.DebuggerValueNode.GetChildren(evalInfo, startIndex, count, dbgValueNodeEvaluationOptions);
-			Debug.Assert(count == 1);
-			return newNodes[0];
+			return GetSingleChild(parent.DebuggerValueNode, startIndex);
 		}
 
 		public override DbgValueNode GetDebuggerNodeForReuse(DebuggerValueRawNode parent, uint startIndex) {
 			Debug2.Assert(evalInfo is not null);
+			return GetSingleChild(parent.DebuggerValueNode, startIndex);
+		}
+
+		// dgSpy: the two call sites above are the whole reason DbgEngineValueNodeImpl used to answer a failed
+		// expansion with a page of fabricated error nodes — they ask for one child and index [0], so an empty
+		// result crashed them. The engine now throws instead, because a page of placeholders is real data to
+		// anything that is not a treeview (see get_members). The treeview still wants a row, so build the one
+		// row here, from the message the engine would have put in it.
+		DbgValueNode GetSingleChild(DbgValueNode parent, uint startIndex) {
 			const int count = 1;
-			var newNodes = parent.DebuggerValueNode.GetChildren(evalInfo, startIndex, count, dbgValueNodeEvaluationOptions);
-			Debug.Assert(count == 1);
-			return newNodes[0];
+			try {
+				var newNodes = parent.GetChildren(evalInfo!, startIndex, count, dbgValueNodeEvaluationOptions);
+				Debug.Assert(count == 1);
+				return newNodes[0];
+			}
+			catch (DbgValueNodeExpansionException ex) {
+				var node = new ExpansionErrorValueNode(parent.Language, parent.Runtime, ex.ParentExpression, ex.ErrorMessage);
+				parent.Runtime.CloseOnContinue(node);
+				return node;
+			}
 		}
 
 		public override DbgValueNodeInfo Evaluate(string expression) {
