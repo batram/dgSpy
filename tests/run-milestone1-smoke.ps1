@@ -41,104 +41,12 @@ New-Item -ItemType Directory -Path $runDirectory | Out-Null
 # Windows PowerShell 5.1 is .NET Framework: no RandomNumberGenerator.GetBytes(int), no Convert.ToHexString.
 $token = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
 $dnSpyProcess = $null; $gatewayProcess = $null; $targetProcess = $null; $detachTargetProcess = $null
-$script:requestId = 0
-$script:failures = @()
-$script:checks = 0
-$script:section = 'startup'
-$script:lastCall = ''
 
-function Assert-That {
-	# $Condition stays untyped: -match/-like against a collection yield the matches rather than a
-	# boolean, and a [bool] parameter would throw instead of failing the check.
-	param([string]$What, $Condition, [string]$Detail = '')
-	$script:checks++
-	if (@($Condition).Count -gt 0 -and [bool](@($Condition) | Select-Object -Last 1)) { Write-Host "  PASS  $What" -ForegroundColor DarkGreen }
-	else {
-		# Most call sites pass no detail, and "FAIL <sentence>" alone leaves a CI log with nothing to
-		# work from. The section and the last tool call are always known, so always say them.
-		$context = "[$script:section]" + $(if ($script:lastCall) { " after $script:lastCall" })
-		Write-Host "  FAIL  $What $Detail" -ForegroundColor Red
-		Write-Host "        $context" -ForegroundColor DarkRed
-		$script:failures += "$What $Detail $context"
-	}
-}
-
-# Sections are already announced for a human reading along; recording them makes every later failure
-# and every tool error carry where it happened without touching the call sites.
-function Write-Section {
-	param([string]$Name)
-	$script:section = $Name
-	Write-Host "== $Name ==" -ForegroundColor Cyan
-}
-
-function Invoke-Mcp {
-	param([string]$Method, [hashtable]$Parameters, [hashtable]$Headers, [switch]$Raw)
-	$script:requestId++
-	$body = @{ jsonrpc = '2.0'; id = $script:requestId; method = $Method }
-	if ($null -ne $Parameters) { $body.params = $Parameters }
-	if ($null -eq $Headers) { $Headers = @{ 'X-dgSpy-Token' = $token } }
-	$response = Invoke-RestMethod -Uri ($gatewayUrl + '/mcp') -Method Post -ContentType 'application/json' `
-		-Headers $Headers -TimeoutSec 25 -Body ($body | ConvertTo-Json -Depth 12)
-	if ($Raw) { return $response }
-	if ($null -ne $response.error) { throw ('MCP error: ' + ($response.error | ConvertTo-Json -Compress)) }
-	return $response.result
-}
-
-# Tools retain a JSON text fallback for compatibility. Protocol-shape checks below separately verify
-# that structuredContent is an object, as required by MCP, including when the tool payload is an array.
-function Invoke-Tool {
-	# -AsText returns the raw JSON. Prefer it for emptiness checks: ConvertFrom-Json collapses an
-	# empty array in ways that make .Count unreliable in Windows PowerShell.
-	param([string]$Name, [hashtable]$Arguments, [switch]$ExpectError, [switch]$AsText)
-	# The arguments are what makes a tool error actionable: "get_frame failed: thread_id is required"
-	# reads as a product bug until you can see the harness passed thread_id as null.
-	$rendered = "$Name($($Arguments | ConvertTo-Json -Compress -Depth 6))"
-	$script:lastCall = $rendered
-	$result = Invoke-Mcp -Method 'tools/call' -Parameters @{ name = $Name; arguments = $Arguments }
-	if ($ExpectError) {
-		if (-not $result.isError) { throw "Tool $rendered was expected to fail but succeeded, returning: $($result.content[0].text)" }
-		return $result.content[0].text
-	}
-	if ($result.isError) { throw ("Tool $rendered failed: " + $result.content[0].text) }
-	if ($AsText) { return $result.content[0].text }
-	# Windows PowerShell 5.1's ConvertFrom-Json hands a JSON array to the pipeline as one object
-	# instead of enumerating it, so @(Invoke-Tool ...)[0] would return the whole array rather than
-	# its first entry. Member enumeration hides that for property reads but not for reflection over
-	# PSObject.Properties. Write-Output enumerates, so callers index and count real entries.
-	Write-Output ($result.content[0].text | ConvertFrom-Json)
-}
-
-# Mutations require an exact scoped version from a current state read. Keep that protocol ceremony
-# visible in the live harness without duplicating it at every call site. Tests that intentionally
-# exercise missing or stale guards must continue to call Invoke-Tool directly.
-function Invoke-MutatingTool {
-	param([string]$Name, [hashtable]$Arguments, [switch]$ExpectError, [switch]$AsText)
-	$callArguments = @{} + $Arguments
-	if (-not $callArguments.ContainsKey('session_id')) {
-		if ([string]::IsNullOrWhiteSpace($script:activeSessionId)) { throw "Mutation $Name has no session_id and no active smoke session." }
-		$callArguments.session_id = $script:activeSessionId
-	}
-	$state = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $callArguments.session_id }
-	if ($null -eq $script:toolDefinitions) { $script:toolDefinitions = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools) }
-	$definition = @($script:toolDefinitions | Where-Object { $_.name -eq $Name })[0]
-	$required = @($definition.inputSchema.required)
-	$guard = @($required | Where-Object { $_ -match '^expected_.+_version$' })[0]
-	if ([string]::IsNullOrWhiteSpace($guard)) { throw "Mutation $Name advertises no scoped version guard." }
-	$stateProperty = $guard.Substring('expected_'.Length)
-	if (-not $callArguments.ContainsKey($guard) -and -not $callArguments.ContainsKey('expected_state_version')) { $callArguments[$guard] = $state.$stateProperty }
-	if ($required -contains 'expected_stop_id' -and -not $callArguments.ContainsKey('expected_stop_id')) { $callArguments.expected_stop_id = $state.stop_id }
-	return Invoke-Tool -Name $Name -Arguments $callArguments -ExpectError:$ExpectError -AsText:$AsText
-}
-
-function Wait-Until {
-	param([scriptblock]$Condition, [int]$TimeoutSeconds = 30)
-	$deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-	do {
-		Start-Sleep -Milliseconds 250
-		if (& $Condition) { return $true }
-	} until ([DateTime]::UtcNow -gt $deadline)
-	return $false
-}
+# Assert-That, Write-Section, Invoke-Mcp, Invoke-Tool, Invoke-MutatingTool and Wait-Until live in
+# TestSupport so the Unity/Mono smoke uses the same client rather than a second copy that drifts.
+# Dot-sourcing runs them in this scope, so the $script: counters they touch remain this run's own.
+. "$PSScriptRoot\TestSupport\McpClient.ps1"
+Initialize-McpClient -GatewayUrl $gatewayUrl -Token $token
 
 # Diagnostics run against a session that is already misbehaving, so any single probe may fail. One
 # failing probe must not cost the rest of the picture, and its failure is itself a finding.
@@ -585,7 +493,7 @@ try {
 	$badExpression = Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $sessionId; expression = 'no_such_local'; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'a bad expression reports an error rather than a fabricated value' (-not [string]::IsNullOrWhiteSpace($badExpression.error) -and -not $badExpression.has_raw_value)
 	# Tick is static, so `this` genuinely does not exist here. The right answer is an error, not a
-	# fabricated value — and it exercises the same path a caller hits by asking for the wrong thing.
+	# fabricated value â€” and it exercises the same path a caller hits by asking for the wrong thing.
 	$thisValue = Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $sessionId; expression = 'this'; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'this in a static method reports an error rather than a fabricated value' (-not [string]::IsNullOrWhiteSpace($thisValue.error) -and -not $thisValue.has_raw_value) "(error='$($thisValue.error)')"
 	$label = Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $sessionId; expression = 'label'; thread_id = $stepThread; frame_index = 0 }
@@ -907,8 +815,8 @@ try {
 	Invoke-MutatingTool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
 
 	# The file-less module path was reasoned about rather than exercised: the only real specimen anyone
-	# had seen was a frame on a live UCH stack. The fixture now carries two of its own — an assembly
-	# loaded from bytes and a Reflection.Emit dynamic assembly — so the whole claim is testable here:
+	# had seen was a frame on a live UCH stack. The fixture now carries two of its own â€” an assembly
+	# loaded from bytes and a Reflection.Emit dynamic assembly â€” so the whole claim is testable here:
 	# metadata resolves, breakpoints are refused explicitly, and a frame belonging to a module with no
 	# path is still navigable to its IL. This covers CorDebug only; Mono is a different engine and still
 	# needs the manual UCH pass.
@@ -932,7 +840,7 @@ try {
 		# A file-less module does not necessarily report an empty filename: an in-memory one reports its
 		# bare assembly name. What matters is that it is not a path anything can be loaded from.
 		Assert-That "$($flCase.Label) module reports no usable file path" (-not [IO.Path]::IsPathRooted($flDoc.filename)) "(was '$($flDoc.filename)')"
-		# dnSpy reports a dynamic module as in-memory as well — it has no file either way — so in-memory
+		# dnSpy reports a dynamic module as in-memory as well â€” it has no file either way â€” so in-memory
 		# is true for both and is_dynamic is what separates them.
 		Assert-That "$($flCase.Label) module is classified in-memory, and dynamic only when it is" ($flDoc.is_in_memory -and $flDoc.is_dynamic -eq $flCase.Dynamic) "(is_dynamic=$($flDoc.is_dynamic) is_in_memory=$($flDoc.is_in_memory))"
 
@@ -997,7 +905,7 @@ try {
 
 	# Leave the session paused where the rest of the script found it: at Tick's entry. The later check
 	# that a running target refuses get_callstack resumes and asks immediately, so it needs Tick's 100ms
-	# body ahead of it — resuming from the trampolines instead lands on the next Tick hit in microseconds.
+	# body ahead of it â€” resuming from the trampolines instead lands on the next Tick hit in microseconds.
 	$flSettle = Invoke-MutatingTool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target.exe'; type = 'Milestone1Target.Program'; method = 'Tick' }
 	Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
 	$flSettled = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $flSettle.cursor_event_id; timeout_ms = 8000 }
@@ -1182,7 +1090,7 @@ try {
 
 	# The success path needs a Mono/Unity target, which this harness cannot produce; see the manual
 	# checklist in docs/DGSPY_UNITY_CHECKLIST.md. What is testable here is argument validation and the
-	# failure path — that a refused endpoint faults with dnSpy's own reason instead of hanging or
+	# failure path â€” that a refused endpoint faults with dnSpy's own reason instead of hanging or
 	# reporting a healthy session. Run last: dnSpy pops a modal error box on connect failure (on its UI
 	# thread, so it blocks neither the dispatcher nor this RPC, but it stays on screen).
 	Write-Section 'attach_endpoint'
