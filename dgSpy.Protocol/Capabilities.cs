@@ -254,6 +254,9 @@ namespace dgSpy.Protocol {
 			Op("list_documents",30000),
 			Op("list_types",30000),
 			Op("list_members",30000),
+			// The discovery entry point. Its work bound is max_scan rather than the clock, but a scan of
+			// every type in a Unity process is still the longest read-only walk on this surface.
+			Op("search",120000),
 			Op("search_symbols",60000),
 			Op("get_il",30000),
 			Op("get_csharp",60000),

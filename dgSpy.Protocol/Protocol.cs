@@ -398,6 +398,44 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("scanned_methods")] public int ScannedMethods { get; set; }
 		[JsonPropertyName("scan_truncated")] public bool ScanTruncated { get; set; }
 	}
+	/// <summary>One <c>search</c> hit. Every identifier here is round-trippable by design: <c>full_name</c>
+	/// is one of the strings the matcher itself tests, so passing it back as <c>pattern</c> re-finds this
+	/// symbol; <c>declaring_type</c> is what <c>list_members</c> and <c>get_csharp</c> take for
+	/// <c>type</c>; <c>token</c> plus <c>module</c> is what <c>get_il</c>, <c>find_references</c> and
+	/// <c>set_il_breakpoint</c> take. Nothing here needs parsing.</summary>
+	public sealed class SearchHit {
+		[JsonPropertyName("kind")] public string Kind { get; set; }="";
+		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("module_path"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? ModulePath { get; set; }
+		/// <summary>False means the module is open in dnSpy's Assembly Explorer but is not loaded in the
+		/// debug session, so the session-scoped tools will answer <c>module_not_found</c> for it.</summary>
+		[JsonPropertyName("in_session")] public bool InSession { get; set; }
+		/// <summary>Metadata token, 0 for a hit with no token of its own (a namespace, for example).</summary>
+		[JsonPropertyName("token")] public uint Token { get; set; }
+		[JsonPropertyName("name")] public string Name { get; set; }="";
+		[JsonPropertyName("full_name")] public string FullName { get; set; }="";
+		[JsonPropertyName("declaring_type"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? DeclaringType { get; set; }
+		[JsonPropertyName("namespace"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Namespace { get; set; }
+		/// <summary>The GUI Search window's Location column: the declaring type, or the namespace.</summary>
+		[JsonPropertyName("location"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Location { get; set; }
+		/// <summary>Why this matched, when the name is not the answer: the IL instruction for a literal,
+		/// or the parameter or local whose name matched.</summary>
+		[JsonPropertyName("match_context"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? MatchContext { get; set; }
+	}
+	public sealed class SearchResults {
+		[JsonPropertyName("hits")] public SearchHit[] Hits { get; set; }=Array.Empty<SearchHit>();
+		[JsonPropertyName("total")] public int Total { get; set; }
+		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
+		/// <summary>Symbol slots inspected by this call. Work, not results.</summary>
+		[JsonPropertyName("scanned")] public int Scanned { get; set; }
+		/// <summary>True when <c>max_scan</c> stopped the walk before the scope was exhausted. Resume by
+		/// passing <c>next_scan_offset</c> back as <c>scan_offset</c>.</summary>
+		[JsonPropertyName("scan_truncated")] public bool ScanTruncated { get; set; }
+		[JsonPropertyName("next_scan_offset")] public int NextScanOffset { get; set; }
+		/// <summary>Modules the walk covered, in the order it covered them. Traversal order is stable, which
+		/// is what makes <c>next_scan_offset</c> mean the same thing on the next call.</summary>
+		[JsonPropertyName("modules_searched")] public string[] ModulesSearched { get; set; }=Array.Empty<string>();
+	}
 	public sealed class MetadataInfo {
 		[JsonPropertyName("module")] public string Module { get; set; }="";
 		[JsonPropertyName("assembly_full_name"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? AssemblyFullName { get; set; }

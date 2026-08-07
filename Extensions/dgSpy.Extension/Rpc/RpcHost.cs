@@ -205,6 +205,7 @@ namespace dgSpy.Extension {
 			case "list_documents": return RpcResponse.Success(req.RequestId,await ListDocumentsAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "list_types": return RpcResponse.Success(req.RequestId,await ListTypesAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "list_members": return RpcResponse.Success(req.RequestId,await ListMembersAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "search": return RpcResponse.Success(req.RequestId,await SearchAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "search_symbols": return RpcResponse.Success(req.RequestId,await SearchSymbolsAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_il": return RpcResponse.Success(req.RequestId,await GetIlAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_csharp": return RpcResponse.Success(req.RequestId,await GetCSharpAsync(req,requestCancellation.Token).ConfigureAwait(false));

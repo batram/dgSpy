@@ -214,6 +214,11 @@
       "mutates_session": false
     },
     {
+      "operation": "search",
+      "max_duration_ms": 120000,
+      "mutates_session": false
+    },
+    {
       "operation": "search_symbols",
       "max_duration_ms": 60000,
       "mutates_session": false
@@ -404,7 +409,7 @@
       "engine": "cordebug",
       "display_name": ".NET Framework CorDebug (CLR v4.0.30319)",
       "acquisition": [
-        "list_programs+attach"
+        "list_programs\u002Battach"
       ],
       "discoverable": true,
       "arbitrary_il_offset_breakpoints": true,

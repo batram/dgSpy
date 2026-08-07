@@ -57,6 +57,39 @@ Progress:
 - **Complete:** the trusted-local-agent control plane has MCP-session controller identity,
   one controller per debugger session, optimistic mutation guards, explicit orphan reclaim, invariant
   disconnect behavior, a coarse inspect-only mode, and bounded redacted local audit records.
+- **Open -- session reclaim proves liveness, not identity.** Issue a claim token when a session is
+  created and accept it as proof of rightful ownership on reclaim.
+
+  Observed live: an MCP client restarted while the Gateway survived. The running session stayed owned by
+  the dead controller, and both `detach` and `claim_session` returned `session_owned`. The acceptance
+  notes below cover the opposite direction -- Gateway restart, session returns unowned, explicit claim
+  recovers it -- so the client-restart path had no coverage, and it does not work.
+
+  The cause is that ownership is decided entirely by controller liveness: `SessionControllers` defers to
+  `McpClientSessions.IsActive`, a last-seen timestamp compared against `DGSPY_CONTROLLER_IDLE_SECONDS`
+  (default 300). Nothing is permanently stuck -- the lease expires and reclaim then succeeds -- but the
+  rule is wrong at both ends. For up to five minutes the *rightful* owner cannot reclaim its own session;
+  after five minutes *any* local caller can, because expiry is the only check and nothing proves
+  identity. A restarting client is exactly the case that most deserves its session back, and is the one
+  currently refused.
+
+  A token issued at session creation fixes both ends: present it and reclaim immediately regardless of
+  the idle timer; without it, fall back to today's expiry rule. Points to settle:
+
+  - Where it is returned (`attach`, `attach_endpoint`, `launch`, `claim_session`), and whether
+    `list_sessions` may echo it -- it must not, or it stops being proof of anything.
+  - Whether it survives a Gateway restart. It has to, or it fails the case it exists for, which means
+    persisting it beside the session rather than holding it in process memory.
+  - That it is a capability, not a permission: it proves continuity of ownership and must not widen what
+    `DGSPY_ACCESS_MODE` allows that caller to do.
+  - Audit: record reclaim-by-token distinctly from reclaim-by-expiry. They carry different evidence
+    about who the caller is.
+  - Whether `release_session` invalidates it, so a deliberate handover cannot be undone by a previous
+    owner replaying an old token.
+
+  Cover it the way the rest of Section 1 is covered: ownership tests for client restart with and without
+  the token, and one proving expiry-based reclaim still works when no token is presented.
+
 - **Deferred until the trust boundary changes:** per-user/per-target ACLs and encrypted
   client-to-Gateway transport. MCP remains authenticated and loopback-only.
 
