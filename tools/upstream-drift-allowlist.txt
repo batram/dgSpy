@@ -63,13 +63,26 @@ Extensions/dnSpy.Debugger/dnSpy.Debugger/Attach/AttachableProcessImpl.cs  stable
 # were gone, and the process died of an AccessViolationException with no managed
 # exception to explain it. Reproduced at roughly 23% of live smoke runs.
 # Carried here because it kills our own gate; offer it to dnSpyEx and drop this
-# entry when they take it.
+# entry when they take it. Mitigation, not a cure: a reader already past its
+# guard still holds a raw pointer, and the crash has recurred once since. Rate
+# went from 23% to roughly one run in 25.
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Metadata/Internal/DbgRawMetadataImpl.cs  upstream use-after-free on runtime teardown, fix carried pending an upstream PR
 
 # get_members: child expansion must surface errors instead of swallowing them,
 # and must page correctly across an aggregate provider's tail.
-Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Evaluation/Engine/DbgEngineValueNodeImpl.cs  get_members expansion error handling
-dnSpy/Roslyn/dnSpy.Roslyn/Debugger/ValueNodes/AggregateValueNodeProvider.cs                  get_members paging across provider tail
+#
+# Upstream answered a failed expansion with a full page of identical error
+# nodes. In a treeview that is one row to shrug at; over RPC it is fabricated
+# data, because the caller cannot tell "this object has N broken members" from
+# "expansion failed once". GetChildrenCore now throws, and each consumer picks
+# its own shape: the GUI builds a single ExpansionErrorValueNode with the same
+# name, message and image the engine used to fabricate, so its behaviour is
+# unchanged, and get_members raises one evaluation_failed naming the parent.
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Evaluation/Engine/DbgEngineValueNodeImpl.cs   get_members expansion error handling
+dnSpy/Roslyn/dnSpy.Roslyn/Debugger/ValueNodes/AggregateValueNodeProvider.cs                   get_members paging across provider tail
+dnSpy/dnSpy.Contracts.Debugger/Evaluation/DbgValueNodeExpansionException.cs                   carries a failed expansion instead of faking a page of members
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Evaluation/ViewModel/Impl/ExpansionErrorValueNode.cs the GUI's single error row, replacing the fabricated page
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Evaluation/ViewModel/Impl/DbgValueNodeReader.cs      both GUI call sites share one GetSingleChild that catches it
 
 # ---------------------------------------------------------------------------
 # Build and repository infrastructure
