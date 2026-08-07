@@ -80,6 +80,16 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("extension_sha256")] public string ExtensionSha256 { get; set; }="";
 		/// <summary>Where that assembly was loaded from, so a mismatch names the tree to replace.</summary>
 		[JsonPropertyName("extension_path")] public string ExtensionPath { get; set; }="";
+		/// <summary>The same build identity a human reads off the dnSpy title bar, as
+		/// "yyyy-MM-dd HH:mm (commit)" in the host's local time. Use it to confirm the running build is the
+		/// one just compiled; use <see cref="ExtensionSha256"/> when an exact identity is needed.</summary>
+		[JsonPropertyName("build_label")] public string BuildLabel { get; set; }="";
+		/// <summary>When the loaded extension assembly was written, for comparisons that need an ordering
+		/// rather than a label.</summary>
+		[JsonPropertyName("build_time_utc"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public DateTime? BuildTimeUtc { get; set; }
+		/// <summary>Short commit the running build was packaged from, suffixed "-dirty" when the tree had
+		/// uncommitted changes. Absent for a build that was never packaged, which has no commit to name.</summary>
+		[JsonPropertyName("build_commit"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? BuildCommit { get; set; }
 		/// <summary>How many cached assemblies were evicted because they described a different build than
 		/// the one running. Non-zero means a target was rebuilt while this dnSpy stayed up; the symbols are
 		/// correct because they were re-read, but it is the signal that this host is not freshly started.</summary>

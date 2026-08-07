@@ -47,7 +47,10 @@ namespace dgSpy.Extension {
 			}
 		}
 		void Host_ConnectionStateChanged(string state) {
-			var info=$"dgSpy [{state}]";
+			// The build stamp rides along with the connection state because dnSpy only exposes title text
+			// as opaque entries: two entries would be reordered independently and could not be replaced
+			// as a unit when the state changes.
+			var info=$"dgSpy {RpcHost.BuildLabel} [{state}]";
 			appWindow.MainWindow.Dispatcher.BeginInvoke(() => {
 				// A queued debugger notification can outlive AppExit. Never put title text back
 				// after the extension has started shutting down.

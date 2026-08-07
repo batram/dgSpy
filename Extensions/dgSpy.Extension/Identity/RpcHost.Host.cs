@@ -32,6 +32,9 @@ namespace dgSpy.Extension {
 				DgSpyVersion=Version,
 				ExtensionSha256=ExtensionSha256,
 				ExtensionPath=ExtensionPath,
+				BuildLabel=BuildLabel,
+				BuildTimeUtc=BuildTimeUtc,
+				BuildCommit=BuildCommit,
 				StaleModuleDocumentsDropped=StaleModuleDocumentsDropped,
 				OperatingSystem=Environment.OSVersion.VersionString,
 				Architecture=Environment.Is64BitProcess ? "X64" : "X86",
@@ -55,6 +58,16 @@ namespace dgSpy.Extension {
 		static readonly Assembly ExtensionAssembly = typeof(RpcHost).Assembly;
 		public static string ExtensionPath { get; } = SafeLocation();
 		public static string ExtensionSha256 { get; } = SafeHash(ExtensionPath);
+		// Build identity for humans. The hashes above prove which build is running, but nobody holds a
+		// hex prefix in their head across a dozen rebuilds in an afternoon, which is the situation this
+		// exists for: "is this the one I just compiled?" answered at a glance, in the title bar.
+		// The timestamp comes from the assembly file's mtime rather than a compile-time constant so it is
+		// still right for a worktree build that was never packaged; the commit comes from the deployment
+		// manifest and is therefore absent for exactly those unpackaged builds, which is honest — an
+		// unpackaged build has no commit anyone can check out.
+		public static DateTime? BuildTimeUtc { get; } = SafeBuildTime(ExtensionPath);
+		public static string? BuildCommit { get; } = SafeCommit(ExtensionPath);
+		public static string BuildLabel { get; } = FormatBuildLabel(BuildTimeUtc,BuildCommit);
 		static string SafeLocation() {
 			try { return ExtensionAssembly.Location ?? ""; } catch { return ""; }
 		}
@@ -67,6 +80,44 @@ namespace dgSpy.Extension {
 			}
 			catch { return "unknown"; }
 		}
+		static DateTime? SafeBuildTime(string path) {
+			if(string.IsNullOrEmpty(path)) return null;
+			try { return System.IO.File.Exists(path) ? System.IO.File.GetLastWriteTimeUtc(path) : (DateTime?)null; }
+			catch { return null; }
+		}
+		// The manifest sits at the root of a deployed payload, four directories above
+		// bin\Extensions\dgSpy\. Walking up instead of hardcoding that depth keeps this working if the
+		// packaged layout shifts, and finding nothing is the normal case for a dev build.
+		static string? SafeCommit(string path) {
+			if(string.IsNullOrEmpty(path)) return null;
+			try {
+				var dir=System.IO.Path.GetDirectoryName(path);
+				for(var i=0;i<6 && !string.IsNullOrEmpty(dir);i++,dir=System.IO.Path.GetDirectoryName(dir)) {
+					var manifest=System.IO.Path.Combine(dir!,"deployment-manifest.json");
+					if(!System.IO.File.Exists(manifest)) continue;
+					using var doc=System.Text.Json.JsonDocument.Parse(System.IO.File.ReadAllText(manifest));
+					if(!doc.RootElement.TryGetProperty("packaged",out var packaged)) return null;
+					if(!packaged.TryGetProperty("git_commit",out var commit)) return null;
+					var sha=commit.GetString();
+					if(string.IsNullOrEmpty(sha)) return null;
+					sha=sha!.Substring(0,Math.Min(8,sha.Length));
+					// A dirty build cannot be checked out again, so saying only the commit would name a
+					// tree that never existed.
+					var dirty=packaged.TryGetProperty("git_dirty",out var d) && d.ValueKind==System.Text.Json.JsonValueKind.True;
+					return dirty ? sha+"-dirty" : sha;
+				}
+				return null;
+			}
+			catch { return null; }
+		}
+		// Local time on purpose: this is compared against "when did I hit build", which happened on
+		// this machine's clock.
+		static string FormatBuildLabel(DateTime? utc,string? commit) {
+			if(utc is null) return commit ?? "unknown";
+			var stamp=utc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+			return commit is null ? stamp : $"{stamp} ({commit})";
+		}
+
 		static string ExtensionInformationalVersion() =>
 			ExtensionAssembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
 				?? ExtensionAssembly.GetName().Version?.ToString() ?? "unknown";
