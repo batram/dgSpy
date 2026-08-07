@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Deliberately does NOT import DnSpyCommon.props: that sets TargetFrameworks
+       (plural), which collides with the single framework needed here and leaves
+       vstest unable to discover any tests. The VS-MEF version below must stay in
+       step with MSVSCompositionVersion in DnSpyCommon.props, since these tests
+       reproduce the host's own composition. -->
+
+  <PropertyGroup>
+    <!-- Must match the shipping host: these tests load the published assemblies
+         and run the same MEF discovery dnSpy runs at startup. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.6.3" />
+    <PackageReference Include="xunit" Version="2.5.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.0" />
+    <PackageReference Include="Microsoft.VisualStudio.Composition" Version="17.13.41" />
+    <!-- Must be loadable by the test host itself so [Export] attribute types are
+         shared with the assemblies under test; see HostLoadContext. -->
+    <PackageReference Include="System.ComponentModel.Composition" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

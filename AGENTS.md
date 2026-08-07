@@ -66,6 +66,18 @@ existing `[ImportingConstructor]` that already takes it. Public and obviously av
 not evidence. `IAppCommandLineArgs` in particular is *not* a MEF export. The full account is
 in the "MEF composition fails silently" section of `docs/DGSPY_BASELINE.md`.
 
+dnSpy does check this, but only under `Debug.Assert(config.ThrowOnErrors() == config)`, which
+the Release build we ship compiles away. `tests\dgSpy.Composition.Tests` performs that check
+in a test run instead, against the published assemblies:
+
+```bash
+dotnet test tests\dgSpy.Composition.Tests\dgSpy.Composition.Tests.csproj -c Release
+```
+
+It must run *after* a publish, and the gate already sequences it that way. Note that no
+behavioural test can cover this: when a part fails to compose there is nothing to call and
+nothing to assert against, which is why these tests read the composition itself.
+
 **Half-applied upstream commits.** When taking or reverting upstream work, take the whole
 commit. A feature typically spans an interface in `dnSpy.Contracts.*`, its `[Export]`ed
 implementation in an extension, resource strings in `Properties\*.resx` *and* the generated
