@@ -56,6 +56,16 @@ Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DbgManagerImpl.cs           sessio
 dnSpy/dnSpy.Contracts.Debugger/Attach/AttachableProcess.cs                stable process identity for list_programs
 Extensions/dnSpy.Debugger/dnSpy.Debugger/Attach/AttachableProcessImpl.cs  stable process identity for list_programs
 
+# An upstream use-after-free, not a dgSpy regression: this file and both its
+# collaborators were byte-identical to dnSpyEx when the crash was diagnosed.
+# DbgRawMetadataImpl.ForceDispose released the native metadata buffers without
+# setting `disposed`, so every reader's guard kept passing while the addresses
+# were gone, and the process died of an AccessViolationException with no managed
+# exception to explain it. Reproduced at roughly 23% of live smoke runs.
+# Carried here because it kills our own gate; offer it to dnSpyEx and drop this
+# entry when they take it.
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Metadata/Internal/DbgRawMetadataImpl.cs  upstream use-after-free on runtime teardown, fix carried pending an upstream PR
+
 # get_members: child expansion must surface errors instead of swallowing them,
 # and must page correctly across an aggregate provider's tail.
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Evaluation/Engine/DbgEngineValueNodeImpl.cs  get_members expansion error handling

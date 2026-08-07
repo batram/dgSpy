@@ -181,7 +181,21 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 			ForceDispose();
 		}
 
+		// Called on runtime teardown, which must release the native buffers even while readers still
+		// hold references, so it deliberately ignores referenceCounter. It must still mark the object
+		// disposed first: every reader above guards on `disposed`, and freeing without setting it left
+		// those guards passing while the addresses were gone. Readers then dereferenced freed memory
+		// through Roslyn MetadataBlock pointers and the process died of an AccessViolationException on
+		// the engine thread -- TypeDefTableReader.GetName under CompileGetLocals, with no managed
+		// exception anywhere to explain it. Marking it disposed turns that into an
+		// ObjectDisposedException, which callers can handle.
+		//
+		// This narrows the window rather than closing it: a reader already past its guard still holds
+		// a raw pointer. Closing it fully means holding a reference across the read, which is a larger
+		// change to every consumer.
 		internal void ForceDispose() {
+			lock (lockObj)
+				disposed = true;
 			GC.SuppressFinalize(this);
 			if (process is not null && address != IntPtr.Zero && Interlocked.Exchange(ref freedAddress, 1) == 0) {
 				bool b = NativeMethods.VirtualFree(address, IntPtr.Zero, NativeMethods.MEM_RELEASE);
