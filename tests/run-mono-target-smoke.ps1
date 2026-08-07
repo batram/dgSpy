@@ -96,6 +96,20 @@ try {
 	$capabilities = Invoke-Tool -Name 'get_capabilities' -Arguments @{}
 	Assert-That 'capabilities separate Mono sequence points from CorDebug offsets' ($null -ne $capabilities)
 
+	Write-Section 'reach the harness'
+	# Launch-Target defaults to suspend=y, so the runtime is parked BEFORE executing any managed
+	# code: Assembly-CSharp is not loaded and no thread has managed frames yet. Inspecting here
+	# proves nothing. Drive the target to a known point first, which also exercises Mono breakpoint
+	# binding -- Mono binds only at sequence points, unlike CorDebug.
+	$resumedToRun = Invoke-MutatingTool -Name 'continue' -Arguments @{}
+	Assert-That 'the target starts running managed code' ($resumedToRun.state -eq 'running') "state=$($resumedToRun.state)"
+
+	$harnessLoaded = Wait-Until {
+		@(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $script:activeSessionId } |
+			Where-Object { $_.name -like 'Assembly-CSharp*' }).Count -gt 0
+	} 60
+	Assert-That 'the harness assembly loads once the target runs' $harnessLoaded
+
 	Write-Section 'modules'
 	# ModuleCreator plus AssemblyMirror.GetMetadataBlob and .IsDynamic, which only exist in dnSpyEx's
 	# Mono.Debugger.Soft fork. On the fork this repo used to pin, this section could not even compile.
@@ -105,9 +119,23 @@ try {
 	Assert-That 'mscorlib is loaded' (@($modules | Where-Object { $_.name -like 'mscorlib*' }).Count -gt 0)
 	Assert-That 'every module reports breakpoint capability explicitly' (@($modules | Where-Object { $null -eq $_.can_set_breakpoint }).Count -eq 0)
 
+	Write-Section 'breakpoint on the harness loop'
+	$harnessModule = @($modules | Where-Object { $_.name -like 'Assembly-CSharp*' })[0].name
+	$breakpoint = Invoke-MutatingTool -Name 'set_breakpoint' -Arguments @{
+		session_id = $script:activeSessionId; module = $harnessModule
+		type = 'UchDebugTarget.DebugTargetHarness'; method = 'TickLoop'
+	}
+	Assert-That 'the breakpoint binds in the harness' ($breakpoint.bound) "bound=$($breakpoint.bound) msg='$($breakpoint.message)'"
+	Assert-That 'the breakpoint returns a cursor' ($null -ne $breakpoint.cursor_event_id)
+
+	$stop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{
+		session_id = $script:activeSessionId; after_event_id = $breakpoint.cursor_event_id; timeout_ms = 30000
+	}
+	Assert-That 'the harness loop reaches the breakpoint' (-not $stop.timed_out -and @($stop.events).Count -gt 0)
+
 	Write-Section 'threads and stacks'
-	$paused = Invoke-MutatingTool -Name 'pause' -Arguments @{}
-	Assert-That 'the target pauses' ($paused.state -eq 'paused') "state=$($paused.state)"
+	$paused = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $script:activeSessionId }
+	Assert-That 'the target is stopped at the breakpoint' ($paused.state -eq 'paused') "state=$($paused.state)"
 	$threads = @(Invoke-Tool -Name 'list_threads' -Arguments @{ session_id = $script:activeSessionId })
 	Assert-That 'threads are enumerated' ($threads.Count -gt 0)
 	Assert-That 'thread ids are unique' ((@($threads.thread_id | Sort-Object -Unique)).Count -eq $threads.Count)
@@ -140,6 +168,9 @@ try {
 	}
 
 	Write-Section 'resume and detach'
+	# TickLoop is a loop, so leaving the breakpoint set would stop the target again immediately and
+	# detach would be racing a fresh stop.
+	Invoke-MutatingTool -Name 'clear_breakpoints' -Arguments @{} | Out-Null
 	$resumed = Invoke-MutatingTool -Name 'continue' -Arguments @{}
 	Assert-That 'the target resumes' ($resumed.state -eq 'running') "state=$($resumed.state)"
 
