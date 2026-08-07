@@ -92,7 +92,8 @@ actually get. No Visual Studio installation is required.
 ### Retained fallback: the net48 host
 
 net48 stays fully supported behind `-TargetFramework net48` on all three scripts, and CI runs the
-net48 CorDebug smoke weekly and on demand so the fallback cannot rot unnoticed. It is still the only
+net48 CorDebug smoke on every commit, alongside the net10 one, so the fallback cannot rot unnoticed
+and a break is attributed to the commit that caused it. It is still the only
 host with Unity/UCH acceptance evidence, so the gate refuses `-Stage Unity` and `-Stage Full` unless
 `-TargetFramework net48` is passed.
 

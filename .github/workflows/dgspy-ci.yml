@@ -6,10 +6,6 @@ on:
   pull_request:
     branches: [dgspy]
   workflow_dispatch:
-  # net48 is retained as the fallback host baseline but is no longer the default, so nothing on the
-  # PR path exercises it. A weekly run is what keeps "retained" from quietly meaning "rotted".
-  schedule:
-    - cron: '0 5 * * 1'
 
 permissions:
   contents: read
@@ -86,10 +82,11 @@ jobs:
 
   cordebug-live-net48:
     name: CorDebug live smoke (net48, retained fallback)
-    # Not on the PR path: net48 is the retained fallback, not what ships, and the net48 host needs a
-    # full Visual Studio MSBuild that the net10 publish does not. Weekly plus on demand is enough to
-    # prove it still builds and debugs before anyone needs to fall back to it.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Runs on every commit, same as the net10 job. A fallback is only a fallback if it works on the
+    # commit you need it for, and this job is what makes "retained" mean something. It was briefly on a
+    # weekly schedule instead; that reports against a commit nobody just pushed and hands you a batch of
+    # suspects days later, which is worse signal for no saving in wall clock - this job is independent
+    # of the net10 one, so the two run in parallel and only runner minutes differ.
     runs-on: windows-latest
     timeout-minutes: 45
 
