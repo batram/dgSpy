@@ -46,6 +46,12 @@ dgSpy dnSpy Extension
   messages then travel over that reverse stream. See [remote hosts](REMOTE_HOSTS.md). Each deployment
   selects plaintext or pinned mutual TLS; the separate MCP client-to-Gateway encrypted transport remains roadmap work.
 
+Every dispatched operation is also recorded into a bounded in-memory log that backs the **dgSpy MCP
+Activity** tool window (`ToolWindows/`), so a human at the dnSpy window can see what an agent did
+without reading the Gateway audit file. The log is a static singleton rather than a MEF export
+deliberately: `RpcHost` is constructed directly by the extension entry point, and an unsatisfiable
+MEF import there would delete the RPC host silently.
+
 Keep tool families in focused `RpcHost.<Family>.cs` partials under `Debugger/`, `Decompiler/`,
 `Evaluation/`, `Events/`, `Handles/`, or `Identity/`. Keep shared dnSpy objects and shutdown ownership in
 `Rpc/RpcHost.cs`. Pure policy belongs outside WPF/dnSpy implementation dependencies so the .NET 10 test
