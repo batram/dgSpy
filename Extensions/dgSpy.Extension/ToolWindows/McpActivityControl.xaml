@@ -3,6 +3,10 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <UserControl.Resources>
+        <!-- dnSpy has no theme brush for error text: ColorType.Error is a text-classification colour
+             with no WPF resource key, and CommonControlsTextBoxErrorForeground is the foreground for
+             text *on* a red field (near-white under the dark theme). Hence a literal, picked to read
+             against GridViewBackground under both the dark and light themes. -->
         <SolidColorBrush x:Key="dgSpyActivityFailed" Color="#C05050" />
     </UserControl.Resources>
     <Grid>
@@ -29,7 +33,9 @@
             <TextBox Grid.Column="3" Name="searchTextBox" Margin="3" VerticalAlignment="Center"
                      Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
                      ToolTip="Filter on operation, status, parameters or result" />
-            <TextBlock Grid.Column="4" Margin="6 0" VerticalAlignment="Center" Text="{Binding CountText}" Opacity="0.75" />
+            <!-- Label, not TextBlock: dnSpy themes Label, and a bare TextBlock inherits WPF's default
+                 black, which is unreadable on every dark theme. Same reason below. -->
+            <Label Grid.Column="4" Margin="0 0 3 0" VerticalAlignment="Center" Content="{Binding CountText}" />
         </Grid>
 
         <!-- Call list -->
@@ -91,18 +97,25 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Margin="6 3" TextTrimming="CharacterEllipsis"
-                       Text="{Binding SelectedHeader}" Opacity="0.75" />
-            <GroupBox Grid.Row="1" Grid.Column="0" Margin="3" Header="Parameters">
+                       Foreground="{DynamicResource GridViewListViewForeground}"
+                       Text="{Binding SelectedHeader}" />
+            <!-- dnSpy's GroupBox style themes the border but not the header, which therefore inherits
+                 WPF's default black. dnSpy only uses GroupBox inside option-page dialogs that already
+                 set a foreground higher up; a tool window has to set it here. -->
+            <GroupBox Grid.Row="1" Grid.Column="0" Margin="3" Header="Parameters"
+                      Foreground="{DynamicResource GridViewListViewForeground}">
                 <TextBox Text="{Binding SelectedArguments, Mode=OneWay}" IsReadOnly="True" BorderThickness="0"
                          FontFamily="Consolas" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                          Background="Transparent" />
             </GroupBox>
-            <GroupBox Grid.Row="1" Grid.Column="1" Margin="3" Header="Result">
+            <GroupBox Grid.Row="1" Grid.Column="1" Margin="3" Header="Result"
+                      Foreground="{DynamicResource GridViewListViewForeground}">
                 <TextBox Text="{Binding SelectedResult, Mode=OneWay}" IsReadOnly="True" BorderThickness="0"
                          FontFamily="Consolas" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                          Background="Transparent" />
             </GroupBox>
-            <TextBlock Grid.Row="1" Grid.ColumnSpan="2" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.6"
+            <TextBlock Grid.Row="1" Grid.ColumnSpan="2" HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Foreground="{DynamicResource GridViewListViewForeground}"
                        Text="Select a call to see its full parameters and result.">
                 <TextBlock.Style>
                     <Style TargetType="{x:Type TextBlock}">
