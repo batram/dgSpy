@@ -652,6 +652,25 @@ try {
 	Assert-That 'get_members expands a reference one level' ($members.total -ge 0 -and $members.expression -eq 'commandLine')
 	Assert-That 'get_members reports paging state' ($members.offset -eq 0 -and -not $members.truncated)
 	Assert-That 'every returned member carries the expression that reaches it again' (@($members.members | Where-Object { [string]::IsNullOrWhiteSpace($_.expression) }).Count -eq 0)
+	# Regression: a page reaching the tail of an aggregate used to throw IndexOutOfRangeException inside
+	# AggregateValueNodeProvider, because `index - childCount` is unsigned and wrapped to a negative
+	# provider index whenever the page started inside providers[0]. The engine swallowed that and returned
+	# one identical "Internal debugger error" row per requested slot, with no member name or expression, so
+	# the documented drill-down loop dead-ended on any object whose full page was requested. Asking for
+	# everything is precisely the page that spans providers[0] into the extra providers such as
+	# "Static members", so this is the shape that reproduces it.
+	$allMembers = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $sessionId; expression = 'commandLine'; thread_id = $stepThread; frame_index = 1; count = 200 }
+	Assert-That 'a full expansion returns members to check' (@($allMembers.members).Count -gt 0) "(total $($allMembers.total))"
+	$internalErrors = @($allMembers.members | Where-Object { $_.error -and $_.error -match 'nternal debugger error' })
+	Assert-That 'expanding a whole object never reports an internal debugger error' ($internalErrors.Count -eq 0) "(first: $($internalErrors[0].error))"
+	# One row per real member, never one per requested slot: count was 200 and total is single digits.
+	Assert-That 'a full page returns one row per member, not one per requested slot' (@($allMembers.members).Count -eq $allMembers.total) "(rows $(@($allMembers.members).Count), total $($allMembers.total))"
+	$unnamed = @($allMembers.members | Where-Object { [string]::IsNullOrWhiteSpace($_.name) -or $_.name -eq '<error>' })
+	Assert-That 'every member of a full page carries its own name' ($unnamed.Count -eq 0) "($($unnamed.Count) unnamed)"
+	# The name must come from the member, not from parsing it back out of expression: a cast-qualified
+	# expression like ((System.MarshalByRefObject)x).Identity has no parseable relationship to "Identity".
+	Assert-That 'no member name echoes the parent expression' (@($allMembers.members | Where-Object { $_.name -eq 'commandLine' }).Count -eq 0)
+
 	# A primitive has nothing to expand. Zero members is the correct answer, not an error.
 	$noMembers = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $sessionId; expression = 'input'; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'expanding a primitive yields zero members rather than an error' ($noMembers.total -eq 0 -and @($noMembers.members).Count -eq 0)

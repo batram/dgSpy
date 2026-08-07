@@ -59,7 +59,15 @@ namespace dnSpy.Roslyn.Debugger.ValueNodes {
 					Array.Copy(tmp, res, tmp.Length);
 					w += tmp.Length;
 				}
-				for (int i = (int)(index - childCount) + 1; i < providers.Length && w < count; i++) {
+				// index and childCount are unsigned. When the page starts inside providers[0] (index <
+				// childCount) this subtraction wraps to a huge value that casts to a negative int, and the
+				// loop indexes providers[] out of bounds. The extra providers occupy global indices
+				// childCount + (i - 1), so a page that starts inside providers[0] continues at the first
+				// extra provider, and only a page starting at or past childCount can skip any of them.
+				// The wrap made every page that spanned providers[0]'s tail into the extras throw
+				// IndexOutOfRangeException, which the engine then reported as "Internal debugger error".
+				int firstExtra = index < childCount ? 1 : (int)(index - childCount) + 1;
+				for (int i = firstExtra; i < providers.Length && w < count; i++) {
 					evalInfo.CancellationToken.ThrowIfCancellationRequested();
 					var provider = providers[i];
 					res[w++] = valueNodeFactory.Create(evalInfo, provider.Name, provider, formatSpecifiers, options, provider.Expression, provider.ImageName, provider.ValueText);

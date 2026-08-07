@@ -27,6 +27,7 @@ using dnSpy.Contracts.Debugger.Engine.Evaluation;
 using dnSpy.Contracts.Debugger.Evaluation;
 using dnSpy.Contracts.Debugger.Text;
 using dnSpy.Debugger.DotNet.Metadata;
+using dnSpy.Debugger.DotNet.Properties;
 
 namespace dnSpy.Debugger.DotNet.Evaluation.Engine {
 	sealed class DbgEngineValueNodeImpl : DbgEngineValueNode {
@@ -98,9 +99,26 @@ namespace dnSpy.Debugger.DotNet.Evaluation.Engine {
 					evalInfo.Runtime.Process.DbgManager.Close(dnNodes);
 				if (!ExceptionUtils.IsInternalDebuggerError(ex))
 					throw;
+				// dgSpy: upstream replaced every failure here with the localized string "Internal debugger
+				// error" against the literal expression "<expression>", discarding the only description of
+				// what actually went wrong. In the GUI that is a row someone can shrug at; over RPC it is
+				// the entire answer, and it names neither the member that failed nor the reason. Keep the
+				// per-slot shape upstream's callers expect, but carry the real exception and the parent
+				// expression so the failure can be diagnosed instead of merely observed.
+				var detail = ex.GetType().Name + ": " + ex.Message;
+				if (detail.Length > 1024)
+					detail = detail.Substring(0, 1024);
+				// Not PredefinedEvaluationErrorMessages.InternalDebuggerError: that constant is a sentinel key
+				// ("InternalDebuggerError <({[dnSpy]})> ") which PredefinedEvaluationErrorMessagesHelper
+				// translates by exact dictionary lookup. Appending to it defeats the lookup and leaks the raw
+				// sentinel to the caller. Use the localized text directly so the result needs no translation.
+				var message = dnSpy_Debugger_DotNet_Resources.InternalDebuggerError + " (" + detail + ")";
+				var expression = dnValueNode.Expression is { Length: > 0 } parent ? parent : "<expression>";
+				evalInfo.Runtime.Process.DbgManager.WriteMessage(PredefinedDbgManagerMessageKinds.Output,
+					"dgSpy: expanding '" + expression + "' failed: " + ex);
 				res = new DbgEngineValueNode[count];
 				for (int i = 0; i < res.Length; i++)
-					res[i] = owner.CreateError(evalInfo, DbgDotNetEngineValueNodeFactoryExtensions.errorName, PredefinedEvaluationErrorMessages.InternalDebuggerError, "<expression>", false);
+					res[i] = owner.CreateError(evalInfo, DbgDotNetEngineValueNodeFactoryExtensions.errorName, message, expression, false);
 				return res;
 			}
 			return res;
