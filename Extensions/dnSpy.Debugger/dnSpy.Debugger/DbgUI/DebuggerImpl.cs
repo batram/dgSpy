@@ -150,9 +150,8 @@ namespace dnSpy.Debugger.DbgUI {
 
 		public override bool CanDetachAll => CanExecutePauseOrRunningCommand;
 		public override void DetachAll() {
-			if (!dbgManager.Value.CanDetachWithoutTerminating) {
-				//TODO: Show a msg box
-			}
+			if (!dbgManager.Value.CanDetachWithoutTerminating && messageBoxService.Value.Show(dnSpy_Debugger_Resources.DetachingWillCauseTerminationOfDebuggeeProcess, MsgBoxButton.Yes | MsgBoxButton.No) != MsgBoxButton.Yes)
+				return;
 			dbgManager.Value.DetachAll();
 		}
 
@@ -406,6 +405,7 @@ namespace dnSpy.Debugger.DbgUI {
 			dbgManager.MessageUserMessage += DbgManager_MessageUserMessage;
 			dbgManager.MessageExceptionThrown += DbgManager_MessageExceptionThrown;
 			dbgManager.DbgManagerMessage += DbgManager_DbgManagerMessage;
+			dbgManager.ProcessesChanged += DbgManager_ProcessChanged;
 		}
 
 		void DbgManager_DbgManagerMessage(object? sender, DbgManagerMessageEventArgs e) {
@@ -431,6 +431,24 @@ namespace dnSpy.Debugger.DbgUI {
 			}
 		}
 
+		void DbgManager_ProcessChanged(object? sender, DbgCollectionChangedEventArgs<DbgProcess> e) {
+			UI(() => {
+				string newProcessName = e.Objects[0].Name;
+
+				if (e.Added) {
+					if (oldProcessName is not null)
+						appWindow.Value.RemoveTitleInfo(oldProcessName);
+					appWindow.Value.AddTitleInfo(newProcessName);
+					oldProcessName = newProcessName;
+				}
+				else {
+					appWindow.Value.RemoveTitleInfo(newProcessName);
+					oldProcessName = null;
+				}
+			});
+		}
+		string? oldProcessName;
+
 		void UI(Action callback) => uiDispatcher.UI(callback);
 
 		void ShowUnhandledException_UI(DbgMessageExceptionThrownEventArgs exm) {
@@ -440,6 +458,10 @@ namespace dnSpy.Debugger.DbgUI {
 			sb.AppendLine(string.Format(dnSpy_Debugger_Resources.ExceptionName, dbgExceptionFormatterService.Value.ToString(exm.Exception.Id)));
 			sb.AppendLine();
 			sb.AppendLine(string.Format(dnSpy_Debugger_Resources.ExceptionMessage, exm.Exception.Message ?? dnSpy_Debugger_Resources.ExceptionMessageIsNull));
+			if (exm.Exception.HResult.HasValue) {
+				sb.AppendLine();
+				sb.AppendLine(string.Format(dnSpy_Debugger_Resources.ExceptionHResult, exm.Exception.HResult.Value));
+			}
 			ShowError_UI(sb.ToString());
 		}
 

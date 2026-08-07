@@ -96,22 +96,20 @@ README.md                      dgSpy project identity
 .github/PULL_REQUEST_TEMPLATE.md  removed, describes dnSpyEx's project not ours
 .github/ISSUE_TEMPLATE/        removed, describes dnSpyEx's project not ours
 
-# ---------------------------------------------------------------------------
-# PENDING CLEANUP -- these are not endorsed, they are tracked debt.
-# Each entry is damage from commit 399ed7297 that has not been undone yet.
-# Removing an entry here should mean the file was restored, not re-listed.
-# ---------------------------------------------------------------------------
+# Every entry below this point is deliberate, like every entry above it. The
+# file no longer carries a PENDING CLEANUP section: commit 399ed7297's damage
+# has been undone in full. Batch A restored 26 non-Mono files, Batch B moved the
+# Mono.Debugger.Soft submodule to dnSpyEx's fork so the 29 Mono files could go
+# back, and Batch C restored DebuggerImpl.cs and deleted three files the overlay
+# had reinstated at paths dnSpyEx abandoned.
+#
+# If tracked debt appears again, give it its own section and say so plainly. An
+# entry that reads like an endorsement while meaning "not fixed yet" is how the
+# original damage stayed invisible.
 
-
-# Batch C: files where the overlay mixed a dgSpy hook and collateral damage in
-# the same file, so they cannot be restored wholesale.
-Extensions/dnSpy.Debugger/dnSpy.Debugger/DbgUI/DebuggerImpl.cs             BATCH C: dgSpy hook and overlay collateral in one file
-Extensions/dnSpy.Debugger/dnSpy.Debugger/DbgUI/WpfCurrentStatementUpdater.cs  BATCH C: dgSpy hook and overlay collateral in one file
-
-# Batch C: files the overlay reinstated at paths dnSpyEx had moved away from,
-# so the tree now carries both copies. Different namespaces, so they compile,
-# but the dnSpy/dnSpy copies duplicate dnSpy.Contracts.Utilities. ProjectWriter
-# is worse: dnSpyEx removed it and it is still referenced here.
-dnSpy/dnSpy/Documents/FrameworkPath.cs      BATCH C: duplicate of dnSpy.Contracts.Utilities.FrameworkPath
-dnSpy/dnSpy/Search/FrameworkFileUtils.cs    BATCH C: duplicate of dnSpy.Contracts.Utilities.FrameworkFileUtils
-dnSpy/dnSpy.Decompiler/MSBuild/ProjectWriter.cs  BATCH C: removed upstream, still referenced here
+# Window activation. A headless host must not drag the main window to the
+# foreground on every debugger stop, and nothing outside the process can prevent
+# that, so both call sites check DgSpyWindowActivation.Suppressed. Both are now
+# purely additive: the surrounding code is upstream's.
+Extensions/dnSpy.Debugger/dnSpy.Debugger/DbgUI/DebuggerImpl.cs                suppress window activation for a headless host
+Extensions/dnSpy.Debugger/dnSpy.Debugger/DbgUI/WpfCurrentStatementUpdater.cs  suppress window activation for a headless host
