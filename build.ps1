@@ -49,6 +49,16 @@ function Build-NetFramework {
 		Remove-Item -LiteralPath $resolvedOutdir -Recurse -Force
 	}
 
+	# The repackaging below renames the framework output to a fixed-name staging directory before
+	# moving it back under net48. A run interrupted between those two steps leaves that staging
+	# directory behind, and the rename then collides with it on every retry. Clear it first so an
+	# interrupted run is safe to retry, matching how Build-Net handles its own staging.
+	$resolvedStaging = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "$net_baseoutput\bin"))
+	if (Test-Path -LiteralPath $resolvedStaging) {
+		Write-Host "Removing stale packaging staging directory from an interrupted run: $resolvedStaging"
+		Remove-Item -LiteralPath $resolvedStaging -Recurse -Force
+	}
+
 	if ($NoMsbuild) {
 		dotnet build -v:m -c $configuration -f $netframework_tfm
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -61,7 +71,12 @@ function Build-NetFramework {
 	# move all files to a bin sub dir but keep the exe files
 	Rename-Item -LiteralPath $outdir -NewName bin
 	New-Item -ItemType Directory $outdir > $null
-	Move-Item -LiteralPath $net_baseoutput\bin -Destination $outdir
+	# Moving a generated directory can fail with Access denied on Windows even when its files are
+	# writable, and failing here leaves the staging directory behind for the next run to trip over.
+	# Copy the contents into the final layout instead, the same way Build-Net does.
+	New-Item -ItemType Directory "$outdir\bin" > $null
+	Get-ChildItem -LiteralPath $resolvedStaging -Force | Copy-Item -Destination "$outdir\bin" -Recurse -Force
+	Remove-Item -LiteralPath $resolvedStaging -Recurse -Force
 	foreach ($filename in 'dnSpy-x86.exe', 'dnSpy-x86.exe.config', 'dnSpy-x86.pdb',
 			 'dnSpy.exe', 'dnSpy.exe.config', 'dnSpy.pdb',
 			 'dnSpy.Console.exe', 'dnSpy.Console.exe.config', 'dnSpy.Console.pdb') {
