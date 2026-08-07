@@ -34,6 +34,8 @@ $dnSpyProcess = $null; $gatewayProcess = $null; $targetProcess = $null; $detachT
 $script:requestId = 0
 $script:failures = @()
 $script:checks = 0
+$script:section = 'startup'
+$script:lastCall = ''
 
 function Assert-That {
 	# $Condition stays untyped: -match/-like against a collection yield the matches rather than a
@@ -42,9 +44,21 @@ function Assert-That {
 	$script:checks++
 	if (@($Condition).Count -gt 0 -and [bool](@($Condition) | Select-Object -Last 1)) { Write-Host "  PASS  $What" -ForegroundColor DarkGreen }
 	else {
+		# Most call sites pass no detail, and "FAIL <sentence>" alone leaves a CI log with nothing to
+		# work from. The section and the last tool call are always known, so always say them.
+		$context = "[$script:section]" + $(if ($script:lastCall) { " after $script:lastCall" })
 		Write-Host "  FAIL  $What $Detail" -ForegroundColor Red
-		$script:failures += "$What $Detail"
+		Write-Host "        $context" -ForegroundColor DarkRed
+		$script:failures += "$What $Detail $context"
 	}
+}
+
+# Sections are already announced for a human reading along; recording them makes every later failure
+# and every tool error carry where it happened without touching the call sites.
+function Write-Section {
+	param([string]$Name)
+	$script:section = $Name
+	Write-Host "== $Name ==" -ForegroundColor Cyan
 }
 
 function Invoke-Mcp {
@@ -66,12 +80,16 @@ function Invoke-Tool {
 	# -AsText returns the raw JSON. Prefer it for emptiness checks: ConvertFrom-Json collapses an
 	# empty array in ways that make .Count unreliable in Windows PowerShell.
 	param([string]$Name, [hashtable]$Arguments, [switch]$ExpectError, [switch]$AsText)
+	# The arguments are what makes a tool error actionable: "get_frame failed: thread_id is required"
+	# reads as a product bug until you can see the harness passed thread_id as null.
+	$rendered = "$Name($($Arguments | ConvertTo-Json -Compress -Depth 6))"
+	$script:lastCall = $rendered
 	$result = Invoke-Mcp -Method 'tools/call' -Parameters @{ name = $Name; arguments = $Arguments }
 	if ($ExpectError) {
-		if (-not $result.isError) { throw "Tool $Name was expected to fail but succeeded." }
+		if (-not $result.isError) { throw "Tool $rendered was expected to fail but succeeded, returning: $($result.content[0].text)" }
 		return $result.content[0].text
 	}
-	if ($result.isError) { throw ("Tool $Name failed: " + $result.content[0].text) }
+	if ($result.isError) { throw ("Tool $rendered failed: " + $result.content[0].text) }
 	if ($AsText) { return $result.content[0].text }
 	# Windows PowerShell 5.1's ConvertFrom-Json hands a JSON array to the pipeline as one object
 	# instead of enumerating it, so @(Invoke-Tool ...)[0] would return the whole array rather than
@@ -112,36 +130,78 @@ function Wait-Until {
 	return $false
 }
 
+# Diagnostics run against a session that is already misbehaving, so any single probe may fail. One
+# failing probe must not cost the rest of the picture, and its failure is itself a finding.
+function Show-Probe {
+	param([string]$Label, [scriptblock]$Read)
+	try {
+		$value = & $Read
+		if ($null -eq $value -or "$value".Length -eq 0) { $value = '(empty)' }
+		Write-Host "        ${Label}: $value"
+	}
+	catch { Write-Host "        ${Label} threw: $($_.Exception.Message)" -ForegroundColor DarkYellow }
+}
+
+# CI keeps these files as an artifact, but an artifact nobody downloads explains nothing. The tails
+# are small enough to belong in the log itself, where the failure is already being read.
+function Write-LogTails {
+	param([int]$Lines = 25)
+	foreach ($log in 'gateway.err','gateway.out','target.err','target.out','detach-target.err') {
+		$path = Join-Path $runDirectory $log
+		if (-not (Test-Path -LiteralPath $path)) { continue }
+		$tail = @(Get-Content -LiteralPath $path -Tail $Lines -ErrorAction SilentlyContinue)
+		if ($tail.Count -eq 0) { continue }
+		Write-Host "  ---- $log (last $($tail.Count) lines) ----" -ForegroundColor DarkGray
+		$tail | ForEach-Object { Write-Host "        $_" -ForegroundColor DarkGray }
+	}
+}
+
 # A wait_for_stop timeout only says "nothing happened". These reads say what the engine, the
 # breakpoints and the target were actually doing at that moment, which is the difference between a
 # failure that can be diagnosed from a CI log and one that can only be reproduced interactively.
 function Write-StopDiagnostics {
 	param([string]$SessionId, $AfterEventId, [string]$What)
 	Write-Host "  DIAG  $What" -ForegroundColor Yellow
-	foreach ($probe in @(
-		@{ Name = 'get_session_state'; Arguments = @{ session_id = $SessionId } },
-		@{ Name = 'list_threads'; Arguments = @{ session_id = $SessionId } },
-		@{ Name = 'list_breakpoints'; Arguments = @{} },
-		@{ Name = 'list_exception_policies'; Arguments = @{ session_id = $SessionId } },
-		@{ Name = 'get_events'; Arguments = @{ session_id = $SessionId; after_event_id = $AfterEventId } }
-	)) {
-		try { Write-Host "        $($probe.Name): $(Invoke-Tool -Name $probe.Name -Arguments $probe.Arguments -AsText)" }
-		catch { Write-Host "        $($probe.Name) threw: $_" }
+	$state = $null
+	try { $state = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $SessionId } } catch { }
+	Show-Probe 'session state' { $state | ConvertTo-Json -Compress -Depth 5 }
+	Show-Probe 'events since cursor'{ Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $SessionId; after_event_id = $AfterEventId } -AsText }
+	Show-Probe 'breakpoints' { Invoke-Tool -Name 'list_breakpoints' -Arguments @{} -AsText }
+	# The stock policy set is ~100 entries of noise. Only the ones this run configured, or that carry a
+	# module condition, can explain a stop that did or did not happen here.
+	Show-Probe 'non-stock exception policies' {
+		@(Invoke-Tool -Name 'list_exception_policies' -Arguments @{ session_id = $SessionId } | ForEach-Object { $_ } |
+			Where-Object { $_.stop_thrown -or @($_.conditions).Count -gt 0 }) | ConvertTo-Json -Compress -Depth 5
+	}
+	# A running session cannot report frames, and "which thread is where" is the one reading that
+	# separates a target that never resumed from a breakpoint that never fired. Pausing here is safe:
+	# every caller of this function is on its way out.
+	if ($state.state -eq 'running') {
+		Show-Probe 'pause for frame reads' { Invoke-MutatingTool -Name 'pause' -Arguments @{ session_id = $SessionId } -AsText }
+	}
+	Show-Probe 'threads' { Invoke-Tool -Name 'list_threads' -Arguments @{ session_id = $SessionId } -AsText }
+	Show-Probe 'callstacks' {
+		$threads = @(Invoke-Tool -Name 'list_threads' -Arguments @{ session_id = $SessionId } | ForEach-Object { $_ })
+		($threads | Select-Object -First 8 | ForEach-Object {
+			$frames = @(Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $SessionId; thread_id = $_.thread_id; max_frames = 8 } | ForEach-Object { $_ })
+			"`n          thread $($_.thread_id): " + (@($frames | ForEach-Object { $_.name }) -join ' <- ')
+		}) -join ''
 	}
 	if ($null -ne $targetProcess) {
 		$targetProcess.Refresh()
 		$exited = $targetProcess.HasExited
 		Write-Host "        target pid $($targetProcess.Id) exited=$exited$(if ($exited) { " code=$($targetProcess.ExitCode)" })"
 	}
+	Write-LogTails
 }
 
 try {
-	Write-Host "== build and deploy ==" -ForegroundColor Cyan
+	Write-Section 'build and deploy'
 	& (Join-Path $repoRoot 'build-dgspy.ps1') -DnSpyDir $dnSpyDir | Out-Null
 	& dotnet build $targetProject -c Debug --nologo -v:quiet
 	if ($LASTEXITCODE) { throw "Target build failed with exit code $LASTEXITCODE" }
 
-	Write-Host "== start target, dnSpy, gateway ==" -ForegroundColor Cyan
+	Write-Section 'start target, dnSpy, gateway'
 	$targetOut = Join-Path $runDirectory 'target.out'
 	$targetProcess = Start-Process -FilePath $targetExe -WindowStyle Hidden -PassThru `
 		-RedirectStandardOutput $targetOut -RedirectStandardError (Join-Path $runDirectory 'target.err')
@@ -169,7 +229,7 @@ try {
 		throw "Extension RPC endpoint 127.0.0.1:$RpcPort did not become ready. Is the extension deployed?"
 	}
 
-	Write-Host "== gateway access control ==" -ForegroundColor Cyan
+	Write-Section 'gateway access control'
 	$rejected = $false
 	try { Invoke-Mcp -Method 'tools/list' -Parameters @{} -Headers @{ 'X-dgSpy-Token' = $token; 'Origin' = 'https://evil.example' } | Out-Null }
 	catch { $rejected = $_.Exception.Response.StatusCode.value__ -eq 403 }
@@ -199,7 +259,7 @@ try {
 	# The gateway opens a fresh connection per request and holds no debugger state, so a dnSpy restart
 	# must be invisible to the next tool call. Do this before attaching: closing dnSpy with a session
 	# attached terminates the target.
-	Write-Host "== gateway survives a dnSpy restart ==" -ForegroundColor Cyan
+	Write-Section 'gateway survives a dnSpy restart'
 	$hostBeforeRestart = Invoke-Tool -Name 'get_host_info' -Arguments @{}
 	Stop-Process -Id $dnSpyProcess.Id -Force
 	$dnSpyProcess.WaitForExit(10000) | Out-Null
@@ -214,7 +274,7 @@ try {
 	$reconnected = Invoke-Tool -Name 'get_host_info' -Arguments @{}
 	Assert-That 'the gateway reconnects to the same stable host after a dnSpy restart' ($reconnected.host_id -eq $hostBeforeRestart.host_id -and -not [string]::IsNullOrWhiteSpace($reconnected.host_id))
 
-	Write-Host "== host info and capabilities ==" -ForegroundColor Cyan
+	Write-Section 'host info and capabilities'
 	Assert-That 'get_host_info reports this machine and a live connection' ($reconnected.machine_name -eq $env:COMPUTERNAME -and $reconnected.connection_state -eq 'connected')
 	Assert-That 'get_host_info reports an x64 dnSpy' ($reconnected.architecture -eq 'X64') "(was $($reconnected.architecture))"
 	Assert-That 'get_host_info reports both in-scope engines' (@($reconnected.engines) -contains 'cordebug' -and @($reconnected.engines) -contains 'unity')
@@ -234,7 +294,7 @@ try {
 	Assert-That 'capabilities advertise the stop-reason vocabulary' (@($capabilities.stop_reasons) -contains 'breakpoint' -and @($capabilities.stop_reasons) -contains 'unknown')
 	Assert-That 'capabilities advertise the Phase 4 vocabularies' (@($capabilities.step_kinds) -contains 'over' -and @($capabilities.condition_kinds) -contains 'when_changed' -and @($capabilities.hit_count_kinds) -contains 'at_least')
 
-	Write-Host "== discovery ==" -ForegroundColor Cyan
+	Write-Section 'discovery'
 	$tools = @((Invoke-Mcp -Method 'tools/list' -Parameters @{}).tools | ForEach-Object { $_.name })
 	foreach ($expected in 'get_host_info','get_capabilities','list_programs','attach','attach_endpoint','launch','detach','terminate','restart','list_sessions','get_session_state','pause','continue','set_il_breakpoint','list_breakpoints','remove_breakpoint','clear_breakpoints','wait_for_stop','wait_for_event','get_events','get_stop_reason','list_threads','get_callstack','get_frame','update_breakpoint','set_exception_breakpoint','list_exception_breakpoints','step_into','step_over','step_out','evaluate','get_members','set_value','get_exception','add_watch','list_watches','remove_watch','list_modules','list_documents','list_types','list_members','search_symbols','get_il','get_csharp','search_text','find_references','find_implementations','get_metadata','get_raw_module','set_breakpoint','invoke_method','create_object','read_memory','write_memory','get_disassembly','get_registers','set_instruction_pointer','create_object_id','list_object_ids','evaluate_object_id','release_object_id','get_autos','get_output','wait_for_output','set_module_breakpoint','list_module_breakpoints','update_module_breakpoint','remove_module_breakpoint','export_breakpoints','import_breakpoints','list_exception_categories','list_exception_policies','set_exception_policy','remove_exception_policy','restore_exception_defaults','get_value_export','write_value_export','analyze_symbol') {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
@@ -268,7 +328,7 @@ try {
 	# none. Re-establish the cache from a listing that contains the target before attaching to it.
 	$program = @(Invoke-Tool -Name 'list_programs' -Arguments @{ process_ids = @($targetId) })[0]
 
-	Write-Host "== attach and session tracking ==" -ForegroundColor Cyan
+	Write-Section 'attach and session tracking'
 	$session = Invoke-Tool -Name 'attach' -Arguments @{ program_id = $program.program_id }
 	$sessionId = $session.session_id
 	$script:activeSessionId = $sessionId
@@ -280,7 +340,7 @@ try {
 	Assert-That 'list_sessions reports the attached program' ($sessions[0].program_id -eq $program.program_id)
 	Assert-That 'list_sessions says detaching is safe' ($sessions[0].can_detach_without_terminating)
 
-	Write-Host "== multiple active targets ==" -ForegroundColor Cyan
+	Write-Section 'multiple active targets'
 	$second = Invoke-Tool -Name 'launch' -Arguments @{ filename = $targetExe; engine = 'cordebug' }
 	$secondPid = [int](@($second.process_ids | Where-Object { $_ -ne $targetId }) | Select-Object -First 1)
 	Assert-That 'launch adds a second process to the same logical session' ($second.session_id -eq $sessionId -and @($second.process_ids).Count -eq 2 -and $secondPid -gt 0) "(ids=$($second.process_ids -join ','))"
@@ -329,7 +389,7 @@ try {
 	$restartAttached = Invoke-MutatingTool -Name 'restart' -Arguments @{ session_id = $sessionId } -ExpectError
 	Assert-That 'restart refuses a target that dgSpy only attached to' ($restartAttached -match 'launched through dgSpy|restart support')
 
-	Write-Host "== pause, inspect, resume ==" -ForegroundColor Cyan
+	Write-Section 'pause, inspect, resume'
 	$paused = Invoke-MutatingTool -Name 'pause' -Arguments @{ session_id = $sessionId }
 	Assert-That 'pause reports paused, not the pre-pause state' ($paused.state -eq 'paused') "(was $($paused.state))"
 
@@ -364,7 +424,7 @@ try {
 		Assert-That 'primitive locals are readable' ($null -ne $local -and $local.value -eq 41) "(input=$($local.value))"
 	}
 
-	Write-Host "== breakpoint and event cursor ==" -ForegroundColor Cyan
+	Write-Section 'breakpoint and event cursor'
 	$breakpoint = Invoke-MutatingTool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
 	Assert-That 'set_il_breakpoint returns an id' ($null -ne $breakpoint.breakpoint_id)
 	# The point of reporting binding state: an unbound breakpoint must not look like a bound one.
@@ -425,7 +485,7 @@ try {
 	Assert-That 'two waiters issued before resume observe the same breakpoint stop' (-not $concurrent1.timed_out -and -not $concurrent2.timed_out -and $secondStop1.event_id -eq $secondStop2.event_id)
 	Assert-That 'resume then stop advances both event id and state version' ($secondStop1.event_id -gt $firstStop.event_id -and $secondStop1.state_version -gt $firstStop.state_version)
 
-	Write-Host "== breakpoint settings ==" -ForegroundColor Cyan
+	Write-Section 'breakpoint settings'
 	# The target is paused at the breakpoint here, which is the only state in which stepping is legal.
 	$disabled = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
 	Assert-That 'update_breakpoint disables a breakpoint' (-not $disabled.enabled)
@@ -449,7 +509,7 @@ try {
 	$missingBp = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = 2147483647; enabled = $true } -ExpectError
 	Assert-That 'update_breakpoint refuses an unknown id' ($missingBp -match 'does not exist')
 
-	Write-Host "== stepping ==" -ForegroundColor Cyan
+	Write-Section 'stepping'
 	# The breakpoint stays disabled across the step. Tick is hot enough that a re-arm would race the
 	# step and stop for the breakpoint instead, which would pass for the wrong reason.
 	$stepCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
@@ -471,7 +531,7 @@ try {
 	# The tool result carries the structured error's message, not its code. Match the message.
 	Assert-That 'stepping an unknown thread is refused rather than guessed' ($badThreadStep -match 'is not active') "(was '$badThreadStep')"
 
-	Write-Host "== exception breakpoints ==" -ForegroundColor Cyan
+	Write-Section 'exception breakpoints'
 	$exception = Invoke-MutatingTool -Name 'set_exception_breakpoint' -Arguments @{ name = 'System.InvalidOperationException'; stop_first_chance = $true }
 	Assert-That 'set_exception_breakpoint reports what it set' ($exception.name -eq 'System.InvalidOperationException' -and $exception.stop_first_chance)
 	Assert-That 'set_exception_breakpoint defaults to the DotNet category' ($exception.category -eq 'DotNet') "(was $($exception.category))"
@@ -493,7 +553,7 @@ try {
 	$noChange = Invoke-MutatingTool -Name 'set_exception_breakpoint' -Arguments @{ name = 'System.Exception' } -ExpectError
 	Assert-That 'set_exception_breakpoint refuses a no-op' ($noChange -match 'stop_first_chance')
 
-	Write-Host "== evaluation ==" -ForegroundColor Cyan
+	Write-Section 'evaluation'
 	$stepThread = $secondStop1.thread_id
 	$evaluated = Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $sessionId; expression = 'input'; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'evaluate returns a raw scalar, not just display text' ($evaluated.has_raw_value -and $evaluated.value -eq 41) "(value=$($evaluated.value) display='$($evaluated.display)')"
@@ -629,7 +689,7 @@ try {
 	# identity carries the additional discriminator breakpoint binding needs.
 	Assert-That 'metadata-backed dynamic or in-memory fixture modules can carry breakpoints' (@($modules | Where-Object { ($_.is_dynamic -or $_.is_in_memory) -and $_.can_set_breakpoint }).Count -ge 2)
 
-	Write-Host "== advanced evaluation and low-level debugging ==" -ForegroundColor Cyan
+	Write-Section 'advanced evaluation and low-level debugging'
 	$invoked = Invoke-MutatingTool -Name 'invoke_method' -Arguments @{ session_id = $sessionId; expression = 'System.Math.Abs(-7)'; thread_id = $stepThread; frame_index = 0; timeout_ms = 2000 }
 	Assert-That 'invoke_method performs explicit audited func-eval' ($invoked.completed -and $invoked.causes_side_effects -and -not [string]::IsNullOrWhiteSpace($invoked.audit_id) -and $invoked.value.value -eq 7)
 	$created = Invoke-MutatingTool -Name 'create_object' -Arguments @{ session_id = $sessionId; expression = 'new System.Text.StringBuilder()'; thread_id = $stepThread; frame_index = 0; timeout_ms = 2000 }
@@ -693,7 +753,7 @@ try {
 	$removedAfterReset = Invoke-MutatingTool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' } -ExpectError
 	Assert-That 'restore_exception_defaults removes custom policies' ($removedAfterReset -match 'Phase8FixtureException') "(error='$removedAfterReset')"
 
-	Write-Host "== symbols, IL and decompilation ==" -ForegroundColor Cyan
+	Write-Section 'symbols, IL and decompilation'
 	$documents = @(Invoke-Tool -Name 'list_documents' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
 	$targetDoc = $documents | Where-Object { $_.filename -like '*Milestone1Target.exe' } | Select-Object -First 1
 	Assert-That 'list_documents finds the target and loads its metadata' ($null -ne $targetDoc -and $targetDoc.has_metadata) "(has_metadata=$($targetDoc.has_metadata))"
@@ -802,7 +862,7 @@ try {
 	# metadata resolves, breakpoints are refused explicitly, and a frame belonging to a module with no
 	# path is still navigable to its IL. This covers CorDebug only; Mono is a different engine and still
 	# needs the manual UCH pass.
-	Write-Host "== dynamic and in-memory modules ==" -ForegroundColor Cyan
+	Write-Section 'dynamic and in-memory modules'
 	$flDocs = @(Invoke-Tool -Name 'list_documents' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
 	$flModules = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
 	$flSeen = ($flDocs | Where-Object { $_.is_dynamic -or $_.is_in_memory } |
@@ -920,13 +980,13 @@ try {
 	$running = Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId } -ExpectError
 	Assert-That 'get_callstack on a running target is refused' ($running -match 'not_paused|Pause the session')
 
-	Write-Host "== clear_breakpoints ==" -ForegroundColor Cyan
+	Write-Section 'clear_breakpoints'
 	$cleared = Invoke-MutatingTool -Name 'clear_breakpoints' -Arguments @{}
 	Assert-That 'clear_breakpoints reports what it removed' ($cleared.removed -ge 1) "(removed=$($cleared.removed))"
 	$after = Invoke-Tool -Name 'list_breakpoints' -Arguments @{} -AsText
 	Assert-That 'no breakpoints remain' ($after -eq '[]') "(payload $after)"
 
-	Write-Host "== detach leaves the target alive ==" -ForegroundColor Cyan
+	Write-Section 'detach leaves the target alive'
 	$cleanupPause = Invoke-MutatingTool -Name 'pause' -Arguments @{ session_id = $sessionId; process_id = $targetId }
 	$cleanupThread = @((Invoke-Tool -Name 'list_threads' -Arguments @{ session_id = $sessionId }) | ForEach-Object { $_ } | Where-Object { $_.process_id -eq $targetId -and $_.is_current } | Select-Object -First 1)[0]
 	$cleanupStack = @(Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId; thread_id = $cleanupThread.thread_id } | ForEach-Object { $_ })
@@ -947,7 +1007,7 @@ try {
 	$err = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId } -ExpectError
 	Assert-That 'the detached session_id is no longer usable' ($err -match 'not active|No active')
 
-	Write-Host "== launch, restart, terminate, unexpected exit ==" -ForegroundColor Cyan
+	Write-Section 'launch, restart, terminate, unexpected exit'
 	$missingLaunch = Invoke-Tool -Name 'launch' -Arguments @{ filename = (Join-Path $runDirectory 'missing.exe') } -ExpectError
 	Assert-That 'launch rejects a missing target before invoking dnSpy' ($missingLaunch -match 'does not exist')
 	$badEngine = Invoke-Tool -Name 'launch' -Arguments @{ filename = $targetExe; engine = 'coreclr' } -ExpectError
@@ -996,7 +1056,7 @@ try {
 	# failure path — that a refused endpoint faults with dnSpy's own reason instead of hanging or
 	# reporting a healthy session. Run last: dnSpy pops a modal error box on connect failure (on its UI
 	# thread, so it blocks neither the dispatcher nor this RPC, but it stays on screen).
-	Write-Host "== attach_endpoint ==" -ForegroundColor Cyan
+	Write-Section 'attach_endpoint'
 	$err = Invoke-Tool -Name 'attach_endpoint' -Arguments @{ address = '127.0.0.1' } -ExpectError
 	Assert-That 'attach_endpoint without a port is refused' ($err -match 'port is required')
 	$err = Invoke-Tool -Name 'attach_endpoint' -Arguments @{ port = 70000 } -ExpectError
@@ -1024,12 +1084,16 @@ try {
 	else {
 		Write-Host "FAILED  $($script:failures.Count) of $($script:checks) checks" -ForegroundColor Red
 		$script:failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+		Write-LogTails
 		Write-Host "Logs: $runDirectory"
 		exit 1
 	}
 }
 catch {
-	Write-Host (($_ | Out-String) + "`nLogs: $runDirectory") -ForegroundColor Red
+	Write-Host (($_ | Out-String)) -ForegroundColor Red
+	Write-Host "  during [$script:section], last tool call $script:lastCall" -ForegroundColor DarkRed
+	Write-LogTails
+	Write-Host "Logs: $runDirectory"
 	exit 1
 }
 finally {
