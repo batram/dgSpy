@@ -108,6 +108,11 @@ try {
 	# unattended would make Full unrunnable rather than thorough.
 	if ($Stage -eq 'MonoTarget') {
 		Invoke-Checked 'Mono/Unity live smoke' { .\tests\run-mono-target-smoke.ps1 -TargetFramework $TargetFramework }
+		# Runs against the same listening player. Kept separate from the smoke above because it proves a
+		# different thing: that symbol search reconstructs declaring-type and nested-type names from real
+		# metadata. A string-level unit test cannot reach that, and a naive module dedup here walked every
+		# module twice while every offline suite stayed green.
+		Invoke-Checked 'Search live smoke' { .\tests\run-search-smoke.ps1 -TargetFramework $TargetFramework }
 	}
 	if ($Stage -in @('Unity','Full')) {
 		Write-Host '== start isolated Unity debugger host ==' -ForegroundColor Cyan

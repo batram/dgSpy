@@ -149,7 +149,32 @@ namespace dgSpy.Extension {
 			var byName=metadata.GetTypes().Where(t=>t.Name==typeName).ToArray();
 			if (byName.Length==1) return byName[0];
 			if (byName.Length>1) throw new RpcException("ambiguous_type",$"'{typeName}' matches {byName.Length} types: {string.Join(", ",byName.Take(10).Select(t=>t.FullName))}. Pass a full type name.");
-			throw new RpcException("type_not_found",$"No type '{typeName}' in this module. Use list_types.");
+			throw new RpcException("type_not_found",DescribeMissingType(metadata,typeName));
+		}
+
+		/// <summary>A caller that asks for <c>GameState.ChatSystem</c> is usually holding a member path, not
+		/// a type name. Answering with a bare "no such type" once led an agent to report that
+		/// <c>GameState.ChatSystem.ChatMode</c> did not exist, when GameState is a type, ChatSystem is a
+		/// ChatDisplay field on it and ChatMode is a field on ChatDisplay. So when the prefix does resolve
+		/// to a type carrying that member, say which type to ask for instead.</summary>
+		static string DescribeMissingType(ModuleDef metadata,string typeName) {
+			var split=typeName.LastIndexOf('.');
+			if (split>0 && split<typeName.Length-1) {
+				var prefix=typeName.Substring(0,split); var memberName=typeName.Substring(split+1);
+				var owners=metadata.GetTypes().Where(t=>t.FullName==prefix || t.Name==prefix).Take(2).ToArray();
+				if (owners.Length==1) {
+					var owner=owners[0];
+					var field=owner.Fields.FirstOrDefault(f=>f.Name==memberName);
+					if (field is not null)
+						return $"'{typeName}' is not a type. '{memberName}' is a field on type '{owner.FullName}', of type '{field.FieldType?.FullName}'. Pass that type to list_members, or use search to walk the path.";
+					var property=owner.Properties.FirstOrDefault(p=>p.Name==memberName);
+					if (property is not null)
+						return $"'{typeName}' is not a type. '{memberName}' is a property on type '{owner.FullName}', of type '{property.PropertySig?.RetType?.FullName}'. Pass that type to list_members, or use search to walk the path.";
+					if (owner.Methods.Any(m=>m.Name==memberName) || owner.Events.Any(e=>e.Name==memberName))
+						return $"'{typeName}' is not a type. '{memberName}' is a member of type '{owner.FullName}'. Use list_members on '{owner.FullName}', or search.";
+				}
+			}
+			return $"No type '{typeName}' in this module. Use search to find it by name, or list_types to enumerate.";
 		}
 
 		async Task<SymbolList> SearchSymbolsAsync(RpcRequest req,CancellationToken cancellationToken) {

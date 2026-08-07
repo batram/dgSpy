@@ -30,7 +30,7 @@
     },
     {
       "name": "get_workflow_help",
-      "description": "Return focused guidance for setup, local_deployment, remote_deployment, attach, stepping, recovery, or shutdown.",
+      "description": "Return focused guidance for setup, local_deployment, remote_deployment, attach, discovery, stepping, recovery, or shutdown.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -41,6 +41,7 @@
               "local_deployment",
               "remote_deployment",
               "attach",
+              "discovery",
               "stepping",
               "recovery",
               "shutdown"
@@ -2294,7 +2295,7 @@
     },
     {
       "name": "list_types",
-      "description": "List types in a loaded module, filtered and paged. Each result carries the metadata token, so a breakpoint can be set from it without parsing display text.",
+      "description": "Drill-in tool: use it when you already know the module and want to enumerate it. To find a type by name, use \u0060search\u0060 \u2014 it resolves qualified names and returns the module. List types in a loaded module, filtered and paged. Each result carries the metadata token, so a breakpoint can be set from it without parsing display text.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2337,7 +2338,7 @@
     },
     {
       "name": "list_members",
-      "description": "List methods, fields, properties and events of a type, with metadata tokens. An ambiguous type name is reported with the candidates rather than resolved by guessing.",
+      "description": "Drill-in tool for a type \u0060search\u0060 already identified. \u0060type\u0060 must name a TYPE, not a path: \u0060A.B\u0060 where B is a field on A is not a type, and the error says so rather than implying the member does not exist. List methods, fields, properties and events of a type, with metadata tokens. An ambiguous type name is reported with the candidates rather than resolved by guessing.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2382,8 +2383,116 @@
       }
     },
     {
+      "name": "search",
+      "description": "START HERE when you have a name and need a symbol. dnSpy\u0027s Search window as a tool: it matches the same candidate strings the GUI does, so a qualified path works \u2014 pattern \u0027GameState.ChatSystem\u0027 finds the ChatSystem field on type GameState, which search_symbols cannot. Space-separated terms are AND-ed, /slashes/ make it a regular expression, and kinds covers every entry of the GUI\u0027s Search For dropdown including property, event, parameter, local and literal. Every returned identifier round-trips: full_name is accepted back here as pattern, declaring_type is accepted by list_members and get_csharp, and module plus token is accepted by get_il, find_references and set_il_breakpoint. Nothing needs parsing. Bounded by max_scan over inspected symbols, not by the clock; scan_truncated=true means work stopped early and next_scan_offset resumes exactly where it left off. Pass module on Unity, where a whole-process scan means hundreds of thousands of framework symbols.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Required unless scope is documents."
+          },
+          "pattern": {
+            "type": "string",
+            "description": "Terms are AND-ed unless match_any_word. /text/ is a regular expression. In literal mode, \u0022quoted\u0022 is a string and 0x1F or 3.5 is a number."
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "assembly",
+                "module",
+                "namespace",
+                "type",
+                "field",
+                "method",
+                "property",
+                "event",
+                "parameter",
+                "local",
+                "parameter_or_local",
+                "assembly_ref",
+                "module_ref",
+                "resource",
+                "generic_type",
+                "non_generic_type",
+                "enum",
+                "interface",
+                "class",
+                "struct",
+                "delegate",
+                "member",
+                "any",
+                "literal"
+              ]
+            },
+            "description": "Default [type, member]. member = method\u002Bfield\u002Bproperty\u002Bevent. literal searches constant values, ldc/ldstr operands and resource names instead of names, and cannot be combined with name kinds. Custom attribute arguments are not searched."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "session",
+              "documents",
+              "all"
+            ],
+            "description": "session (default) searches the debug session\u0027s loaded modules, the same set every other decompiler tool uses. documents searches dnSpy\u0027s Assembly Explorer and needs no attached process. all searches both. Every hit carries in_session, which is false when the session tools will answer module_not_found for it."
+          },
+          "module": {
+            "type": "string",
+            "description": "Substring filter on module name or path."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Default 100."
+          },
+          "max_scan": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000000,
+            "description": "Hard work bound in inspected symbols; default 200000."
+          },
+          "scan_offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Resume cursor: pass a previous response\u0027s next_scan_offset."
+          },
+          "case_sensitive": {
+            "type": "boolean",
+            "description": "Default false."
+          },
+          "whole_word": {
+            "type": "boolean",
+            "description": "Default false."
+          },
+          "match_any_word": {
+            "type": "boolean",
+            "description": "Default false; true ORs the terms instead of ANDing them."
+          },
+          "compiler_generated": {
+            "type": "boolean",
+            "description": "Default true. Keep it true to find auto-property backing fields and state-machine members."
+          }
+        },
+        "required": [
+          "pattern"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
       "name": "search_symbols",
-      "description": "Find types and members by name across loaded modules. This is how you get from a name to the module and metadata token a breakpoint needs, without knowing a token up front. Bounded; reports total and truncated. Pass module to avoid searching every loaded assembly, which on Unity means thousands of framework types.",
+      "description": "Prefer \u0060search\u0060. This is the older, narrower matcher: it compares the simple name only, so it cannot find \u0027Type.Member\u0027 even though that is the shape it returns as full_name, and it covers only type, method and field \u2014 no properties, events, parameters, locals or literals. Kept for compatibility. Find types and members by name across the session\u0027s loaded modules; bounded, reports total and truncated. Pass module to avoid searching every loaded assembly, which on Unity means thousands of framework types.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2396,7 +2505,7 @@
           },
           "pattern": {
             "type": "string",
-            "description": "Case-insensitive substring."
+            "description": "Case-insensitive substring, matched against the simple name only."
           },
           "kinds": {
             "type": "array",
@@ -2576,7 +2685,7 @@
     },
     {
       "name": "search_text",
-      "description": "Search decompiled C# text in loaded modules. Output and work are bounded; scan_truncated means max_methods stopped the scan before the selected scope was exhausted. Pass module and type on Unity.",
+      "description": "Heavier than \u0060search\u0060, and the last resort: it decompiles method bodies one at a time. For string and number constants use \u0060search\u0060 with kinds:[\u0022literal\u0022], which reads IL and costs a fraction of this. Use this only when the thing you are looking for exists solely in decompiled C# \u2014 a language construct rather than a name or a constant. Search decompiled C# text in loaded modules. Output and work are bounded; scan_truncated means max_methods stopped the scan before the selected scope was exhausted. Pass module and type on Unity.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2622,7 +2731,7 @@
     },
     {
       "name": "find_references",
-      "description": "Find loaded methods whose IL references a target metadata member. The target is module plus token; search_module optionally limits the scan.",
+      "description": "Drill-in tool. Takes module plus token, which is exactly what \u0060search\u0060 returns. Find loaded methods whose IL references a target metadata member. The target is module plus token; search_module optionally limits the scan.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2662,7 +2771,7 @@
     },
     {
       "name": "find_implementations",
-      "description": "Find directly derived types and direct interface implementers. search_module limits the loaded modules scanned and should be used on Unity.",
+      "description": "Drill-in tool. Takes module plus token or a type name, both of which \u0060search\u0060 returns. Find directly derived types and direct interface implementers. search_module limits the loaded modules scanned and should be used on Unity.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2704,7 +2813,7 @@
     },
     {
       "name": "get_metadata",
-      "description": "Return bounded metadata facts for a module and optionally resolve one metadata token.",
+      "description": "Module-level facts, not a way to locate a symbol \u2014 use \u0060search\u0060 for that. Return bounded metadata facts for a module and optionally resolve one metadata token.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3561,7 +3670,7 @@
     },
     {
       "name": "analyze_symbol",
-      "description": "Return bounded typed caller, callee, construction, field, override, implementation, and attribute edges.",
+      "description": "Drill-in tool for a symbol \u0060search\u0060 already found; it takes the module and token search returns. Return bounded typed caller, callee, construction, field, override, implementation, and attribute edges.",
       "inputSchema": {
         "type": "object",
         "properties": {

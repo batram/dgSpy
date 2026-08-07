@@ -67,7 +67,7 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   `update_module_breakpoint`, `remove_module_breakpoint`, `export_breakpoints`, `import_breakpoints`,
   `list_exception_categories`, `list_exception_policies`, `set_exception_policy`,
   `remove_exception_policy`, `restore_exception_defaults`.
-- Code and metadata: `list_modules`, `list_documents`, `list_types`, `list_members`, `search_symbols`,
+- Code and metadata: `search`, `list_modules`, `list_documents`, `list_types`, `list_members`, `search_symbols`,
   `get_il`, `get_csharp`, `search_text`, `find_references`, `find_implementations`, `get_metadata`,
   `get_raw_module`, `analyze_symbol`.
 - Explicit side effects and low-level access: `invoke_method`, `create_object`, `read_memory`,
@@ -215,10 +215,40 @@ ship without being filterable and advertised in the same edit.
   `stop_reason: "step"`. `completed: false` means still running, not failed. The cursor matters for the
   same reason it does for breakpoints: a step over a fast call lands before a follow-up state read
   returns.
-- **`search_symbols` is how you get from a name to a breakpoint.** It returns module plus metadata
-  token, which is exactly what `set_il_breakpoint` takes, so an agent never has to parse display text
-  into an identity. `set_breakpoint` does the same resolution server-side and then follows the identical
+- **`search` is the discovery entry point.** It is dnSpy's Search window as a tool: it tests the same
+  candidate strings the GUI does, so a qualified path resolves --- `GameState.ChatSystem` finds the
+  `ChatSystem` field on type `GameState`, which `search_symbols` cannot, because that tool compares the
+  simple name only and so cannot find the very `full_name` it prints. `kinds` covers every entry of the
+  GUI's *Search For* dropdown, including `property`, `event`, `parameter`, `local` and `literal`;
+  `search_symbols` covers three of the twenty-four. Space-separated terms are AND-ed, `/slashes/` make a
+  regular expression, and `kinds: ["literal"]` searches constant values and `ldc`/`ldstr` operands
+  directly out of IL rather than decompiling, which is what makes it far cheaper than `search_text`.
+  The port and the reasons for not driving dnSpy's own `IDocumentSearcher` are in
+  [SEARCH_PROPOSAL.md](SEARCH_PROPOSAL.md).
+- **`search` results round-trip; nothing needs parsing.** `full_name` is one of the strings the matcher
+  itself tests, so it is accepted back as `pattern`. `declaring_type` is accepted by `list_members` and
+  `get_csharp`. `module` plus `token` is accepted by `get_il`, `find_references`, `analyze_symbol` and
+  `set_il_breakpoint`. This is the rule commit `3fcbacd73` established for `get_members`, applied to a
+  second surface: a tool must never emit an identifier it would then reject.
+- **`search` is the only read-only tool whose scope can leave the debug session.** `scope: "session"`
+  (the default) searches the session's loaded modules, the same set as every neighbouring tool.
+  `scope: "documents"` searches dnSpy's Assembly Explorer and needs no attached process, which answers
+  the case where an assembly is open in dnSpy but not loaded in the target and every other tool reports
+  `module_not_found`. `scope: "all"` searches both. Every hit carries `in_session`, so a caller knows
+  before it tries whether the session-scoped tools will accept that module.
+- **`search` is resumable, which nothing else on this surface is.** `max_scan` bounds inspected symbols
+  rather than the clock, traversal order is deterministic, and `next_scan_offset` fed back as
+  `scan_offset` continues exactly where the previous call stopped. `scan_truncated: false` means the
+  scope was exhausted. The other bounded scans (`search_text.max_methods`,
+  `analyze_symbol.max_methods`) still have no cursor, so a large module has regions they cannot reach.
+- **`search_symbols` remains, narrower.** It returns module plus metadata token, which is exactly what
+  `set_il_breakpoint` takes, so an agent never has to parse display text into an identity.
+  `set_breakpoint` does the same resolution server-side and then follows the identical
   path, so binding state and Mono snapping cannot diverge between the two tools.
+- **A member path is not a type name, and the error says which.** `list_members(type: "GameState.ChatSystem")`
+  reports that `ChatSystem` is a *field* on type `GameState` of type `ChatDisplay`, and names the type to
+  ask for instead. The previous flat "No type ... Use list_types" once led an agent to report that a
+  member which plainly exists did not.
 - **`get_il` marks the offsets Mono will accept.** `is_sequence_point` per instruction answers the
   question that previously took trial and error. `has_sequence_points: false` means no PDB was
   available — *not* that there are no legal offsets.
@@ -239,7 +269,9 @@ ship without being filterable and advertised in the same edit.
   module filters avoid scanning every Unity framework assembly when the caller already knows the scope.
   `search_text` also caps the number of methods it decompiles (`max_methods`, default 200) and reports
   `scanned_methods` / `scan_truncated`; `find_implementations.search_module` provides the equivalent
-  Unity-safe scope. These are work bounds, not merely output caps.
+  Unity-safe scope. These are work bounds, not merely output caps. Reach for `search_text` last: it
+  decompiles, so it costs orders of magnitude more than `search`, and for string or number constants
+  `search` with `kinds: ["literal"]` answers the same question out of IL.
 - **`value` and `display` are separate on purpose.** `value` is the raw scalar, `display` is dnSpy's
   formatted text. An agent comparing numbers wants the first; one showing something wants the second.
   Collapsing them would force every caller to parse display text back into a value.
