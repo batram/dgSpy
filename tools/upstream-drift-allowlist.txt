@@ -87,10 +87,27 @@ README.md                      dgSpy project identity
 # Removing an entry here should mean the file was restored, not re-listed.
 # ---------------------------------------------------------------------------
 
-# Batch B: 28 Mono files reverted by the overlay. Restoring them needs a live
-# Unity target, because the gate covers CorDebug only and the restored code
-# calls Mono.Debugger.Soft APIs against a submodule this fork pins itself.
-Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/   BATCH B: overlay collateral, needs a live Unity target to verify
+# Batch B: 29 Mono files reverted by the overlay. Restoring them was attempted
+# and reverted: it does not compile, and the blocker is not the extension code.
+#
+# dnSpyEx extended its Mono.Debugger.Soft fork; this repo pins batram's, which
+# descends from plain dnSpy and lacks those additions. Restoring dnSpyEx's Mono
+# extension needs, at minimum:
+#     PointerValue                  (excluded from compilation in batram's csproj)
+#     PointerValue.Value
+#     AssemblyMirror.GetMetadataBlob, .IsDynamic, .GetMethod
+#     AppDomainMirror.CreateByteArray
+#     ArrayMirror.SetByteValues
+#     TypeMirror.GetValueSize
+#     EventType.Crash
+#     a MonoDebugTypeCreator signature that takes uint rather than string
+#
+# So the extension code and the submodule are a matched pair and cannot be moved
+# independently. Closing this means either porting those APIs into
+# batram/Mono.Debugger.Soft, or adopting dnSpyEx's fork and carrying over the one
+# dgSpy commit on batram's (888ded0 "Bound Unity stack-frame fetch waits").
+# Both are changes to a separate repository, and neither is a file restore here.
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/   BATCH B: blocked, pinned Mono.Debugger.Soft fork lacks the dnSpyEx APIs this code needs
 
 # Batch C: files where the overlay mixed a dgSpy hook and collateral damage in
 # the same file, so they cannot be restored wholesale.
