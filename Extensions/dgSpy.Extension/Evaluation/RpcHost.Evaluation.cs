@@ -43,6 +43,13 @@ namespace dgSpy.Extension {
 					var requested=manager.Processes.SelectMany(p=>p.Threads).FirstOrDefault(t=>ThreadId(t)==requestedThreadId)
 						?? throw new RpcException("thread_not_found",$"Thread {requestedThreadId} is not active. Refresh list_threads and use an exact thread_id.");
 					manager.CurrentThread.Current=requested;
+					// The caller's choice is authoritative; do not read CurrentThread.Current back to
+					// discover it. That assignment does not necessarily land before the read, so the
+					// read returned whichever thread carried the stop and every frame below was then
+					// taken from the wrong thread -- an error when that thread had no frame at the
+					// index, and silently the wrong frame's data when it did. The wait on the next
+					// line is what actually lets the assignment take effect.
+					return ThreadId(requested);
 				}
 				return manager.CurrentThread.Current is null ? "" : ThreadId(manager.CurrentThread.Current);
 			},cancellationToken).ConfigureAwait(false);
