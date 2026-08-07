@@ -94,8 +94,19 @@ namespace dgSpy.Extension {
 				node.FormatValue(eval,display,DbgValueFormatterOptions.None,null);
 			}
 			var value=node.Value;
+			// CanEvaluateExpression only says this is a value row rather than a grouping row; it does not
+			// promise the string parses. For a compiler-generated member it does not - see
+			// ExpressionAddressability. Report no expression rather than one guaranteed to fail, and do not
+			// fall back to the caller's expression here: that names the parent, not this member.
+			var nodeExpression=node.CanEvaluateExpression && node.Expression.Length!=0 ? node.Expression : expression;
+			if (!ExpressionAddressability.IsAddressable(nodeExpression)) nodeExpression="";
+			// The "Static members" row is a grouping row whose expression is the declaring type name rather
+			// than an expression, so passing it back returns "error CS0119: 'X' is a type, which is not valid
+			// in the given context". Its members are addressable - dnSpy composes them as Type.Member, which
+			// is legal - but the group itself is not, and there is no RPC path to expand a grouping row.
+			if (node.ImageName==PredefinedDbgValueNodeImageNames.StaticMembers) nodeExpression="";
 			return new EvaluatedValue {
-				Expression=node.CanEvaluateExpression && node.Expression.Length!=0 ? node.Expression : expression,
+				Expression=nodeExpression,
 				Name=name.Text.Length==0 ? expression : name.Text,
 				Type=type.Text,
 				// Raw value and display text are kept apart on purpose: an agent that needs to compare or

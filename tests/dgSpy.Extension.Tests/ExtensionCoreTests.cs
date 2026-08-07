@@ -218,6 +218,38 @@ public sealed class ExtensionCoreTests {
 		Assert.Contains("refresh",error.Message);
 	}
 
+	[Theory]
+	// A generated name is unspellable wherever it appears, and it always arrives as a segment after a dot.
+	[InlineData("aggregate.<AutoName>k__BackingField")]
+	[InlineData("((Milestone1Target.AggregateFixture)existing).<ModuleDef>k__BackingField")]
+	[InlineData("this.<>c__DisplayClass0_0")]
+	[InlineData("frame.<>4__this")]
+	[InlineData("state.<>1__state")]
+	[InlineData("CS$<>8__locals0.captured")]
+	[InlineData("$VB$Local_x")]
+	public void Unspellable_member_names_are_not_offered_as_expressions(string expression) =>
+		Assert.False(ExpressionAddressability.IsAddressable(expression));
+
+	[Theory]
+	// The angle brackets of a generic type in a cast, and the leading '$' of a pseudo-variable, are both
+	// legal - rejecting either would strip expressions that do work.
+	[InlineData("aggregate.InstanceCount")]
+	[InlineData("aggregate.AutoName")]
+	[InlineData("Milestone1Target.AggregateFixture")]
+	[InlineData("((System.Collections.Generic.List<int>)x).Count")]
+	[InlineData("((System.Collections.Generic.Dictionary<string,System.Collections.Generic.List<int>>)x).Keys")]
+	[InlineData("$exception")]
+	[InlineData("$exception.Message")]
+	[InlineData("$1.InstanceName")]
+	[InlineData("commandLine[0]")]
+	[InlineData("commandLine[0].Length")]
+	public void Ordinary_expressions_are_still_offered(string expression) =>
+		Assert.True(ExpressionAddressability.IsAddressable(expression));
+
+	[Fact]
+	public void An_absent_expression_is_not_addressable() =>
+		Assert.False(ExpressionAddressability.IsAddressable(""));
+
 	[Fact]
 	public void Failed_child_expansion_is_one_error_not_a_page_of_members() {
 		// The regression this guards: DbgEngineValueNodeImpl used to answer a failed expansion with `count`

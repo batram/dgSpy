@@ -41,6 +41,11 @@ namespace Milestone1Target {
 		public static int SharedCount = 3;
 		public int InstanceCount = 5;
 		public string InstanceName = "instance";
+		/// <summary>An auto-property, so this fixture also carries a compiler-generated backing field
+		/// named <c>&lt;AutoName&gt;k__BackingField</c>. Angle brackets are not legal in a C# identifier,
+		/// so no spelling of that name parses - which is why get_members must not hand the caller an
+		/// expression for it. Plain fields cannot reproduce that; every other member here is one.</summary>
+		public string AutoName { get; set; } = "auto";
 	}
 	static class GenericExtensions {
 		public static T Unwrap<T>(this GenericBox<T> box) => box.Value;

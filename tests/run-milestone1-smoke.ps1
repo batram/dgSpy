@@ -570,7 +570,9 @@ try {
 	$members = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $sessionId; expression = 'commandLine'; thread_id = $stepThread; frame_index = 1; count = 5 }
 	Assert-That 'get_members expands a reference one level' ($members.total -ge 0 -and $members.expression -eq 'commandLine')
 	Assert-That 'get_members reports paging state' ($members.offset -eq 0 -and -not $members.truncated)
-	Assert-That 'every returned member carries the expression that reaches it again' (@($members.members | Where-Object { [string]::IsNullOrWhiteSpace($_.expression) }).Count -eq 0)
+	# This only checks the string is non-empty. It never passes one back, which is why get_members shipped
+	# expressions that could not parse. The round trip is asserted for real over 'aggregate' below.
+	Assert-That 'every returned member carries a non-empty expression' (@($members.members | Where-Object { [string]::IsNullOrWhiteSpace($_.expression) }).Count -eq 0)
 	# Regression: a page reaching the tail of an aggregate used to throw IndexOutOfRangeException inside
 	# AggregateValueNodeProvider, because `index - childCount` is unsigned and wrapped to a negative
 	# provider index whenever the page started inside providers[0]. The engine swallowed that and returned
@@ -598,6 +600,37 @@ try {
 	# The tail page is the other half of the wrap: it starts inside the first provider and runs past it.
 	$tailPage = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $sessionId; expression = 'aggregate'; thread_id = $stepThread; frame_index = 1; offset = 1; count = 200 }
 	Assert-That 'a page starting inside the first provider and spanning its tail succeeds' (@($tailPage.members | Where-Object { $_.error -and $_.error -match 'nternal debugger error' }).Count -eq 0 -and @($tailPage.members).Count -eq ($allMembers.total - 1))
+
+	# get_members documents that a member's expression goes back in to drill deeper, and nothing verified
+	# that until now: the assertion above only checks the string is non-empty. dnSpy composes a member
+	# expression by appending the raw metadata name, and reports CanEvaluateExpression=true regardless, so
+	# an auto-property backing field produced 'aggregate.<AutoName>k__BackingField'. Angle brackets are not
+	# legal in a C# identifier and there is no escaped form, so passing that back returned
+	# "error CS1001: Identifier expected". AggregateFixture.AutoName exists to reproduce that; every other
+	# member of the fixture is a plain field and cannot.
+	$backing = @($allMembers.members | Where-Object { $_.name -eq '<AutoName>k__BackingField' })
+	Assert-That 'the fixture really exposes a compiler-generated backing field' ($backing.Count -eq 1) "(names: $((@($allMembers.members).name) -join ', '))"
+	Assert-That 'an unspellable member reports no expression rather than one that cannot parse' ([string]::IsNullOrEmpty($backing[0].expression)) "(got '$($backing[0].expression)')"
+	# The row is suppressed, not hidden: with func-eval off the backing field is the only readable path to
+	# an auto-property's value, so dropping the row would cost more than it saved.
+	Assert-That 'a row with no expression still carries its value' ($backing[0].has_raw_value -and $backing[0].value -eq 'auto') "(value '$($backing[0].value)')"
+	# The other unusable expression, and a different cause: "Static members" is a grouping row carrying the
+	# declaring type name, and a bare type is not an expression (error CS0119). There is no RPC path to
+	# expand a grouping row, but its members stay reachable by naming them, so suppressing it costs little.
+	$statics = @($allMembers.members | Where-Object { $_.name -eq 'Static members' })
+	Assert-That 'the static members group reports no expression rather than a bare type name' ([string]::IsNullOrEmpty($statics[0].expression)) "(got '$($statics[0].expression)')"
+	$staticValue = Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $sessionId; expression = 'Milestone1Target.AggregateFixture.SharedCount'; thread_id = $stepThread; frame_index = 1 }
+	Assert-That 'a static member is still reachable by naming it directly' ($staticValue.has_raw_value -and -not $staticValue.error) "(error '$($staticValue.error)')"
+	# The real contract. Every expression get_members hands back is fed straight back into get_members,
+	# which is the documented drill-down loop. Any error at all means the caller was given a dead end.
+	$offered = @($allMembers.members | Where-Object { -not [string]::IsNullOrWhiteSpace($_.expression) })
+	Assert-That 'a full page still offers usable expressions' ($offered.Count -ge 3) "(offered $($offered.Count))"
+	$deadEnds = @()
+	foreach ($offer in $offered) {
+		$probe = Invoke-Mcp -Method 'tools/call' -Parameters @{ name = 'get_members'; arguments = @{ session_id = $sessionId; expression = $offer.expression; thread_id = $stepThread; frame_index = 1; count = 1; allow_func_eval = $true } }
+		if ($probe.isError) { $deadEnds += "$($offer.name) -> $($offer.expression): $($probe.content[0].text)" }
+	}
+	Assert-That 'every expression get_members offers is accepted when passed back' ($deadEnds.Count -eq 0) "($($deadEnds -join ' | '))"
 
 	# A primitive has nothing to expand. Zero members is the correct answer, not an error.
 	$noMembers = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $sessionId; expression = 'input'; thread_id = $stepThread; frame_index = 0 }

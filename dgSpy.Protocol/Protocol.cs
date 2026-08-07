@@ -227,7 +227,15 @@ namespace dgSpy.Protocol {
 	public sealed class EvaluatedValue {
 		/// <summary>Expression that produces this value again, including for a member reached by
 		/// expansion. This is what makes depth the caller's to control: pass a member's expression back
-		/// to get_members to go one level deeper.</summary>
+		/// to get_members to go one level deeper.
+		/// <para>Empty means this row cannot be addressed by any expression, so it is a stop rather than a
+		/// retry. Two causes. Compiler-generated members - auto-property backing fields, async and iterator
+		/// state machine fields, lambda display-class fields - have metadata names
+		/// (<c>&lt;Foo&gt;k__BackingField</c>) containing characters no identifier may contain in either
+		/// language. Grouping rows such as <c>Static members</c> carry a type name, and a bare type is not
+		/// an expression; its members remain reachable by naming them directly
+		/// (<c>Some.Type.SomeStaticField</c>). In both cases the row's name, type and value are still
+		/// accurate; only drilling deeper from that row is impossible.</para></summary>
 		[JsonPropertyName("expression")] public string Expression { get; set; }="";
 		[JsonPropertyName("name")] public string Name { get; set; }="";
 		[JsonPropertyName("type")] public string Type { get; set; }="";

@@ -2013,7 +2013,7 @@
     },
     {
       "name": "get_members",
-      "description": "Expand one object one level, paged. Pass a returned member\u0027s \u0060expression\u0060 back here to go deeper: depth is deliberately the caller\u0027s to control, because recursing server-side is unbounded on a cyclic object graph. Reports total and truncated.",
+      "description": "Expand one object one level, paged. Pass a returned member\u0027s \u0060expression\u0060 back here to go deeper: depth is deliberately the caller\u0027s to control, because recursing server-side is unbounded on a cyclic object graph. A member whose \u0060expression\u0060 is empty cannot be addressed at all: either a compiler-generated member (auto-property backing field, async or iterator state machine field, lambda display class) whose name is not spellable in any language, or a grouping row such as \u0060Static members\u0060 that carries a type name rather than an expression. Its name, type and value are still accurate; do not retry it. Static members stay reachable by naming them directly, eg. \u0060Some.Type.SomeStaticField\u0060. Reports total and truncated.",
       "inputSchema": {
         "type": "object",
         "properties": {
