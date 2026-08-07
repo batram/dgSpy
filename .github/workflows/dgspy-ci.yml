@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [dgspy]
   workflow_dispatch:
+  # net48 is retained as the fallback host baseline but is no longer the default, so nothing on the
+  # PR path exercises it. A weekly run is what keeps "retained" from quietly meaning "rotted".
+  schedule:
+    - cron: '0 5 * * 1'
 
 permissions:
   contents: read
@@ -46,7 +50,7 @@ jobs:
         run: dotnet test tests/dgSpy.Extension.Tests/dgSpy.Extension.Tests.csproj --configuration Release --nologo --verbosity minimal
 
   cordebug-live:
-    name: CorDebug live smoke
+    name: CorDebug live smoke (net10, shipping host)
     runs-on: windows-latest
     timeout-minutes: 45
 
@@ -76,6 +80,43 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cordebug-smoke-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/dgspy-smoke-*
+          if-no-files-found: warn
+          retention-days: 7
+
+  cordebug-live-net48:
+    name: CorDebug live smoke (net48, retained fallback)
+    # Not on the PR path: net48 is the retained fallback, not what ships, and the net48 host needs a
+    # full Visual Studio MSBuild that the net10 publish does not. Weekly plus on demand is enough to
+    # prove it still builds and debugs before anyone needs to fall back to it.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install .NET SDKs
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            10.0.x
+            7.0.x
+
+      - name: Build, test, and run live CorDebug smoke on net48
+        shell: pwsh
+        env:
+          DGSPY_SMOKE_LOG_ROOT: ${{ runner.temp }}
+        run: .\tests\run-modernization-gate.ps1 -Stage CorDebug -TargetFramework net48
+
+      - name: Upload smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cordebug-net48-smoke-diagnostics-${{ github.run_id }}
           path: ${{ runner.temp }}/dgspy-smoke-*
           if-no-files-found: warn
           retention-days: 7

@@ -1,6 +1,9 @@
 param(
 	[ValidateSet('Shared','CorDebug','Unity','Full')]
 	[string]$Stage = 'Shared',
+	# net10 is the default host: it is what ships and what launch_local_host runs. net48 is retained as
+	# the fallback baseline and is still the only host with Unity/UCH acceptance evidence.
+	[ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows',
 	[switch]$SkipHostBuild,
 	[switch]$UpdateSnapshots
 )
@@ -11,6 +14,14 @@ $ErrorActionPreference = 'Stop'
 $env:MSBUILDDISABLENODEREUSE = '1'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $repoRoot = Split-Path $PSScriptRoot -Parent
+
+# ps_scratch\Start-DnSpyPhase6Uch.ps1 launches the net48 host by absolute path, and Unity/UCH has no
+# acceptance evidence on net10. Running the Unity stage against a net10 build would start a net48
+# dnSpy with no extension deployed to it and fail in a way that looks like a Unity regression, so
+# refuse instead of letting the mismatch surface later as a mystery.
+if ($Stage -in @('Unity','Full') -and $TargetFramework -ne 'net48') {
+	throw "Stage '$Stage' covers Unity, which is only proven on the net48 host. Rerun with -TargetFramework net48, or use -Stage CorDebug for the shipping net10 host."
+}
 
 function Invoke-Checked {
 	param([string]$Label, [scriptblock]$Command)
@@ -30,7 +41,12 @@ if ($locking.Count) {
 
 Push-Location $repoRoot
 try {
-	if (-not $SkipHostBuild) {
+	# The net10 host publishes through the SDK-native driver and needs no Visual Studio installation at
+	# all. Only the net48 host requires full MSBuild, so that discovery now runs only when it is asked for.
+	if (-not $SkipHostBuild -and $TargetFramework -ne 'net48') {
+		Invoke-Checked 'dnSpy net10 x64 self-contained publish' { .\build.ps1 net-x64 -NoMsbuild }
+	}
+	elseif (-not $SkipHostBuild) {
 		$msbuildCandidates = @(
 			'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe',
 			'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\amd64\MSBuild.exe',
@@ -60,7 +76,7 @@ try {
 			$env:MSBuildEnableWorkloadResolver = $previousWorkloadResolver
 		}
 	}
-	Invoke-Checked 'dgSpy build and deploy' { .\build-dgspy.ps1 }
+	Invoke-Checked 'dgSpy build and deploy' { .\build-dgspy.ps1 -TargetFramework $TargetFramework }
 
 	if ($UpdateSnapshots) {
 		$env:DGSPY_UPDATE_SNAPSHOTS = '1'
@@ -77,7 +93,7 @@ try {
 	}
 
 	if ($Stage -in @('CorDebug','Full')) {
-		Invoke-Checked 'CorDebug live smoke' { .\tests\run-milestone1-smoke.ps1 }
+		Invoke-Checked 'CorDebug live smoke' { .\tests\run-milestone1-smoke.ps1 -TargetFramework $TargetFramework }
 	}
 	if ($Stage -in @('Unity','Full')) {
 		Write-Host '== start isolated Unity debugger host ==' -ForegroundColor Cyan

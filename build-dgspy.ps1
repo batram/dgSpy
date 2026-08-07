@@ -1,8 +1,14 @@
 # Builds the dgSpy projects and deploys the extension into dnSpy.
-# See docs/DGSPY_BASELINE.md. Scope: x64, net48 dnSpy.
+# See docs/DGSPY_BASELINE.md. Scope: x64.
+#
+# net10 is the default because it is what ships: pack-dgspy.ps1 packages the net10 host and that is
+# what install-dgspy.ps1 deploys and what launch_local_host runs. Testing net48 by default meant the
+# live smoke proved a build no user runs. net48 remains fully supported via -TargetFramework net48.
 param(
 	[string]$Configuration = 'Release',
-	[string]$DnSpyDir = "$PSScriptRoot\dnSpy\dnSpy\bin\Release\net48",
+	[ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows',
+	# Defaults to the tree matching -TargetFramework; PowerShell cannot express that in the param block.
+	[string]$DnSpyDir,
 	[switch]$NoDeploy
 )
 
@@ -10,11 +16,22 @@ $ErrorActionPreference = 'Stop'
 # See build.ps1: keep MSBuild from leaving reusable worker nodes holding bin/obj handles.
 $env:MSBUILDDISABLENODEREUSE = '1'
 
+# The net10 host is a self-contained publish, so its runtime tree is the publish directory rather
+# than the build output directory. Both layouts put dnSpy.exe at the root and the runtime under bin\.
+$hostBuildCommand = if ($TargetFramework -eq 'net48') { '.\build.ps1 netframework' } else { '.\build.ps1 net-x64 -NoMsbuild' }
+if ([string]::IsNullOrWhiteSpace($DnSpyDir)) {
+	$DnSpyDir = if ($TargetFramework -eq 'net48') {
+		"$PSScriptRoot\dnSpy\dnSpy\bin\Release\net48"
+	} else {
+		"$PSScriptRoot\dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish"
+	}
+}
+
 $extensionProject = Join-Path $PSScriptRoot 'Extensions\dgSpy.Extension\dgSpy.Extension.csproj'
 $gatewayProject = Join-Path $PSScriptRoot 'dgSpy.Gateway\dgSpy.Gateway.csproj'
 $cliProject = Join-Path $PSScriptRoot 'dgSpy.Cli\dgSpy.Cli.csproj'
 
-dotnet build $extensionProject -c $Configuration -f net48 --nologo -v:minimal
+dotnet build $extensionProject -c $Configuration -f $TargetFramework --nologo -v:minimal
 if ($LASTEXITCODE) { throw "Extension build failed with exit code $LASTEXITCODE" }
 
 dotnet build $gatewayProject -c $Configuration --nologo -v:minimal
@@ -26,13 +43,13 @@ if ($LASTEXITCODE) { throw "CLI build failed with exit code $LASTEXITCODE" }
 if ($NoDeploy) { return }
 
 if (-not (Test-Path $DnSpyDir)) {
-	throw "dnSpy directory not found: $DnSpyDir. Build dnSpy first (.\build.ps1 netframework) or pass -DnSpyDir."
+	throw "dnSpy directory not found: $DnSpyDir. Build dnSpy first ($hostBuildCommand) or pass -DnSpyDir."
 }
 
-$extensionOutput = Join-Path $PSScriptRoot "Extensions\dgSpy.Extension\bin\$Configuration\net48"
+$extensionOutput = Join-Path $PSScriptRoot "Extensions\dgSpy.Extension\bin\$Configuration\$TargetFramework"
 $runtimeBin = Join-Path $DnSpyDir 'bin'
 if (-not (Test-Path -LiteralPath (Join-Path $runtimeBin 'dnSpy.Contracts.DnSpy.dll'))) {
-	throw "Packaged dnSpy runtime directory not found: $runtimeBin. Run .\build.ps1 netframework first."
+	throw "Packaged dnSpy runtime directory not found: $runtimeBin. Run $hostBuildCommand first."
 }
 $deployDir = Join-Path $runtimeBin 'Extensions\dgSpy'
 
@@ -44,9 +61,10 @@ if ($running.Count -gt 0) {
 	throw "dnSpy is running from $resolvedDnSpyDir (PID $($running.Id -join ', ')). Close it before deploying."
 }
 
-# AppDirectories.BinDirectory is the directory containing dnSpy.Contracts.DnSpy.dll, which the
-# packaged net48 layout places under net48\bin. dnSpy scans that directory and its Extensions\*
-# children. Remove stale direct copies there so the extension cannot be composed twice.
+# AppDirectories.BinDirectory is the directory containing dnSpy.Contracts.DnSpy.dll, which both the
+# packaged net48 layout and the self-contained net10 publish place under bin\. dnSpy scans that
+# directory and its Extensions\* children. Remove stale direct copies there so the extension cannot
+# be composed twice.
 foreach ($stale in Get-ChildItem $runtimeBin -Filter 'dgSpy.*' -File -ErrorAction SilentlyContinue) {
 	Remove-Item $stale.FullName -Force
 	Write-Host "Removed stale $($stale.Name) from $runtimeBin"
@@ -64,16 +82,21 @@ if (Test-Path -LiteralPath $obsoleteDeployDir) {
 }
 
 New-Item -ItemType Directory -Path $deployDir -Force | Out-Null
-# dgSpy.Protocol targets netstandard2.0, so its System.Text.Json compatibility assemblies must sit
-# beside the net48 extension in the LoadFrom context. Copy only these dependencies, never dnSpy's
-# own contracts. Remove the obsolete Newtonsoft payload left by earlier dgSpy deployments.
+# Remove the obsolete Newtonsoft payload left by earlier dgSpy deployments.
 $obsoleteNewtonsoft = Join-Path $deployDir 'Newtonsoft.Json.dll'
 if (Test-Path -LiteralPath $obsoleteNewtonsoft) { Remove-Item -LiteralPath $obsoleteNewtonsoft -Force }
-foreach ($file in @(
-	'dgSpy.Extension.x.dll', 'dgSpy.Extension.x.pdb', 'dgSpy.Protocol.dll', 'dgSpy.Protocol.pdb',
-	'System.Text.Json.dll', 'System.Text.Encodings.Web.dll', 'System.Memory.dll', 'System.Buffers.dll',
-	'System.Runtime.CompilerServices.Unsafe.dll', 'System.Threading.Tasks.Extensions.dll', 'Microsoft.Bcl.AsyncInterfaces.dll'
-)) {
+$deployFiles = @('dgSpy.Extension.x.dll', 'dgSpy.Extension.x.pdb', 'dgSpy.Protocol.dll', 'dgSpy.Protocol.pdb')
+if ($TargetFramework -eq 'net48') {
+	# dgSpy.Protocol targets netstandard2.0, so under net48 its System.Text.Json compatibility
+	# assemblies must sit beside the extension in the LoadFrom context. Copy only these dependencies,
+	# never dnSpy's own contracts. The net10 runtime supplies all of these, and pack-dgspy.ps1 ships
+	# the same four files this list starts with.
+	$deployFiles += @(
+		'System.Text.Json.dll', 'System.Text.Encodings.Web.dll', 'System.Memory.dll', 'System.Buffers.dll',
+		'System.Runtime.CompilerServices.Unsafe.dll', 'System.Threading.Tasks.Extensions.dll', 'Microsoft.Bcl.AsyncInterfaces.dll'
+	)
+}
+foreach ($file in $deployFiles) {
 	Copy-Item (Join-Path $extensionOutput $file) $deployDir -Force
 }
 

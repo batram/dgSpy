@@ -3,7 +3,11 @@
 # drives the whole MCP surface and asserts on the results. Everything it starts, it stops.
 param(
 	[int]$GatewayPort = 17350,
-	[int]$RpcPort = 0
+	[int]$RpcPort = 0,
+	# net10 by default because that is the host users actually run: it is what pack-dgspy.ps1 packages
+	# and what launch_local_host deploys. Defaulting to net48 meant this smoke proved a build nobody
+	# ships. net48 stays available as the retained fallback baseline.
+	[ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,7 +22,13 @@ if ($RpcPort -eq 0) {
 	$probe.Start(); $RpcPort = ([Net.IPEndPoint]$probe.LocalEndpoint).Port; $probe.Stop()
 }
 
-$dnSpyDir = Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net48'
+# The net10 host is a self-contained publish, so its runtime tree is the publish directory. Both
+# layouts put dnSpy.exe at the root with the runtime and Extensions\ under bin\.
+$dnSpyDir = if ($TargetFramework -eq 'net48') {
+	Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net48'
+} else {
+	Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish'
+}
 $gatewayDll = Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net10.0\dgSpy.Gateway.dll'
 $targetProject = Join-Path $PSScriptRoot 'TestTargets\Milestone1Target\Milestone1Target.csproj'
 $targetExe = Join-Path $PSScriptRoot 'TestTargets\Milestone1Target\bin\Debug\net48\Milestone1Target.exe'
@@ -197,7 +207,8 @@ function Write-StopDiagnostics {
 
 try {
 	Write-Section 'build and deploy'
-	& (Join-Path $repoRoot 'build-dgspy.ps1') -DnSpyDir $dnSpyDir | Out-Null
+	Write-Host "  host target framework: $TargetFramework ($dnSpyDir)"
+	& (Join-Path $repoRoot 'build-dgspy.ps1') -TargetFramework $TargetFramework -DnSpyDir $dnSpyDir | Out-Null
 	& dotnet build $targetProject -c Debug --nologo -v:quiet
 	if ($LASTEXITCODE) { throw "Target build failed with exit code $LASTEXITCODE" }
 
@@ -659,8 +670,14 @@ try {
 	# the documented drill-down loop dead-ended on any object whose full page was requested. Asking for
 	# everything is precisely the page that spans providers[0] into the extra providers such as
 	# "Static members", so this is the shape that reproduces it.
-	$allMembers = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $sessionId; expression = 'commandLine'; thread_id = $stepThread; frame_index = 1; count = 200 }
+	# AggregateFixture exists in the target for exactly this: instance members from one provider plus a
+	# "Static members" row from another. commandLine cannot serve here - the target runs with no
+	# arguments, so it is an empty array with nothing to expand.
+	$allMembers = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $sessionId; expression = 'aggregate'; thread_id = $stepThread; frame_index = 1; count = 200 }
 	Assert-That 'a full expansion returns members to check' (@($allMembers.members).Count -gt 0) "(total $($allMembers.total))"
+	# Without this the test could silently stop covering the regression: a single-provider object would
+	# pass every assertion below while never entering the aggregate paging path that broke.
+	Assert-That 'the expansion really is an aggregate, so the paged path is covered' (@($allMembers.members | Where-Object { $_.name -eq 'Static members' }).Count -eq 1) "(names: $((@($allMembers.members).name) -join ', '))"
 	$internalErrors = @($allMembers.members | Where-Object { $_.error -and $_.error -match 'nternal debugger error' })
 	Assert-That 'expanding a whole object never reports an internal debugger error' ($internalErrors.Count -eq 0) "(first: $($internalErrors[0].error))"
 	# One row per real member, never one per requested slot: count was 200 and total is single digits.
@@ -669,7 +686,10 @@ try {
 	Assert-That 'every member of a full page carries its own name' ($unnamed.Count -eq 0) "($($unnamed.Count) unnamed)"
 	# The name must come from the member, not from parsing it back out of expression: a cast-qualified
 	# expression like ((System.MarshalByRefObject)x).Identity has no parseable relationship to "Identity".
-	Assert-That 'no member name echoes the parent expression' (@($allMembers.members | Where-Object { $_.name -eq 'commandLine' }).Count -eq 0)
+	Assert-That 'no member name echoes the parent expression' (@($allMembers.members | Where-Object { $_.name -eq 'aggregate' }).Count -eq 0)
+	# The tail page is the other half of the wrap: it starts inside the first provider and runs past it.
+	$tailPage = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $sessionId; expression = 'aggregate'; thread_id = $stepThread; frame_index = 1; offset = 1; count = 200 }
+	Assert-That 'a page starting inside the first provider and spanning its tail succeeds' (@($tailPage.members | Where-Object { $_.error -and $_.error -match 'nternal debugger error' }).Count -eq 0 -and @($tailPage.members).Count -eq ($allMembers.total - 1))
 
 	# A primitive has nothing to expand. Zero members is the correct answer, not an error.
 	$noMembers = Invoke-Tool -Name 'get_members' -Arguments @{ session_id = $sessionId; expression = 'input'; thread_id = $stepThread; frame_index = 0 }

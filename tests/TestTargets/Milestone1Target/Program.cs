@@ -30,6 +30,18 @@ namespace Milestone1Target {
 	[Phase8Marker]
 	sealed class Worker : BaseWorker, IWorker { public override int Run(int value) => value + 7; }
 	sealed class GenericBox<T> { public T Value; }
+	/// <summary>A value node whose expansion is an aggregate: instance members from one provider and a
+	/// "Static members" row from another. dnSpy paged those two providers with unsigned arithmetic that
+	/// wrapped whenever a page started inside the first one, so requesting the whole object threw
+	/// IndexOutOfRangeException and get_members answered with a page of "Internal debugger error" rows.
+	/// Nothing else in this fixture forms an aggregate: a delegate and an array expose one provider, and
+	/// a string does not expand at all, so the regression had no shape to reproduce against.</summary>
+	sealed class AggregateFixture {
+		public static readonly string SharedName = "dgSpy-aggregate-fixture";
+		public static int SharedCount = 3;
+		public int InstanceCount = 5;
+		public string InstanceName = "instance";
+	}
 	static class GenericExtensions {
 		public static T Unwrap<T>(this GenericBox<T> box) => box.Value;
 	}
@@ -55,12 +67,18 @@ namespace Milestone1Target {
 			// frame on the stack — the case set_breakpoint has to refuse rather than never bind.
 			var inMemory=LoadInMemoryTrampoline();
 			var emitted=EmitDynamicTrampoline();
+			// Held in a local for the whole run so get_members always has an aggregate to expand from a
+			// Main frame. See AggregateFixture for why the other locals cannot serve that purpose.
+			var aggregate=new AggregateFixture();
 			ExercisePhase8Relationships();
 			while (keepRunning) {
 				if (loadDeferredModule) { LoadDeferredPayload(); loadDeferredModule=false; }
 				if (unloadDeferredModule) { CycleDeferredPayload(); unloadDeferredModule=false; }
 				if (throwPhase8Exception) { throwPhase8Exception=false; try { throw new Phase8FixtureException(); } catch (Phase8FixtureException) { } }
 				Tick(41);
+				// Read the fixture every iteration: a local that is assigned and never read afterwards can
+				// be reported out of scope, and this one has to be expandable for the whole run.
+				AggregateFixture.SharedCount=aggregate.InstanceCount;
 				// Both round trips are microseconds against Tick's 100ms sleep, so a bare pause still
 				// lands in Tick essentially always; the other checks select their frame with a breakpoint.
 				inMemory(ViaInMemory,41);

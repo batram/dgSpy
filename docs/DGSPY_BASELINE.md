@@ -5,26 +5,36 @@
 | | Current scope |
 |---|---|
 | Architecture | x64 only |
-| dnSpy build | `net48` and `net10.0-windows`, Release |
+| dnSpy build | `net10.0-windows` (default, and what ships), Release; `net48` retained as fallback |
 | Debug engines | .NET Framework CorDebug (`CLR v4.0.30319`, covering 4.0–4.8) and Mono/Unity (UCH) |
-| Out of scope for now | x86, CoreCLR, clean-host remote acceptance, multi-session |
+| Out of scope for now | x86, debugging CoreCLR targets, clean-host remote acceptance, multi-session |
+
+CoreCLR is out of scope as a *debuggee* runtime. It says nothing about the host: the shipping dnSpy
+runs on net10 and debugs `CLR v4.0.30319` targets through CorDebug, which is a COM API and does not
+require the debugger to share the target's runtime.
 
 ## Toolchain
 
 - Windows 10 or later, x64.
 - .NET SDK 10 (builds the modern host, gateway, and other SDK projects).
 - .NET Framework 4.8 developer pack (extension and test target).
-- MSBuild from a full Visual Studio installation for the net48 host, whose COM references are not supported by `dotnet build`.
+- MSBuild from a full Visual Studio installation, **only** for the retained net48 host. The default
+  net10 build needs nothing beyond the .NET SDK.
+  - The long-standing justification for this requirement was that the net48 host has COM references
+    `dotnet build` cannot handle. That no longer matches the tree: the only `COMReference` is in
+    `Extensions/ILSpy.Decompiler/.../ILSpy.AddIn/ILSpy.AddIn.csproj`, which is not in `dnSpy.sln` and
+    is never built. Whether `build.ps1 netframework -NoMsbuild` (plain `dotnet build -f net48`)
+    actually succeeds is untested; if it does, this dependency can be dropped entirely.
 
 ## Projects
 
 | Project | TFM | Notes |
 |---|---|---|
-| `dgSpy.Protocol` | `netstandard2.0` | DTOs only. Referenced by both sides, so it must stay loadable from net48 and the modern .NET host. |
-| `Extensions/dgSpy.Extension` | `net48`, `net10.0-windows` | The net48 target remains the local baseline; the net10 target is packed with the self-contained remote host. Output is `dgSpy.Extension.x.dll` — dnSpy's scanner only loads `*.x.dll`. |
+| `dgSpy.Protocol` | `netstandard2.0` | DTOs only. Referenced by both sides, so it must stay loadable from the retained net48 extension and the modern .NET host. It can move to `net10.0` once net48 is dropped. |
+| `Extensions/dgSpy.Extension` | `net10.0-windows` (default), `net48` | The net10 target is the default everywhere and is what `pack-dgspy.ps1` ships; net48 is the retained fallback. Output is `dgSpy.Extension.x.dll` — dnSpy's scanner only loads `*.x.dll`. |
 | `dgSpy.Cli` | `net10.0` | Console entrypoint, packaged with the Gateway in one shared self-contained runtime. |
 | `dgSpy.Gateway` | `net10.0` | Standalone process, packaged with the CLI in one shared self-contained runtime. |
-| `tests/TestTargets/Milestone1Target` | `net48`, x64 | CorDebug smoke target; the project pins `PlatformTarget=x64` and the smoke test verifies dnSpy reports `X64`. |
+| `tests/TestTargets/Milestone1Target` | `net48`, x64 | Stays .NET Framework permanently: it is a *debuggee*, and CorDebug `CLR v4` is an in-scope engine that needs a Framework process to debug. CorDebug smoke target; the project pins `PlatformTarget=x64` and the smoke test verifies dnSpy reports `X64`. |
 
 The dgSpy projects are intentionally **not** in `dnSpy.sln`, and dgSpy builds through `build-dgspy.ps1`.
 The two deliberate upstream patch sets are recorded below because each is a modernization/rebase
@@ -67,8 +77,28 @@ By default the extension persists its stable identity and RPC credential in
 `DGSPY_HOST_ID` and `DGSPY_RPC_TOKEN` for both dnSpy and the gateway. `DGSPY_TOKEN` remains the separate
 client-to-gateway MCP credential.
 
+### Default: the net10 host that ships
+
+This is what `pack-dgspy.ps1` packages, what `install-dgspy.ps1` installs, and what
+`launch_local_host` runs. `build-dgspy.ps1`, `tests\run-milestone1-smoke.ps1` and
+`tests\run-modernization-gate.ps1` all target it by default, so the live smoke proves the build users
+actually get. No Visual Studio installation is required.
+
+```powershell
+.\build.ps1 net-x64 -NoMsbuild
+.\tests\run-modernization-gate.ps1 -Stage CorDebug
+```
+
+### Retained fallback: the net48 host
+
+net48 stays fully supported behind `-TargetFramework net48` on all three scripts, and CI runs the
+net48 CorDebug smoke weekly and on demand so the fallback cannot rot unnoticed. It is still the only
+host with Unity/UCH acceptance evidence, so the gate refuses `-Stage Unity` and `-Stage Full` unless
+`-TargetFramework net48` is passed.
+
 ```powershell
 .\build.ps1 netframework
+.\tests\run-modernization-gate.ps1 -Stage CorDebug -TargetFramework net48
 ```
 
 If MSBuild is installed but not on PATH, pass its resolved executable explicitly:
@@ -77,7 +107,7 @@ If MSBuild is installed but not on PATH, pass its resolved executable explicitly
 .\build.ps1 netframework -MSBuildPath 'C:\path\to\MSBuild.exe'
 ```
 
-### Verified net48 build
+#### Verified net48 build
 
 ```powershell
 .\build.ps1 netframework -MSBuildPath 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
@@ -90,13 +120,10 @@ changes, discover the full Visual Studio installations and pass the appropriate 
 & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -products * -format value -property installationPath
 ```
 
-Build the self-contained modern x64 host through the SDK-native driver. Full-framework MSBuild 18
-cannot load the SDK 10 `Microsoft.Deployment.DotNet.Releases` task dependency during this publish;
-that is a build-driver limitation, not a source failure.
-
-```powershell
-.\build.ps1 net-x64 -NoMsbuild
-```
+The net10 host publishes through the SDK-native driver because full-framework MSBuild 18 cannot load
+the SDK 10 `Microsoft.Deployment.DotNet.Releases` task dependency during this publish; that is a
+build-driver limitation, not a source failure. Neither driver can produce both target frameworks,
+which is why `build.ps1` has two modes.
 
 `pack-dgspy.ps1` starts with the self-contained dnSpy tree, then merges the CLI and Gateway publishes
 into its `cli\bin` runtime directory. All three applications therefore ship one .NET 10 runtime.
