@@ -70,7 +70,11 @@ function Invoke-Tool {
 	}
 	if ($result.isError) { throw ("Tool $Name failed: " + $result.content[0].text) }
 	if ($AsText) { return $result.content[0].text }
-	return $result.content[0].text | ConvertFrom-Json
+	# Windows PowerShell 5.1's ConvertFrom-Json hands a JSON array to the pipeline as one object
+	# instead of enumerating it, so @(Invoke-Tool ...)[0] would return the whole array rather than
+	# its first entry. Member enumeration hides that for property reads but not for reflection over
+	# PSObject.Properties. Write-Output enumerates, so callers index and count real entries.
+	Write-Output ($result.content[0].text | ConvertFrom-Json)
 }
 
 # Mutations require an exact scoped version from a current state read. Keep that protocol ceremony
@@ -221,7 +225,7 @@ try {
 	Assert-That 'the .NET Framework test target is x64' ($program.architecture -eq 'X64') "(was $($program.architecture))"
 	Assert-That 'program_id carries no dnSpy type name' (-not $program.program_id.Contains('RuntimeId')) "(was $($program.program_id))"
 	Assert-That 'list_programs omits duplicate runtime_id' (-not ($program.PSObject.Properties.Name -contains 'runtime_id'))
-	Assert-That 'list_programs reports command_line' ($program.PSObject.Properties.Name -contains 'command_line')
+	Assert-That 'list_programs reports command_line' ($program.PSObject.Properties.Name -contains 'command_line') "(entry $($program | ConvertTo-Json -Depth 4 -Compress))"
 	Assert-That 'runtime_guid is distinct from runtime_kind_guid' ($program.runtime_guid -ne $program.runtime_kind_guid)
 	Assert-That 'the entry names an attach provider a caller can pass back' (@($program.attach_providers) -contains 'DotNetFramework') "(was $($program.attach_providers -join ','))"
 
