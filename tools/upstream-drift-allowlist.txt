@@ -1,0 +1,106 @@
+# Intentional divergence from dnSpyEx.
+#
+# Every file that differs from the baseline in tools/upstream-baseline.txt must
+# match a pattern here, with a reason. tools/check-upstream-drift.ps1 fails on
+# anything unlisted, and equally on an entry that no longer matches anything.
+#
+# The point is not bookkeeping. Commit 399ed7297 reverted 57 shared files to a
+# pre-dnSpyEx state, and nothing noticed: the code compiled and the test gate
+# only exercises dgSpy's own MCP surface. Requiring a written reason per file
+# makes that class of silent damage impossible to introduce quietly again.
+#
+# Format:  <pattern><whitespace><reason>
+#   - a pattern ending in / matches that directory and everything under it
+#   - '*' matches any run of characters
+#   - anything else is an exact repo-relative path
+#   - '#' starts a comment; blank lines ignored
+#
+# Before adding an entry, be sure the drift is deliberate. If a file differs
+# because something overwrote it, the fix is to restore it, not to list it.
+
+# ---------------------------------------------------------------------------
+# Wholly ours: projects, tests, docs and tooling that upstream has no notion of
+# ---------------------------------------------------------------------------
+dgSpy.Cli/                     dgSpy MCP command line client
+dgSpy.Gateway/                 dgSpy MCP gateway
+dgSpy.Protocol/                dgSpy wire protocol
+Extensions/dgSpy.Extension/    dgSpy in-process dnSpy extension
+Build/RemoteCertificateTool/   certificate helper for remote hosts
+tests/                         dgSpy test suites, fixtures and gates
+docs/                          dgSpy documentation
+tools/                         dgSpy developer tooling
+packaging/                     dgSpy packaging assets
+AGENTS.md                      working rules for coding agents
+Start-dgSpy.ps1                dgSpy launcher
+build-dgspy.ps1                dgSpy build and deploy
+install-dgspy.ps1              dgSpy install
+pack-dgspy.ps1                 dgSpy packaging
+pack-remote-host.ps1           dgSpy remote host packaging
+.github/workflows/dgspy-ci.yml dgSpy CI, separate from the inherited build workflow
+
+# ---------------------------------------------------------------------------
+# dgSpy hooks inside dnSpy source trees. These are deliberate and small; keep
+# them that way, and prefer adding a new file over editing an upstream one.
+# ---------------------------------------------------------------------------
+Extensions/dnSpy.Debugger/dnSpy.Debugger/DbgUI/DgSpyWindowActivation.cs    dgSpy window activation, new file
+
+# RPC threading. dgSpy serves requests off dnSpy's UI thread, so the debugger
+# dispatcher has to expose a way to marshal work and observe completion.
+dnSpy/dnSpy.Contracts.Debugger/DbgDispatcher.cs                           dispatcher surface for RPC marshalling
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DbgDispatcherImpl.cs        dispatcher surface for RPC marshalling
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DebuggerThread.cs           dispatcher surface for RPC marshalling
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Shared/Dispatcher.cs             dispatcher surface for RPC marshalling
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DbgManagerImpl.cs           session and engine state needed by the RPC host
+
+# Attach: dgSpy exposes attachable processes over MCP and needs stable identity.
+dnSpy/dnSpy.Contracts.Debugger/Attach/AttachableProcess.cs                stable process identity for list_programs
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Attach/AttachableProcessImpl.cs  stable process identity for list_programs
+
+# get_members: child expansion must surface errors instead of swallowing them,
+# and must page correctly across an aggregate provider's tail.
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Evaluation/Engine/DbgEngineValueNodeImpl.cs  get_members expansion error handling
+dnSpy/Roslyn/dnSpy.Roslyn/Debugger/ValueNodes/AggregateValueNodeProvider.cs                  get_members paging across provider tail
+
+# ---------------------------------------------------------------------------
+# Build and repository infrastructure
+# ---------------------------------------------------------------------------
+build.ps1                      net10 host targets and the dgSpy build ordering
+.github/workflows/build.yml    inherited workflow, retargeted; see Batch C note below
+.gitmodules                    submodules pinned to dgSpy modernization forks
+Extensions/dnSpy.Debugger/Mono.Debugger.Soft  pinned to batram/Mono.Debugger.Soft@dgspy
+DnSpyRoslyn.props              net48 host retained alongside net10
+.gitignore                     dgSpy build and scratch outputs
+.editorconfig                  dgSpy formatting deviation
+README.md                      dgSpy project identity
+.github/ISSUE_TEMPLATE.md      dgSpy project identity
+
+# Community health files describe dnSpyEx's project, not ours: FUNDING.yml
+# points at their maintainer and the templates at their tracker.
+.github/FUNDING.yml            removed, describes dnSpyEx's project not ours
+.github/dependabot.yml         removed, describes dnSpyEx's project not ours
+.github/PULL_REQUEST_TEMPLATE.md  removed, describes dnSpyEx's project not ours
+.github/ISSUE_TEMPLATE/        removed, describes dnSpyEx's project not ours
+
+# ---------------------------------------------------------------------------
+# PENDING CLEANUP -- these are not endorsed, they are tracked debt.
+# Each entry is damage from commit 399ed7297 that has not been undone yet.
+# Removing an entry here should mean the file was restored, not re-listed.
+# ---------------------------------------------------------------------------
+
+# Batch B: 28 Mono files reverted by the overlay. Restoring them needs a live
+# Unity target, because the gate covers CorDebug only and the restored code
+# calls Mono.Debugger.Soft APIs against a submodule this fork pins itself.
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/   BATCH B: overlay collateral, needs a live Unity target to verify
+
+# Batch C: files where the overlay mixed a dgSpy hook and collateral damage in
+# the same file, so they cannot be restored wholesale.
+Extensions/dnSpy.Debugger/dnSpy.Debugger/DbgUI/DebuggerImpl.cs             BATCH C: dgSpy hook and overlay collateral in one file
+Extensions/dnSpy.Debugger/dnSpy.Debugger/DbgUI/WpfCurrentStatementUpdater.cs  BATCH C: dgSpy hook and overlay collateral in one file
+
+# Batch C: files the overlay reinstated at paths dnSpyEx had moved away from,
+# so the tree now carries both copies. Different namespaces, so they compile,
+# but the dnSpy/dnSpy copies duplicate dnSpy.Contracts.Utilities. ProjectWriter
+# is worse: dnSpyEx removed it and it is still referenced here.
+dnSpy/dnSpy/Documents/FrameworkPath.cs      BATCH C: duplicate of dnSpy.Contracts.Utilities.FrameworkPath
+dnSpy/dnSpy/Search/FrameworkFileUtils.cs    BATCH C: duplicate of dnSpy.Contracts.Utilities.FrameworkFileUtils
+dnSpy/dnSpy.Decompiler/MSBuild/ProjectWriter.cs  BATCH C: removed upstream, still referenced here

@@ -1,0 +1,13 @@
+# The dnSpyEx commit this fork is currently based on.
+#
+# tools/check-upstream-drift.ps1 compares the working tree against this exact
+# commit, not against a moving branch tip, so the check is deterministic and a
+# new dnSpyEx release cannot turn today's green run red on its own.
+#
+# Update this ONLY as part of deliberately merging a newer dnSpyEx, and re-check
+# the allowlist in the same change: a merge can legitimately resolve some drift
+# and can equally hide new drift behind a stale entry.
+#
+# Upstream remote: https://github.com/dnSpyEx/dnSpy (branch master)
+
+3f4caa4f89e95c44d4ef4d115d60a350726e7559

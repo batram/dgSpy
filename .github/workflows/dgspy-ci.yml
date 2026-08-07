@@ -15,6 +15,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  upstream-drift:
+    name: Upstream drift
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      # Needs real history, not a shallow clone, so the dnSpyEx baseline commit
+      # is reachable. Submodules are irrelevant to this check.
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch dnSpyEx baseline
+        shell: pwsh
+        run: |
+          $baseline = (Get-Content tools/upstream-baseline.txt |
+            Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() } |
+            Select-Object -First 1).Trim()
+          git cat-file -e "$baseline^{commit}" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            git fetch --no-tags https://github.com/dnSpyEx/dnSpy.git master
+          }
+
+      # Fails on any difference from dnSpyEx that nobody wrote a reason for.
+      # See the header of tools/check-upstream-drift.ps1 for why this exists.
+      - name: Check drift against dnSpyEx
+        shell: pwsh
+        run: ./tools/check-upstream-drift.ps1 -Revision HEAD -Report
+
   unit-and-contract:
     name: Unit tests and contracts
     runs-on: windows-latest

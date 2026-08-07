@@ -74,6 +74,34 @@ Dropping any one of them compiles cleanly and fails at runtime, or composes away
 `git show --diff-filter=D --name-only --format="" <commit>` lists what a commit deleted;
 check whether anything still imports or references it.
 
+## Staying in sync with dnSpyEx
+
+This repo is a genuine fork of [dnSpyEx](https://github.com/dnSpyEx/dnSpy). Its `master` is a
+direct ancestor of ours, so most of the tree is upstream code that we should not be touching.
+
+The rule is simple: **every file that differs from dnSpyEx must have a written reason.**
+
+```bash
+powershell -NoProfile -File tools\check-upstream-drift.ps1
+```
+
+`tools/upstream-drift-allowlist.txt` records each intentional divergence and why. Anything
+differing without an entry fails the check, and so does an entry that no longer matches
+anything -- a stale line must be deleted rather than left as a standing licence to overwrite
+something. `tools/upstream-baseline.txt` pins the exact dnSpyEx commit we compare against, so a
+new upstream release cannot turn a green run red by itself. Use `-Report` to see the drift
+grouped by reason. CI runs this as its own job.
+
+If a file drifts and the change was not deliberate, **restore it rather than listing it**:
+
+```bash
+git checkout 3f4caa4f8 -- <path>
+```
+
+When deliberately merging a newer dnSpyEx, update the baseline and re-check the allowlist in the
+same change: a merge can legitimately resolve drift, and can equally hide new drift behind an
+entry that already exists.
+
 ## Seeing the GUI
 
 No automated suite catches the failures above, because they are only visible in the running
@@ -120,3 +148,8 @@ knowing up front, because each one cost a debugging cycle to find:
   only; here-strings are PowerShell only.
 - Do not switch branches. This repo commits on whatever branch is checked out.
 - New tooling goes in `tools\`, not the repository root.
+- **Never apply a cross-baseline overlay, tree copy, or bulk file sync.** Commit 399ed7297 did
+  exactly that -- it set this tree to the content of an older dgSpy tree, which silently reverted
+  57 files to a pre-dnSpyEx state. Making one tree's hash equal another's is not integration; it
+  discards everything the target had that the source lacked. Changes to shared files land as
+  individual, reviewable commits, and `tools\check-upstream-drift.ps1` now fails if they do not.
