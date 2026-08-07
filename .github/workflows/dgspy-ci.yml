@@ -65,6 +65,10 @@ jobs:
 
       - name: Build, test, and run live CorDebug smoke
         shell: pwsh
+        env:
+          # The smoke run defaults its logs to the process temp directory, which is not runner.temp,
+          # so the collector below found nothing to upload.
+          DGSPY_SMOKE_LOG_ROOT: ${{ runner.temp }}
         run: .\tests\run-modernization-gate.ps1 -Stage CorDebug
 
       - name: Upload smoke diagnostics

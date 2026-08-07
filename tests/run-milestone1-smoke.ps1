@@ -22,7 +22,10 @@ $dnSpyDir = Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net48'
 $gatewayDll = Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net10.0\dgSpy.Gateway.dll'
 $targetProject = Join-Path $PSScriptRoot 'TestTargets\Milestone1Target\Milestone1Target.csproj'
 $targetExe = Join-Path $PSScriptRoot 'TestTargets\Milestone1Target\bin\Debug\net48\Milestone1Target.exe'
-$runDirectory = Join-Path ([IO.Path]::GetTempPath()) ('dgspy-smoke-' + [Guid]::NewGuid().ToString('N'))
+# CI collects these logs as an artifact, and its temp root is not the process temp directory, so let
+# the caller point the run directory at a path the collector actually globs.
+$logRoot = if ([string]::IsNullOrWhiteSpace($env:DGSPY_SMOKE_LOG_ROOT)) { [IO.Path]::GetTempPath() } else { $env:DGSPY_SMOKE_LOG_ROOT }
+$runDirectory = Join-Path $logRoot ('dgspy-smoke-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $runDirectory | Out-Null
 
 # Windows PowerShell 5.1 is .NET Framework: no RandomNumberGenerator.GetBytes(int), no Convert.ToHexString.
@@ -107,6 +110,29 @@ function Wait-Until {
 		if (& $Condition) { return $true }
 	} until ([DateTime]::UtcNow -gt $deadline)
 	return $false
+}
+
+# A wait_for_stop timeout only says "nothing happened". These reads say what the engine, the
+# breakpoints and the target were actually doing at that moment, which is the difference between a
+# failure that can be diagnosed from a CI log and one that can only be reproduced interactively.
+function Write-StopDiagnostics {
+	param([string]$SessionId, $AfterEventId, [string]$What)
+	Write-Host "  DIAG  $What" -ForegroundColor Yellow
+	foreach ($probe in @(
+		@{ Name = 'get_session_state'; Arguments = @{ session_id = $SessionId } },
+		@{ Name = 'list_threads'; Arguments = @{ session_id = $SessionId } },
+		@{ Name = 'list_breakpoints'; Arguments = @{} },
+		@{ Name = 'list_exception_policies'; Arguments = @{ session_id = $SessionId } },
+		@{ Name = 'get_events'; Arguments = @{ session_id = $SessionId; after_event_id = $AfterEventId } }
+	)) {
+		try { Write-Host "        $($probe.Name): $(Invoke-Tool -Name $probe.Name -Arguments $probe.Arguments -AsText)" }
+		catch { Write-Host "        $($probe.Name) threw: $_" }
+	}
+	if ($null -ne $targetProcess) {
+		$targetProcess.Refresh()
+		$exited = $targetProcess.HasExited
+		Write-Host "        target pid $($targetProcess.Id) exited=$exited$(if ($exited) { " code=$($targetProcess.ExitCode)" })"
+	}
 }
 
 try {
@@ -529,10 +555,17 @@ try {
 	# here so this recovery assertion tests exception-policy removal, not residual breakpoint settings.
 	$null = Invoke-MutatingTool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id }
 	$breakpoint = Invoke-MutatingTool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
-	$returnCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
+	# Asserted here as well as at the first creation: an unbound recreate would look exactly like a
+	# resume that never stopped, and the two have completely different causes.
+	Assert-That 'the fixture breakpoint rebinds after the exception stop' ($breakpoint.bound) "(payload $($breakpoint | ConvertTo-Json -Compress -Depth 5))"
+	$returnCursor =(Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
 	$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId }
 	$returnStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $returnCursor; timeout_ms = 8000 }
 	Assert-That 'the target resumes from the exception into the normal fixture breakpoint' (-not $returnStop.timed_out)
+	if ($returnStop.timed_out) {
+		Write-StopDiagnostics -SessionId $sessionId -AfterEventId $returnCursor -What 'no stop after resuming from the fixture exception'
+		throw 'The target never stopped again after the fixture exception; every later check needs that stop.'
+	}
 	$stepThread = @($returnStop.events)[0].thread_id
 	$null = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
 
