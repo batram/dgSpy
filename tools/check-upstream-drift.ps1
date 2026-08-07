@@ -137,7 +137,11 @@ try {
         }
     }
 
-    $stale = $rules | Where-Object { $_.Hits -eq 0 }
+    # @() is load-bearing. Where-Object returning exactly one object yields a
+    # scalar PSCustomObject whose .Count is $null, not 1, so the stale check below
+    # silently passed whenever precisely one entry had gone stale. Two or more
+    # produced an array and failed correctly, which is why it looked like it worked.
+    $stale = @($rules | Where-Object { $_.Hits -eq 0 })
 
     # --- output -----------------------------------------------------------
 

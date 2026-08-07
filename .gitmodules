@@ -21,4 +21,4 @@
 [submodule "Extensions/dnSpy.Debugger/Mono.Debugger.Soft"]
 	path = Extensions/dnSpy.Debugger/Mono.Debugger.Soft
 	url = https://github.com/batram/Mono.Debugger.Soft.git
-	branch = dgspy
+	branch = dgspy-on-dnspyex

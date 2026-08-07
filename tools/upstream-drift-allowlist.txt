@@ -67,7 +67,12 @@ dnSpy/Roslyn/dnSpy.Roslyn/Debugger/ValueNodes/AggregateValueNodeProvider.cs     
 build.ps1                      net10 host targets and the dgSpy build ordering
 .github/workflows/build.yml    inherited workflow, retargeted; see Batch C note below
 .gitmodules                    submodules pinned to dgSpy modernization forks
-Extensions/dnSpy.Debugger/Mono.Debugger.Soft  pinned to batram/Mono.Debugger.Soft@dgspy
+# Rooted on the commit dnSpyEx pins (d12451c) plus one dgSpy patch, so the Mono
+# extension can stay on dnSpyEx's code. It has to be a fork rather than dnSpyEx's
+# own repo only because of that patch: ThreadMirror.GetFrames waited forever, and
+# Unity can retire a thread before GET_FRAME_INFO replies, wedging dnSpy's single
+# Mono debugger thread so Break, Run and Detach queue behind it permanently.
+Extensions/dnSpy.Debugger/Mono.Debugger.Soft  dnSpyEx's fork plus the bounded stack-frame wait Unity needs
 DnSpyRoslyn.props              net48 host retained alongside net10
 .gitignore                     dgSpy build and scratch outputs
 .editorconfig                  dgSpy formatting deviation
@@ -87,27 +92,6 @@ README.md                      dgSpy project identity
 # Removing an entry here should mean the file was restored, not re-listed.
 # ---------------------------------------------------------------------------
 
-# Batch B: 29 Mono files reverted by the overlay. Restoring them was attempted
-# and reverted: it does not compile, and the blocker is not the extension code.
-#
-# dnSpyEx extended its Mono.Debugger.Soft fork; this repo pins batram's, which
-# descends from plain dnSpy and lacks those additions. Restoring dnSpyEx's Mono
-# extension needs, at minimum:
-#     PointerValue                  (excluded from compilation in batram's csproj)
-#     PointerValue.Value
-#     AssemblyMirror.GetMetadataBlob, .IsDynamic, .GetMethod
-#     AppDomainMirror.CreateByteArray
-#     ArrayMirror.SetByteValues
-#     TypeMirror.GetValueSize
-#     EventType.Crash
-#     a MonoDebugTypeCreator signature that takes uint rather than string
-#
-# So the extension code and the submodule are a matched pair and cannot be moved
-# independently. Closing this means either porting those APIs into
-# batram/Mono.Debugger.Soft, or adopting dnSpyEx's fork and carrying over the one
-# dgSpy commit on batram's (888ded0 "Bound Unity stack-frame fetch waits").
-# Both are changes to a separate repository, and neither is a file restore here.
-Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/   BATCH B: blocked, pinned Mono.Debugger.Soft fork lacks the dnSpyEx APIs this code needs
 
 # Batch C: files where the overlay mixed a dgSpy hook and collateral damage in
 # the same file, so they cannot be restored wholesale.

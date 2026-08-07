@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <root>
   <!-- 
     Microsoft ResX Schema 
@@ -59,46 +59,46 @@
             : using a System.ComponentModel.TypeConverter
             : and then encoded with base64 encoding.
     -->
-  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
-    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+  <xsd:schema xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata" id="root">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace"/>
     <xsd:element name="root" msdata:IsDataSet="true">
       <xsd:complexType>
         <xsd:choice maxOccurs="unbounded">
           <xsd:element name="metadata">
             <xsd:complexType>
               <xsd:sequence>
-                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+                <xsd:element name="value" type="xsd:string" minOccurs="0"/>
               </xsd:sequence>
-              <xsd:attribute name="name" use="required" type="xsd:string" />
-              <xsd:attribute name="type" type="xsd:string" />
-              <xsd:attribute name="mimetype" type="xsd:string" />
-              <xsd:attribute ref="xml:space" />
+              <xsd:attribute name="name" use="required" type="xsd:string"/>
+              <xsd:attribute name="type" type="xsd:string"/>
+              <xsd:attribute name="mimetype" type="xsd:string"/>
+              <xsd:attribute ref="xml:space"/>
             </xsd:complexType>
           </xsd:element>
           <xsd:element name="assembly">
             <xsd:complexType>
-              <xsd:attribute name="alias" type="xsd:string" />
-              <xsd:attribute name="name" type="xsd:string" />
+              <xsd:attribute name="alias" type="xsd:string"/>
+              <xsd:attribute name="name" type="xsd:string"/>
             </xsd:complexType>
           </xsd:element>
           <xsd:element name="data">
             <xsd:complexType>
               <xsd:sequence>
-                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
-                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1"/>
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2"/>
               </xsd:sequence>
-              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
-              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
-              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
-              <xsd:attribute ref="xml:space" />
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1"/>
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3"/>
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4"/>
+              <xsd:attribute ref="xml:space"/>
             </xsd:complexType>
           </xsd:element>
           <xsd:element name="resheader">
             <xsd:complexType>
               <xsd:sequence>
-                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1"/>
               </xsd:sequence>
-              <xsd:attribute name="name" type="xsd:string" use="required" />
+              <xsd:attribute name="name" type="xsd:string" use="required"/>
             </xsd:complexType>
           </xsd:element>
         </xsd:choice>
@@ -118,141 +118,135 @@
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
   <data name="DbgAsm_Args" xml:space="preserve">
-    <value>Аргументи</value>
+    <value>A_rguments</value>
   </data>
   <data name="DbgAsm_Assembly" xml:space="preserve">
-    <value>Збірка</value>
+    <value>_Assembly</value>
   </data>
   <data name="DbgAsm_BreakAt" xml:space="preserve">
-    <value>Зупинитись на</value>
+    <value>_Break at</value>
   </data>
   <data name="DbgAsm_ConnectionPort" xml:space="preserve">
     <value>_Port</value>
   </data>
   <data name="DbgAsm_Connect_To_Process" xml:space="preserve">
-    <value>З'єднання</value>
-  </data>
-  <data name="DbgAsm_Environment" xml:space="preserve">
-    <value>Середовище</value>
+    <value>Connect</value>
   </data>
   <data name="DbgAsm_IP_Address" xml:space="preserve">
-    <value>IP адреса</value>
+    <value>IP Address</value>
   </data>
   <data name="DbgAsm_WorkingDir" xml:space="preserve">
-    <value>_Робоча директорія</value>
+    <value>_Thư mục làm việc</value>
   </data>
   <data name="DbgBreak_CreateProcessEvent" xml:space="preserve">
-    <value>Створити процес</value>
+    <value>CreateProcess</value>
   </data>
   <data name="DbgBreak_Dont" xml:space="preserve">
-    <value>Не зупиняти</value>
+    <value>Don't Break</value>
   </data>
   <data name="DbgBreak_EntryPoint" xml:space="preserve">
-    <value>Точка Входу</value>
+    <value>Entry Point</value>
   </data>
   <data name="Error_FileDoesNotExist" xml:space="preserve">
-    <value>Файл не існує</value>
+    <value>Tệp tin không tồn tại</value>
   </data>
   <data name="Error_MissingFilename" xml:space="preserve">
-    <value>Відсутнє ім'я файлу</value>
+    <value>Thiếu tên tệp</value>
   </data>
   <data name="Plugin_ShortDescription" xml:space="preserve">
-    <value>Дебагер ({0})</value>
+    <value>Debugger ({0})</value>
   </data>
   <data name="Error_CouldNotFindFile" xml:space="preserve">
-    <value>Не вдалось знайти {0}</value>
+    <value>Không tìm thấy {0}</value>
   </data>
   <data name="Error_CouldNotConnectToProcess" xml:space="preserve">
-    <value>Не вдається відключитись до відлагоджуваного процесу</value>
+    <value>Không thể kết nối với quy trình đã gỡ lỗi</value>
   </data>
   <data name="Error_CouldNotFindDebuggedProcess" xml:space="preserve">
-    <value>Не вдається знайти процес, що відлагоджується</value>
+    <value>Không thể tìm thấy quy trình đã gỡ lỗi</value>
   </data>
   <data name="Error_ConnectionWasUnexpectedlyClosed" xml:space="preserve">
-    <value>Підключення до відлагоджуваного процесу несподівано закрите</value>
+    <value>Kết nối đến quá trình gỡ lỗi đã bị đóng đột ngột</value>
   </data>
   <data name="Thread_UserState_Aborted" xml:space="preserve">
-    <value>Перервано</value>
+    <value>Đã hủy</value>
   </data>
   <data name="Thread_UserState_AbortRequested" xml:space="preserve">
     <value>AbortRequested</value>
   </data>
   <data name="Thread_UserState_Background" xml:space="preserve">
-    <value>Фон</value>
+    <value>Background</value>
   </data>
   <data name="Thread_UserState_Stopped" xml:space="preserve">
-    <value>Зупинено</value>
+    <value>Đã dừng</value>
   </data>
   <data name="Thread_UserState_StopRequested" xml:space="preserve">
     <value>StopRequested</value>
   </data>
   <data name="Thread_UserState_Suspended" xml:space="preserve">
-    <value>Призупинено</value>
+    <value>Suspended</value>
   </data>
   <data name="Thread_UserState_SuspendRequested" xml:space="preserve">
     <value>SuspendRequested</value>
   </data>
   <data name="Thread_UserState_Unstarted" xml:space="preserve">
-    <value>Unstarted</value>
+    <value>Chưa bắt đầu</value>
   </data>
   <data name="Thread_UserState_WaitSleepJoin" xml:space="preserve">
     <value>WaitSleepJoin</value>
   </data>
   <data name="ExceptionMessageIsNull" xml:space="preserve">
-    <value>"&lt;повідомлення без виключення&gt;"</value>
+    <value>"&lt;thông báo không có lỗi&gt;"</value>
   </data>
   <data name="StackFrame_FunctionEvaluation" xml:space="preserve">
-    <value>Обчислення функції</value>
+    <value>Đánh giá chức năng</value>
   </data>
   <data name="StackFrame_NativeTransition" xml:space="preserve">
-    <value>Перехід native</value>
+    <value>Native Transition</value>
   </data>
   <data name="Error_RuntimeDoesNotSupportCallingGenericMethods" xml:space="preserve">
-    <value>Це середовище виконання не підтримує виклик узагальнених методів</value>
+    <value>This runtime doesn't support calling generic Methods</value>
   </data>
   <data name="Error_CanNotWriteToThisArgument" xml:space="preserve">
-    <value>Неможливо записати в 'this'</value>
+    <value>Không thể viết cho 'this'</value>
   </data>
   <data name="Error_CannotAccessMemberRuntimeLimitations" xml:space="preserve">
-    <value>Член не може бути доступний через обмеження часу виконання</value>
+    <value>Member can't be accessed due to runtime limitations</value>
   </data>
   <data name="Error_CouldNotSetNextStatement" xml:space="preserve">
-    <value>Не можу встановити наступну інструкцію.</value>
+    <value>Không thể đặt câu lệnh tiếp theo.</value>
   </data>
   <data name="DbgAsm_ProcessIsSuspended" xml:space="preserve">
-    <value>Процесс призупинений та в очікуванні відладчика</value>
+    <value>Quá trình bị tạm dừng và _đang chờ cho trình gỡ lỗi</value>
   </data>
   <data name="Error_RuntimeDoesNotSupportSettingNewStatement" xml:space="preserve">
-    <value>Середовище виконання не підтримує установку нового оператора</value>
+    <value>The runtime doesn't support setting a new statement</value>
   </data>
   <data name="AttachToProcessXCommand" xml:space="preserve">
-    <value>Приєднатись до процесу ({0})...</value>
+    <value>Attach vào Process ({0})...</value>
   </data>
   <data name="UnityEditor" xml:space="preserve">
-    <value>Редактор</value>
+    <value>Editor</value>
   </data>
   <data name="ConnectToUnity_UseAttachToUnityProcessDlgBoxMessage" xml:space="preserve">
-    <value>Використовуйте діалог Attach to Process (Unity) для підключення до відлагоджуваного файлу</value>
+    <value>Sử dụng hộp thoại Attach to Process (Unity) để Attach to Debug builds</value>
   </data>
   <data name="CanNotSetABreakpointWhenProcessIsPaused" xml:space="preserve">
-    <value>Неможливо встановити точку зупинки при призупинці  процесу.</value>
+    <value>Không thể đặt một Breakpoint khi quá trình bị tạm dừng.</value>
   </data>
   <data name="DbgAsm_Executable" xml:space="preserve">
-    <value>Виконуваний</value>
+    <value>E_xecutable</value>
   </data>
   <data name="CouldNotConnectToUnityGame_MakeSureMonoDllFileIsPatched" xml:space="preserve">
-    <value>Переконайтесь, що маєте пропатчену бібліотеку mono.dll</value>
+    <value>Đảm bảo bạn đã vá tệp mono.dll của trò chơi</value>
   </data>
   <data name="DbgAsm_ConnectionTimeoutInSeconds" xml:space="preserve">
-    <value>Таймаут(и)</value>
+    <value>_Timeout (s)</value>
   </data>
   <data name="AttachToUnityProcess_DebugBuildsOnlyMessage" xml:space="preserve">
-    <value>Лишень для билдів Unity Debug</value>
+    <value>Điều này chỉ dành cho các bản dựng Unity Debug</value>
   </data>
   <data name="DebuggingUnityGamesText" xml:space="preserve">
-    <value>Відладка ігор Unity</value>
-  </data>
-  <data name="MonoDebuggerConnectionMessage" xml:space="preserve">
-    <value>Підключено до: {0}, Версія Mono: {1}, Версія протоколу: {2}</value>
+    <value>Debugging Unity Games</value>
   </data>
 </root>
