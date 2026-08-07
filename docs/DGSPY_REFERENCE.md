@@ -88,7 +88,12 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   detach, terminate, or restart a target. Recovery is selection plus ownership, not implicit target control.
 
 - `get_host_info` identifies the host: dnSpy/dgSpy versions, machine, architecture, supported engines,
-  and the live `session_id` if there is one. `get_capabilities` reports per-operation time bounds,
+  and the live `session_id` if there is one. `dgspy_version` and `extension_sha256` are derived from the
+  extension assembly that the process actually loaded, and `extension_path` names the tree it came from.
+  Trust those over any other version string: a stale deployment reports a stale hash, whereas a
+  hand-maintained version number keeps looking current no matter how old the running code is.
+  `get_local_deployment` and `doctor` compare the installed payload against the deployed one and report
+  `stale` with recovery when they differ. `get_capabilities` reports per-operation time bounds,
   per-engine behavior, and limits. Engine differences are advertised, not assumed — most importantly
   that Mono/Unity binds breakpoints only at sequence points and that a deadline cannot abort work that
   has already started (`limits.cancels_in_flight_work: false`).

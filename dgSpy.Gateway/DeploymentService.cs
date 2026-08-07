@@ -36,13 +36,20 @@ public sealed class DeploymentService {
 
 	async Task<object> GetStartedAsync(HostRouter router,CancellationToken token) {
 		var hosts=await router.ListHostsAsync(token); var local=GetLocal(); var serialized=hosts.Select(item=>System.Text.Json.JsonSerializer.Serialize(item)).ToArray(); var connected=serialized.Any(item=>item.Contains("\"state\":\"connected\"",StringComparison.Ordinal)); var degraded=serialized.Any(item=>item.Contains("\"state\":\"degraded\"",StringComparison.Ordinal));
-		return new { gateway="ready",access_mode=Environment.GetEnvironmentVariable("DGSPY_ACCESS_MODE") ?? "full-control",local_deployment=local,hosts,recommended_next_action=connected ? "select a connected host, then attach or launch" : degraded ? "inspect dispatcher and evaluation queue faults before issuing debugger control" : "call launch_local_host, or create one remote host package" };
+		// Staleness outranks "you are connected": a connected host running superseded code is the case that
+		// wastes the most time, because everything else looks healthy.
+		var stale=(bool?)System.Text.Json.JsonSerializer.SerializeToNode(local)!["payload"]?["stale"]==true;
+		return new { gateway="ready",access_mode=Environment.GetEnvironmentVariable("DGSPY_ACCESS_MODE") ?? "full-control",local_deployment=local,hosts,recommended_next_action=stale ? "the installed payload is newer than the running deployment: close dnSpy and call launch_local_host before trusting any result" : connected ? "select a connected host, then attach or launch" : degraded ? "inspect dispatcher and evaluation queue faults before issuing debugger control" : "call launch_local_host, or create one remote host package" };
 	}
 	async Task<object> DoctorAsync(HostRouter router,CancellationToken token) {
 		var checks=new List<object>();
 		checks.Add(Check("state_root",Directory.Exists(stateRoot),stateRoot,Directory.Exists(stateRoot)?null:"Created on first mutation."));
 		checks.Add(Check("local_deployment",true,Directory.Exists(installRoot)?installRoot:"not installed",Directory.Exists(installRoot)?null:"Optional: call launch_local_host; it installs the bundled host automatically."));
 		var payload=RemotePayloadRoot(); try { ValidateRemotePayload(payload); checks.Add(Check("bundled_host_payload",true,payload,null)); } catch(GatewayControlException ex) { checks.Add(Check("bundled_host_payload",false,payload,ex.Message)); }
+		// A stale deployment is not a broken one: every other check passes while the debugger answers from
+		// code that no longer exists in the tree. Doctor has to say so out loud or nobody finds out.
+		var freshness=DeploymentFreshness(); var freshnessJson=System.Text.Json.JsonSerializer.SerializeToNode(freshness)!;
+		checks.Add(Check("deployment_freshness",(bool?)freshnessJson["stale"]!=true,(string?)freshnessJson["detail"] ?? "",(string?)freshnessJson["recovery"]));
 		var registry=Environment.GetEnvironmentVariable("DGSPY_HOSTS_FILE"); checks.Add(Check("host_registry",string.IsNullOrWhiteSpace(registry)||File.Exists(registry),registry ?? "implicit local host",string.IsNullOrWhiteSpace(registry)||File.Exists(registry)?null:"Configured registry is missing."));
 		object[] hosts; try { hosts=await router.ListHostsAsync(token); var serialized=hosts.Select(item=>System.Text.Json.JsonSerializer.Serialize(item)).ToArray(); var connected=serialized.Count(item=>item.Contains("\"state\":\"connected\"",StringComparison.Ordinal)); var degraded=serialized.Count(item=>item.Contains("\"state\":\"degraded\"",StringComparison.Ordinal)); var available=connected+degraded; var ok=connected>0 && degraded==0; checks.Add(Check("hosts",ok,$"{hosts.Length} registered, {connected} connected, {degraded} degraded",ok?null:available>0?"Inspect the host dispatcher/evaluation fault fields before retrying control operations.":"Start dnSpy locally or connect a provisioned remote host.")); } catch(Exception ex) { hosts=Array.Empty<object>(); checks.Add(Check("hosts",false,ex.GetType().Name,"Repair the host registry or credentials.")); }
 		return new { healthy=checks.All(c=>(bool)c.GetType().GetProperty("ok")!.GetValue(c)!),state_root=stateRoot,install_root=installRoot,checks,hosts };
@@ -53,8 +60,25 @@ public sealed class DeploymentService {
 		return new { topic=topic ?? "setup",guidance=text };
 	}
 
-	object GetLocal() { var current=ReadCurrent(); var active=(string?)current?["active_version"]; return new { installed=active is not null,active_version=active,previous_version=(string?)current?["previous_version"],host_id=(string?)current?["host_id"],install_path=active is null ? null : Path.Combine(installRoot,"versions",active),launcher=Path.Combine(installRoot,"current","Start-dgSpy.cmd") }; }
-	async Task<object> LaunchLocalAsync(HostRouter router,CancellationToken token) { var installed=EnsureBundledLocalHost(token); var current=ReadCurrent()!; var version=(string)current["active_version"]!; var executable=Path.Combine(installRoot,"versions",version,"dnSpy.exe"); ValidateDnSpy(Path.GetDirectoryName(executable)!); var start=new ProcessStartInfo(executable) { UseShellExecute=false }; start.Environment["DGSPY_STATE_ROOT"]=stateRoot; var process=Process.Start(start) ?? throw new InvalidOperationException("dnSpy did not start."); for(var attempt=0;attempt<20;attempt++) { await Task.Delay(250,token); var hosts=await router.ListHostsAsync(token); if(hosts.Any(item=>System.Text.Json.JsonSerializer.Serialize(item).Contains("\"state\":\"connected\"",StringComparison.Ordinal))) return new { started=true,installed,process_id=process.Id,connected=true,host_id=(string?)current["host_id"] }; } return new { started=true,installed,process_id=process.Id,connected=false,host_id=(string?)current["host_id"],recovery="Call doctor; dnSpy may still be composing extensions." }; }
+	object GetLocal() { var current=ReadCurrent(); var active=(string?)current?["active_version"]; return new { installed=active is not null,active_version=active,previous_version=(string?)current?["previous_version"],host_id=(string?)current?["host_id"],install_path=active is null ? null : Path.Combine(installRoot,"versions",active),launcher=Path.Combine(installRoot,"current","Start-dgSpy.cmd"),payload=DeploymentFreshness() }; }
+	async Task<object> LaunchLocalAsync(HostRouter router,CancellationToken token) {
+		// An already-running dnSpy keeps the RPC endpoint, so a redeploy that starts a second process can
+		// report "connected" while the connection still belongs to the superseded build. Say which version
+		// was deployed and warn when a redeploy happened, rather than implying the new code is live.
+		var installed=EnsureBundledLocalHost(token); var current=ReadCurrent()!; var version=(string)current["active_version"]!;
+		var executable=Path.Combine(installRoot,"versions",version,"dnSpy.exe"); ValidateDnSpy(Path.GetDirectoryName(executable)!);
+		var deployedSha=DeployedPayloadSha(version);
+		var start=new ProcessStartInfo(executable) { UseShellExecute=false }; start.Environment["DGSPY_STATE_ROOT"]=stateRoot;
+		var process=Process.Start(start) ?? throw new InvalidOperationException("dnSpy did not start.");
+		for(var attempt=0;attempt<20;attempt++) {
+			await Task.Delay(250,token);
+			var hosts=await router.ListHostsAsync(token);
+			if(hosts.Any(item=>System.Text.Json.JsonSerializer.Serialize(item).Contains("\"state\":\"connected\"",StringComparison.Ordinal)))
+				return new { started=true,installed,redeployed=installed,active_version=version,payload_sha256=deployedSha,process_id=process.Id,connected=true,host_id=(string?)current["host_id"],
+					recovery=installed?"A new version was deployed. If a dnSpy was already running it still owns the endpoint: confirm get_host_info reports an extension_sha256 from this deployment, and close the old dnSpy if it does not.":null };
+		}
+		return new { started=true,installed,redeployed=installed,active_version=version,payload_sha256=deployedSha,process_id=process.Id,connected=false,host_id=(string?)current["host_id"],recovery="Call doctor; dnSpy may still be composing extensions." };
+	}
 	object Rollback(JsonObject args) { RequireConfirm(args); var current=ReadCurrent() ?? throw new GatewayControlException("local_not_installed","No managed local deployment exists."); var previous=(string?)current["previous_version"] ?? throw new GatewayControlException("rollback_unavailable","No previous local version is retained."); var active=(string)current["active_version"]!; if(!Directory.Exists(Path.Combine(installRoot,"versions",previous))) throw new GatewayControlException("rollback_unavailable","The retained previous version directory is missing."); current["active_version"]=previous; current["previous_version"]=active; current["updated_utc"]=DateTime.UtcNow; WriteCurrent(current); WriteCurrentLauncher(); return new { rolled_back=true,active_version=previous,previous_version=active }; }
 	object Uninstall(JsonObject args) { RequireConfirm(args); if(Directory.Exists(installRoot)) Directory.Delete(installRoot,true); foreach(var shortcut in new[]{Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"dgSpy.cmd"),Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),"Programs","dgSpy.cmd")}) if(File.Exists(shortcut)&&File.ReadAllText(shortcut).Contains(installRoot,StringComparison.OrdinalIgnoreCase)) File.Delete(shortcut); if((bool?)args["remove_settings"]==true && Directory.Exists(stateRoot)) Directory.Delete(stateRoot,true); return new { uninstalled=true,settings_preserved=(bool?)args["remove_settings"]!=true }; }
 
@@ -97,15 +121,61 @@ public sealed class DeploymentService {
 	async Task<object> RemoteReadinessAsync(string? hostId,HostRouter router,CancellationToken token) { if(string.IsNullOrWhiteSpace(hostId)) throw new GatewayControlException("invalid_arguments","host_id is required."); var hosts=await router.ListHostsAsync(token); var selected=hosts.Select(item=>System.Text.Json.JsonSerializer.Serialize(item)).FirstOrDefault(json=>json.Contains($"\"host_id\":\"{hostId}\"",StringComparison.Ordinal)); return new { host_id=hostId,registered=selected is not null,connected=selected?.Contains("\"state\":\"connected\"",StringComparison.Ordinal)==true,hosts }; }
 	object RevokeRemote(JsonObject args) { RequireConfirm(args); var hostId=(string?)args["host_id"] ?? throw new GatewayControlException("invalid_arguments","host_id is required."); var registry=Environment.GetEnvironmentVariable("DGSPY_HOSTS_FILE") ?? Path.Combine(packageRoot,"gateway-hosts.json"); if(!File.Exists(registry)) return new { host_id=hostId,revoked=false,already_absent=true }; var root=JsonNode.Parse(File.ReadAllText(registry))!.AsObject(); var hosts=root["hosts"]!.AsArray(); var removed=hosts.Where(node=>(string?)node?["host_id"]==hostId).ToArray(); foreach(var node in removed) hosts.Remove(node); AtomicWrite(registry,root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })); return new { host_id=hostId,revoked=removed.Length>0,credentials_retained=true,gateway_restart_required=removed.Length>0,recovery="Restart the Gateway to apply revocation, then delete retained credential files after confirming no rollback is required." }; }
 
+	// The deployment identity must be derived from everything that can change, because anything it leaves
+	// out is a code change the gateway will deploy over silently. This once hashed dnSpy.exe alone — an
+	// apphost stub generated from the project name, byte-identical across every rebuild — so a rebuilt
+	// dnSpy.dll and dgSpy.Extension.x.dll produced the same fingerprint, the active==version check below
+	// short-circuited, and the gateway kept running a tree that was days old while reporting success.
 	internal bool EnsureBundledLocalHost(CancellationToken token) {
 		var payload=RemotePayloadRoot(); ValidateRemotePayload(payload); var hostId=DefaultHostId();
-		var fingerprint=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(payload,"dnSpy.exe")))).Substring(0,12).ToLowerInvariant();
-		var version="bundled-"+fingerprint; var current=ReadCurrent(); var active=(string?)current?["active_version"];
-		if(active==version) { ValidateDnSpy(Path.Combine(installRoot,"versions",version)); return false; }
+		var payloadSha=HashTreeCached(payload);
+		var version="bundled-"+payloadSha.Substring(0,12).ToLowerInvariant();
+		var current=ReadCurrent(); var active=(string?)current?["active_version"];
+		// Trusting the name alone reuses a directory whose contents were never checked. The recorded hash
+		// is what makes "already installed" a claim about content instead of about a string.
+		if(active==version && string.Equals(DeployedPayloadSha(version),payloadSha,StringComparison.OrdinalIgnoreCase)) { ValidateDnSpy(Path.Combine(installRoot,"versions",version)); return false; }
 		var destination=Path.Combine(installRoot,"versions",version); Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-		if(!Directory.Exists(destination)) { var staging=destination+".staging-"+Guid.NewGuid().ToString("N"); try { CopyTree(payload,staging,token); ValidateDnSpy(staging); File.WriteAllText(Path.Combine(staging,"deployment-manifest.json"),System.Text.Json.JsonSerializer.Serialize(new { version,host_id=hostId,created_utc=DateTime.UtcNow,source="bundled_payload",sha256=HashTree(staging) })); Directory.Move(staging,destination); } catch { if(Directory.Exists(staging)) Directory.Delete(staging,true); throw; } }
+		// A directory whose recorded hash disagrees with its name is a partial or interrupted copy. Never
+		// overwrite it in place: dnSpy may be running out of it. Deploy beside it instead.
+		if(Directory.Exists(destination) && !string.Equals(DeployedPayloadSha(version),payloadSha,StringComparison.OrdinalIgnoreCase)) {
+			var unique=2; while(Directory.Exists(destination+"-"+unique)) unique++;
+			version=version+"-"+unique; destination=Path.Combine(installRoot,"versions",version);
+		}
+		if(!Directory.Exists(destination)) { var staging=destination+".staging-"+Guid.NewGuid().ToString("N"); try { CopyTree(payload,staging,token); ValidateDnSpy(staging); File.WriteAllText(Path.Combine(staging,"deployment-manifest.json"),System.Text.Json.JsonSerializer.Serialize(new { version,host_id=hostId,created_utc=DateTime.UtcNow,source="bundled_payload",payload_sha256=payloadSha,packaged=ReadStagedManifest(),sha256=HashTree(staging) })); Directory.Move(staging,destination); } catch { if(Directory.Exists(staging)) Directory.Delete(staging,true); throw; } }
 		Directory.CreateDirectory(stateRoot); EnsureSecret(Path.Combine(stateRoot,"gateway.token")); EnsureSecret(Path.Combine(stateRoot,"rpc.token")); File.WriteAllText(Path.Combine(stateRoot,"host.id"),hostId);
 		WriteCurrent(new JsonObject { ["active_version"]=version,["previous_version"]=active,["host_id"]=hostId,["updated_utc"]=DateTime.UtcNow }); WriteCurrentLauncher(); return true;
+	}
+
+	/// <summary>The payload hash a deployed version recorded for itself, or null when it predates the
+	/// field or was never fully written.</summary>
+	string? DeployedPayloadSha(string version) {
+		var manifest=Path.Combine(installRoot,"versions",version,"deployment-manifest.json");
+		if(!File.Exists(manifest)) return null;
+		try { return (string?)JsonNode.Parse(File.ReadAllText(manifest))?["payload_sha256"]; } catch { return null; }
+	}
+	/// <summary>The packaging manifest that ships beside the staged payload, carrying the commit it was
+	/// built from. Recorded verbatim in the deployment so a deployed tree can name its own provenance.</summary>
+	JsonNode? ReadStagedManifest() {
+		var manifest=Path.Combine(Path.GetDirectoryName(RemotePayloadRoot())!,"manifest.json");
+		if(!File.Exists(manifest)) return null;
+		try { return JsonNode.Parse(File.ReadAllText(manifest)); } catch { return null; }
+	}
+
+	/// <summary>Compares the payload that is installed against the one that is deployed and running. This
+	/// is the check that was missing: every stage reported success about its own step, and nothing ever
+	/// compared one stage's output with the next stage's input.</summary>
+	object DeploymentFreshness() {
+		var current=ReadCurrent(); var active=(string?)current?["active_version"];
+		if(active is null) return new { known=true,stale=false,detail="No managed local deployment yet." };
+		string payloadSha;
+		try { var payload=RemotePayloadRoot(); ValidateRemotePayload(payload); payloadSha=HashTreeCached(payload); }
+		catch(Exception ex) { return new { known=false,stale=false,detail=$"Installed payload could not be hashed: {ex.Message}" }; }
+		var deployed=DeployedPayloadSha(active);
+		if(deployed is null) return new { known=false,stale=true,staged_payload_sha256=payloadSha,active_version=active,detail="The active deployment predates payload verification and cannot prove what it contains.",recovery="Call launch_local_host to redeploy the installed payload." };
+		var stale=!string.Equals(deployed,payloadSha,StringComparison.OrdinalIgnoreCase);
+		return new { known=true,stale,staged_payload_sha256=payloadSha,active_payload_sha256=deployed,active_version=active,
+			detail=stale?"The installed payload is newer than the running deployment; dnSpy is executing older code.":"The active deployment matches the installed payload.",
+			recovery=stale?"Close dnSpy and call launch_local_host to deploy the installed payload.":null };
 	}
 	string RemotePayloadRoot() {
 		var configured=Environment.GetEnvironmentVariable("DGSPY_REMOTE_PAYLOAD_ROOT"); if(!string.IsNullOrWhiteSpace(configured)) return Path.GetFullPath(configured);
@@ -142,6 +212,27 @@ public sealed class DeploymentService {
 	static void AtomicWrite(string path,string content) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); var temporary=path+".tmp-"+Guid.NewGuid().ToString("N"); File.WriteAllText(temporary,content,new UTF8Encoding(false)); File.Move(temporary,path,true); }
 	static void CopyTree(string source,string destination,CancellationToken token) { foreach(var directory in Directory.EnumerateDirectories(source,"*",SearchOption.AllDirectories)) { token.ThrowIfCancellationRequested(); Directory.CreateDirectory(Path.Combine(destination,Path.GetRelativePath(source,directory))); } Directory.CreateDirectory(destination); foreach(var file in Directory.EnumerateFiles(source,"*",SearchOption.AllDirectories)) { token.ThrowIfCancellationRequested(); var target=Path.Combine(destination,Path.GetRelativePath(source,file)); Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file,target,false); } }
 	static void ValidateDnSpy(string path) { if(!File.Exists(Path.Combine(path,"dnSpy.exe"))||!File.Exists(Path.Combine(path,"bin","dnSpy.Contracts.DnSpy.dll"))||!File.Exists(Path.Combine(path,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll"))) throw new GatewayControlException("invalid_dnspy_source",$"'{path}' is not a packaged dnSpy directory containing the dgSpy extension."); }
+	// HashTree reads the whole payload — roughly a quarter of a gigabyte. Freshness is now checked by
+	// get_started, doctor and get_local_deployment, so paying that on every call would make routine
+	// diagnostics slow enough that people stop running them. The stamp is metadata-only (no file reads)
+	// and changes whenever any file is added, removed, resized or rewritten, so a hit is safe.
+	readonly object hashCacheSync=new object();
+	(string Stamp,string Hash)? hashCache;
+	string HashTreeCached(string root) {
+		var stamp=TreeStamp(root);
+		lock(hashCacheSync) { if(hashCache is { } cached && cached.Stamp==stamp) return cached.Hash; }
+		var hash=HashTree(root);
+		lock(hashCacheSync) hashCache=(stamp,hash);
+		return hash;
+	}
+	static string TreeStamp(string root) {
+		var count=0L; var bytes=0L; var newest=0L;
+		foreach(var file in Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories)) {
+			var info=new FileInfo(file); count++; bytes+=info.Length;
+			var written=info.LastWriteTimeUtc.Ticks; if(written>newest) newest=written;
+		}
+		return $"{root}|{count}|{bytes}|{newest}";
+	}
 	static string HashTree(string root) { using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256); foreach(var file in Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories).OrderBy(path=>path,StringComparer.OrdinalIgnoreCase)) { var relative=Encoding.UTF8.GetBytes(Path.GetRelativePath(root,file).Replace('\\','/')); hash.AppendData(relative); hash.AppendData(File.ReadAllBytes(file)); } return Convert.ToHexString(hash.GetHashAndReset()); }
 	static void EnsureSecret(string path) { if(File.Exists(path)&&!string.IsNullOrWhiteSpace(File.ReadAllText(path))) return; Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllText(path,Convert.ToHexString(RandomNumberGenerator.GetBytes(32))); }
 	static string SafeSegment(string value) { value=value.Trim(); if(string.IsNullOrWhiteSpace(value)||value.IndexOfAny(Path.GetInvalidFileNameChars())>=0||value is "." or "..") throw new GatewayControlException("invalid_name",$"'{value}' is not a safe identifier."); return value; }

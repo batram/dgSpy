@@ -29,7 +29,9 @@ namespace dgSpy.Extension {
 		}
 
 		public IEnumerable<string> MergedResourceDictionaries { get { yield break; } }
-		public ExtensionInfo ExtensionInfo => new ExtensionInfo { ShortDescription="dgSpy MCP debugger bridge 0.1.0" };
+		// One version source. dnSpy's extension list is often the only place a human looks before filing a
+		// bug, so it must name the build that is loaded rather than a literal that outlives it.
+		public ExtensionInfo ExtensionInfo => new ExtensionInfo { ShortDescription="dgSpy MCP debugger bridge "+RpcHost.Version };
 		public void OnEvent(ExtensionEvent @event,object? obj) {
 			if (@event==ExtensionEvent.AppLoaded) {
 				host.ConnectionStateChanged += Host_ConnectionStateChanged;

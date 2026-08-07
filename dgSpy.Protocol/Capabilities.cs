@@ -73,6 +73,13 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("machine_name")] public string MachineName { get; set; }="";
 		[JsonPropertyName("dnspy_version")] public string DnSpyVersion { get; set; }="";
 		[JsonPropertyName("dgspy_version")] public string DgSpyVersion { get; set; }="";
+		/// <summary>SHA-256 of the extension assembly this process actually loaded. It is the only field
+		/// that identifies running code rather than a number someone typed: a stale deployment reports a
+		/// stale hash here while every hand-maintained version string still looks current. Compare it
+		/// against the packaged assembly to prove which build answered the call.</summary>
+		[JsonPropertyName("extension_sha256")] public string ExtensionSha256 { get; set; }="";
+		/// <summary>Where that assembly was loaded from, so a mismatch names the tree to replace.</summary>
+		[JsonPropertyName("extension_path")] public string ExtensionPath { get; set; }="";
 		[JsonPropertyName("protocol_version")] public int ProtocolVersion { get; set; }=dgSpy.Protocol.ProtocolVersion.Current;
 		[JsonPropertyName("operating_system")] public string OperatingSystem { get; set; }="";
 		[JsonPropertyName("architecture")] public string Architecture { get; set; }="";

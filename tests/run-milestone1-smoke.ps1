@@ -281,6 +281,17 @@ try {
 	Assert-That 'get_host_info reports no session before attach' ($null -eq $reconnected.session_id)
 	Assert-That 'get_host_info names a dnSpy version' (-not [string]::IsNullOrWhiteSpace($reconnected.dnspy_version)) "(was '$($reconnected.dnspy_version)')"
 
+	# The regression this exists for: every stage reported success about its own step, nothing compared one
+	# stage's output against the next stage's input, and a debugger three commits behind answered calls for
+	# days while still reporting "0.1.0". Assert that the host answering is the extension this run built.
+	$builtExtension = Join-Path $dnSpyDir 'bin\Extensions\dgSpy\dgSpy.Extension.x.dll'
+	$builtSha = (Get-FileHash -LiteralPath $builtExtension -Algorithm SHA256).Hash.ToLowerInvariant()
+	Assert-That 'get_host_info reports the extension assembly it actually loaded' `
+		($reconnected.extension_sha256 -eq $builtSha) `
+		"(reported '$($reconnected.extension_sha256)', built '$builtSha' at $builtExtension)"
+	Assert-That 'the reported dgspy version is content-derived, not a hardcoded literal' `
+		($reconnected.dgspy_version -like "*+$($builtSha.Substring(0,12))") "(was '$($reconnected.dgspy_version)')"
+
 	$capabilities = Invoke-Tool -Name 'get_capabilities' -Arguments @{}
 	Assert-That 'get_capabilities matches the protocol version the gateway reports' ($capabilities.protocol_version -eq (Invoke-RestMethod ($gatewayUrl + '/health')).protocol_version)
 	$cordebug = @($capabilities.engines) | Where-Object { $_.engine -eq 'cordebug' }

@@ -38,6 +38,26 @@ function Merge-PublishTree([string]$Source,[string]$Destination) {
   }
 }
 
+# Deliberately not a second tree-hash implementation. DeploymentService.HashTree is the one authority for
+# payload identity; reimplementing it here in PowerShell - which has no Path.GetRelativePath on .NET
+# Framework and sorts with culture rules where the gateway sorts ordinally - would drift for exactly the
+# file names nobody tests. The package instead records signals that cannot be expressed two ways: an exact
+# hash of the one assembly whose staleness is otherwise invisible, plus a coarse shape of the tree.
+function Get-PayloadShape([string]$Root) {
+  $files=@(Get-ChildItem -LiteralPath $Root -File -Recurse)
+  return [ordered]@{file_count=$files.Count;payload_bytes=[int64](($files|Measure-Object -Property Length -Sum).Sum)}
+}
+# Provenance is best-effort: a release built from an exported tree has no git, and that must not fail the
+# pack. An absent commit is reported as absent, never as a plausible-looking placeholder.
+function Get-GitValue([string[]]$GitArguments) {
+  try {
+    $value=(& git -C $PSScriptRoot @GitArguments 2>$null)
+    if($LASTEXITCODE -ne 0) { return $null }
+    return ($value|Out-String).Trim()
+  }
+  catch { return $null }
+}
+
 $resolved=[IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $resolved -Force|Out-Null
 $staging=Join-Path $resolved ('.staging-'+[Guid]::NewGuid().ToString('N'))
@@ -73,7 +93,15 @@ try {
   $launcherDestination=Join-Path $cli 'launcher';New-Item -ItemType Directory -Path $launcherDestination -Force|Out-Null
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'packaging\remote-host\Start-dgSpyRemoteHost.ps1') -Destination $launcherDestination
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'packaging\remote-host\Start-dgSpyRemoteHost.cmd') -Destination $launcherDestination
-  $manifest=[ordered]@{format_version=1;runtime=$Runtime;target_framework='net10.0';shared_runtime=$true;created_utc=[DateTime]::UtcNow.ToString('O');entrypoint='cli/bin/dgspy.exe';gateway='cli/bin/dgSpy.Gateway.exe';host='cli/dnSpy.exe'}
+  # The package has to be able to prove what it contains and where it came from. Without this the only
+  # identity downstream was a hand-maintained "0.1.0" plus the hash of an apphost stub that never changes,
+  # so a stale deployment was indistinguishable from a fresh one at every later stage.
+  $shape=Get-PayloadShape $cli
+  $commit=Get-GitValue 'rev-parse','HEAD'
+  $dirty=[bool](Get-GitValue 'status','--porcelain')
+  $extensionSha=(Get-FileHash -LiteralPath (Join-Path $extensionDestination 'dgSpy.Extension.x.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+  $manifest=[ordered]@{format_version=1;runtime=$Runtime;target_framework='net10.0';shared_runtime=$true;created_utc=[DateTime]::UtcNow.ToString('O');entrypoint='cli/bin/dgspy.exe';gateway='cli/bin/dgSpy.Gateway.exe';host='cli/dnSpy.exe';extension_sha256=$extensionSha;file_count=$shape.file_count;payload_bytes=$shape.payload_bytes;git_commit=$commit;git_dirty=$dirty}
+  Write-Host "dgSpy extension $($extensionSha.Substring(0,12)) from commit $(if($commit){$commit.Substring(0,12)}else{'unknown'})$(if($dirty){' (dirty tree)'})"
   [IO.File]::WriteAllText((Join-Path $staging 'manifest.json'),(($manifest|ConvertTo-Json)+"`n"),[Text.UTF8Encoding]::new($false))
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-dgspy.ps1') -Destination $staging
   $archive=Join-Path $resolved "dgspy-$Runtime.zip"
