@@ -1,8 +1,8 @@
 param(
-	[ValidateSet('Shared','CorDebug','Unity','Full')]
+	[ValidateSet('Shared','CorDebug','Unity','MonoTarget','Full')]
 	[string]$Stage = 'Shared',
 	# net10 is the default host: it is what ships and what launch_local_host runs. net48 is retained as
-	# the fallback baseline and is still the only host with Unity/UCH acceptance evidence.
+	# the fallback baseline.
 	[ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows',
 	[switch]$SkipHostBuild,
 	[switch]$UpdateSnapshots
@@ -15,13 +15,15 @@ $env:MSBUILDDISABLENODEREUSE = '1'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $repoRoot = Split-Path $PSScriptRoot -Parent
 
-# ps_scratch\Start-DnSpyPhase6Uch.ps1 launches the net48 host by absolute path, and Unity/UCH has no
-# acceptance evidence on net10. Running the Unity stage against a net10 build would start a net48
-# dnSpy with no extension deployed to it and fail in a way that looks like a Unity regression, so
-# refuse instead of letting the mismatch surface later as a mystery.
-if ($Stage -in @('Unity','Full') -and $TargetFramework -ne 'net48') {
-	throw "Stage '$Stage' covers Unity, which is only proven on the net48 host. Rerun with -TargetFramework net48, or use -Stage CorDebug for the shipping net10 host."
-}
+# The Unity stages used to refuse anything but net48, for two reasons that no longer hold. The host
+# launcher was ps_scratch\Start-DnSpyPhase6Uch.ps1, gitignored and hardcoding an absolute net48 path,
+# so a net10 run started a net48 dnSpy with no extension deployed and failed like a Unity regression;
+# tests\TestSupport\Start-DgSpyHost.ps1 now resolves the host per framework and refuses up front if
+# the extension is missing. And Unity/UCH had no acceptance evidence on net10, which it now does:
+# the net10 host was driven against a live patched Unity player over attach_endpoint, covering
+# modules, threads, call stacks, frames, evaluation and expansion.
+#
+# So the stages run on the shipping host by default, like everything else.
 
 function Invoke-Checked {
 	param([string]$Label, [scriptblock]$Command)
@@ -100,9 +102,16 @@ try {
 	if ($Stage -in @('CorDebug','Full')) {
 		Invoke-Checked 'CorDebug live smoke' { .\tests\run-milestone1-smoke.ps1 -TargetFramework $TargetFramework }
 	}
+	# Needs a listening uch-debug-target player, which this repo neither builds nor ships: it takes a
+	# Unity editor and a licence, which hosted runners do not have. Launch it first with the target
+	# repo's tools\Launch-Target.ps1. Left out of Full for that reason -- a stage that cannot run
+	# unattended would make Full unrunnable rather than thorough.
+	if ($Stage -eq 'MonoTarget') {
+		Invoke-Checked 'Mono/Unity live smoke' { .\tests\run-mono-target-smoke.ps1 -TargetFramework $TargetFramework }
+	}
 	if ($Stage -in @('Unity','Full')) {
 		Write-Host '== start isolated Unity debugger host ==' -ForegroundColor Cyan
-		$unityHostId = & .\ps_scratch\Start-DnSpyPhase6Uch.ps1
+		$unityHostId = & .\tests\TestSupport\Start-DgSpyHost.ps1 -RpcPort 7351 -TargetFramework $TargetFramework
 		try {
 			Invoke-Checked 'Unity read-only modernization smoke' { .\tests\run-uch-modernization-smoke.ps1 }
 		}
