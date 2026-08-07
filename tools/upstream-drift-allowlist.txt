@@ -75,7 +75,6 @@ dnSpy/Roslyn/dnSpy.Roslyn/Debugger/ValueNodes/AggregateValueNodeProvider.cs     
 # Build and repository infrastructure
 # ---------------------------------------------------------------------------
 build.ps1                      net10 host targets and the dgSpy build ordering
-.github/workflows/build.yml    inherited workflow, retargeted; see Batch C note below
 .gitmodules                    submodules pinned to dgSpy modernization forks
 # Rooted on the commit dnSpyEx pins (d12451c) plus one dgSpy patch, so the Mono
 # extension can stay on dnSpyEx's code. It has to be a fork rather than dnSpyEx's
@@ -83,11 +82,16 @@ build.ps1                      net10 host targets and the dgSpy build ordering
 # Unity can retire a thread before GET_FRAME_INFO replies, wedging dnSpy's single
 # Mono debugger thread so Break, Run and Detach queue behind it permanently.
 Extensions/dnSpy.Debugger/Mono.Debugger.Soft  dnSpyEx's fork plus the bounded stack-frame wait Unity needs
-DnSpyRoslyn.props              net48 host retained alongside net10
+# Introduced by the overlay, so it looked like collateral, but it is load
+# bearing. Restoring upstream's netstandard2.0;net10.0-windows fails the net48
+# host build with six NETSDK1005 "assets file doesn't have a target for
+# netstandard2.0" errors, and not from a stale restore -- it reproduces after
+# clearing every obj under dnSpy/Roslyn. Our build.ps1 netframework path wants a
+# direct net48 target from the Roslyn projects. Revisit only together with that
+# script; changing this alone breaks the retained fallback host.
+DnSpyRoslyn.props              net48 Roslyn target required by our netframework build path
 .gitignore                     dgSpy build and scratch outputs
-.editorconfig                  dgSpy formatting deviation
-README.md                      dgSpy project identity
-.github/ISSUE_TEMPLATE.md      dgSpy project identity
+README.md                      dgSpy banner above upstream's text
 
 # Community health files describe dnSpyEx's project, not ours: FUNDING.yml
 # points at their maintainer and the templates at their tracker.
