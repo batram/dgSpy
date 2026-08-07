@@ -147,3 +147,100 @@ jobs:
           path: ${{ runner.temp }}/dgspy-smoke-*
           if-no-files-found: warn
           retention-days: 7
+
+  mono-target-live:
+    name: Mono/Unity live smoke (uch-debug-target)
+    # dgSpy is public and uch-debug-target is private, so this job needs an explicit credential
+    # rather than the built-in GITHUB_TOKEN. Fork PRs never receive secrets, but a merged PR that
+    # edited a build script would run with them on the following push, so keep the token off the
+    # pull_request trigger entirely.
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install .NET SDKs
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            10.0.x
+            7.0.x
+
+      # Pinned to a tag on purpose. Tracking "latest" would make a regression gate's verdict depend
+      # on when it happened to run. Hosted runners have no Unity editor and no licence, so the player
+      # is built and published by hand; only consumption is automated.
+      - name: Fetch the Unity debug target
+        env:
+          GH_TOKEN: ${{ secrets.UCH_TARGET_TOKEN }}
+          UCH_TARGET_TAG: v1-unity2021.3.45f1
+        shell: pwsh
+        run: |
+          gh release download $env:UCH_TARGET_TAG `
+            --repo batram/uch-debug-target `
+            --pattern 'uch-debug-target-release-*.zip' `
+            --pattern 'manifest.json' `
+            --dir "${{ runner.temp }}/uch-target"
+
+      # The tag says what this should be; the hash says what it is. Without this a re-published or
+      # truncated asset would surface as a debugger failure rather than a download problem.
+      - name: Verify the download against its manifest
+        shell: pwsh
+        run: |
+          $dir = "${{ runner.temp }}/uch-target"
+          $manifest = Get-Content (Join-Path $dir 'manifest.json') -Raw | ConvertFrom-Json
+          $zip = Get-ChildItem $dir -Filter 'uch-debug-target-release-*.zip' | Select-Object -First 1
+          $asset = $manifest.assets | Where-Object { $_.name -eq $zip.Name }
+          if (-not $asset) { throw "manifest.json does not describe $($zip.Name)" }
+          $actual = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash
+          if ($actual -ne $asset.sha256) { throw "SHA-256 mismatch for $($zip.Name): expected $($asset.sha256), got $actual" }
+          Write-Host "verified $($zip.Name) ($($asset.bytes) bytes) against manifest tag $($manifest.tag)"
+          Expand-Archive $zip.FullName -DestinationPath (Join-Path $dir 'player')
+
+      - name: Build and deploy dgSpy
+        shell: pwsh
+        run: |
+          .\build.ps1 net-x64 -NoMsbuild
+          .\build-dgspy.ps1
+
+      # Launching is the target repo's job, but its tooling is not in this repo, so the agent option
+      # is built here the one way that works. Unity SILENTLY ignores a malformed --debugger-agent:
+      # no warning, no log line, the port simply never opens, and the usual cause is PowerShell
+      # splitting the comma-separated list. Hence one single-quoted string passed as one argument.
+      - name: Launch the target
+        shell: pwsh
+        run: |
+          $player = Join-Path "${{ runner.temp }}/uch-target/player" 'UchDebugTarget.exe'
+          $agent = '--debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:56000,suspend=y'
+          Start-Process -FilePath $player -ArgumentList $agent,'-batchmode','-nographics' -PassThru | Out-Null
+          # Readiness is observed, never connected to. A connect-close without completing the DWP
+          # handshake wedges the agent, and a bare connect while the runtime is still suspended
+          # awaiting its first debugger kills the player outright. Both look like debugger bugs.
+          $deadline = (Get-Date).AddSeconds(90)
+          do {
+            Start-Sleep -Seconds 2
+            $up = @(Get-NetTCPConnection -State Listen -LocalPort 56000 -ErrorAction SilentlyContinue).Count -gt 0
+          } until ($up -or (Get-Date) -gt $deadline)
+          if (-not $up) { throw 'The Unity debugger agent never listened on 56000.' }
+          Write-Host 'agent listening on 127.0.0.1:56000'
+
+      - name: Run the Mono/Unity live smoke
+        shell: pwsh
+        env:
+          DGSPY_SMOKE_LOG_ROOT: ${{ runner.temp }}
+        run: .\tests\run-modernization-gate.ps1 -Stage MonoTarget
+
+      - name: Upload smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mono-target-smoke-diagnostics-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/dgspy-mono-smoke-*
+            ${{ runner.temp }}/uch-target/player/player.log
+          if-no-files-found: warn
+          retention-days: 7
