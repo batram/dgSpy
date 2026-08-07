@@ -1,5 +1,5 @@
-/*
-    Copyright (C) 2014-2019 de4dot@gmail.com
+﻿/*
+    Copyright (C) 2022 ElektroKill
 
     This file is part of dnSpy
 
@@ -20,33 +20,28 @@
 using System;
 using System.ComponentModel.Composition;
 using dnSpy.Contracts.Controls;
-using dnSpy.Contracts.Debugger;
 using dnSpy.Contracts.Text;
 using dnSpy.Contracts.Text.Classification;
 using dnSpy.Debugger.Evaluation.UI;
 using dnSpy.Debugger.Evaluation.ViewModel;
 
-namespace dnSpy.Debugger.ToolWindows.Autos {
-	[Export(typeof(AutosContent))]
-	sealed class AutosContent : VariablesWindowContentBase {
-		public static readonly Guid VariablesWindowGuid = new Guid("F183274A-8EC3-4DE7-A291-388C6BB73362");
-
-		readonly DebuggerSettings debuggerSettings;
+namespace dnSpy.Debugger.ToolWindows.StaticFields {
+	[Export(typeof(StaticFieldsContent))]
+	sealed class StaticFieldsContent : VariablesWindowContentBase {
+		public static readonly Guid VariablesWindowGuid = new Guid("B8715D35-8F1B-439C-AF7B-1849AF5E7130");
 
 		[ImportingConstructor]
-		AutosContent(IWpfCommandService wpfCommandService, VariablesWindowVMFactory variablesWindowVMFactory, DebuggerSettings debuggerSettings) {
-			this.debuggerSettings = debuggerSettings;
+		StaticFieldsContent(IWpfCommandService wpfCommandService, VariablesWindowVMFactory variablesWindowVMFactory) =>
 			Initialize(wpfCommandService, variablesWindowVMFactory, CreateVariablesWindowVMOptions());
-		}
 
 		VariablesWindowVMOptions CreateVariablesWindowVMOptions() {
 			var options = new VariablesWindowVMOptions() {
-				VariablesWindowValueNodesProvider = new AutosVariablesWindowValueNodesProvider(debuggerSettings),
-				WindowContentType = ContentTypes.AutosWindow,
-				NameColumnName = PredefinedTextClassifierTags.AutosWindowName,
-				ValueColumnName = PredefinedTextClassifierTags.AutosWindowValue,
-				TypeColumnName = PredefinedTextClassifierTags.AutosWindowType,
-				VariablesWindowKind = VariablesWindowKind.Autos,
+				VariablesWindowValueNodesProvider = new StaticFieldsVariablesWindowValueNodesProvider(),
+				WindowContentType = ContentTypes.StaticFieldsWindow,
+				NameColumnName = PredefinedTextClassifierTags.StaticFieldsWindowName,
+				ValueColumnName = PredefinedTextClassifierTags.StaticFieldsWindowValue,
+				TypeColumnName = PredefinedTextClassifierTags.StaticFieldsWindowType,
+				VariablesWindowKind = VariablesWindowKind.StaticFields,
 				VariablesWindowGuid = VariablesWindowGuid,
 			};
 			return options;
