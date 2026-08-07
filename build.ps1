@@ -5,6 +5,11 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# MSBuild worker nodes outlive the build by default (nodeReuse:true) and keep handles open on
+# bin/obj, which breaks later cleanup and repackaging. Reuse buys nothing here because the
+# msbuild.exe and dotnet SDK node pools cannot share nodes anyway.
+$env:MSBUILDDISABLENODEREUSE = '1'
+
 $netframework_tfm = 'net48'
 $net_tfm = 'net10.0-windows'
 $configuration = 'Release'
@@ -49,7 +54,7 @@ function Build-NetFramework {
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 	else {
-		& $msbuildExe -v:m -m -restore -t:Build -p:Configuration=$configuration -p:TargetFramework=$netframework_tfm
+		& $msbuildExe -v:m -m:8 -restore -t:Build -p:Configuration=$configuration -p:TargetFramework=$netframework_tfm
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 
@@ -89,7 +94,7 @@ function Build-Net {
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 	else {
-		& $msbuildExe -v:m -m -restore -t:Publish -p:Configuration=$configuration -p:TargetFramework=$net_tfm -p:RuntimeIdentifier=$rid -p:SelfContained=True
+		& $msbuildExe -v:m -m:8 -restore -t:Publish -p:Configuration=$configuration -p:TargetFramework=$net_tfm -p:RuntimeIdentifier=$rid -p:SelfContained=True
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 
@@ -120,7 +125,7 @@ if ($buildNetX86 -or $buildNetX64) {
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 	else {
-		& $msbuildExe -v:m -m -restore -t:Build -p:Configuration=$configuration -p:TargetFramework=$netframework_tfm $apphostpatcher_dir\AppHostPatcher.csproj
+		& $msbuildExe -v:m -m:8 -restore -t:Build -p:Configuration=$configuration -p:TargetFramework=$netframework_tfm $apphostpatcher_dir\AppHostPatcher.csproj
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 }

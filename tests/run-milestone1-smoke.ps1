@@ -8,6 +8,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+# See build.ps1: keep MSBuild from leaving reusable worker nodes holding bin/obj handles.
+$env:MSBUILDDISABLENODEREUSE = '1'
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $gatewayUrl = "http://127.0.0.1:$GatewayPort"

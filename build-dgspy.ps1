@@ -7,6 +7,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# See build.ps1: keep MSBuild from leaving reusable worker nodes holding bin/obj handles.
+$env:MSBUILDDISABLENODEREUSE = '1'
 
 $extensionProject = Join-Path $PSScriptRoot 'Extensions\dgSpy.Extension\dgSpy.Extension.csproj'
 $gatewayProject = Join-Path $PSScriptRoot 'dgSpy.Gateway\dgSpy.Gateway.csproj'

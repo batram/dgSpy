@@ -1,5 +1,7 @@
 param([string]$Configuration='Release',[string]$Runtime='win-x64',[string]$OutputDirectory="$PSScriptRoot\artifacts\dgspy")
 $ErrorActionPreference='Stop'
+# See build.ps1: keep MSBuild from leaving reusable worker nodes holding bin/obj handles.
+$env:MSBUILDDISABLENODEREUSE='1'
 $hostFrameworkOverrides=@(
   'Microsoft.VisualBasic.dll',
   'System.Diagnostics.EventLog.dll',

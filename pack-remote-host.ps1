@@ -12,6 +12,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# See build.ps1: keep MSBuild from leaving reusable worker nodes holding bin/obj handles.
+$env:MSBUILDDISABLENODEREUSE = '1'
 function New-RandomSecret {
 	$bytes=[byte[]]::new(32); $generator=[Security.Cryptography.RandomNumberGenerator]::Create()
 	try { $generator.GetBytes($bytes); [Convert]::ToBase64String($bytes) } finally { $generator.Dispose() }

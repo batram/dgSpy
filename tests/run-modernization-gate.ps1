@@ -6,6 +6,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# See build.ps1. This gate refuses to run when leftover build nodes hold repo output, so the
+# nodes this run spawns must not survive it either.
+$env:MSBUILDDISABLENODEREUSE = '1'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $repoRoot = Split-Path $PSScriptRoot -Parent
 

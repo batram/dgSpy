@@ -1,6 +1,8 @@
 param([string]$Configuration='Release')
 $ErrorActionPreference='Stop'
 $OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new()
+# See build.ps1: keep MSBuild from leaving reusable worker nodes holding bin/obj handles.
+$env:MSBUILDDISABLENODEREUSE='1'
 $scratch=Join-Path ([IO.Path]::GetTempPath()) ('dgspy-agent-workflow-'+[Guid]::NewGuid().ToString('N'))
 $state=Join-Path $scratch 'state'
 $cli=Join-Path $PSScriptRoot "..\dgSpy.Cli\bin\$Configuration\net10.0\dgspy.dll"
