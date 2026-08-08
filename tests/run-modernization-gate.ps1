@@ -92,7 +92,19 @@ try {
 		# reproduces dnSpy's MEF composition. dnSpy only validates that under
 		# Debug.Assert, so the Release build we ship drops unsatisfiable parts in
 		# silence and no other check in this gate can see it.
-		Invoke-Checked 'Composition tests' { dotnet test tests\dgSpy.Composition.Tests\dgSpy.Composition.Tests.csproj -c Release --nologo -v:minimal }
+		$previousPublishBin = $env:DGSPY_PUBLISH_BIN
+		try {
+			$env:DGSPY_PUBLISH_BIN = if ($TargetFramework -eq 'net48') {
+				Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net48'
+			}
+			else {
+				Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish\bin'
+			}
+			Invoke-Checked 'Composition tests' { dotnet test tests\dgSpy.Composition.Tests\dgSpy.Composition.Tests.csproj -c Release --nologo -v:minimal }
+		}
+		finally {
+			$env:DGSPY_PUBLISH_BIN = $previousPublishBin
+		}
 	}
 	finally {
 		Remove-Item Env:DGSPY_UPDATE_SNAPSHOTS -ErrorAction SilentlyContinue

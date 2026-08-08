@@ -69,8 +69,9 @@ sealed class PublishedHost {
 		// the assemblies under test. Resolve from there rather than from the test
 		// host, or half the graph fails to load and the composition looks broken
 		// for reasons that have nothing to do with the code under test.
-		var context = new HostLoadContext(BinDirectory);
-		Assemblies = LoadHostAssemblies(context);
+		var assemblyDirectories = GetAssemblyDirectories(BinDirectory);
+		var context = new HostLoadContext(assemblyDirectories);
+		Assemblies = LoadHostAssemblies(context, assemblyDirectories);
 
 		// VS-MEF resolves type references through this loader while validating the
 		// graph. The default one calls Assembly.Load, which searches the test host's
@@ -88,9 +89,17 @@ sealed class PublishedHost {
 	/// Mirrors App.GetAssemblies: the core assemblies plus every *.x.dll extension,
 	/// in bin and under bin\Extensions (one level deep).
 	/// </summary>
-	List<Assembly> LoadHostAssemblies(HostLoadContext context) {
+	static string[] GetAssemblyDirectories(string hostDirectory) {
+		var dependencyDirectory = Path.Combine(hostDirectory, "bin");
+		return Directory.Exists(dependencyDirectory)
+			? new[] { hostDirectory, dependencyDirectory }
+			: new[] { hostDirectory };
+	}
+
+	List<Assembly> LoadHostAssemblies(HostLoadContext context, string[] assemblyDirectories) {
 		var names = new List<string> {
 			"dnSpy.dll",
+			"dnSpy.exe",
 			"dnSpy.Contracts.DnSpy.dll",
 			"dnSpy.Roslyn.dll",
 			"Microsoft.VisualStudio.Text.Logic.dll",
@@ -102,18 +111,20 @@ sealed class PublishedHost {
 		};
 
 		var paths = new List<string>();
-		foreach (var n in names) {
-			var p = Path.Combine(BinDirectory, n);
-			if (File.Exists(p))
-				paths.Add(p);
-		}
+		foreach (var directory in assemblyDirectories) {
+			foreach (var n in names) {
+				var p = Path.Combine(directory, n);
+				if (File.Exists(p))
+					paths.Add(p);
+			}
 
-		paths.AddRange(Directory.GetFiles(BinDirectory, ExtensionSearchPattern));
-		var extDir = Path.Combine(BinDirectory, "Extensions");
-		if (Directory.Exists(extDir)) {
-			paths.AddRange(Directory.GetFiles(extDir, ExtensionSearchPattern));
-			foreach (var d in Directory.GetDirectories(extDir))
-				paths.AddRange(Directory.GetFiles(d, ExtensionSearchPattern));
+			paths.AddRange(Directory.GetFiles(directory, ExtensionSearchPattern));
+			var extDir = Path.Combine(directory, "Extensions");
+			if (Directory.Exists(extDir)) {
+				paths.AddRange(Directory.GetFiles(extDir, ExtensionSearchPattern));
+				foreach (var d in Directory.GetDirectories(extDir))
+					paths.AddRange(Directory.GetFiles(d, ExtensionSearchPattern));
+			}
 		}
 
 		var loaded = new List<Assembly>();
@@ -147,10 +158,10 @@ sealed class PublishedHost {
 	}
 
 	sealed class HostLoadContext : AssemblyLoadContext {
-		readonly string binDir;
+		readonly string[] assemblyDirectories;
 
-		public HostLoadContext(string binDir) : base(nameof(HostLoadContext), isCollectible: false) =>
-			this.binDir = binDir;
+		public HostLoadContext(string[] assemblyDirectories) : base(nameof(HostLoadContext), isCollectible: false) =>
+			this.assemblyDirectories = assemblyDirectories;
 
 		protected override Assembly? Load(AssemblyName assemblyName) {
 			if (assemblyName.Name is null)
@@ -173,8 +184,12 @@ sealed class PublishedHost {
 			catch (FileLoadException) {
 			}
 
-			var path = Path.Combine(binDir, assemblyName.Name + ".dll");
-			return File.Exists(path) ? LoadFromAssemblyPath(path) : null;
+			foreach (var directory in assemblyDirectories) {
+				var path = Path.Combine(directory, assemblyName.Name + ".dll");
+				if (File.Exists(path))
+					return LoadFromAssemblyPath(path);
+			}
+			return null;
 		}
 	}
 }

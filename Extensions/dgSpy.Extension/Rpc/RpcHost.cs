@@ -447,11 +447,17 @@ namespace dgSpy.Extension {
 			await WaitForDebuggerAsync(()=>!manager.IsDebugging || bp.BoundBreakpoints.Length!=0,cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
 			return await OnDebuggerAsync(()=>Describe(bp,requested),cancellationToken).ConfigureAwait(false);
 		}
-		Task RemoveBreakpointAsync(int id,CancellationToken cancellationToken) => OnDebuggerAsync(()=>{
-			var found=breakpoints.Breakpoints.FirstOrDefault(b=>b.Id==id);
-			if (found is not null) breakpoints.Remove(new[]{found});
-			return true;
-		},cancellationToken);
+		async Task RemoveBreakpointAsync(int id,CancellationToken cancellationToken) {
+			await OnDebuggerAsync(()=>{
+				var found=breakpoints.Breakpoints.FirstOrDefault(b=>b.Id==id);
+				if (found is not null) breakpoints.Remove(new[]{found});
+				return true;
+			},cancellationToken).ConfigureAwait(false);
+			// DbgCodeBreakpointsService.Remove posts RemoveCore back to the debugger dispatcher.
+			// Drain that queued callback before a caller recreates the same location, or the old
+			// breakpoint can be closed after its replacement has already reported bound=true.
+			await OnDebuggerAsync(()=>true,cancellationToken).ConfigureAwait(false);
+		}
 		BreakpointInfo Describe(DbgCodeBreakpoint bp,uint? requested=null) {
 			var message=bp.BoundBreakpointsMessage;
 			var severity=message.Severity==DbgBoundCodeBreakpointSeverity.Error ? "error" : message.Severity==DbgBoundCodeBreakpointSeverity.Warning ? "warning" : "none";
@@ -484,19 +490,24 @@ namespace dgSpy.Extension {
 			await OnDebuggerAsync(()=>breakpoints.Breakpoints.Select(b=>Describe(b)).OrderBy(b=>b.BreakpointId).ToArray(),cancellationToken).ConfigureAwait(false);
 		async Task<RemoveBreakpointResult> RemoveBreakpointAsync(RpcRequest req,CancellationToken cancellationToken) {
 			var id=(int?)req.Arguments["breakpoint_id"] ?? throw new RpcException("invalid_arguments","breakpoint_id is required.");
-			return await OnDebuggerAsync(()=>{
+			var result=await OnDebuggerAsync(()=>{
 				var found=breakpoints.Breakpoints.FirstOrDefault(b=>b.Id==id);
 				if (found is null) throw new RpcException("breakpoint_not_found",$"Breakpoint {id} does not exist. Refresh list_breakpoints and use an exact breakpoint_id.");
 				breakpoints.Remove(new[]{found});
 				lock(sync) requestedOffsets.Remove(id);
 				return new RemoveBreakpointResult { BreakpointId=id,Removed=true,StateVersion=stateVersion };
 			},cancellationToken).ConfigureAwait(false);
+			await OnDebuggerAsync(()=>true,cancellationToken).ConfigureAwait(false);
+			return result;
 		}
 		// Clears every dnSpy breakpoint, including any set by hand in the UI — dnSpy keeps one global
 		// collection and dgSpy does not own a subset of it. Breakpoints outlive a session and rebind on
 		// the next attach, so without this a fresh session can stop on a breakpoint nobody set.
-		async Task<ClearBreakpointsResult> ClearBreakpointsAsync(CancellationToken cancellationToken) =>
-			await OnDebuggerAsync(()=>{ var count=breakpoints.Breakpoints.Length; breakpoints.Clear(); lock(sync) requestedOffsets.Clear(); return new ClearBreakpointsResult { Removed=count,StateVersion=stateVersion }; },cancellationToken).ConfigureAwait(false);
+		async Task<ClearBreakpointsResult> ClearBreakpointsAsync(CancellationToken cancellationToken) {
+			var result=await OnDebuggerAsync(()=>{ var count=breakpoints.Breakpoints.Length; breakpoints.Clear(); lock(sync) requestedOffsets.Clear(); return new ClearBreakpointsResult { Removed=count,StateVersion=stateVersion }; },cancellationToken).ConfigureAwait(false);
+			await OnDebuggerAsync(()=>true,cancellationToken).ConfigureAwait(false);
+			return result;
+		}
 		static string ThreadId(DbgThread thread) => $"{thread.Process.Id}:{thread.Id}";
 		async Task<ThreadInfo[]> ListThreadsAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
