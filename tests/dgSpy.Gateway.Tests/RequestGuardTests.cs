@@ -377,6 +377,40 @@ public class HostRegistryTests {
 		finally { Directory.Delete(directory,true); }
 	}
 
+	[Theory]
+	[InlineData(false,7)]
+	[InlineData(true,3)]
+	public async Task Trace_calls_returns_the_last_observed_version_vector(bool stepTimesOut,int requestCount) {
+		var directory=CreateRegistryDirectory(); var auditPath=Path.Combine(directory,"audit.jsonl");
+		try {
+			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} }); var router=new HostRouter(HostRegistry.FromJson(json,directory));
+			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start(); using var remote=new TcpClient(); var accept=listener.AcceptTcpClientAsync(); await remote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var gateway=await accept;
+			var gatewayReader=new StreamReader(gateway.GetStream(),Encoding.UTF8,false,4096,true); var gatewayWriter=new StreamWriter(gateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true}; Assert.True(router.TryRegister("host-a",gateway,gatewayReader,gatewayWriter,out _));
+			var remoteReader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true); var remoteWriter=new StreamWriter(remote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true};
+			var versions=new { lifecycle_version=2,execution_version=4,breakpoints_version=1,stop_id="stop-2",last_event_id=9 };
+			var responder=Task.Run(async ()=>{ for(var index=0;index<requestCount;index++){ var request=ProtocolJson.Deserialize<RpcRequest>((await remoteReader.ReadLineAsync())!)!; object result=request.Operation switch {
+				"get_session_state"=>new SessionState { SessionId="session-a",State="paused",ExecutionVersion=3,StopId="stop-1" },
+				"step_into"=>new { completed=true,cursor_event_id=4,versions },
+				"wait_for_stop"=>stepTimesOut ? new { events=Array.Empty<object>(),timed_out=true,versions } : new { events=new[]{new { thread_id="1:2" }},timed_out=false,versions },
+				"get_callstack"=>Array.Empty<object>(),
+				_=>new { ok=true },
+			}; await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,result))); } });
+			var clients=new McpClientSessions(TimeSpan.FromMinutes(5)); clients.Touch("client-a"); var controllers=new SessionControllers(clients); controllers.Claim("session-a","host-a","client-a"); var audit=new GatewayAuditLog(auditPath,4096);
+			var executor=new GatewayToolExecutor(router,controllers,new GatewayAccessPolicy("full-control"),audit);
+
+			var response=await executor.ExecuteAsync("trace_calls",ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a",expected_execution_version=3,expected_stop_id="stop-1",max_steps=1 }),"client-a",default);
+			await responder; listener.Stop();
+
+			Assert.Null(response.Error);
+			var result=ProtocolJson.ToNode(response.Result)!.AsObject();
+			Assert.Equal(stepTimesOut ? "step_timeout" : "bound_reached",(string?)result["reason"]);
+			Assert.Equal(4,(int?)result["versions"]?["execution_version"]);
+			Assert.Equal("stop-2",(string?)result["versions"]?["stop_id"]);
+			Assert.Equal(9,(int?)result["versions"]?["last_event_id"]);
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
 	static string CreateRegistryDirectory() {
 		var directory=Path.Combine(Path.GetTempPath(),"dgspy-host-registry-"+Guid.NewGuid().ToString("N"));
 		Directory.CreateDirectory(directory);

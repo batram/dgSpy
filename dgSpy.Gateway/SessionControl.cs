@@ -178,19 +178,22 @@ public sealed class GatewayToolExecutor {
 	/// gateway saw the intermediate responses — so a caller that had to re-read state after every
 	/// step_and_inspect got no benefit from the composite at all. The source is the call that observed
 	/// the final state: the wait for the stepping tools, the cleanup removal for run_to_*.</summary>
-	static JsonObject Versioned(JsonObject result,JsonObject? source) { if(source?["versions"] is JsonNode versions) result["versions"]=versions.DeepClone(); return result; }
+	static JsonObject Versioned(JsonObject result,JsonObject? source) => VersionedFromVector(result,source?["versions"]);
+	static JsonObject VersionedFromVector(JsonObject result,JsonNode? versions) { if(versions is not null) result["versions"]=versions.DeepClone(); return result; }
 	async Task<RpcResponse> TraceCallsAsync(JsonObject arguments,string clientId,CancellationToken token) {
-		var maxSteps=Math.Clamp((int?)arguments["max_steps"] ?? 25,1,100); var duration=Math.Clamp((int?)arguments["duration_ms"] ?? 10000,1,30000); var maxDepth=Math.Clamp((int?)arguments["max_depth"] ?? 20,1,50); var started=DateTime.UtcNow; var entries=new JsonArray(); var current=(JsonObject)arguments.DeepClone();
+		var maxSteps=Math.Clamp((int?)arguments["max_steps"] ?? 25,1,100); var duration=Math.Clamp((int?)arguments["duration_ms"] ?? 10000,1,30000); var maxDepth=Math.Clamp((int?)arguments["max_depth"] ?? 20,1,50); var started=DateTime.UtcNow; var entries=new JsonArray(); var current=(JsonObject)arguments.DeepClone(); JsonObject? versions=null;
 		for(var index=0;index<maxSteps && (DateTime.UtcNow-started).TotalMilliseconds<duration;index++) {
 			current["kind"]="into"; current["timeout_ms"]=Math.Min(5000,duration-(int)(DateTime.UtcNow-started).TotalMilliseconds); current["max_frames"]=maxDepth;
-			var result=await StepAndInspectAsync(current,clientId,token); if(result.Error is not null) return result; var node=ProtocolJson.ToNode(result.Result)!.AsObject(); var stop=node["stop"]; if(stop is null) return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { entries,completed=false,reason="step_timeout",steps=index+1,limitations=TraceLimitations });
+			var result=await StepAndInspectAsync(current,clientId,token); if(result.Error is not null) return result; var node=ProtocolJson.ToNode(result.Result)!.AsObject();
+			versions=node["versions"]?.AsObject() ?? ProtocolJson.ToNode(await GetStateAsync(current,token))!.AsObject();
+			var stop=node["stop"]; if(stop is null) return RpcResponse.Success(Guid.NewGuid().ToString("N"),VersionedFromVector(new JsonObject { ["entries"]=entries,["completed"]=false,["reason"]="step_timeout",["steps"]=index+1,["limitations"]=new JsonArray(TraceLimitations.Select(value=>(JsonNode?)value).ToArray()) },versions));
 			var stack=node["callstack"]; var text=stack?.ToJsonString() ?? ""; if(Matches(arguments,text)) entries.Add(new JsonObject { ["step"]=index+1,["stop"]=stop.DeepClone(),["callstack"]=stack?.DeepClone() });
 			// The step's own response now carries the vector the next iteration must guard with, so the
 			// trace no longer spends a get_session_state per step to re-read what it was just told.
-			var versions=node["versions"]?.AsObject() ?? ProtocolJson.ToNode(await GetStateAsync(current,token))!.AsObject();
 			current["expected_execution_version"]=versions["execution_version"]?.DeepClone(); current["expected_stop_id"]=versions["stop_id"]?.DeepClone();
 		}
-		return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { entries,completed=true,reason="bound_reached",steps=entries.Count,limitations=TraceLimitations });
+		versions ??= ProtocolJson.ToNode(await GetStateAsync(current,token))!.AsObject();
+		return RpcResponse.Success(Guid.NewGuid().ToString("N"),VersionedFromVector(new JsonObject { ["entries"]=entries,["completed"]=true,["reason"]="bound_reached",["steps"]=entries.Count,["limitations"]=new JsonArray(TraceLimitations.Select(value=>(JsonNode?)value).ToArray()) },versions));
 	}
 	static readonly string[] TraceLimitations={"best-effort managed sequence-point trace","optimized and inlined calls can be absent","native/runtime calls are unobservable","async continuations may move to another thread"};
 	static bool Matches(JsonObject arguments,string text) { foreach(var property in new[]{"module_filter","namespace_filter","type_filter"}) { var filter=(string?)arguments[property]; if(!string.IsNullOrWhiteSpace(filter)&&!text.Contains(filter,StringComparison.OrdinalIgnoreCase)) return false; } return true; }
