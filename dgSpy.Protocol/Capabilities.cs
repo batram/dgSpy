@@ -296,8 +296,8 @@ namespace dgSpy.Protocol {
 				Engine="unity", DisplayName="Mono/Unity soft debugger",
 				Acquisition=new[]{"attach_endpoint"}, Discoverable=false,
 				ArbitraryIlOffsetBreakpoints=false, SequencePointBreakpointsOnly=true, DetachWithoutTerminating=true,
-				MethodInvocation=true,ObjectConstruction=true,MemoryAccess=true,NativeDisassembly=false,Registers=false,SetInstructionPointer=true,AbortFunctionEvaluation=true,ObjectIds=true,ExceptionModes=new[]{"thrown","unhandled"},
-				Notes="A target launched with an explicit --debugger-agent endpoint emits no discovery beacon, so only attach_endpoint reaches it, and the endpoint accepts one connection per launch. Breakpoints bind only at sequence points.",
+				MethodInvocation=true,ObjectConstruction=true,MemoryAccess=true,NativeDisassembly=false,Registers=true,SetInstructionPointer=true,AbortFunctionEvaluation=true,ObjectIds=true,ExceptionModes=new[]{"thrown","unhandled"},
+				Notes="A target launched with an explicit --debugger-agent endpoint emits no discovery beacon, so only attach_endpoint reaches it, and the endpoint accepts one connection per launch. Breakpoints bind only at sequence points. Registers require soft-debugger protocol 2.3 or newer.",
 			},
 		};
 		public static readonly CapabilityLimits Limits = new CapabilityLimits {

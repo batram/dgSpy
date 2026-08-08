@@ -1936,7 +1936,7 @@
     },
     {
       "name": "get_registers",
-      "description": "Return a stopped CorDebug x64 thread\u0027s integer and control registers. Each row includes name, unsigned numeric value, fixed-width hexadecimal text, and bit width. The selected thread must be paused; frame_index selects and validates the managed frame whose OS-thread context is read. Mono\u0027s soft debugger does not expose this native context.",
+      "description": "Return a stopped x64 thread\u0027s integer and control registers for CorDebug or Mono soft-debugger protocol 2.3\u002B. Each row includes name, unsigned numeric value, fixed-width hexadecimal text, and bit width. The selected thread must be paused; frame_index selects and validates the managed frame whose OS-thread context is read.",
       "inputSchema": {
         "type": "object",
         "properties": {

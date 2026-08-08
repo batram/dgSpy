@@ -19,9 +19,9 @@ in the same callback that changed it reports the old settings and looks like a w
   target and would otherwise stall event delivery for the whole session.
 `invoke_method` and `create_object` are deliberately separate always-side-effecting tools, not flags on
 `evaluate`. They enable func-eval, use dnSpy's hard func-eval timeout, write an Output-window audit record,
-and return its id. `get_registers` reads the stopped x64 Windows thread context directly for CorDebug,
-since dnSpy has no public register contract. Mono remains explicitly unsupported because its soft-debugger
-thread id is not a Windows OS thread id and cannot safely be passed to `GetThreadContext`.
+and return its id. `get_registers` reads the stopped x64 Windows thread context directly for CorDebug and
+Mono soft-debugger protocol 2.3+, since dnSpy has no public register contract. The Mono engine records when
+`DbgThread.Id` came from `THREAD.GET_TID`, and the reader verifies the thread belongs to the debug process.
 
 - `Decompiler/`: metadata, symbol search, typed relationship analysis, IL, decompilation and breakpoint-by-name. Metadata and
   decompilation also run on the `EvaluationQueue`: dnlib loads lazily and dnSpy caches one `ModuleDef`

@@ -443,7 +443,7 @@
       "object_construction": true,
       "memory_access": true,
       "native_disassembly": false,
-      "registers": false,
+      "registers": true,
       "set_instruction_pointer": true,
       "abort_function_evaluation": true,
       "object_ids": true,
@@ -451,7 +451,7 @@
         "thrown",
         "unhandled"
       ],
-      "notes": "A target launched with an explicit --debugger-agent endpoint emits no discovery beacon, so only attach_endpoint reaches it, and the endpoint accepts one connection per launch. Breakpoints bind only at sequence points."
+      "notes": "A target launched with an explicit --debugger-agent endpoint emits no discovery beacon, so only attach_endpoint reaches it, and the endpoint accepts one connection per launch. Breakpoints bind only at sequence points. Registers require soft-debugger protocol 2.3 or newer."
     }
   ],
   "limits": {

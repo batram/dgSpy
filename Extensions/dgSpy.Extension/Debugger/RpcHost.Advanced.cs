@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using dgSpy.Protocol;
 using dnSpy.Contracts.Debugger.DotNet.Evaluation;
+using dnSpy.Contracts.Debugger.DotNet.Mono;
 using dnSpy.Contracts.Metadata;
 using System.Text.Json.Nodes;
 
@@ -115,9 +116,11 @@ namespace dgSpy.Extension {
 			CheckSession(req); var captured=await CaptureFrameAsync(req,cancellationToken).ConfigureAwait(false);
 			return await OnDebuggerAsync(()=>{
 				var runtime=captured.Frame.Runtime.InternalRuntime as IDbgDotNetRuntime;
-				if (runtime is null || (runtime.Features & DbgDotNetRuntimeFeatures.NativeMethodBodies)==0)
-					throw new RpcException("capability_unsupported","Native registers require the Windows CorDebug engine; the Mono soft debugger does not expose an OS thread context.");
-				return ProtocolJson.ToObject(new { architecture="x64",thread_id=ThreadId(captured.Frame.Thread),frame_index=captured.Info.FrameIndex,registers=NativeRegisterReader.ReadX64(captured.Frame.Thread.Id) });
+				var isCorDebug=runtime is not null && (runtime.Features & DbgDotNetRuntimeFeatures.NativeMethodBodies)!=0;
+				var isMonoSystemThread=captured.Frame.Thread.TryGetData<DbgMonoThreadInfo>(out var mono) && mono.HasSystemThreadId;
+				if (!isCorDebug && !isMonoSystemThread)
+					throw new RpcException("capability_unsupported",mono is null ? "This runtime does not expose an OS thread context." : $"Mono soft-debugger protocol {mono.ProtocolMajor}.{mono.ProtocolMinor} does not expose system thread ids; version 2.3 or newer is required.");
+				return ProtocolJson.ToObject(new { architecture="x64",thread_id=ThreadId(captured.Frame.Thread),frame_index=captured.Info.FrameIndex,registers=NativeRegisterReader.ReadX64(captured.Frame.Thread.Id,captured.Frame.Thread.Process.Id) });
 			},cancellationToken).ConfigureAwait(false);
 		}
 

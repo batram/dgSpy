@@ -130,3 +130,9 @@ README.md                      dgSpy banner above upstream's text
 # purely additive: the surrounding code is upstream's.
 Extensions/dnSpy.Debugger/dnSpy.Debugger/DbgUI/DebuggerImpl.cs                suppress window activation for a headless host
 Extensions/dnSpy.Debugger/dnSpy.Debugger/DbgUI/WpfCurrentStatementUpdater.cs  suppress window activation for a headless host
+
+# Mono protocol 2.3 added THREAD.GET_TID. Surface whether DbgThread.Id came from
+# that system-TID command so dgSpy can read registers without engine-private casts
+# or mistaking the older managed ThreadId fallback for a Windows thread id.
+dnSpy/dnSpy.Contracts.Debugger.DotNet.Mono/DbgMonoThreadInfo.cs              expose negotiated system-thread identity provenance
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/Impl/DbgEngineImpl.Threads.cs  attach Mono system-thread identity provenance

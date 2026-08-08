@@ -8,7 +8,7 @@ namespace dgSpy.Extension {
 	/// and Mono both suspend that same thread; dgSpy's supported target architecture is x64.</summary>
 	static class NativeRegisterReader {
 		const int ContextSize=1232,ContextFlagsOffset=48,ContextAmd64ControlInteger=0x00100003;
-		public static object[] ReadX64(ulong threadId) {
+		public static object[] ReadX64(ulong threadId,int processId) {
 			if(threadId>uint.MaxValue) throw new RpcException("capability_unavailable",$"Thread id {threadId} is not a Windows thread id.");
 			var thread=OpenThread(0x0008|0x0040,false,(uint)threadId); if(thread==IntPtr.Zero) throw Failure("OpenThread",threadId);
 			// CONTEXT on AMD64 is 16-byte aligned. AllocHGlobal's alignment is an implementation detail,
@@ -16,6 +16,9 @@ namespace dgSpy.Extension {
 			var allocation=Marshal.AllocHGlobal(ContextSize+15);
 			var context=new IntPtr((allocation.ToInt64()+15)&~15L);
 			try {
+				var owner=GetProcessIdOfThread(thread);
+				if(owner==0) throw Failure("GetProcessIdOfThread",threadId);
+				if(owner!=(uint)processId) throw new RpcException("target_mismatch",$"OS thread {threadId} belongs to process {owner}, not selected debug process {processId}.");
 				for(var i=0;i<ContextSize;i++) Marshal.WriteByte(context,i,0); Marshal.WriteInt32(context,ContextFlagsOffset,ContextAmd64ControlInteger);
 				if(!GetThreadContext(thread,context)) throw Failure("GetThreadContext",threadId); var result=new List<object>(18);
 				Add(result,"rax",context,120); Add(result,"rcx",context,128); Add(result,"rdx",context,136); Add(result,"rbx",context,144); Add(result,"rsp",context,152); Add(result,"rbp",context,160); Add(result,"rsi",context,168); Add(result,"rdi",context,176);
@@ -27,6 +30,7 @@ namespace dgSpy.Extension {
 		static void Add(List<object> values,string name,IntPtr context,int offset) { var value=unchecked((ulong)Marshal.ReadInt64(context,offset)); values.Add(new { name,value,hex="0x"+value.ToString("X16"),bits=64 }); }
 		static RpcException Failure(string operation,ulong threadId) { var error=Marshal.GetLastWin32Error(); return new RpcException("capability_unavailable",$"{operation} could not read the x64 context of stopped OS thread {threadId}: {new Win32Exception(error).Message} (Win32 {error})."); }
 		[DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenThread(uint desiredAccess,bool inheritHandle,uint threadId);
+		[DllImport("kernel32.dll",SetLastError=true)] static extern uint GetProcessIdOfThread(IntPtr thread);
 		[DllImport("kernel32.dll",SetLastError=true)] static extern bool GetThreadContext(IntPtr thread,IntPtr context);
 		[DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
 	}

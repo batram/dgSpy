@@ -173,10 +173,11 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   dnSpy language debug info to find the current source statement's IL span, maps referenced IL locals,
   parameters, `this`, and fields back to source expressions, and evaluates them through the same bounded
   value pipeline as `evaluate`. Function evaluation remains opt-in.
-- **`get_registers` reads a stopped CorDebug x64 Windows thread context.** It returns RAX-R15, RSP, RBP,
-  RSI, RDI, RIP and RFLAGS with unsigned values, fixed-width hex, and bit widths. The selected thread/frame
-  must be paused. Mono's soft-debugger protocol does not expose a trustworthy Windows OS thread context,
-  so Mono returns `capability_unsupported` instead of treating its managed thread id as an OS thread id.
+- **`get_registers` reads a stopped x64 Windows thread context.** It returns RAX-R15, RSP, RBP, RSI, RDI,
+  RIP and RFLAGS with unsigned values, fixed-width hex, and bit widths. CorDebug supplies its OS thread id
+  directly. Mono soft-debugger protocol 2.3+ supplies `THREAD.GET_TID`; dgSpy records that provenance when
+  dnSpy creates the thread and verifies the opened thread belongs to the selected debug process. Older Mono
+  agents return `capability_unsupported` rather than treating their managed `ThreadId` fallback as an OS id.
 - `get_session_controller` reports `controller_expires_utc` and `controller_expires_in_seconds` when a
   session is owned, plus `controller_is_caller`. A client that lost its transport — an MCP client
   restarting its stdio server gives the session a new identity and strands the old lease on a dead one —

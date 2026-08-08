@@ -268,7 +268,9 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl {
 			var props = GetThreadProperties_MonoDebug(monoThread, threadData, isCreateThread: true, forceReadName: false, isMainThread: isMainThread, isFinalizerThread: isFinalizerThread, canFuncEval: false);
 			threadData.Last = props;
 			var state = ThreadMirrorUtils.GetState(props.ThreadState);
-			var engineThread = objectFactory!.CreateThread(props.AppDomain, props.Kind, props.Id, props.ManagedId, props.Name, props.SuspendedCount, state, GetMessageFlags(), data: threadData);
+			var version=monoThread.VirtualMachine.Version;
+			var engineThread = objectFactory!.CreateThread(props.AppDomain, props.Kind, props.Id, props.ManagedId, props.Name, props.SuspendedCount, state, GetMessageFlags(), data: threadData,
+				onCreated: created=>created.Thread.GetOrCreateData(()=>new DbgMonoThreadInfo(version.AtLeast(2,3),version.MajorVersion,version.MinorVersion)));
 			lock (lockObj)
 				toEngineThread.Add(monoThread, engineThread);
 			return true;

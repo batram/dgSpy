@@ -119,8 +119,8 @@ try {
 		Assert-That 'get_disassembly exposes managed IL on Mono' ($managedDisassembly.capability -eq 'managed_il' -and @($managedDisassembly.body.instructions).Count -gt 0) "($($managedDisassembly.dgspy_error))"
 		$nativeDisassembly=Try-Rpc 'get_disassembly' @{session_id=$sessionId;mode='native';thread_id=$thread;frame_index=0} 40
 		Assert-That 'Mono native disassembly returns the advertised capability failure' ($nativeDisassembly.dgspy_error -match 'capability_unsupported|not supported') "($($nativeDisassembly.dgspy_error))"
-		$registers=Try-Rpc 'get_registers' @{session_id=$sessionId;thread_id=$thread}
-		Assert-That 'get_registers returns the host-wide capability failure on Mono' ($registers.dgspy_error -match 'capability_unsupported|not exposed') "($($registers.dgspy_error))"
+		$registers=Invoke-DgSpyRpc -OperationName 'get_registers' -OperationArguments @{session_id=$sessionId;thread_id=$thread;frame_index=0}
+		Assert-That 'get_registers reads the stopped Mono x64 integer context' ($registers.architecture -eq 'x64' -and @($registers.registers).Count -eq 18 -and @($registers.registers | Where-Object { $_.name -eq 'rip' -and $_.value -gt 0 -and $_.hex -match '^0x[0-9A-F]{16}$' }).Count -eq 1) "(registers=$(($registers | ConvertTo-Json -Compress -Depth 5)))"
 		$currentFrame=Try-Rpc 'get_frame' @{session_id=$sessionId;thread_id=$thread;frame_index=0} 40
 		$setIp=Try-Rpc 'set_instruction_pointer' @{session_id=$sessionId;thread_id=$thread;frame_index=0;module=$currentFrame.module;method_token=$currentFrame.method_token;il_offset=$currentFrame.il_offset} 40
 		Assert-That 'set_instruction_pointer validates and audits the current Mono location' ($setIp.completed -and $setIp.capability -eq 'set_instruction_pointer' -and -not [string]::IsNullOrWhiteSpace($setIp.audit_id)) "($($setIp.dgspy_error))"

@@ -333,7 +333,7 @@ public class CapabilityContractTests {
 		Assert.True((bool?)capabilities["engines"]![0]!["memory_access"]);
 		Assert.False((bool?)capabilities["engines"]![1]!["native_disassembly"]);
 		Assert.True((bool?)capabilities["engines"]![0]!["registers"]);
-		Assert.False((bool?)capabilities["engines"]![1]!["registers"]);
+		Assert.True((bool?)capabilities["engines"]![1]!["registers"]);
 		Assert.Equal(10000,(int?)capabilities["limits"]!["max_evaluation_timeout_ms"]);
 	}
 
