@@ -32,9 +32,14 @@ function Invoke-Checked {
 	if ($LASTEXITCODE) { throw "$Label failed with exit code $LASTEXITCODE" }
 }
 
+# Processes running from an agent worktree under .claude\worktrees hold that worktree's own build
+# output, not this tree's; matching them here refused gate runs for a concurrent session that could
+# not actually lock anything this gate builds.
+$worktrees = Join-Path $repoRoot '.claude\worktrees'
 $locking = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
 	$_.Name -in @('dotnet.exe','MSBuild.exe','dnSpy.exe','testhost.exe') -and
-	($_.ExecutablePath -like "$repoRoot*" -or $_.CommandLine -like "*$repoRoot*")
+	($_.ExecutablePath -like "$repoRoot*" -or $_.CommandLine -like "*$repoRoot*") -and
+	-not ($_.ExecutablePath -like "$worktrees*" -or $_.CommandLine -like "*$worktrees*")
 })
 if ($locking.Count) {
 	$details = ($locking | ForEach-Object { "$($_.Name):$($_.ProcessId)" }) -join ', '

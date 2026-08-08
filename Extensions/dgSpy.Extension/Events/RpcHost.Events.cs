@@ -16,7 +16,7 @@ namespace dgSpy.Extension {
 
 		async Task<WaitResult> WaitForEventsAsync(RpcRequest req,IReadOnlyCollection<string>? kinds,CancellationToken cancellationToken) {
 			CheckSession(req);
-			long after=(long?)req.Arguments["after_event_id"] ?? 0;
+			long after=ReadCursor(req);
 			int timeout=Math.Min(10000,Math.Max(1,(int?)req.Arguments["timeout_ms"] ?? 5000));
 			using var wait=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 			wait.CancelAfter(timeout);
@@ -35,8 +35,18 @@ namespace dgSpy.Extension {
 
 		EventResult GetEvents(RpcRequest req) {
 			CheckSession(req);
+			return EventResult(events.Snapshot(ReadCursor(req),ReadKinds(req)));
+		}
+
+		/// <summary>Reads <c>after_event_id</c>, rejecting a cursor beyond the newest event. Such a cursor
+		/// can never be satisfied — the next events take the ids it would skip — so waiting on it is a
+		/// silent forever-timeout. The known way to produce one is feeding a version counter (state_version
+		/// or a `versions` field) where an event cursor belongs; say so instead of timing out.</summary>
+		long ReadCursor(RpcRequest req) {
 			long after=(long?)req.Arguments["after_event_id"] ?? 0;
-			return EventResult(events.Snapshot(after,ReadKinds(req)));
+			var last=events.LastEventId;
+			if (after>last) throw new RpcException("cursor_ahead_of_stream",$"after_event_id {after} is beyond the newest event {last} and can never be satisfied. Event cursors come from cursor_event_id, event_id, or last_event_id — a versions counter or state_version is not a cursor.");
+			return after;
 		}
 
 		DebugEvent GetStopReason(RpcRequest req) {

@@ -135,6 +135,10 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   `get_events`. The event carries PID, exit code, terminal reason, and a terminal flag. Call `detach` to
   clear the terminal session, or start the next session once the debugger has stopped.
 - `list_sessions` recovers a lost `session_id`.
+- `wait_for_stop`, `wait_for_event`, and `get_events` reject an `after_event_id` beyond the newest
+  event with `cursor_ahead_of_stream` instead of waiting forever or returning a clean empty result —
+  such a cursor would skip the very ids the next events take. The known way to produce one is feeding
+  a version counter where a cursor belongs.
 - `event_id` is only an event cursor. `state_version` remains as a legacy all-event counter. The scoped
   revisions report relevant change domains and return `stale_lifecycle`, `stale_execution`,
   `stale_breakpoints`, or `stale_stop` on mismatch. `stop_id` changes only when the target reaches a new
@@ -270,6 +274,11 @@ ship without being filterable and advertised in the same edit.
   interpreted code may never land, in which case pause or set a breakpoint instead of waiting.
 - `remove_exception_policy` returns `removed: true` with the entry's former flags under
   `former_policy`; the flags are what the policy *was*, not a still-active setting.
+- **Exception breakpoints and exception policies are one thing.** `set_exception_breakpoint` and
+  `set_exception_policy` write the same dnSpy entry (the policy form additionally takes module
+  conditions); `list_exception_breakpoints` is the filtered deliberately-configured view of the same
+  entries `list_exception_policies` reports raw, and `remove_exception_policy` removes entries created
+  by either setter.
 - **`search` is the discovery entry point.** It is dnSpy's Search window as a tool: it tests the same
   candidate strings the GUI does, so a qualified path resolves --- `GameState.ChatSystem` finds the
   `ChatSystem` field on type `GameState`, which `search_symbols` cannot, because that tool compares the

@@ -399,6 +399,12 @@ try {
 	Assert-That 'the stop event is after the cursor' ($firstStop.event_id -gt $cursor)
 	Assert-That 'the normalized stop preserves its reason and target identity' ($firstStop.stop_reason -eq 'breakpoint' -and $firstStop.process_id -eq $targetId -and -not [string]::IsNullOrWhiteSpace($firstStop.thread_id))
 	Assert-That 'the normalized stop preserves breakpoint identity and IL location' ($firstStop.breakpoint_id -eq $breakpoint.breakpoint_id -and $firstStop.module -like '*Milestone1Target.exe' -and $firstStop.method_token -eq $methodToken -and $firstStop.il_offset -eq 0)
+	# A cursor beyond the stream can never be satisfied — the next events take the ids it would skip.
+	# It must fail loudly, not wait out its timeout and return a clean empty result.
+	$aheadWait = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = 999999999; timeout_ms = 1000 } -ExpectError
+	Assert-That 'wait_for_stop rejects a cursor beyond the stream' ($aheadWait -match 'can never be satisfied') "(was '$aheadWait')"
+	$aheadEvents = Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $sessionId; after_event_id = 999999999 } -ExpectError
+	Assert-That 'get_events rejects a cursor beyond the stream' ($aheadEvents -match 'can never be satisfied') "(was '$aheadEvents')"
 	$exactReason = Invoke-Tool -Name 'get_stop_reason' -Arguments @{ session_id = $sessionId; event_id = $firstStop.event_id }
 	$latestReason = Invoke-Tool -Name 'get_stop_reason' -Arguments @{ session_id = $sessionId }
 	Assert-That 'get_stop_reason returns an exact retained stop' ($exactReason.event_id -eq $firstStop.event_id -and $exactReason.stop_reason -eq 'breakpoint')

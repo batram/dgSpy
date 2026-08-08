@@ -1081,7 +1081,7 @@
     },
     {
       "name": "wait_for_stop",
-      "description": "Wait without polling for the next normalized stop after an event cursor. Concurrent waiters do not consume events. A truncated result supplies oldest_available_cursor so the caller can recover.",
+      "description": "Wait without polling for the next normalized stop after an event cursor. Concurrent waiters do not consume events. A truncated result supplies oldest_available_cursor so the caller can recover. A cursor beyond the newest event is rejected with cursor_ahead_of_stream instead of waiting forever \u2014 cursors come from cursor_event_id, event_id, or last_event_id, never from a version counter.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1114,7 +1114,7 @@
     },
     {
       "name": "wait_for_event",
-      "description": "Wait without polling for any requested event kinds after a cursor. Returns immediately when a matching buffered event already exists; concurrent waiters are non-destructive.",
+      "description": "Wait without polling for any requested event kinds after a cursor. Returns immediately when a matching buffered event already exists; concurrent waiters are non-destructive. A cursor beyond the newest event is rejected with cursor_ahead_of_stream instead of waiting forever.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1180,7 +1180,7 @@
     },
     {
       "name": "get_events",
-      "description": "Read normalized lifecycle and debugger events without consuming them. Optional kinds filter the bounded per-session stream; truncated reports when the requested cursor is older than retained history.",
+      "description": "Read normalized lifecycle and debugger events without consuming them. Optional kinds filter the bounded per-session stream; truncated reports when the requested cursor is older than retained history, and a cursor beyond the newest event is rejected with cursor_ahead_of_stream rather than returning a clean empty result.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1450,7 +1450,7 @@
     },
     {
       "name": "set_exception_breakpoint",
-      "description": "Stop when an exception is thrown. Pass a fully qualified type name, or omit name to set the category\u0027s default that governs every exception it does not name. Like code breakpoints these are dnSpy-global and outlive a session.",
+      "description": "Stop when an exception is thrown. Pass a fully qualified type name, or omit name to set the category\u0027s default that governs every exception it does not name. Like code breakpoints these are dnSpy-global and outlive a session. Exception breakpoints and exception policies are ONE thing: this writes the same entry set_exception_policy writes (that tool additionally takes module conditions); list with either list tool and remove with remove_exception_policy.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1500,7 +1500,7 @@
     },
     {
       "name": "list_exception_breakpoints",
-      "description": "List exceptions configured to break on throw. By default this reports first-chance entries only, which is the set someone deliberately configured: dnSpy stops on SECOND chance for essentially every .NET exception it knows, so including those returns thousands of identical stock entries that say nothing about this session. Bounded, with total and truncated.",
+      "description": "List exceptions configured to break on throw. By default this reports first-chance entries only, which is the set someone deliberately configured: dnSpy stops on SECOND chance for essentially every .NET exception it knows, so including those returns thousands of identical stock entries that say nothing about this session. Bounded, with total and truncated. Same underlying entries as list_exception_policies; that tool is the unfiltered raw view with module conditions.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3461,7 +3461,7 @@
     },
     {
       "name": "list_exception_policies",
-      "description": "List bounded exception definitions with flags and module conditions.",
+      "description": "List bounded exception definitions with flags and module conditions \u2014 the raw, unfiltered view of the same entries list_exception_breakpoints reports.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3490,7 +3490,7 @@
     },
     {
       "name": "set_exception_policy",
-      "description": "Add or replace thrown/unhandled flags and module conditions for an exception.",
+      "description": "Add or replace thrown/unhandled flags and module conditions for an exception. Writes the same entry set_exception_breakpoint writes; use this form when module conditions are needed.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3580,7 +3580,7 @@
     },
     {
       "name": "restore_exception_defaults",
-      "description": "Reset dnSpy exception policies to defaults and remove user additions.",
+      "description": "Reset dnSpy exception policies to defaults and remove user additions, including entries created by set_exception_breakpoint.",
       "inputSchema": {
         "type": "object",
         "properties": {
