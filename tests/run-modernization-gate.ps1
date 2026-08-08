@@ -125,16 +125,10 @@ try {
 	# repo's tools\Launch-Target.ps1. Left out of Full for that reason -- a stage that cannot run
 	# unattended would make Full unrunnable rather than thorough.
 	if ($Stage -eq 'MonoTarget') {
+		# A server=y Unity agent accepts one debugger connection per player launch. This local stage can
+		# therefore exercise only the primary debugger smoke against the supplied player. CI launches a
+		# fresh player for each of the debugger, search, and scan-cursor scripts in a three-way matrix.
 		Invoke-Checked 'Mono/Unity live smoke' { .\tests\run-mono-target-smoke.ps1 -TargetFramework $TargetFramework }
-		# Runs against the same listening player. Kept separate from the smoke above because it proves a
-		# different thing: that symbol search reconstructs declaring-type and nested-type names from real
-		# metadata. A string-level unit test cannot reach that, and a naive module dedup here walked every
-		# module twice while every offline suite stayed green.
-		Invoke-Checked 'Search live smoke' { .\tests\run-search-smoke.ps1 -TargetFramework $TargetFramework }
-		# Also the same listening player, and also a claim no offline suite can reach: that a bounded scan
-		# resumed from its own next_scan_offset covers exactly what one unbounded call covers. Both halves
-		# of that -- the gap and the repeat -- only show up over a real dnlib traversal.
-		Invoke-Checked 'Scan cursor and module paging live smoke' { .\tests\run-scan-cursor-smoke.ps1 -TargetFramework $TargetFramework }
 	}
 	if ($Stage -in @('Unity','Full')) {
 		Write-Host '== start isolated Unity debugger host ==' -ForegroundColor Cyan

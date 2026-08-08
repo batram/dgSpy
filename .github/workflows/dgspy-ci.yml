@@ -149,7 +149,7 @@ jobs:
           retention-days: 7
 
   mono-target-live:
-    name: Mono/Unity live smoke (uch-debug-target)
+    name: Mono/Unity live smoke (${{ matrix.smoke }})
     # dgSpy is public and uch-debug-target is private, so this job needs an explicit credential
     # rather than the built-in GITHUB_TOKEN. Fork PRs never receive secrets, but a merged PR that
     # edited a build script would run with them on the following push, so keep the token off the
@@ -157,6 +157,13 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # The Unity server=y agent accepts one debugger connection per player launch. These must be
+        # separate jobs, not three sequential attach/detach passes against one process: a detached
+        # agent can leave the TCP port listening while never accepting another DWP handshake.
+        smoke: [debugger, search, scan-cursors]
 
     steps:
       - name: Check out repository
@@ -268,15 +275,23 @@ jobs:
         shell: pwsh
         env:
           DGSPY_SMOKE_LOG_ROOT: ${{ runner.temp }}
-        run: .\tests\run-modernization-gate.ps1 -Stage MonoTarget
+        run: |
+          switch ('${{ matrix.smoke }}') {
+            'debugger' { .\tests\run-mono-target-smoke.ps1 }
+            'search' { .\tests\run-search-smoke.ps1 }
+            'scan-cursors' { .\tests\run-scan-cursor-smoke.ps1 }
+            default { throw "Unknown Mono smoke '${{ matrix.smoke }}'" }
+          }
 
       - name: Upload smoke diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: mono-target-smoke-diagnostics-${{ github.run_id }}
+          name: mono-target-${{ matrix.smoke }}-diagnostics-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/dgspy-mono-smoke-*
+            ${{ runner.temp }}/dgspy-search-smoke-*
+            ${{ runner.temp }}/dgspy-scan-cursor-smoke-*
             ${{ runner.temp }}/uch-target/player/ci-player-*.log
           if-no-files-found: warn
           retention-days: 7
