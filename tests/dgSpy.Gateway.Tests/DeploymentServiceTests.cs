@@ -121,6 +121,17 @@ public sealed class DeploymentServiceTests : IDisposable {
 	}
 
 	[Fact]
+	public void Replacement_fails_closed_when_process_exit_cannot_be_queried() {
+		Assert.False(DeploymentService.IsStillAlive(1234,()=>true));
+		Assert.True(DeploymentService.IsStillAlive(1234,()=>false));
+
+		var unknown=Assert.Throws<GatewayControlException>(()=>DeploymentService.IsStillAlive(5678,()=>throw new InvalidOperationException("query failed")));
+		Assert.Equal("replace_failed",unknown.Code);
+		Assert.Contains("pid 5678",unknown.Message);
+		Assert.Contains("Could not confirm",unknown.Message);
+	}
+
+	[Fact]
 	public void Replacement_treats_failed_or_malformed_session_reads_as_unknown_not_empty() {
 		var failed=Assert.Throws<GatewayControlException>(()=>DeploymentService.ReadLocalSessions(RpcResponse.Failure("request","host_unavailable","gone"),false));
 		Assert.Equal("replace_session_state_unknown",failed.Code);

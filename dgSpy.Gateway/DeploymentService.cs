@@ -158,11 +158,16 @@ public sealed class DeploymentService {
 		RequireReplacedHostsExited(running.Select(process=>(Pid:SafePid(process),Alive:IsStillAlive(process))).ToArray());
 	}
 
-	/// <summary>Whether a process this method killed is still running. A Process object that can no
-	/// longer be queried describes something that is gone, not something alive, so a throwing
-	/// <c>HasExited</c> counts as exited -- the conservative reading would refuse every replacement on a
-	/// recycled handle.</summary>
-	static bool IsStillAlive(Process process) { try { return !process.HasExited; } catch { return false; } }
+	/// <summary>Whether a process this method killed is still running. Failure to query <c>HasExited</c>
+	/// is not proof that the process is gone: treating an access or OS failure as exit would let the
+	/// replacement start beside a host that may still own the RPC endpoint. Fail closed instead.</summary>
+	static bool IsStillAlive(Process process) => IsStillAlive(SafePid(process),()=>process.HasExited);
+	internal static bool IsStillAlive(int processId,Func<bool> hasExited) {
+		try { return !hasExited(); }
+		catch(Exception ex) {
+			throw new GatewayControlException("replace_failed",$"Could not confirm that the managed dnSpy host pid {processId} exited ({ex.GetType().Name}: {ex.Message}), so no replacement was started. Close it manually, then call launch_local_host again.");
+		}
+	}
 	static int SafePid(Process process) { try { return process.Id; } catch { return 0; } }
 
 	/// <summary>Refuses to report a replacement that did not happen. Separated from the process handling
