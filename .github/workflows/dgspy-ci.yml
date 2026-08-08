@@ -215,17 +215,26 @@ jobs:
         shell: pwsh
         run: |
           $player = Join-Path "${{ runner.temp }}/uch-target/player" 'UchDebugTarget.exe'
+          $playerLog = Join-Path "${{ runner.temp }}/uch-target/player" 'ci-player.log'
           $agent = '--debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:56000,suspend=y'
-          Start-Process -FilePath $player -ArgumentList $agent,'-batchmode','-nographics' -PassThru | Out-Null
+          $process = Start-Process -FilePath $player -ArgumentList $agent,'-batchmode','-nographics','-logFile',$playerLog -PassThru
           # Readiness is observed, never connected to. A connect-close without completing the DWP
           # handshake wedges the agent, and a bare connect while the runtime is still suspended
           # awaiting its first debugger kills the player outright. Both look like debugger bugs.
           $deadline = (Get-Date).AddSeconds(90)
           do {
             Start-Sleep -Seconds 2
-            $up = @(Get-NetTCPConnection -State Listen -LocalPort 56000 -ErrorAction SilentlyContinue).Count -gt 0
+            if ($process.HasExited) {
+              if (Test-Path $playerLog) { Get-Content $playerLog }
+              throw "Unity player exited before the debugger agent listened (exit code $($process.ExitCode))."
+            }
+            $up = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
+              Where-Object { $_.Port -eq 56000 }
           } until ($up -or (Get-Date) -gt $deadline)
-          if (-not $up) { throw 'The Unity debugger agent never listened on 56000.' }
+          if (-not $up) {
+            if (Test-Path $playerLog) { Get-Content $playerLog }
+            throw 'The Unity debugger agent never listened on 56000.'
+          }
           Write-Host 'agent listening on 127.0.0.1:56000'
 
       - name: Run the Mono/Unity live smoke
@@ -241,6 +250,6 @@ jobs:
           name: mono-target-smoke-diagnostics-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/dgspy-mono-smoke-*
-            ${{ runner.temp }}/uch-target/player/player.log
+            ${{ runner.temp }}/uch-target/player/ci-player.log
           if-no-files-found: warn
           retention-days: 7

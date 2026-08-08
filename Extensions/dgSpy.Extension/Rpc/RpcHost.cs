@@ -456,6 +456,14 @@ namespace dgSpy.Extension {
 			// DbgCodeBreakpointsService.Remove posts RemoveCore back to the debugger dispatcher.
 			// Drain that queued callback before a caller recreates the same location, or the old
 			// breakpoint can be closed after its replacement has already reported bound=true.
+			await SettleBreakpointRemovalAsync(cancellationToken).ConfigureAwait(false);
+		}
+		async Task SettleBreakpointRemovalAsync(CancellationToken cancellationToken) {
+			// Removal first returns to dnSpy's dispatcher, then CorDebug queues native disposal on
+			// its debugger thread. The latter has no completion callback, so allow that bounded queue
+			// transition to finish before the same location can be recreated.
+			await OnDebuggerAsync(()=>true,cancellationToken).ConfigureAwait(false);
+			await Task.Delay(250,cancellationToken).ConfigureAwait(false);
 			await OnDebuggerAsync(()=>true,cancellationToken).ConfigureAwait(false);
 		}
 		BreakpointInfo Describe(DbgCodeBreakpoint bp,uint? requested=null) {
@@ -497,7 +505,7 @@ namespace dgSpy.Extension {
 				lock(sync) requestedOffsets.Remove(id);
 				return new RemoveBreakpointResult { BreakpointId=id,Removed=true,StateVersion=stateVersion };
 			},cancellationToken).ConfigureAwait(false);
-			await OnDebuggerAsync(()=>true,cancellationToken).ConfigureAwait(false);
+			await SettleBreakpointRemovalAsync(cancellationToken).ConfigureAwait(false);
 			return result;
 		}
 		// Clears every dnSpy breakpoint, including any set by hand in the UI — dnSpy keeps one global
@@ -505,7 +513,7 @@ namespace dgSpy.Extension {
 		// the next attach, so without this a fresh session can stop on a breakpoint nobody set.
 		async Task<ClearBreakpointsResult> ClearBreakpointsAsync(CancellationToken cancellationToken) {
 			var result=await OnDebuggerAsync(()=>{ var count=breakpoints.Breakpoints.Length; breakpoints.Clear(); lock(sync) requestedOffsets.Clear(); return new ClearBreakpointsResult { Removed=count,StateVersion=stateVersion }; },cancellationToken).ConfigureAwait(false);
-			await OnDebuggerAsync(()=>true,cancellationToken).ConfigureAwait(false);
+			await SettleBreakpointRemovalAsync(cancellationToken).ConfigureAwait(false);
 			return result;
 		}
 		static string ThreadId(DbgThread thread) => $"{thread.Process.Id}:{thread.Id}";
