@@ -68,7 +68,7 @@ public sealed class DeploymentService {
 		var installed=EnsureBundledLocalHost(token); var current=ReadCurrent()!; var version=(string)current["active_version"]!;
 		var executable=Path.Combine(installRoot,"versions",version,"dnSpy.exe"); ValidateDnSpy(Path.GetDirectoryName(executable)!);
 		var deployedSha=DeployedPayloadSha(version);
-		var start=new ProcessStartInfo(executable) { UseShellExecute=false }; start.Environment["DGSPY_STATE_ROOT"]=stateRoot;
+		var start=new ProcessStartInfo(executable) { UseShellExecute=false }; start.Environment["DGSPY_STATE_ROOT"]=stateRoot; BackfillWindowsEnvironment(start.Environment);
 		var process=Process.Start(start) ?? throw new InvalidOperationException("dnSpy did not start.");
 		for(var attempt=0;attempt<20;attempt++) {
 			await Task.Delay(250,token);
@@ -208,7 +208,19 @@ public sealed class DeploymentService {
 
 	JsonObject? ReadCurrent() { var path=Path.Combine(installRoot,"current.json"); return File.Exists(path)?JsonNode.Parse(File.ReadAllText(path))!.AsObject():null; }
 	void WriteCurrent(JsonObject current) { Directory.CreateDirectory(installRoot); AtomicWrite(Path.Combine(installRoot,"current.json"),current.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })); }
-	void WriteCurrentLauncher() { var current=ReadCurrent()!; var directory=Path.Combine(installRoot,"current"); Directory.CreateDirectory(directory); var exe=Path.Combine(installRoot,"versions",(string)current["active_version"]!,"dnSpy.exe"); AtomicWrite(Path.Combine(directory,"Start-dgSpy.cmd"),$"@echo off\r\nset \"DGSPY_STATE_ROOT={stateRoot}\"\r\nstart \"dgSpy\" \"{exe}\" %*\r\n"); }
+	void WriteCurrentLauncher() { var current=ReadCurrent()!; var directory=Path.Combine(installRoot,"current"); Directory.CreateDirectory(directory); var exe=Path.Combine(installRoot,"versions",(string)current["active_version"]!,"dnSpy.exe"); var windows=Environment.GetFolderPath(Environment.SpecialFolder.Windows); AtomicWrite(Path.Combine(directory,"Start-dgSpy.cmd"),$"@echo off\r\nif not defined windir set \"windir={windows}\"\r\nif not defined SystemRoot set \"SystemRoot={windows}\"\r\nset \"DGSPY_STATE_ROOT={stateRoot}\"\r\nstart \"dgSpy\" \"{exe}\" %*\r\n"); }
+	// A client that hands us an environment without windir kills dnSpy during WPF startup: the static
+	// constructor of MS.Internal.FontCache.Util builds an absolute Uri for the Fonts directory out of it,
+	// and an empty value makes the path relative, so it throws UriFormatException behind a modal dialog
+	// before any dgSpy code runs (observed with Codex as the MCP client). Setting anything on
+	// ProcessStartInfo.Environment makes .NET compose the child's block from ours instead of letting it
+	// inherit a normal one, so the gap propagates all the way into dnSpy. SystemRoot is not a substitute
+	// for windir — removing windir alone reproduces it — so both are filled, from the OS rather than from
+	// each other, and only where the caller left a gap.
+	static void BackfillWindowsEnvironment(IDictionary<string,string?> environment) {
+		var windows=Environment.GetFolderPath(Environment.SpecialFolder.Windows); if(string.IsNullOrWhiteSpace(windows)) return;
+		foreach(var name in new[]{"windir","SystemRoot"}) if(!environment.TryGetValue(name,out var value)||string.IsNullOrWhiteSpace(value)) environment[name]=windows;
+	}
 	static void AtomicWrite(string path,string content) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); var temporary=path+".tmp-"+Guid.NewGuid().ToString("N"); File.WriteAllText(temporary,content,new UTF8Encoding(false)); File.Move(temporary,path,true); }
 	static void CopyTree(string source,string destination,CancellationToken token) { foreach(var directory in Directory.EnumerateDirectories(source,"*",SearchOption.AllDirectories)) { token.ThrowIfCancellationRequested(); Directory.CreateDirectory(Path.Combine(destination,Path.GetRelativePath(source,directory))); } Directory.CreateDirectory(destination); foreach(var file in Directory.EnumerateFiles(source,"*",SearchOption.AllDirectories)) { token.ThrowIfCancellationRequested(); var target=Path.Combine(destination,Path.GetRelativePath(source,file)); Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file,target,false); } }
 	static void ValidateDnSpy(string path) { if(!File.Exists(Path.Combine(path,"dnSpy.exe"))||!File.Exists(Path.Combine(path,"bin","dnSpy.Contracts.DnSpy.dll"))||!File.Exists(Path.Combine(path,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll"))) throw new GatewayControlException("invalid_dnspy_source",$"'{path}' is not a packaged dnSpy directory containing the dgSpy extension."); }
