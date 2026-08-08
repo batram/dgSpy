@@ -59,6 +59,17 @@ public class ProgramOutputAssemblerTests {
 	}
 
 	[Fact]
+	public void ProcessFlushDoesNotPublishAnotherProcessesPartialLine() {
+		var (assembler,lines)=New();
+		assembler.Append(Out(1),"first partial");
+		assembler.Append(Out(2),"second partial");
+		assembler.Flush(1);
+		Assert.Equal(new[]{"first partial"},lines.Select(l=>l.Line));
+		assembler.Append(Out(2)," completed\n");
+		Assert.Equal(new[]{"first partial","second partial completed"},lines.Select(l=>l.Line));
+	}
+
+	[Fact]
 	public void ANewlinelessFloodIsEmittedRatherThanBufferedWithoutBound() {
 		var (assembler,lines)=New(maxPending:8);
 		assembler.Append(Out(),"123456789");

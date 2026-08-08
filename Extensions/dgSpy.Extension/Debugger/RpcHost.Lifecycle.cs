@@ -63,7 +63,7 @@ namespace dgSpy.Extension {
 				var owned=attachedProgramId?.Split(';') ?? Array.Empty<string>();
 				if (!owned.Contains(programId,StringComparer.OrdinalIgnoreCase)) return null;
 			}
-			return await OnDebuggerAsync(()=>manager.IsDebugging && manager.Processes.Length!=0 ? State() : null,cancellationToken).ConfigureAwait(false);
+			return await OnDebuggerAsync(()=>manager.IsDebugging && LaunchSessionOwnership.CanAdopt(programId,attachedProgramId?.Split(';') ?? Array.Empty<string>(),manager.Processes.Select(p=>p.Filename)) ? State() : null,cancellationToken).ConfigureAwait(false);
 		}
 
 		static string BreakKind(string? value) {
@@ -131,7 +131,7 @@ namespace dgSpy.Extension {
 		void OnProcessExited(DbgMessageProcessExitedEventArgs e) {
 			// A last line written without a trailing newline is still sitting in the line assembler. Publish
 			// it now: the pipe is closed, so nothing will ever complete it.
-			programOutput.Flush();
+			programOutput.Flush(e.Process.Id);
 			string? action;
 			lock(sync) {
 				if (sessionId is null) return;

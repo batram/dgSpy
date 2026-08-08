@@ -15,6 +15,7 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\SessionStateCalculator.cs" Link="Debugger\SessionStateCalculator.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\FrameSnapshotGuard.cs" Link="Debugger\FrameSnapshotGuard.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\DetachCompletionGuard.cs" Link="Debugger\DetachCompletionGuard.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\LaunchSessionOwnership.cs" Link="Debugger\LaunchSessionOwnership.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcException.cs" Link="Rpc\RpcException.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcSecurity.cs" Link="Rpc\RpcSecurity.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\SymbolSearchQuery.cs" Link="Decompiler\SymbolSearchQuery.cs" />

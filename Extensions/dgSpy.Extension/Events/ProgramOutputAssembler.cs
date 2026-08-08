@@ -46,10 +46,21 @@ namespace dgSpy.Extension {
 		// Emit everything still buffered, eg. a final line written without a trailing newline before the
 		// target exited. Idempotent.
 		public void Flush() {
+			FlushCore(_=>true);
+		}
+
+		// Flush only one process when it exits. Other processes in the same session can still be writing
+		// partial lines, and publishing those fragments here would split their eventual line in two.
+		public void Flush(int processId) {
+			FlushCore(origin=>origin.ProcessId==processId);
+		}
+
+		void FlushCore(Func<ProgramOutputOrigin,bool> include) {
 			var flushed=new List<KeyValuePair<ProgramOutputOrigin,string>>();
 			lock(sync) {
 				if (disposed) return;
 				foreach (var entry in pending) {
+					if (!include(entry.Key)) continue;
 					if (entry.Value.Length==0) continue;
 					flushed.Add(new KeyValuePair<ProgramOutputOrigin,string>(entry.Key,entry.Value.ToString()));
 					entry.Value.Clear();
