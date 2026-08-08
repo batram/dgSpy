@@ -278,6 +278,11 @@ ship without being filterable and advertised in the same edit.
   returns. The result's `status` makes the outcome explicit — `completed`, `step_error` (see `error`),
   or `in_flight` with a `hint`: the target is running again, and a step across interop, optimized, or
   interpreted code may never land, in which case pause or set a breakpoint instead of waiting.
+- **A breakpoint outranks a step.** Stepping out of a method that still has an active breakpoint in
+  it — a loop body, say — hits that breakpoint first: the step reports `completed: false` and the
+  next stop is the breakpoint, in the same method you were trying to leave, not the caller. This is
+  correct debugger behaviour, not a failed step. Remove or disable the breakpoint first when the
+  point of the step is to reach the frame above.
 - `remove_exception_policy` returns `removed: true` with the entry's former flags under
   `former_policy`; the flags are what the policy *was*, not a still-active setting.
 - **Exception breakpoints and exception policies are one thing.** `set_exception_breakpoint` and
