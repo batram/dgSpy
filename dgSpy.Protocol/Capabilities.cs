@@ -99,10 +99,16 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("architecture")] public string Architecture { get; set; }="";
 		[JsonPropertyName("dnspy_process_id")] public int DnSpyProcessId { get; set; }
 		[JsonPropertyName("connection_state")] public string ConnectionState { get; set; }="connected";
+		/// <summary>"healthy", "faulted" (a debugger-thread callback failed and was contained; the host
+		/// still works), or "unavailable" (the debugger thread is gone: every control operation fails
+		/// immediately and any session this host still names is dead). See dispatcher_recovery.</summary>
 		[JsonPropertyName("dispatcher_state")] public string DispatcherState { get; set; }="healthy";
 		[JsonPropertyName("dispatcher_fault_count")] public long DispatcherFaultCount { get; set; }
 		[JsonPropertyName("last_dispatcher_fault_utc"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public DateTime? LastDispatcherFaultUtc { get; set; }
 		[JsonPropertyName("last_dispatcher_fault"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? LastDispatcherFault { get; set; }
+		/// <summary>What to do about dispatcher_state, absent when it is healthy. A fault count on its own
+		/// never told anyone whether the host was still worth talking to.</summary>
+		[JsonPropertyName("dispatcher_recovery"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? DispatcherRecovery { get; set; }
 		[JsonPropertyName("evaluation_queue_state")] public string EvaluationQueueState { get; set; }="idle";
 		[JsonPropertyName("evaluation_active_since_utc"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public DateTime? EvaluationActiveSinceUtc { get; set; }
 		[JsonPropertyName("evaluation_pending")] public int EvaluationPending { get; set; }

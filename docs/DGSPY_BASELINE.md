@@ -51,7 +51,9 @@ survive or be proven obsolete during modernization.
 | Patch set | Files | Change and reason | License |
 |---|---|---|---|
 | dgSpy changes to dnSpy | `dnSpy/dnSpy.Contracts.Debugger/DbgMessageEventArgs.cs`; `Extensions/dnSpy.Debugger/.../DbgUI/DgSpyWindowActivation.cs`; `DebuggerImpl.cs`; `WpfCurrentStatementUpdater.cs` | Preserve process/thread exit codes for lifecycle events and add the opt-in `--dgspy-no-window-activation` behavior needed by a headless debugger host. | GPLv3; see `dnSpy/dnSpy/LicenseInfo/GPLv3.txt`. |
-| Value cleanup tolerates sparse arrays | `Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DbgManagerImpl.cs` | Engine error paths return object arrays with null entries. Dereferencing one on the debugger thread stopped every later object from being closed and raised a modal `NullReferenceException` while the target was paused. | GPLv3; see `dnSpy/dnSpy/LicenseInfo/GPLv3.txt`. |
+| Value cleanup tolerates sparse arrays and failing objects | `Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DbgManagerImpl.cs` | Engine error paths return object arrays with null entries. Dereferencing one on the debugger thread stopped every later object from being closed and raised a modal `NullReferenceException` while the target was paused. `CloseObjects_DbgThread` now also isolates a `Close` that throws: one object's cleanup failing said nothing about the rest, but abandoned every object after it in the batch and faulted the dispatcher. | GPLv3; see `dnSpy/dnSpy/LicenseInfo/GPLv3.txt`. |
+| Raw metadata survives runtime teardown | `Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Metadata/Internal/DbgRawMetadataImpl.cs` | Upstream use-after-free plus a release-after-dispose. `ForceDispose` freed the native module buffers on runtime teardown while readers still held references, so a reader past its guard dereferenced returned memory and the host died of an uncatchable `AccessViolationException` about a minute after a detach, with nothing in any log. The free is now deferred until the last reference is released, with the finalizer as the backstop. `Release` also threw `ObjectDisposedException` on that same teardown path, which aborted the close batch above; releasing an already-disposed object is now a no-op. | GPLv3; see `dnSpy/dnSpy/LicenseInfo/GPLv3.txt`. |
+| Dispatcher can report that it is gone | `dnSpy/dnSpy.Contracts.Debugger/DbgDispatcher.cs`; `Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DbgDispatcherImpl.cs`; `Extensions/dnSpy.Debugger/dnSpy.Debugger/Shared/Dispatcher.cs` | `BeginInvoke` silently discards work once the dispatcher shuts down and cannot say so, so every RPC awaiting a result waited out its full deadline instead of failing. `TryBeginInvoke` enqueues and reports in one step, and `IsShutdown` distinguishes a dead dispatcher from one that merely recorded a contained fault. | GPLv3; see `dnSpy/dnSpy/LicenseInfo/GPLv3.txt`. |
 | Aggregate child paging | `dnSpy/Roslyn/dnSpy.Roslyn/Debugger/ValueNodes/AggregateValueNodeProvider.cs` | `index - childCount` is unsigned and wrapped to a negative provider index whenever a requested page started inside `providers[0]`, so any page spanning that provider's tail into the extra providers (`Static members`, `Raw View`) threw `IndexOutOfRangeException`. Upstream bug; fix is a corrected start index. | GPLv3; see `dnSpy/dnSpy/LicenseInfo/GPLv3.txt`. |
 | Diagnosable child-expansion failures | `Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Evaluation/Engine/DbgEngineValueNodeImpl.cs`; `dnSpy/dnSpy.Contracts.Debugger/Evaluation/DbgValueNodeExpansionException.cs` (new); `Extensions/dnSpy.Debugger/dnSpy.Debugger/Evaluation/ViewModel/Impl/ExpansionErrorValueNode.cs` (new); `.../ViewModel/Impl/DbgValueNodeReader.cs` | Upstream answered every expansion failure with `count` copies of an error node carrying the localized string "Internal debugger error" against the literal expression `<expression>`, discarding the exception. Two fixes. **Content**: the message now carries the exception type/message and the parent expression, and the full exception goes to debugger output. **Shape**: `GetChildrenCore` throws `DbgValueNodeExpansionException` instead of fabricating a page. A page of placeholders is harmless in a treeview but is fabricated data over RPC — `get_members` handed back N rows that look like members, so nothing could tell "this object has N broken members" from "expansion failed once". `DbgValueNode.GetChildren` has exactly three consumers: the GUI's two `DbgValueNodeReader` call sites, which ask for one child and now build a single `ExpansionErrorValueNode` row (identical text, name and image to the old fabricated node, so GUI behaviour is unchanged), and `RpcHost.GetMembersAsync`, which raises one `evaluation_failed`. | GPLv3; see `dnSpy/dnSpy/LicenseInfo/GPLv3.txt`. |
 | Bounded Mono frame fetch | `Extensions/dnSpy.Debugger/Mono.Debugger.Soft` gitlink at `888ded0f` | Bounds `ThreadMirror.GetFrames()` to three seconds. A Unity thread can disappear while frames are requested and some runtimes never reply, wedging dnSpy's Mono debugger thread. Neither checked Mono nor dnSpyEx contains an equivalent bound. | MIT-style Mono source notices retained in the fork; see `Locale.cs` and `Properties/AssemblyInfo.cs`. |
@@ -246,16 +248,61 @@ The complete upstream-edit inventory is above. These details explain the UI-spec
 | `Extensions\dnSpy.Debugger\...\DbgUI\DgSpyWindowActivation.cs` | New. Reads `--dgspy-no-window-activation` from the process command line. |
 | `Extensions\dnSpy.Debugger\...\DbgUI\DebuggerImpl.cs` | 5 added lines: early return in `ActivateWindow_UI`. |
 | `Extensions\dnSpy.Debugger\...\DbgUI\WpfCurrentStatementUpdater.cs` | 3 added lines: early return in `ActivateMainWindow_UI`. |
+| `Extensions\dnSpy.Debugger\...\DbgUI\DebuggerImpl.cs` | 1 changed condition in `AppWindow_MainWindowClosing`: no "stop debugging?" prompt under the switch. |
 
 `--dgspy-no-window-activation` stops dnSpy pulling itself to the foreground on every debugger stop,
 which otherwise steals focus from whatever the user is typing into on each breakpoint hit. It
-suppresses *only* the foreground grab: the window still opens, still navigates to source, and keeps
-every command, so a user can take over an automated session by clicking on it. All dgSpy launchers
-pass it — `run-milestone1-smoke.ps1` and `ps_scratch\Start-DnSpyPhase6Uch.ps1`.
+suppresses the foreground grab and the modal "stop debugging?" prompt on window close; the window
+still opens, still navigates to source, and keeps every command, so a user can take over an automated
+session by clicking on it.
+
+The close prompt belongs here for the same reason as the foreground grab: nobody is watching a
+headless host, so the question is never answered, the close never completes, and the process stays up
+holding its attachment. That also blocks the extension's `AppExit` handler, which is what detaches
+targets before the process dies — so leaving the prompt in place strands the target rather than
+protecting it.
+
+Every dgSpy launcher passes the switch: the gateway's `LaunchLocalAsync`, the remote-host launcher,
+`run-milestone1-smoke.ps1`, `run-remote-registration-smoke.ps1` and `Start-DgSpyHost.ps1`. The gateway
+was the one that did not, so the host an agent actually uses was the only one still grabbing focus.
 
 Nothing outside the process can substitute for this. `-WindowStyle Hidden` sets only the initial show
 state, and an external hide-or-restyle loop is permanently racing code inside the app that owns the
 window — it loses by however long its poll interval is, which is what the user sees as a flicker.
+
+## Host lifecycle
+
+**A host that exits takes its debuggee with it.** Verified directly, not inferred: attach to a
+throwaway target, kill the dnSpy process, and the target dies in the same second. ICorDebug leaves
+kill-on-exit at its default and nothing in the managed API lets the right side clear it, so an
+attachment that is still live when the host process ends destroys the process being debugged. Nothing
+logs it. From the agent's side a target simply vanishes, which is why this was suspected for a long
+time before it was tested.
+
+Everything else in this section follows from that:
+
+- The extension detaches every target on `ExtensionEvent.AppExit` (`RpcHost.DetachTargetsBeforeExit`),
+  so an orderly close of dnSpy is safe. That path only exists because the "stop debugging?" prompt is
+  suppressed under `--dgspy-no-window-activation` — see the section above.
+- `launch_local_host` with `replace=true` detaches the running host's sessions over RPC before it
+  closes the process, and refuses outright when a target cannot be detached without killing it.
+- A hard kill of the host is still fatal to the target, and always will be. Nothing running inside the
+  host survives its own termination. Do not kill a host to recover it; detach first.
+
+**Exactly one host owns the RPC endpoint.** `launch_local_host` never starts a second dnSpy beside a
+running one. It adopts a host already running the installed payload, and otherwise fails with
+`host_already_running` naming both builds. Two hosts contending for the endpoint is the worst state
+available: the second process composes, finds the port taken, and every answer keeps coming from the
+superseded build while the call reports success. It is indistinguishable from a working host until
+results start disagreeing with the tree.
+
+**A dispatcher fault is not the same as a dead dispatcher.** `dispatcher_state` is `healthy`,
+`faulted` (a debugger-thread callback failed and was contained; the host still works) or `unavailable`
+(the debugger thread is gone). Only the last one ends the host, and it is reported as such:
+`OnDebuggerAsync` fails immediately with `dispatcher_unavailable` rather than letting every operation
+that needs the debugger thread wait out its full deadline. A silently discarded callback is how a host
+stayed registered while being unusable — reads answered from cached state, control operations just
+stopped responding, and nothing said which of the two you were looking at.
 
 ## Thread-affinity rules
 

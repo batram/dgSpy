@@ -719,6 +719,32 @@ namespace dgSpy.Extension {
 		// stalls event delivery for every session. See docs/DGSPY_BASELINE.md.
 		// The token abandons the *wait*, not the queued work; dnSpy gives us no way to cancel a
 		// dispatcher callback, so the callback still runs and its result is dropped.
+		/// <summary>Detaches every live target before this process goes away. A host holding an ICorDebug
+		/// attachment takes its debuggee down with it when it exits -- confirmed by killing a host and
+		/// watching the attached process die with it, not inferred. That makes closing dnSpy, for any
+		/// reason including deploying a newer payload, capable of destroying whatever the user was
+		/// debugging, with nothing anywhere saying why the target vanished.
+		///
+		/// It cannot save a target from a host that is killed outright; nothing running inside the host
+		/// can. It does cover every orderly exit, which is the one an agent or a redeploy causes.
+		/// Bounded, and every failure is swallowed: an exit path must always reach the exit.</summary>
+		public void DetachTargetsBeforeExit(TimeSpan timeout) {
+			try {
+				if (!manager.IsDebugging) return;
+				// Not disposed on purpose: the callback may still be queued when the wait gives up, and
+				// setting a disposed event would throw on the debugger thread during shutdown.
+				var completed=new ManualResetEventSlim(false);
+				Action work=()=>{ try { if (manager.IsDebugging && manager.CanDetachWithoutTerminating) manager.DetachAll(); } catch { } finally { completed.Set(); } };
+				if (manager.Dispatcher is IDbgDispatcherDiagnostics diagnostics) { if (!diagnostics.TryBeginInvoke(work)) return; }
+				else manager.Dispatcher.BeginInvoke(work);
+				if (!completed.Wait(timeout)) return;
+				// DetachAll only asks; the engine removes the processes asynchronously, and exiting before
+				// it has done so is the same as never detaching at all.
+				var deadline=DateTime.UtcNow+timeout;
+				while (manager.IsDebugging && DateTime.UtcNow<deadline) Thread.Sleep(50);
+			}
+			catch { }
+		}
 		public void Dispose() { shutdown.Cancel(); tcpListener?.Stop(); connectionStateTimer?.Dispose(); evaluations.Dispose(); targetControl.Dispose(); shutdown.Dispose(); }
 	}
 

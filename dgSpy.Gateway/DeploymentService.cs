@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json.Nodes;
+using dgSpy.Protocol;
 
 namespace dgSpy.Gateway;
 
@@ -25,7 +26,7 @@ public sealed class DeploymentService {
 		"doctor" => await DoctorAsync(router,token),
 		"get_workflow_help" => Workflow((string?)args["topic"]),
 		"get_local_deployment" => GetLocal(),
-		"launch_local_host" => await LaunchLocalAsync(router,token),
+		"launch_local_host" => await LaunchLocalAsync(args,router,token),
 		"rollback_local_deployment" => Rollback(args),
 		"uninstall_local_deployment" => Uninstall(args),
 		"create_remote_host_package" => await CreateRemoteAsync(args,token),
@@ -39,7 +40,7 @@ public sealed class DeploymentService {
 		// Staleness outranks "you are connected": a connected host running superseded code is the case that
 		// wastes the most time, because everything else looks healthy.
 		var stale=(bool?)System.Text.Json.JsonSerializer.SerializeToNode(local)!["payload"]?["stale"]==true;
-		return new { gateway="ready",access_mode=Environment.GetEnvironmentVariable("DGSPY_ACCESS_MODE") ?? "full-control",local_deployment=local,hosts,recommended_next_action=stale ? "the installed payload is newer than the running deployment: close dnSpy and call launch_local_host before trusting any result" : connected ? "select a connected host, then attach or launch; once attached, find symbols with search" : degraded ? "inspect dispatcher and evaluation queue faults before issuing debugger control" : "call launch_local_host, or create one remote host package" };
+		return new { gateway="ready",access_mode=Environment.GetEnvironmentVariable("DGSPY_ACCESS_MODE") ?? "full-control",local_deployment=local,hosts,recommended_next_action=stale ? "the installed payload is newer than the running deployment: call launch_local_host with replace=true before trusting any result, and finish or hand off any live session first because replacing ends it" : connected ? "select a connected host, then attach or launch; once attached, find symbols with search" : degraded ? "inspect dispatcher and evaluation queue faults before issuing debugger control" : "call launch_local_host, or create one remote host package" };
 	}
 	async Task<object> DoctorAsync(HostRouter router,CancellationToken token) {
 		var checks=new List<object>();
@@ -51,34 +52,143 @@ public sealed class DeploymentService {
 		var freshness=DeploymentFreshness(); var freshnessJson=System.Text.Json.JsonSerializer.SerializeToNode(freshness)!;
 		checks.Add(Check("deployment_freshness",(bool?)freshnessJson["stale"]!=true,(string?)freshnessJson["detail"] ?? "",(string?)freshnessJson["recovery"]));
 		var registry=Environment.GetEnvironmentVariable("DGSPY_HOSTS_FILE"); checks.Add(Check("host_registry",string.IsNullOrWhiteSpace(registry)||File.Exists(registry),registry ?? "implicit local host",string.IsNullOrWhiteSpace(registry)||File.Exists(registry)?null:"Configured registry is missing."));
-		object[] hosts; try { hosts=await router.ListHostsAsync(token); var serialized=hosts.Select(item=>System.Text.Json.JsonSerializer.Serialize(item)).ToArray(); var connected=serialized.Count(item=>item.Contains("\"state\":\"connected\"",StringComparison.Ordinal)); var degraded=serialized.Count(item=>item.Contains("\"state\":\"degraded\"",StringComparison.Ordinal)); var available=connected+degraded; var ok=connected>0 && degraded==0; checks.Add(Check("hosts",ok,$"{hosts.Length} registered, {connected} connected, {degraded} degraded",ok?null:available>0?"Inspect the host dispatcher/evaluation fault fields before retrying control operations.":"Start dnSpy locally or connect a provisioned remote host.")); } catch(Exception ex) { hosts=Array.Empty<object>(); checks.Add(Check("hosts",false,ex.GetType().Name,"Repair the host registry or credentials.")); }
+		object[] hosts; try { hosts=await router.ListHostsAsync(token); var serialized=hosts.Select(item=>System.Text.Json.JsonSerializer.Serialize(item)).ToArray(); var connected=serialized.Count(item=>item.Contains("\"state\":\"connected\"",StringComparison.Ordinal)); var degraded=serialized.Count(item=>item.Contains("\"state\":\"degraded\"",StringComparison.Ordinal)); var available=connected+degraded;
+			// A contained dispatcher fault leaves a host connected and usable, so it must not fail this
+			// check — but it is still the trace of something that went wrong on the debugger thread, and
+			// silence about it is how a fault went unnoticed until control operations stopped working.
+			var faulted=serialized.Count(item=>item.Contains("\"dispatcher_state\":\"faulted\"",StringComparison.Ordinal));
+			var unavailable=serialized.Count(item=>item.Contains("\"dispatcher_state\":\"unavailable\"",StringComparison.Ordinal));
+			var ok=connected>0 && degraded==0; checks.Add(Check("hosts",ok,$"{hosts.Length} registered, {connected} connected, {degraded} degraded, {faulted} with contained dispatcher faults, {unavailable} with a dead dispatcher",ok?(faulted>0?"A host recorded a contained dispatcher fault; read last_dispatcher_fault and re-read session state before trusting anything from around that time.":null):unavailable>0?"A host's debugger thread is gone: it cannot run any control operation and its sessions are dead. Read dispatcher_recovery on that host.":available>0?"Inspect the host dispatcher/evaluation fault fields before retrying control operations.":"Start dnSpy locally or connect a provisioned remote host.")); } catch(Exception ex) { hosts=Array.Empty<object>(); checks.Add(Check("hosts",false,ex.GetType().Name,"Repair the host registry or credentials.")); }
 		return new { healthy=checks.All(c=>(bool)c.GetType().GetProperty("ok")!.GetValue(c)!),state_root=stateRoot,install_root=installRoot,checks,hosts };
 	}
 	static object Check(string name,bool ok,string detail,string? recovery) => new { name,ok,detail,recovery };
 	static object Workflow(string? topic) {
-		var text=topic switch { "local_deployment"=>"Call launch_local_host once. It installs the bundled host when needed, starts dnSpy, and waits briefly for registration.","remote_deployment"=>"Ask for host_id and the Gateway address reachable from that host, then call create_remote_host_package once. Give the ZIP and SHA-256 to the user; do not transfer or run it automatically.","attach"=>"Use list_programs with narrow filters then attach, or attach_endpoint for a Mono/Unity server=y endpoint. Never TCP-probe a single-use Unity endpoint.","discovery"=>"Start with search. It takes a name, including a qualified path like Type.Member, and returns module plus metadata token. Drill in with list_members, list_types, get_csharp, get_il, find_references or analyze_symbol using the identifiers search returned: they round-trip without parsing. Pass module on Unity. kinds:[\"literal\"] finds string and number constants from IL; search_text is the last resort because it decompiles.","stepping"=>"Use current scoped versions and stop_id. step_and_inspect is the compact path. trace_calls is bounded best-effort and cannot observe optimized, native, runtime, async, or missing-sequence-point calls.","recovery"=>"Call doctor and list_hosts. Recover sessions with list_sessions and claim_session; refresh state after stale version errors. A disconnect never implies resume or detach.","shutdown"=>"Detach safely before closing dnSpy. A detach_timed_out result means the target remains attached and the session is preserved.",_=>"Run dgspy mcp for client-spawned startup, or dgspy start for URL clients. Begin with get_started and doctor." };
+		var text=topic switch { "local_deployment"=>"Call launch_local_host once. It installs the bundled host when needed, starts dnSpy, and waits briefly for registration. It never starts a second host beside a running one: a host already running the installed payload is adopted, and a host running a different build fails the call with host_already_running. Pass replace=true only when you mean to end that host's debugging sessions, because replacing detaches its targets and closes it.","remote_deployment"=>"Ask for host_id and the Gateway address reachable from that host, then call create_remote_host_package once. Give the ZIP and SHA-256 to the user; do not transfer or run it automatically.","attach"=>"Use list_programs with narrow filters then attach, or attach_endpoint for a Mono/Unity server=y endpoint. Never TCP-probe a single-use Unity endpoint.","discovery"=>"Start with search. It takes a name, including a qualified path like Type.Member, and returns module plus metadata token. Drill in with list_members, list_types, get_csharp, get_il, find_references or analyze_symbol using the identifiers search returned: they round-trip without parsing. Pass module on Unity. kinds:[\"literal\"] finds string and number constants from IL; search_text is the last resort because it decompiles.","stepping"=>"Use current scoped versions and stop_id. step_and_inspect is the compact path. trace_calls is bounded best-effort and cannot observe optimized, native, runtime, async, or missing-sequence-point calls.","recovery"=>"Call doctor and list_hosts. Recover sessions with list_sessions and claim_session; refresh state after stale version errors. A disconnect never implies resume or detach.","shutdown"=>"Detach before the host goes down. A host holding an ICorDebug attachment takes its target with it when it exits -- crash, close, or redeploy alike -- so an undetached target dies with the host. The host detaches everything itself on a normal dnSpy exit and launch_local_host with replace=true detaches before closing, but neither can save a target from a host that is killed outright. A detach_timed_out result means the target remains attached and the session is preserved.",_=>"Run dgspy mcp for client-spawned startup, or dgspy start for URL clients. Begin with get_started and doctor." };
 		return new { topic=topic ?? "setup",guidance=text };
 	}
 
 	object GetLocal() { var current=ReadCurrent(); var active=(string?)current?["active_version"]; return new { installed=active is not null,active_version=active,previous_version=(string?)current?["previous_version"],host_id=(string?)current?["host_id"],install_path=active is null ? null : Path.Combine(installRoot,"versions",active),launcher=Path.Combine(installRoot,"current","Start-dgSpy.cmd"),payload=DeploymentFreshness() }; }
-	async Task<object> LaunchLocalAsync(HostRouter router,CancellationToken token) {
-		// An already-running dnSpy keeps the RPC endpoint, so a redeploy that starts a second process can
-		// report "connected" while the connection still belongs to the superseded build. Say which version
-		// was deployed and warn when a redeploy happened, rather than implying the new code is live.
+	// Starting a second dnSpy while one is already up is the failure this method exists to prevent. The
+	// running process keeps the RPC endpoint, so the new one composes, finds the port taken, and sits
+	// there doing nothing while every answer keeps coming from the build that was supposed to be
+	// superseded. Nothing in the result distinguishes that from success, which is what makes it
+	// expensive: it is discovered only when results start disagreeing with the source.
+	//
+	// So this never starts a process while one is alive. Exactly one of three things happens, and the
+	// result says which: adopt the running host when it is already the build we would deploy, refuse
+	// with the process id and both builds when it is not, or -- only when the caller asked for it --
+	// replace it, which detaches its targets first and then closes it.
+	async Task<object> LaunchLocalAsync(JsonObject args,HostRouter router,CancellationToken token) {
+		var replace=(bool?)args["replace"]==true; var allowTerminate=(bool?)args["allow_terminate"]==true;
+		// The running-host decision is made before anything is deployed. Installing first would move
+		// current.json onto a version that is not the one running, and deployment freshness -- the check
+		// that catches a host answering from superseded code -- compares exactly those two things.
+		var payloadRoot=RemotePayloadRoot(); ValidateRemotePayload(payloadRoot); var payloadExtensionSha=ExtensionSha(payloadRoot);
+		var running=RunningManagedHosts();
+		if(running.Length>0) {
+			var live=await ConnectedLocalHostAsync(router,token,running.Select(process=>process.Id).ToArray());
+			var matches=live is not null && payloadExtensionSha is not null && string.Equals((string?)live["extension_sha256"],payloadExtensionSha,StringComparison.OrdinalIgnoreCase);
+			// Adoption is the honest answer to "make sure the local host is running" when it already is,
+			// running the code we would have deployed. Reporting started=true for a process we did not
+			// start would be a lie the caller cannot check.
+			if(matches && running.Length==1) {
+				var adoptedCurrent=ReadCurrent();
+				return new { started=false,adopted=true,installed=false,redeployed=false,replaced=false,active_version=(string?)adoptedCurrent?["active_version"],
+					extension_sha256=payloadExtensionSha,process_id=(int?)live!["dnspy_process_id"] ?? running[0].Id,connected=true,host_id=(string?)adoptedCurrent?["host_id"],
+					recovery=(string?)null,detail="A local host already running this exact payload was adopted rather than duplicated." };
+			}
+			var describe=string.Join(", ",running.Select(process=>$"pid {process.Id}"));
+			var runningBuild=live is null ? "not answering RPC" : $"build {(string?)live["build_label"] ?? "unknown"}, extension {Shorten((string?)live["extension_sha256"])}";
+			if(!replace)
+				throw new GatewayControlException("host_already_running",
+					$"A managed dnSpy is already running ({describe}; {runningBuild}) and owns the RPC endpoint, but it is not the payload this deployment would install (extension {Shorten(payloadExtensionSha)}). Starting a second host would leave two processes contending for the endpoint, and every answer would keep coming from the old one while this call reported success. Call launch_local_host again with replace=true to detach its targets, close it, and start the installed payload -- that ends any debugging session it holds. To keep the session, finish with the running host instead.");
+			await ReplaceRunningHostAsync(running,live,router,allowTerminate,token);
+		}
+
 		var installed=EnsureBundledLocalHost(token); var current=ReadCurrent()!; var version=(string)current["active_version"]!;
-		var executable=Path.Combine(installRoot,"versions",version,"dnSpy.exe"); ValidateDnSpy(Path.GetDirectoryName(executable)!);
-		var deployedSha=DeployedPayloadSha(version);
-		var start=new ProcessStartInfo(executable) { UseShellExecute=false }; start.Environment["DGSPY_STATE_ROOT"]=stateRoot; BackfillWindowsEnvironment(start.Environment);
+		var versionRoot=Path.Combine(installRoot,"versions",version); var executable=Path.Combine(versionRoot,"dnSpy.exe"); ValidateDnSpy(versionRoot);
+		var deployedSha=DeployedPayloadSha(version); var deployedExtensionSha=ExtensionSha(versionRoot); var hostId=(string?)current["host_id"];
+		// The host the gateway starts is a headless one, and only this switch tells dnSpy that. Without
+		// it dnSpy pulls itself to the foreground on every debugger stop, and its "stop debugging?"
+		// prompt on close waits for a person who is not there -- which blocks the orderly exit that
+		// detaches targets before the process dies. Every other launcher (the remote host, the smokes)
+		// already passes it; the gateway was the one that did not.
+		var start=new ProcessStartInfo(executable,"--dgspy-no-window-activation") { UseShellExecute=false }; start.Environment["DGSPY_STATE_ROOT"]=stateRoot; BackfillWindowsEnvironment(start.Environment);
 		var process=Process.Start(start) ?? throw new InvalidOperationException("dnSpy did not start.");
 		for(var attempt=0;attempt<20;attempt++) {
 			await Task.Delay(250,token);
 			var hosts=await router.ListHostsAsync(token);
 			if(hosts.Any(item=>System.Text.Json.JsonSerializer.Serialize(item).Contains("\"state\":\"connected\"",StringComparison.Ordinal)))
-				return new { started=true,installed,redeployed=installed,active_version=version,payload_sha256=deployedSha,process_id=process.Id,connected=true,host_id=(string?)current["host_id"],
-					recovery=installed?"A new version was deployed. If a dnSpy was already running it still owns the endpoint: confirm get_host_info reports an extension_sha256 from this deployment, and close the old dnSpy if it does not.":null };
+				return new { started=true,adopted=false,installed,redeployed=installed,replaced=running.Length>0,active_version=version,payload_sha256=deployedSha,extension_sha256=deployedExtensionSha,process_id=process.Id,connected=true,host_id=hostId,recovery=(string?)null };
 		}
-		return new { started=true,installed,redeployed=installed,active_version=version,payload_sha256=deployedSha,process_id=process.Id,connected=false,host_id=(string?)current["host_id"],recovery="Call doctor; dnSpy may still be composing extensions." };
+		return new { started=true,adopted=false,installed,redeployed=installed,replaced=running.Length>0,active_version=version,payload_sha256=deployedSha,extension_sha256=deployedExtensionSha,process_id=process.Id,connected=false,host_id=hostId,recovery="Call doctor; dnSpy may still be composing extensions." };
 	}
+
+	/// <summary>Closing a host that holds an ICorDebug attachment kills the target with it -- verified,
+	/// not assumed. So a replacement detaches every session first and only then closes the process. A
+	/// target the engine cannot detach from without killing it stops the replacement instead, because
+	/// destroying whatever the user was debugging is never an acceptable side effect of a redeploy.</summary>
+	async Task ReplaceRunningHostAsync(Process[] running,JsonNode? live,HostRouter router,bool allowTerminate,CancellationToken token) {
+		if(live is not null) {
+			foreach(var session in await LocalSessionsAsync(router,token)) {
+				var sessionId=(string?)session["session_id"]; if(string.IsNullOrEmpty(sessionId)) continue;
+				if((bool?)session["can_detach_without_terminating"]!=true && !allowTerminate)
+					throw new GatewayControlException("replace_would_terminate",
+						$"The running host cannot detach from session '{sessionId}' (processes {string.Join(", ",session["process_ids"]?.AsArray().Select(node=>(int?)node) ?? Enumerable.Empty<int?>())}) without terminating the target, so replacing it would destroy that process. Finish with the running host, or pass allow_terminate=true to accept losing the target.");
+				var detach=new JsonObject { ["session_id"]=sessionId,["expected_lifecycle_version"]=(long?)session["lifecycle_version"] ?? 0,["allow_terminate"]=allowTerminate };
+				var response=await router.CallAsync(new RpcRequest { Operation="detach",Arguments=detach,DeadlineUtc=DateTime.UtcNow.AddSeconds(20) },token);
+				if(response.Error is not null)
+					throw new GatewayControlException("replace_detach_failed",$"The running host could not detach session '{sessionId}' ({response.Error.Code}: {response.Error.Message}), so it was left running and nothing was replaced. Its target is still attached and would die with it.");
+			}
+		}
+		foreach(var process in running) {
+			try { if(!process.HasExited) { process.Kill(); process.WaitForExit(15000); } } catch(InvalidOperationException) { }
+			catch(Exception ex) { throw new GatewayControlException("replace_failed",$"Could not close the running host (pid {process.Id}): {ex.Message}. Close it manually, then call launch_local_host again."); }
+		}
+		// The listener socket is not free the instant the process is, and starting into a taken port is
+		// exactly the two-hosts state this method exists to avoid.
+		for(var attempt=0;attempt<20 && running.Any(process=>{ try { return !process.HasExited; } catch { return false; } });attempt++) await Task.Delay(250,token);
+		await Task.Delay(500,token);
+	}
+
+	/// <summary>dnSpy processes started from this managed install. Any one of them owns, or is about to
+	/// fight for, the RPC endpoint. The user's own separate dnSpy lives elsewhere and is never touched.</summary>
+	Process[] RunningManagedHosts() {
+		var root=Path.Combine(installRoot,"versions")+Path.DirectorySeparatorChar;
+		var found=new List<Process>();
+		foreach(var process in Process.GetProcessesByName("dnSpy")) {
+			string? path=null;
+			try { path=process.MainModule?.FileName; } catch { }
+			if(path is not null && path.StartsWith(root,StringComparison.OrdinalIgnoreCase)) found.Add(process); else process.Dispose();
+		}
+		return found.ToArray();
+	}
+	/// <summary>The registered host that is one of these processes. Identified by process id rather than
+	/// by position in the list: with a remote host also registered, taking the first connected entry
+	/// would compare a machine across the network against the payload installed on this one.</summary>
+	async Task<JsonNode?> ConnectedLocalHostAsync(HostRouter router,CancellationToken token,int[] processIds) {
+		foreach(var item in await router.ListHostsAsync(token)) {
+			var node=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(item))!;
+			if((string?)node["state"] is not ("connected" or "degraded") || node["host"] is not JsonNode host) continue;
+			if((int?)host["dnspy_process_id"] is int id && processIds.Contains(id)) return host;
+		}
+		return null;
+	}
+	async Task<JsonObject[]> LocalSessionsAsync(HostRouter router,CancellationToken token) {
+		var response=await router.CallAsync(new RpcRequest { Operation="list_sessions",DeadlineUtc=DateTime.UtcNow.AddSeconds(10) },token);
+		if(response.Error is not null || response.Result is null) return Array.Empty<JsonObject>();
+		var node=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(response.Result));
+		var array=node as JsonArray ?? node?["result"] as JsonArray;
+		return array?.OfType<JsonObject>().ToArray() ?? Array.Empty<JsonObject>();
+	}
+	/// <summary>Hash of the extension assembly under a payload or deployment root, which is what a
+	/// running host reports as extension_sha256. Comparing those two is the only way to tell "already
+	/// running the build I want" from "running something else" without trusting a version string.</summary>
+	static string? ExtensionSha(string root) {
+		var path=Path.Combine(root,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll");
+		try { return File.Exists(path) ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant() : null; } catch { return null; }
+	}
+	static string Shorten(string? sha) => string.IsNullOrEmpty(sha) ? "unknown" : sha!.Substring(0,Math.Min(12,sha!.Length));
 	object Rollback(JsonObject args) { RequireConfirm(args); var current=ReadCurrent() ?? throw new GatewayControlException("local_not_installed","No managed local deployment exists."); var previous=(string?)current["previous_version"] ?? throw new GatewayControlException("rollback_unavailable","No previous local version is retained."); var active=(string)current["active_version"]!; if(!Directory.Exists(Path.Combine(installRoot,"versions",previous))) throw new GatewayControlException("rollback_unavailable","The retained previous version directory is missing."); current["active_version"]=previous; current["previous_version"]=active; current["updated_utc"]=DateTime.UtcNow; WriteCurrent(current); WriteCurrentLauncher(); return new { rolled_back=true,active_version=previous,previous_version=active }; }
 	object Uninstall(JsonObject args) { RequireConfirm(args); if(Directory.Exists(installRoot)) Directory.Delete(installRoot,true); foreach(var shortcut in new[]{Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"dgSpy.cmd"),Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),"Programs","dgSpy.cmd")}) if(File.Exists(shortcut)&&File.ReadAllText(shortcut).Contains(installRoot,StringComparison.OrdinalIgnoreCase)) File.Delete(shortcut); if((bool?)args["remove_settings"]==true && Directory.Exists(stateRoot)) Directory.Delete(stateRoot,true); return new { uninstalled=true,settings_preserved=(bool?)args["remove_settings"]!=true }; }
 
@@ -171,11 +281,11 @@ public sealed class DeploymentService {
 		try { var payload=RemotePayloadRoot(); ValidateRemotePayload(payload); payloadSha=HashTreeCached(payload); }
 		catch(Exception ex) { return new { known=false,stale=false,detail=$"Installed payload could not be hashed: {ex.Message}" }; }
 		var deployed=DeployedPayloadSha(active);
-		if(deployed is null) return new { known=false,stale=true,staged_payload_sha256=payloadSha,active_version=active,detail="The active deployment predates payload verification and cannot prove what it contains.",recovery="Call launch_local_host to redeploy the installed payload." };
+		if(deployed is null) return new { known=false,stale=true,staged_payload_sha256=payloadSha,active_version=active,detail="The active deployment predates payload verification and cannot prove what it contains.",recovery="Call launch_local_host to redeploy the installed payload; add replace=true if a host from that deployment is still running." };
 		var stale=!string.Equals(deployed,payloadSha,StringComparison.OrdinalIgnoreCase);
 		return new { known=true,stale,staged_payload_sha256=payloadSha,active_payload_sha256=deployed,active_version=active,
 			detail=stale?"The installed payload is newer than the running deployment; dnSpy is executing older code.":"The active deployment matches the installed payload.",
-			recovery=stale?"Close dnSpy and call launch_local_host to deploy the installed payload.":null };
+			recovery=stale?"Call launch_local_host with replace=true; it detaches the running host's targets, closes it, and launches the installed payload. Any debugging session it holds ends, so finish or hand off that session first.":null };
 	}
 	string RemotePayloadRoot() {
 		var configured=Environment.GetEnvironmentVariable("DGSPY_REMOTE_PAYLOAD_ROOT"); if(!string.IsNullOrWhiteSpace(configured)) return Path.GetFullPath(configured);

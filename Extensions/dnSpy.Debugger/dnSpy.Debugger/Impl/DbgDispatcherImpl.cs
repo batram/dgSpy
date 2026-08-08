@@ -39,8 +39,12 @@ namespace dnSpy.Debugger.Impl {
 
 		public override bool CheckAccess() => Dispatcher.CheckAccess();
 
+		public bool IsShutdown => Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished;
+
+		public bool TryBeginInvoke(Action callback) => !IsShutdown && Dispatcher.TryBeginInvoke(callback);
+
 		public override void BeginInvoke(Action callback) {
-			if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+			if (IsShutdown)
 				return;
 			Dispatcher.BeginInvoke(callback);
 		}

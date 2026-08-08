@@ -26,6 +26,15 @@ namespace dnSpy.Contracts.Debugger {
 		long FaultCount { get; }
 		DateTime? LastFaultUtc { get; }
 		string? LastFault { get; }
+
+		/// <summary>True once the dispatcher has begun shutting down and will silently drop work.</summary>
+		bool IsShutdown { get; }
+
+		/// <summary>Queues <paramref name="callback"/> and reports whether it was actually queued.
+		/// <see cref="DbgDispatcher.BeginInvoke(Action)"/> discards work on a shut-down dispatcher and
+		/// cannot say so, which turns every caller that waits for a result into a hang until its
+		/// deadline. Callers that need an answer must be able to fail immediately instead.</summary>
+		bool TryBeginInvoke(Action callback);
 	}
 
 	/// <summary>

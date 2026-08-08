@@ -72,10 +72,19 @@
     },
     {
       "name": "launch_local_host",
-      "description": "SIDE EFFECTING. Install the bundled local host when needed, launch dnSpy, and wait briefly for registration.",
+      "description": "SIDE EFFECTING. Ensure exactly one managed local host is running: adopt one that is already running the installed payload, install and launch when none is, and never start a second process beside a running one. Fails with host_already_running when a different build owns the endpoint; replace=true then detaches that host\u0027s targets, closes it, and launches the installed payload, which ends its debugging sessions.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "replace": {
+            "type": "boolean",
+            "description": "Close a running host that is not the installed payload and launch that payload instead. Detaches its targets first; any debugging session it holds ends."
+          },
+          "allow_terminate": {
+            "type": "boolean",
+            "description": "With replace, proceed even when a target cannot be detached without killing it. Destroys that process."
+          }
+        },
         "required": []
       },
       "annotations": {

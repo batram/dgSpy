@@ -43,6 +43,10 @@ namespace dgSpy.Extension {
 				shuttingDown=true;
 				host.ConnectionStateChanged -= Host_ConnectionStateChanged;
 				if (connectionStateInfo is not null) appWindow.RemoveTitleInfo(connectionStateInfo);
+				// Before anything else: an attached target dies with this process, so detaching is the
+				// last useful thing this extension can do. Disposing first would tear down the RPC host
+				// while the target is still attached and lose it.
+				host.DetachTargetsBeforeExit(TimeSpan.FromSeconds(10));
 				host.Dispose();
 			}
 		}

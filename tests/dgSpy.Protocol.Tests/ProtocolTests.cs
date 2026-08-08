@@ -224,6 +224,34 @@ public class CapabilityContractTests {
 	}
 
 	[Fact]
+	public void A_contained_dispatcher_fault_and_a_dead_dispatcher_are_different_conditions() {
+		// One recovered fault used to leave a host reporting "degraded" for the rest of its life, which
+		// told callers to stop using a host that was fine; and a dispatcher that had actually died
+		// reported the same word, which told them nothing about the one case that ends the host. The
+		// two now carry different states and different recovery text.
+		var contained = ProtocolJson.ParseObject(ProtocolJson.Serialize(new HostInfo {
+			ConnectionState="connected",DispatcherState="faulted",DispatcherFaultCount=4,
+			LastDispatcherFault="ObjectDisposedException",DispatcherRecovery="contained; the host is still usable" }));
+		var dead = ProtocolJson.ParseObject(ProtocolJson.Serialize(new HostInfo {
+			ConnectionState="degraded",DispatcherState="unavailable",DispatcherRecovery="close this host and relaunch" }));
+
+		Assert.Equal("connected",(string?)contained["connection_state"]);
+		Assert.Equal("faulted",(string?)contained["dispatcher_state"]);
+		Assert.Equal(4L,(long?)contained["dispatcher_fault_count"]);
+		Assert.Equal("contained; the host is still usable",(string?)contained["dispatcher_recovery"]);
+
+		Assert.Equal("degraded",(string?)dead["connection_state"]);
+		Assert.Equal("unavailable",(string?)dead["dispatcher_state"]);
+		Assert.Equal("close this host and relaunch",(string?)dead["dispatcher_recovery"]);
+
+		// Absent rather than null when there is nothing to do, so a healthy host does not carry a field
+		// that reads like an unresolved problem.
+		var healthy = ProtocolJson.ParseObject(ProtocolJson.Serialize(new HostInfo()));
+		Assert.False(healthy.ContainsKey("dispatcher_recovery"));
+		Assert.Equal("healthy",(string?)healthy["dispatcher_state"]);
+	}
+
+	[Fact]
 	public void Runtime_capabilities_report_the_endpoint_host_identity() {
 		var capabilities=CapabilityCatalog.Describe("0.1.0","host-a");
 
