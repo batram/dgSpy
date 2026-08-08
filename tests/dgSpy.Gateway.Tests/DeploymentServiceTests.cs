@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using System.Text.Json.Nodes;
+using dgSpy.Protocol;
 using Xunit;
 
 namespace dgSpy.Gateway.Tests;
@@ -77,6 +78,33 @@ public sealed class DeploymentServiceTests : IDisposable {
 		Assert.True((bool?)afterRebuild["payload"]!["stale"]);
 		Assert.Contains("newer than the running deployment",(string?)afterRebuild["payload"]!["detail"]);
 		Assert.NotNull((string?)afterRebuild["payload"]!["recovery"]);
+	}
+
+	[Fact]
+	public void Replacement_refuses_to_kill_hosts_whose_sessions_cannot_all_be_observed() {
+		var unavailable=Assert.Throws<GatewayControlException>(()=>DeploymentService.RequireReplacementSessionVisibility(1,null,false));
+		Assert.Equal("replace_session_state_unknown",unavailable.Code);
+
+		var ambiguous=Assert.Throws<GatewayControlException>(()=>DeploymentService.RequireReplacementSessionVisibility(2,new JsonObject(),false));
+		Assert.Equal("replace_session_state_unknown",ambiguous.Code);
+
+		DeploymentService.RequireReplacementSessionVisibility(1,null,true);
+		DeploymentService.RequireReplacementSessionVisibility(2,new JsonObject(),true);
+	}
+
+	[Fact]
+	public void Replacement_treats_failed_or_malformed_session_reads_as_unknown_not_empty() {
+		var failed=Assert.Throws<GatewayControlException>(()=>DeploymentService.ReadLocalSessions(RpcResponse.Failure("request","host_unavailable","gone"),false));
+		Assert.Equal("replace_session_state_unknown",failed.Code);
+		var missing=Assert.Throws<GatewayControlException>(()=>DeploymentService.ReadLocalSessions(new RpcResponse(),false));
+		Assert.Equal("replace_session_state_unknown",missing.Code);
+		var malformed=Assert.Throws<GatewayControlException>(()=>DeploymentService.ReadLocalSessions(RpcResponse.Success("request",new { unexpected=true }),false));
+		Assert.Equal("replace_session_state_unknown",malformed.Code);
+		var mixed=Assert.Throws<GatewayControlException>(()=>DeploymentService.ReadLocalSessions(RpcResponse.Success("request",new object[]{new { session_id="ok" },"bad"}),false));
+		Assert.Equal("replace_session_state_unknown",mixed.Code);
+
+		Assert.Empty(DeploymentService.ReadLocalSessions(RpcResponse.Failure("request","host_unavailable","gone"),true));
+		Assert.Empty(DeploymentService.ReadLocalSessions(RpcResponse.Success("request",Array.Empty<object>()),false));
 	}
 
 	// A version directory that cannot prove its provenance is an interrupted copy: the tree landed but the

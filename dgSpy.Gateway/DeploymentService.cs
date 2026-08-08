@@ -129,8 +129,9 @@ public sealed class DeploymentService {
 	/// target the engine cannot detach from without killing it stops the replacement instead, because
 	/// destroying whatever the user was debugging is never an acceptable side effect of a redeploy.</summary>
 	async Task ReplaceRunningHostAsync(Process[] running,JsonNode? live,HostRouter router,bool allowTerminate,CancellationToken token) {
+		RequireReplacementSessionVisibility(running.Length,live,allowTerminate);
 		if(live is not null) {
-			foreach(var session in await LocalSessionsAsync(router,token)) {
+			foreach(var session in await LocalSessionsAsync(router,allowTerminate,token)) {
 				var sessionId=(string?)session["session_id"]; if(string.IsNullOrEmpty(sessionId)) continue;
 				if((bool?)session["can_detach_without_terminating"]!=true && !allowTerminate)
 					throw new GatewayControlException("replace_would_terminate",
@@ -149,6 +150,13 @@ public sealed class DeploymentService {
 		// exactly the two-hosts state this method exists to avoid.
 		for(var attempt=0;attempt<20 && running.Any(process=>{ try { return !process.HasExited; } catch { return false; } });attempt++) await Task.Delay(250,token);
 		await Task.Delay(500,token);
+	}
+	internal static void RequireReplacementSessionVisibility(int runningCount,JsonNode? live,bool allowTerminate) {
+		if(allowTerminate) return;
+		if(live is null)
+			throw new GatewayControlException("replace_session_state_unknown","The running host is not answering RPC, so the Gateway cannot prove that replacing it is safe. It was left running. Recover the host and retry, or pass allow_terminate=true to accept that killing it may destroy an attached target.");
+		if(runningCount!=1)
+			throw new GatewayControlException("replace_session_state_unknown",$"There are {runningCount} managed dnSpy processes but only one RPC endpoint, so the Gateway cannot prove that every process is free of attached targets. They were left running. Close the extras safely, or pass allow_terminate=true to accept that killing them may destroy attached targets.");
 	}
 
 	/// <summary>dnSpy processes started from this managed install. Any one of them owns, or is about to
@@ -174,12 +182,21 @@ public sealed class DeploymentService {
 		}
 		return null;
 	}
-	async Task<JsonObject[]> LocalSessionsAsync(HostRouter router,CancellationToken token) {
+	async Task<JsonObject[]> LocalSessionsAsync(HostRouter router,bool allowTerminate,CancellationToken token) {
 		var response=await router.CallAsync(new RpcRequest { Operation="list_sessions",DeadlineUtc=DateTime.UtcNow.AddSeconds(10) },token);
-		if(response.Error is not null || response.Result is null) return Array.Empty<JsonObject>();
+		return ReadLocalSessions(response,allowTerminate);
+	}
+	internal static JsonObject[] ReadLocalSessions(RpcResponse response,bool allowTerminate) {
+		if(response.Error is not null || response.Result is null) {
+			if(allowTerminate) return Array.Empty<JsonObject>();
+			var detail=response.Error is null ? "the host returned no result" : $"{response.Error.Code}: {response.Error.Message}";
+			throw new GatewayControlException("replace_session_state_unknown",$"The Gateway could not list the running host's sessions ({detail}), so it cannot prove that replacing it is safe. The host was left running. Retry after recovery, or pass allow_terminate=true to accept that killing it may destroy an attached target.");
+		}
 		var node=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(response.Result));
 		var array=node as JsonArray ?? node?["result"] as JsonArray;
-		return array?.OfType<JsonObject>().ToArray() ?? Array.Empty<JsonObject>();
+		if(array is not null && array.All(item=>item is JsonObject)) return array.OfType<JsonObject>().ToArray();
+		if(allowTerminate) return Array.Empty<JsonObject>();
+		throw new GatewayControlException("replace_session_state_unknown","The running host returned a malformed session list, so the Gateway cannot prove that replacing it is safe. The host was left running. Retry after recovery, or pass allow_terminate=true to accept that killing it may destroy an attached target.");
 	}
 	/// <summary>Hash of the extension assembly under a payload or deployment root, which is what a
 	/// running host reports as extension_sha256. Comparing those two is the only way to tell "already
