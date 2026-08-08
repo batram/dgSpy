@@ -332,7 +332,8 @@ public class CapabilityContractTests {
 		var capabilities=ProtocolJson.ParseObject(ProtocolJson.Serialize(CapabilityCatalog.Describe("0.1.0")));
 		Assert.True((bool?)capabilities["engines"]![0]!["memory_access"]);
 		Assert.False((bool?)capabilities["engines"]![1]!["native_disassembly"]);
-		Assert.False((bool?)capabilities["engines"]![0]!["registers"]);
+		Assert.True((bool?)capabilities["engines"]![0]!["registers"]);
+		Assert.False((bool?)capabilities["engines"]![1]!["registers"]);
 		Assert.Equal(10000,(int?)capabilities["limits"]!["max_evaluation_timeout_ms"]);
 	}
 

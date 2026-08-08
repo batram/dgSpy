@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -10,6 +11,10 @@ using dnSpy.Contracts.Debugger;
 using dnSpy.Contracts.Debugger.Breakpoints.Modules;
 using dnSpy.Contracts.Debugger.Evaluation;
 using dnSpy.Contracts.Debugger.Exceptions;
+using dnSpy.Contracts.Debugger.DotNet.Code;
+using dnSpy.Contracts.Debugger.DotNet.Evaluation;
+using dnlib.DotNet;
+using dnlib.DotNet.Emit;
 
 namespace dgSpy.Extension {
 	sealed partial class RpcHost {
@@ -35,13 +40,39 @@ namespace dgSpy.Extension {
 		static ObjectIdInfo DescribeObjectId(DbgObjectId id,string expression,EvaluatedValue? value)=>new ObjectIdInfo { ObjectId=id.Id,Expression=expression,ProcessId=id.Process.Id,RuntimeId=id.Runtime.Guid.ToString("D"),Value=value };
 		void ValidateRuntime(RpcRequest req,DbgRuntime actual) { var process=(int?)req.Arguments["process_id"]; var runtime=(string?)req.Arguments["runtime_id"]; if(process.HasValue && process.Value!=actual.Process.Id) throw new RpcException("target_mismatch","The selected frame is owned by a different process."); if(!string.IsNullOrEmpty(runtime) && !StringComparer.OrdinalIgnoreCase.Equals(runtime,actual.Guid.ToString("D")) && !StringComparer.OrdinalIgnoreCase.Equals(runtime,actual.Name)) throw new RpcException("target_mismatch","The selected frame is owned by a different runtime."); }
 
-		/// <summary>dnSpy's Autos provider is a stub: DbgEngineAutosProviderImpl returns one error node
-		/// carrying the literal text "NYI" for every .NET engine, so this is unconditional rather than
-		/// engine-specific. Returning that row as a success made an unimplemented feature look like a frame
-		/// with nothing interesting in it. Report it the way get_registers reports its missing capability,
-		/// and keep the real path live so an upstream implementation starts working without a code change.</summary>
-		async Task<EvaluatedValue[]> GetAutosAsync(RpcRequest req,CancellationToken cancellationToken) { CheckSession(req); return await WithEvaluationAsync(req,(captured,eval)=>{ ValidateRuntime(req,captured.Frame.Runtime); var nodes=captured.Language.AutosProvider.GetNodes(eval,NodeOptions((bool?)req.Arguments["allow_func_eval"]??false)); try { var values=nodes.Take(200).Select(n=>DescribeNode(n,eval,n.Expression)).ToArray(); if(IsNotImplementedStub(values)) throw new RpcException("capability_unsupported","autos are not implemented by dnSpy's Autos provider on this host; it returns a single \"NYI\" placeholder for every engine. Use get_frame with include=[\"locals\",\"this\"], which reports the same information from the provider dnSpy does implement."); return values; } finally { manager.Close(nodes); } },cancellationToken).ConfigureAwait(false); }
-		static bool IsNotImplementedStub(EvaluatedValue[] values)=>values.Length==1 && values[0].Error=="NYI";
+		/// <summary>Evaluates the locals, parameters, and fields referenced by the current source statement.
+		/// dnSpy's stock Autos provider is a NYI node, but its language debug info has the statement's exact
+		/// IL span and active source names. The normal evaluator still owns formatting and func-eval policy.</summary>
+		async Task<EvaluatedValue[]> GetAutosAsync(RpcRequest req,CancellationToken cancellationToken) { CheckSession(req); return await WithEvaluationAsync(req,(captured,eval)=>{
+			ValidateRuntime(req,captured.Frame.Runtime); var expressions=GetAutoExpressions(eval).Take(200).ToArray();
+			if(expressions.Length==0) return Array.Empty<EvaluatedValue>();
+			var nodes=CreateNodes(captured,eval,expressions,(bool?)req.Arguments["allow_func_eval"]??false,allowSideEffects:false);
+			try { return nodes.Select((n,i)=>DescribeNode(n,eval,expressions[i])).ToArray(); } finally { manager.Close(nodes); }
+		},cancellationToken).ConfigureAwait(false); }
+
+		static IEnumerable<string> GetAutoExpressions(DbgEvaluationInfo eval) {
+			var languageInfo=eval.Context.TryGetLanguageDebugInfo(); if(languageInfo is null) yield break;
+			var info=languageInfo.MethodDebugInfo; var statement=info.GetSourceStatementByCodeOffset(languageInfo.ILOffset);
+			if(statement is null || !info.Method.HasBody) yield break;
+			var locals=ActiveLocals(info.Scope,languageInfo.ILOffset).Where(l=>l.Index>=0).GroupBy(l=>l.Index).ToDictionary(g=>g.Key,g=>g.First().Name);
+			var parameters=info.Parameters.GroupBy(p=>p.Index).ToDictionary(g=>g.Key,g=>g.First().Name); var seen=new HashSet<string>(StringComparer.Ordinal);
+			foreach(var instruction in info.Method.Body.Instructions.Where(i=>statement.Value.ILSpan.Start<=i.Offset && i.Offset<statement.Value.ILSpan.End)) {
+				string? expression=null;
+				if(instruction.Operand is Local local && locals.TryGetValue(local.Index,out var localName)) expression=localName;
+				else if(instruction.Operand is Parameter parameter) expression=parameter.IsHiddenThisParameter ? "this" : parameters.TryGetValue(parameter.Index,out var parameterName) ? parameterName : parameter.Name;
+				else if(instruction.Operand is IField field) expression=field.ResolveFieldDef()?.IsStatic==true ? field.DeclaringType.FullName+"."+field.Name : "this."+field.Name;
+				else expression=ShortVariableExpression(instruction.OpCode.Code,info,locals,parameters);
+				if(!string.IsNullOrWhiteSpace(expression) && ExpressionAddressability.IsAddressable(expression!) && seen.Add(expression!)) yield return expression!;
+			}
+		}
+		static IEnumerable<DbgLocal> ActiveLocals(DbgMethodDebugScope scope,uint offset) { foreach(var local in scope.Locals) yield return local; foreach(var child in scope.Scopes.Where(s=>s.Span.Start<=offset && offset<s.Span.End)) foreach(var local in ActiveLocals(child,offset)) yield return local; }
+		static string? ShortVariableExpression(Code code,DbgMethodDebugInfo info,Dictionary<int,string> locals,Dictionary<int,string> parameters) {
+			int index; switch(code) {
+			case Code.Ldloc_0: case Code.Stloc_0: return locals.TryGetValue(0,out var l0)?l0:null; case Code.Ldloc_1: case Code.Stloc_1: return locals.TryGetValue(1,out var l1)?l1:null;
+			case Code.Ldloc_2: case Code.Stloc_2: return locals.TryGetValue(2,out var l2)?l2:null; case Code.Ldloc_3: case Code.Stloc_3: return locals.TryGetValue(3,out var l3)?l3:null;
+			case Code.Ldarg_0: index=0; break; case Code.Ldarg_1: index=1; break; case Code.Ldarg_2: index=2; break; case Code.Ldarg_3: index=3; break; default: return null; }
+			if(info.Method.HasThis) { if(index==0) return "this"; index--; } return parameters.TryGetValue(index,out var parameter)?parameter:null;
+		}
 
 		OutputResult GetOutput(RpcRequest req) { CheckSession(req); return OutputResultOf(output.Snapshot((long?)req.Arguments["after_output_id"]??0)); }
 		async Task<WaitOutputResult> WaitForOutputAsync(RpcRequest req,CancellationToken cancellationToken) { CheckSession(req); var after=(long?)req.Arguments["after_output_id"]??0; var timeout=Math.Min(10000,Math.Max(1,(int?)req.Arguments["timeout_ms"]??5000)); using var wait=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); wait.CancelAfter(timeout); while(true) { var snapshot=output.Snapshot(after); if(snapshot.Messages.Length!=0 || snapshot.Truncated) return WaitOutputResultOf(snapshot,false); try { await output.WaitAsync(snapshot.Last,wait.Token).ConfigureAwait(false); } catch(OperationCanceledException) when(!cancellationToken.IsCancellationRequested) { return WaitOutputResultOf(output.Snapshot(after),true); } } }
@@ -73,7 +104,7 @@ namespace dgSpy.Extension {
 			RejectReparsePath(root,Path.GetDirectoryName(path)!); if(File.Exists(path)&&!((bool?)req.Arguments["overwrite"]??false)) throw new RpcException("file_exists","The export path already exists; pass overwrite=true explicitly.");
 			Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllBytes(path,bytes); var audit=AuditMutation(req.Operation,$"path={path} length={bytes.Length} sha256={Hash(bytes)}"); return new HostExportResult { Path=path,Size=bytes.Length,Sha256=Hash(bytes),AuditId=audit };
 		}
-		static void RejectReparsePath(string root,string directory) { for(var current=new DirectoryInfo(directory);current is not null&&current.FullName.StartsWith(root,StringComparison.OrdinalIgnoreCase);current=current.Parent) if(current.Exists&&(current.Attributes&FileAttributes.ReparsePoint)!=0) throw new RpcException("path_not_allowed","The export path crosses a reparse point."); }
+		static void RejectReparsePath(string root,string directory) { for(var current=new DirectoryInfo(directory);current is not null&&current.FullName.StartsWith(root,StringComparison.OrdinalIgnoreCase);current=current.Parent) if(current.Exists&&(current.Attributes&System.IO.FileAttributes.ReparsePoint)!=0) throw new RpcException("path_not_allowed","The export path crosses a reparse point."); }
 		async Task<byte[]> ReadExportBytesAsync(RpcRequest req,CancellationToken token) { CheckSession(req); var expression=(string?)req.Arguments["expression"]; if(string.IsNullOrWhiteSpace(expression)) throw new RpcException("invalid_arguments","expression is required."); return await WithEvaluationAsync(req,(captured,eval)=>{ ValidateRuntime(req,captured.Frame.Runtime); var nodes=CreateNodes(captured,eval,new[]{expression!},false,false); try { var value=nodes[0].Value??throw new RpcException("value_unavailable",nodes[0].ErrorMessage??"No value."); if(value.HasRawValue) { if(value.RawValue is string text) return System.Text.Encoding.UTF8.GetBytes(text); if(value.RawValue is not null) { using var memory=new MemoryStream(); using(var writer=new BinaryWriter(memory)) { switch(value.RawValue) { case byte v: writer.Write(v); break; case sbyte v: writer.Write(v); break; case short v: writer.Write(v); break; case ushort v: writer.Write(v); break; case int v: writer.Write(v); break; case uint v: writer.Write(v); break; case long v: writer.Write(v); break; case ulong v: writer.Write(v); break; case float v: writer.Write(v); break; case double v: writer.Write(v); break; case bool v: writer.Write(v); break; case char v: writer.Write(v); break; default: throw new RpcException("capability_unavailable","The value has no supported byte representation."); } } return memory.ToArray(); } } var address=value.GetRawAddressValue(true)??throw new RpcException("capability_unavailable","The value exposes neither a scalar nor a raw data address."); if(address.Length>16*1024*1024) throw new RpcException("output_too_large","Value exports are capped at 16 MiB."); return value.Process.ReadMemory(address.Address,(int)address.Length); } finally { manager.Close(nodes); } },token).ConfigureAwait(false); }
 		static string Hash(byte[] bytes) { using var sha=SHA256.Create(); return BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-","").ToLowerInvariant(); }
 	}

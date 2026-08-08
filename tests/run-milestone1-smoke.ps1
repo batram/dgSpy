@@ -521,12 +521,8 @@ try {
 	Assert-That 'release_object_id releases exactly the selected id' ($releasedId.object_id -eq $objectId.object_id)
 	$releasedRead = Invoke-Tool -Name 'evaluate_object_id' -Arguments @{ session_id = $sessionId; object_id = $objectId.object_id; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 1 } -ExpectError
 	Assert-That 'a released object ID cannot be evaluated' ($releasedRead -match 'not active')
-	# dnSpy implements no Autos provider for any .NET engine: it answers with a single "NYI" placeholder,
-	# and the extension refuses that explicitly rather than handing back a row that looks like data. This
-	# check asserts the refusal, which is the tool's documented and shipped behaviour; asserting entries
-	# instead made the whole smoke abort here on a contract that has not been true for some time.
-	$autos = Invoke-Tool -Name 'get_autos' -Arguments @{ session_id = $sessionId; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } -ExpectError
-	Assert-That 'get_autos reports the missing provider instead of a placeholder row' ($autos -match 'capability_unsupported' -and $autos -match 'get_frame') "(was '$autos')"
+	$autos = @(Invoke-Tool -Name 'get_autos' -Arguments @{ session_id = $sessionId; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } | ForEach-Object { $_ })
+	Assert-That 'get_autos returns current-statement expressions instead of dnSpy NYI' ($autos.Count -gt 0 -and @($autos | Where-Object { $_.error -eq 'NYI' -or [string]::IsNullOrWhiteSpace($_.expression) }).Count -eq 0) "(entries=$(($autos | ConvertTo-Json -Compress -Depth 5)))"
 	$valueExport = Invoke-Tool -Name 'get_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'get_value_export returns hashed bounded bytes' ($valueExport.total_size -eq 4 -and $valueExport.sha256.Length -eq 64 -and [Convert]::FromBase64String($valueExport.data_base64).Length -eq 4)
 	$hostExport = Invoke-MutatingTool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = 'input.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 }
@@ -702,8 +698,8 @@ try {
 	Assert-That 'get_disassembly exposes managed IL with its capability' ($managedDisassembly.capability -eq 'managed_il' -and @($managedDisassembly.body.instructions).Count -gt 0)
 	$nativeDisassembly = Invoke-Tool -Name 'get_disassembly' -Arguments @{ session_id = $sessionId; mode = 'native'; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'get_disassembly exposes JIT native blocks when advertised' ($nativeDisassembly.capability -eq 'native_disassembly' -and @($nativeDisassembly.blocks).Count -gt 0)
-	$registerFailure = Invoke-Tool -Name 'get_registers' -Arguments @{ session_id = $sessionId; thread_id = $stepThread } -ExpectError
-	Assert-That 'get_registers returns a structured unsupported capability failure' ($registerFailure -match 'not exposed|unsupported')
+	$registers = Invoke-Tool -Name 'get_registers' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0 }
+	Assert-That 'get_registers reads the stopped x64 integer context' ($registers.architecture -eq 'x64' -and @($registers.registers).Count -eq 18 -and @($registers.registers | Where-Object { $_.name -eq 'rip' -and $_.value -gt 0 -and $_.hex -match '^0x[0-9A-F]{16}$' }).Count -eq 1) "(registers=$(($registers | ConvertTo-Json -Compress -Depth 5)))"
 	$currentFrame = Invoke-Tool -Name 'get_frame' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0 }
 	$setIp = Invoke-MutatingTool -Name 'set_instruction_pointer' -Arguments @{ session_id = $sessionId; thread_id = $stepThread; frame_index = 0; module = $currentFrame.module; method_token = $currentFrame.method_token; il_offset = $currentFrame.il_offset }
 	Assert-That 'set_instruction_pointer validates and audits the selected frame' ($setIp.completed -and $setIp.causes_side_effects -and $setIp.capability -eq 'set_instruction_pointer')

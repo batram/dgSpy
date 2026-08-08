@@ -419,7 +419,7 @@
       "object_construction": true,
       "memory_access": true,
       "native_disassembly": true,
-      "registers": false,
+      "registers": true,
       "set_instruction_pointer": true,
       "abort_function_evaluation": true,
       "object_ids": true,

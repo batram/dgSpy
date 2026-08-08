@@ -169,9 +169,14 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   is refused like any other. The cost of the value decides it, not whether the target is a primitive.
   Measured on CorDebug at an unsafe point: `answer = 1717` assigned, `label = null` assigned,
   `label = "..."` refused with `compiler_error: false`.
-- **`get_autos` returns `capability_unsupported` on every engine.** dnSpy's Autos provider is a stub that
-  answers with a single `NYI` node; dgSpy used to pass that through as a successful empty-looking read.
-  Use `get_frame` with `include: ["locals", "this"]`, which is the provider dnSpy does implement.
+- **`get_autos` implements statement-scoped C# Autos independently of dnSpy's NYI provider.** It uses
+  dnSpy language debug info to find the current source statement's IL span, maps referenced IL locals,
+  parameters, `this`, and fields back to source expressions, and evaluates them through the same bounded
+  value pipeline as `evaluate`. Function evaluation remains opt-in.
+- **`get_registers` reads a stopped CorDebug x64 Windows thread context.** It returns RAX-R15, RSP, RBP,
+  RSI, RDI, RIP and RFLAGS with unsigned values, fixed-width hex, and bit widths. The selected thread/frame
+  must be paused. Mono's soft-debugger protocol does not expose a trustworthy Windows OS thread context,
+  so Mono returns `capability_unsupported` instead of treating its managed thread id as an OS thread id.
 - `get_session_controller` reports `controller_expires_utc` and `controller_expires_in_seconds` when a
   session is owned, plus `controller_is_caller`. A client that lost its transport — an MCP client
   restarting its stdio server gives the session a new identity and strands the old lease on a dead one —

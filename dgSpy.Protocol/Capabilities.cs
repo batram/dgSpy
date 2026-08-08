@@ -289,7 +289,7 @@ namespace dgSpy.Protocol {
 				Engine="cordebug", DisplayName=".NET Framework CorDebug (CLR v4.0.30319)",
 				Acquisition=new[]{"list_programs+attach"}, Discoverable=true,
 				ArbitraryIlOffsetBreakpoints=true, SequencePointBreakpointsOnly=false, DetachWithoutTerminating=true,
-				MethodInvocation=true,ObjectConstruction=true,MemoryAccess=true,NativeDisassembly=true,Registers=false,SetInstructionPointer=true,AbortFunctionEvaluation=true,ObjectIds=true,ExceptionModes=new[]{"thrown","unhandled"},
+				MethodInvocation=true,ObjectConstruction=true,MemoryAccess=true,NativeDisassembly=true,Registers=true,SetInstructionPointer=true,AbortFunctionEvaluation=true,ObjectIds=true,ExceptionModes=new[]{"thrown","unhandled"},
 				Notes="Accepts a breakpoint at any IL offset. Closing dnSpy with a session attached terminates the target; detach instead.",
 			},
 			new EngineCapabilities {

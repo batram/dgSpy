@@ -1936,7 +1936,7 @@
     },
     {
       "name": "get_registers",
-      "description": "Return registers when exposed by the active runtime. This dnSpy contract does not expose them, so callers receive capability_unsupported instead of an empty successful result.",
+      "description": "Return a stopped CorDebug x64 thread\u0027s integer and control registers. Each row includes name, unsigned numeric value, fixed-width hexadecimal text, and bit width. The selected thread must be paused; frame_index selects and validates the managed frame whose OS-thread context is read. Mono\u0027s soft debugger does not expose this native context.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1949,6 +1949,10 @@
           },
           "thread_id": {
             "type": "string"
+          },
+          "frame_index": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": [
@@ -3072,7 +3076,7 @@
     },
     {
       "name": "get_autos",
-      "description": "Return the C# Autos provider values for a selected paused frame, capped at 200. dnSpy does not implement an Autos provider for any .NET engine, so on this host every call returns capability_unsupported rather than a success carrying a placeholder row. Use get_frame with include=[\u0022locals\u0022,\u0022this\u0022] instead \u2014 that provider is real and reports the same information.",
+      "description": "Return up to 200 C# expressions referenced by the selected frame\u0027s current source statement. dgSpy derives the statement from dnSpy language debug info, maps its IL operands to active locals, parameters, this, and fields, then evaluates them through the normal value pipeline. Function evaluation remains off unless allow_func_eval=true.",
       "inputSchema": {
         "type": "object",
         "properties": {
