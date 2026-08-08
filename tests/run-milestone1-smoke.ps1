@@ -437,8 +437,14 @@ try {
 	Start-Sleep -Milliseconds 300
 	$beforeResume = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
 	Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId; expected_execution_version = $beforeResume.execution_version } | Out-Null
-	$concurrent1 = (Receive-Job -Job $waiter1 -Wait -AutoRemoveJob) | ConvertFrom-Json
-	$concurrent2 = (Receive-Job -Job $waiter2 -Wait -AutoRemoveJob) | ConvertFrom-Json
+	try {
+		$concurrent1 = (Receive-Job -Job $waiter1 -Wait) | ConvertFrom-Json
+		$concurrent2 = (Receive-Job -Job $waiter2 -Wait) | ConvertFrom-Json
+	}
+	finally {
+		Remove-Job -Job $waiter1 -Force -ErrorAction SilentlyContinue
+		Remove-Job -Job $waiter2 -Force -ErrorAction SilentlyContinue
+	}
 	$secondStop1 = @($concurrent1.events)[0]
 	$secondStop2 = @($concurrent2.events)[0]
 	Assert-That 'two waiters issued before resume observe the same breakpoint stop' (-not $concurrent1.timed_out -and -not $concurrent2.timed_out -and $secondStop1.event_id -eq $secondStop2.event_id)
@@ -776,9 +782,12 @@ try {
 	Assert-That 'set_instruction_pointer validates and audits the selected frame' ($setIp.completed -and $setIp.causes_side_effects -and $setIp.capability -eq 'set_instruction_pointer')
 	$outputMessages = Invoke-Tool -Name 'get_output' -Arguments @{ session_id = $sessionId; after_output_id = 0 }
 	Assert-That 'get_output exposes bounded debugger messages including audits' (@($outputMessages.messages | Where-Object { $_.message -like '*dgSpy audit*' }).Count -ge 1)
-	$debugOutput = @($outputMessages.messages | Where-Object { $_.category -eq 'DebugOutput' -and $_.message -eq 'DGSPY_DEBUG_OUTPUT_ATTACHED' })
+	$debugOutput = @($outputMessages.messages | Where-Object {
+		$_.category -eq 'DebugOutput' -and $_.message -eq 'DGSPY_DEBUG_OUTPUT_ATTACHED' -and
+		$_.process_id -eq $targetId -and $_.runtime_id -eq $program.runtime_guid
+	})
 	Assert-That 'get_output captures an attached debugger log message without scraping the GUI' `
-		($debugOutput.Count -ge 1 -and @($debugOutput | Where-Object { $_.process_id -ne $targetId -or $_.runtime_id -ne $program.runtime_guid }).Count -eq 0) `
+		($debugOutput.Count -ge 1) `
 		"(matches=$($debugOutput.Count) payload=$(($debugOutput | ConvertTo-Json -Compress -Depth 5)))"
 	$moduleBreak = Invoke-MutatingTool -Name 'set_module_breakpoint' -Arguments @{ session_id = $sessionId; module_name = 'DeferredPayload*'; is_loaded = $true }
 	$moduleBreaks = @(Invoke-Tool -Name 'list_module_breakpoints' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })

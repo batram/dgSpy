@@ -87,8 +87,24 @@ namespace dgSpy.Extension {
 		async Task<SessionState> ContinueProcessAsync(RpcRequest req,CancellationToken token) {
 			CheckSession(req);
 			dnSpy.Contracts.Debugger.DbgProcess? process=null;
+			long executionBefore;
+			lock(sync) executionBefore=executionVersion;
 			await OnDebuggerAsync(()=>{ CheckVersion(req); process=SelectProcess(req); process.Run(); return true; },token).ConfigureAwait(false);
-			await WaitForDebuggerAsync(()=>!manager.IsDebugging || process is null || process.IsRunning,token).ConfigureAwait(false);
+			bool Applied() {
+				long current; lock(sync) current=executionVersion;
+				return !manager.IsDebugging || process is null || process.IsRunning || current!=executionBefore;
+			}
+			await WaitForDebuggerAsync(Applied,token).ConfigureAwait(false);
+			var applied=await OnDebuggerAsync(Applied,token).ConfigureAwait(false);
+			if (!applied) {
+				// CorDebug can decline the first Run while it is unwinding an exception callback. Retrying is
+				// safe only after the full bounded wait proves that no continued/stopped event occurred and the
+				// selected process is still paused. Never repeat a mutation whose execution change was observed.
+				await OnDebuggerAsync(()=>{ if (!Applied()) process!.Run(); return true; },token).ConfigureAwait(false);
+				await WaitForDebuggerAsync(Applied,token).ConfigureAwait(false);
+				applied=await OnDebuggerAsync(Applied,token).ConfigureAwait(false);
+			}
+			if (!applied) throw new RpcException("continue_timed_out","CorDebug did not resume the selected process after two bounded attempts. The target remains paused; read get_session_state before deciding whether to retry.");
 			return await OnDebuggerAsync(State,token).ConfigureAwait(false);
 		}
 
