@@ -137,7 +137,13 @@ try {
 	}
 	if ($Stage -in @('Unity','Full')) {
 		Write-Host '== start isolated Unity debugger host ==' -ForegroundColor Cyan
-		$unityHostId = & .\tests\TestSupport\Start-DgSpyHost.ps1 -RpcPort 7351 -TargetFramework $TargetFramework
+		# A dedicated port like the MonoTarget smokes use (7361/7363/7365), not 7351: an installed
+		# dgSpy holding 7351 makes this stage silently test the WRONG host - the second dnSpy cannot
+		# bind the port, but the readiness probe is a bare TCP connect and reaches the installed
+		# host instead. Start-DgSpyHost exports DGSPY_RPC_PORT, and Invoke-DgSpyRpc honors it, so
+		# the smoke follows automatically.
+		$unityRpcPort = if ($env:DGSPY_RPC_PORT) { [int]$env:DGSPY_RPC_PORT } else { 7367 }
+		$unityHostId = & .\tests\TestSupport\Start-DgSpyHost.ps1 -RpcPort $unityRpcPort -TargetFramework $TargetFramework
 		try {
 			Invoke-Checked 'Unity read-only modernization smoke' { .\tests\run-uch-modernization-smoke.ps1 }
 		}
