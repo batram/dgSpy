@@ -18,11 +18,17 @@
 .EXAMPLE
 	$hostId = & tests\TestSupport\Start-DgSpyHost.ps1 -RpcPort 7351
 	try { ... } finally { Stop-Process -Id $hostId -Force -ErrorAction SilentlyContinue }
+
+.EXAMPLE
+	# Omit -RpcPort to bind a free ephemeral port; read the chosen one from $env:DGSPY_RPC_PORT.
+	$hostId = & tests\TestSupport\Start-DgSpyHost.ps1
 #>
 [CmdletBinding()]
 param(
 	# Port the extension serves RPC on. Must not collide with a gateway port or another host.
-	[Parameter(Mandatory)][int]$RpcPort,
+	# Omit (or pass 0) to pick a free ephemeral port; the choice is exported as DGSPY_RPC_PORT,
+	# which Invoke-DgSpyRpc honors, so most callers never need the number themselves.
+	[int]$RpcPort = 0,
 
 	# net10 is the shipping host. net48 is the retained fallback baseline.
 	[ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows',
@@ -54,6 +60,15 @@ if (-not (Test-Path $extension)) {
 	throw "The dgSpy extension is not deployed to $dnSpyDir. Run .\build-dgspy.ps1 -TargetFramework $TargetFramework."
 }
 
+# A free ephemeral port when none was requested. Binding port 0 and releasing it has a small
+# time-of-check race, but the identity check below catches a steal instead of letting it pass.
+if ($RpcPort -le 0) {
+	$probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+	$probe.Start()
+	$RpcPort = ([Net.IPEndPoint]$probe.LocalEndpoint).Port
+	$probe.Stop()
+}
+
 $env:DGSPY_RPC_PORT = "$RpcPort"
 
 # --dgspy-no-window-activation is a dgSpy patch to dnSpy. -WindowStyle Hidden only sets the initial
@@ -83,6 +98,23 @@ if (-not $connected) {
 	$detail = if ($process.HasExited) { "the host exited with code $($process.ExitCode)" } else { "the host is running but never listened on $RpcPort" }
 	Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
 	throw "dnSpy RPC did not come up within $TimeoutSeconds s: $detail. Host: $dnSpyExe"
+}
+
+# The TCP probe proves SOMETHING listens, not that it is the host just started: if this host's
+# extension lost the port to another dgSpy (installed app, another agent's run), this host keeps
+# running without listening and the probe connects to the other one - which then authenticates,
+# because every local host shares the rpc.token credential. Every suite downstream would silently
+# test that other host's build. Ask the listener who it is and refuse anything but our process
+# running our deployed extension.
+. (Join-Path $PSScriptRoot 'Invoke-DgSpyRpc.ps1')
+$identity = Invoke-DgSpyRpc -OperationName 'get_host_info' -RpcPort $RpcPort -DeadlineSeconds 10
+if ($identity.dnspy_process_id -ne $process.Id) {
+	Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+	throw "Port $RpcPort is served by dnSpy pid $($identity.dnspy_process_id) (extension '$($identity.extension_path)'), not the host this script started (pid $($process.Id)). Another dgSpy holds the port; pick a different one or stop it."
+}
+if (-not ([IO.Path]::GetFullPath($identity.extension_path)).StartsWith([IO.Path]::GetFullPath($dnSpyDir), [StringComparison]::OrdinalIgnoreCase)) {
+	Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+	throw "The started host loaded its extension from '$($identity.extension_path)', outside the tree it was launched from ($dnSpyDir). The deployment is stale or cross-wired; run .\build-dgspy.ps1 -TargetFramework $TargetFramework."
 }
 
 $process.Id
