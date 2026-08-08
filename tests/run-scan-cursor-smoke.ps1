@@ -259,13 +259,15 @@ try {
 	}
 	Assert-That 'a subject method was found to analyze' ($null -ne $subject)
 
-	# Same window property as search_text: 3000 slots whole, then as three pages of 1000.
+	# Same window property as search_text. Size each page from the actual module so even the compact
+	# pinned CI fixture exercises the cursor, while three pages still cover the 3000-slot window.
 	$analyzeArgs = @{ session_id = $session_id; module = $moduleName; token = $subject.token; search_module = $moduleName; count = 500 }
 	$analyzeWhole = Invoke-Tool -Name 'analyze_symbol' -Arguments ($analyzeArgs + @{ max_scan = 3000 })
 	Write-Host "        $($analyzeWhole.scanned) slots inspected, $($analyzeWhole.total) edges, truncated=$($analyzeWhole.scan_truncated)" -ForegroundColor DarkGray
+	$analyzePageSize = [Math]::Max(1, [int][Math]::Ceiling($analyzeWhole.scanned / 3.0))
 	$analyzeChunks = @(); $offset = 0; $pages = 0
 	for ($page = 0; $page -lt 3; $page++) {
-		$slice = Invoke-Tool -Name 'analyze_symbol' -Arguments ($analyzeArgs + @{ max_scan = 1000; scan_offset = $offset })
+		$slice = Invoke-Tool -Name 'analyze_symbol' -Arguments ($analyzeArgs + @{ max_scan = $analyzePageSize; scan_offset = $offset })
 		$analyzeChunks += @($slice.edges); $pages++
 		$offset = $slice.next_scan_offset
 		if (-not $slice.scan_truncated) { break }

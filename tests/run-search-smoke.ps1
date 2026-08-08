@@ -16,11 +16,10 @@
 	  Box<T>            a generic type, so `1 must be stripped
 	  "deepest"         a string literal in a method body     (the Number/String case)
 
-	UchDebugTarget\Assets\Scripts\SearchProbe.cs was added for the categories nothing else in the
-	target had: nested and nested-generic types (whose metadata names use '/'), an enum, a delegate,
-	an event, constant fields whose values live in the Constant table rather than in IL, and a
-	distinctively named parameter and local. Every identifier there ends in "Probe" so a check can
-	assert an exact hit, instead of matching a framework symbol by accident.
+	Newer UchDebugTarget players include SearchProbe.cs for categories nothing else in the target has:
+	nested and nested-generic types, an enum, a delegate, an event, constants, and distinctively named
+	parameters and locals. The pinned CI player predates that fixture, so those additional checks run
+	when the type is present while the checks against the original DeepGraph fixture always run.
 
 	Note that this player carries no local-variable debug info, so kinds:["local"] finds nothing here.
 	That is a property of a release Unity build, not of the tool; the check reports which case it saw
@@ -224,6 +223,8 @@ try {
 	$whole = Invoke-Tool -Name 'search' -Arguments @{ session_id = $session_id; pattern = 'Level'; kinds = @('type'); whole_word = $true; module = $moduleFilter }
 	Assert-That 'whole_word rejects a partial name' ($whole.total -eq 0) "total=$($whole.total)"
 
+	$searchProbeFixture = Invoke-Tool -Name 'search' -Arguments @{ session_id = $session_id; pattern = 'UchDebugTarget.SearchProbe'; kinds = @('type'); module = $moduleFilter }
+	if ($searchProbeFixture.total -gt 0) {
 	Write-Section 'nested types'
 	# Metadata spells a nested type Outer/Inner, and a generic one Outer/Inner`1. dnSpy presents both
 	# with dots and no arity, and a name a tool prints has to be a name that tool accepts. This is the
@@ -299,6 +300,10 @@ try {
 	$emitted = Invoke-Tool -Name 'search' -Arguments @{ session_id = $session_id; pattern = '"probe-emitted-marker"'; kinds = @('literal'); module = $moduleFilter }
 	Assert-That 'a field initializer is found as an ldstr in IL' ($emitted.total -gt 0) "total=$($emitted.total)"
 	Assert-That 'the IL literal hit names the instruction' (@($emitted.hits)[0].match_context -match 'ldstr')
+	}
+	else {
+		Write-Host '  SKIP  SearchProbe-specific categories (fixture is not present in this player)' -ForegroundColor DarkYellow
+	}
 
 	Write-Section 'boundedness and the resume cursor'
 	$unbounded = Invoke-Tool -Name 'search' -Arguments @{ session_id = $session_id; pattern = 'Level'; kinds = @('type','member'); module = $moduleFilter; count = 500 }
