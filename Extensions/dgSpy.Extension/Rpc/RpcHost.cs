@@ -764,12 +764,13 @@ namespace dgSpy.Extension {
 				var name=new DbgStringBuilderTextWriter();
 				language.Formatter.FormatFrame(eval,name,DbgStackFrameFormatterOptions.DeclaringTypes|DbgStackFrameFormatterOptions.ParameterTypes|DbgStackFrameFormatterOptions.ReturnTypes,DbgValueFormatterOptions.None,null);
 				if (name.Text.Length!=0) info.Name=name.Text;
-				info.Locals=GetPrimitiveLocals(language,eval);
+				info.Locals=GetPrimitiveLocals(language,eval,out var rawLocals);
+				info.RawLocals=rawLocals;
 			}
 			finally { context.Close(); }
 			return info;
 		}
-		PrimitiveValue[] GetPrimitiveLocals(DbgLanguage language,DbgEvaluationInfo eval) { var nodes=language.LocalsProvider.GetNodes(eval,DbgValueNodeEvaluationOptions.NoFuncEval,DbgLocalsValueNodeEvaluationOptions.None).Select(n=>n.ValueNode).ToArray(); try { return nodes.Where(n=>n.Value is not null && n.Value.HasRawValue && n.Value.ValueType!=DbgSimpleValueType.Other && n.Value.ValueType!=DbgSimpleValueType.Void).Select(n=>{ var name=new DbgStringBuilderTextWriter(); var type=new DbgStringBuilderTextWriter(); n.FormatName(eval,name,DbgValueFormatterOptions.None); n.FormatActualType(eval,type,DbgValueFormatterTypeOptions.None,DbgValueFormatterOptions.None,null); return new PrimitiveValue { Name=name.Text,Type=type.Text,Value=n.Value!.RawValue }; }).ToArray(); } finally { manager.Close(nodes); } }
+		PrimitiveValue[] GetPrimitiveLocals(DbgLanguage language,DbgEvaluationInfo eval,out bool rawLocals) { var nodes=LocalsNodes(language,eval,DbgValueNodeEvaluationOptions.NoFuncEval,out rawLocals); try { return nodes.Where(n=>n.Value is not null && n.Value.HasRawValue && n.Value.ValueType!=DbgSimpleValueType.Other && n.Value.ValueType!=DbgSimpleValueType.Void).Select(n=>{ var name=new DbgStringBuilderTextWriter(); var type=new DbgStringBuilderTextWriter(); n.FormatName(eval,name,DbgValueFormatterOptions.None); n.FormatActualType(eval,type,DbgValueFormatterTypeOptions.None,DbgValueFormatterOptions.None,null); return new PrimitiveValue { Name=name.Text,Type=type.Text,Value=n.Value!.RawValue }; }).ToArray(); } finally { manager.Close(nodes); } }
 		// RunContinuationsAsynchronously matters: without it every continuation after an await —
 		// response serialization, socket writes — runs inline on the debugger dispatcher thread, which
 		// stalls event delivery for every session. See docs/DGSPY_BASELINE.md.

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using dgSpy.Protocol;
+using dnSpy.Contracts.Debugger.DotNet.Disassembly;
 using dnSpy.Contracts.Debugger.DotNet.Evaluation;
 using dnSpy.Contracts.Debugger.DotNet.Mono;
 using dnSpy.Contracts.Metadata;
@@ -127,8 +128,39 @@ namespace dgSpy.Extension {
 				var isMonoSystemThread=captured.Frame.Thread.TryGetData<DbgMonoThreadInfo>(out var mono) && mono.HasSystemThreadId;
 				if (!isCorDebug && !isMonoSystemThread)
 					throw new RpcException("capability_unsupported",mono is null ? "This runtime does not expose an OS thread context." : $"Mono soft-debugger protocol {mono.ProtocolMajor}.{mono.ProtocolMinor} does not expose system thread ids; version 2.3 or newer is required.");
-				return ProtocolJson.ToObject(new { architecture="x64",thread_id=ThreadId(captured.Frame.Thread),frame_index=captured.Info.FrameIndex,registers=NativeRegisterReader.ReadX64(captured.Frame.Thread.Id,captured.Frame.Thread.Process.Id) });
+				var context=NativeRegisterReader.ReadX64(captured.Frame.Thread.Id,captured.Frame.Thread.Process.Id);
+				var (relation,note)=ClassifyContext(captured,runtime,context.Rip);
+				return ProtocolJson.ToObject(new { architecture="x64",thread_id=ThreadId(captured.Frame.Thread),frame_index=captured.Info.FrameIndex,frame_relation=relation,note,registers=context.Registers });
 			},cancellationToken).ConfigureAwait(false);
+		}
+
+		// What these registers actually describe.
+		//
+		// This is not the managed frame's context and usually cannot be. At a managed stop the runtime
+		// suspends the debuggee thread inside its own stop machinery, so the OS context Windows preserved
+		// is a wait deep in ntdll -- measured at a method-entry breakpoint on an instance method of a
+		// /debug:full /optimize- x64 assembly: rip in ntdll, rcx a wait handle rather than `this`, rbp a
+		// 0xFFFFFFFF sentinel rather than a frame base. Every one of those numbers is a true reading of
+		// the machine and a wrong answer to "what were this frame's registers", and nothing in the values
+		// themselves lets a caller tell the two apart. So the answer says which it is.
+		//
+		// The test is exact rather than heuristic: rip either falls inside the JIT-compiled body of the
+		// selected frame's method or it does not. A non-leaf frame can never match -- rip belongs to the
+		// leaf -- so it is answered without asking the engine anything.
+		static (string relation,string note) ClassifyContext(CapturedFrame captured,IDbgDotNetRuntime? runtime,ulong rip) {
+			const string Caveat="Registers describe the OS thread, not this managed frame: do not read `this` from rcx or a frame base from rbp. Use get_frame, evaluate or a value's `address` for frame data.";
+			if (captured.Info.FrameIndex!=0)
+				return ("unrelated",$"The OS thread context belongs to the leaf frame, and frame_index is {captured.Info.FrameIndex}. {Caveat}");
+			if (runtime is null || (runtime.Features & DbgDotNetRuntimeFeatures.NativeMethodBodies)==0)
+				return ("unknown",$"This runtime cannot report the frame's native code range, so whether the context belongs to this frame could not be established. {Caveat}");
+			DbgDotNetNativeCode code;
+			try { if (!runtime.TryGetNativeCode(captured.Frame,out code)) return ("unknown",$"The frame has no JIT-compiled native body to compare rip against. {Caveat}"); }
+			catch { return ("unknown",$"The frame's native code range could not be read. {Caveat}"); }
+			foreach (var block in code.Blocks) {
+				if (rip>=block.Address && rip<block.Address+(ulong)block.Code.Count)
+					return ("matched","rip is inside this frame's JIT-compiled body, so the context describes this frame.");
+			}
+			return ("unrelated",$"rip is outside this frame's JIT-compiled body: the runtime parked the thread elsewhere to report the stop, which is the normal case at a managed breakpoint. {Caveat}");
 		}
 
 		async Task<MutationResult> SetInstructionPointerAsync(RpcRequest req,CancellationToken cancellationToken) {

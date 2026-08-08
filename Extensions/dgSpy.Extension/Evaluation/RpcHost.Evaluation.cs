@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -108,6 +109,18 @@ namespace dgSpy.Extension {
 			// in the given context". Its members are addressable - dnSpy composes them as Type.Member, which
 			// is legal - but the group itself is not, and there is no RPC path to expand a grouping row.
 			if (node.ImageName==PredefinedDbgValueNodeImageNames.StaticMembers) nodeExpression="";
+			// The address the value lives at, so read_memory/write_memory have a supported way to reach a
+			// managed object. Without it the only route to an array's bytes was
+			// GCHandle.Alloc(x, Pinned).AddrOfPinnedObject() through invoke_method, which costs a func-eval
+			// and leaks a pinned handle into the debuggee for the rest of its life -- while also pinning the
+			// very heap the caller was inspecting. onlyDataAddress:true gives the element data for a string
+			// or array and falls back to the whole object for anything else, which is what the length is
+			// for. Null for values with no address at all, eg. one enregistered by the JIT.
+			DbgRawAddressValue? address=null;
+			if (value is not null && node.ErrorMessage is null) {
+				// The engine is entitled to refuse; a missing address must not fail the whole row.
+				try { address=value.GetRawAddressValue(onlyDataAddress:true); } catch { address=null; }
+			}
 			return new EvaluatedValue {
 				Expression=nodeExpression,
 				Name=name.Text.Length==0 ? expression : name.Text,
@@ -128,12 +141,81 @@ namespace dgSpy.Extension {
 				ReadOnly=node.IsReadOnly,
 				CausesSideEffects=node.CausesSideEffects,
 				HasChildren=node.HasChildren,
+				Address=address?.Address,
+				AddressLength=address?.Length,
 			};
 		}
 
-		DbgValueNode[] CreateNodes(CapturedFrame captured,DbgEvaluationInfo eval,string[] expressions,bool allowFuncEval,bool allowSideEffects) {
+		// dnSpy asks the engine to compile a GetLocals method for the frame, and that compilation can
+		// succeed while recovering no source-level variable names at all -- measured against a
+		// /debug:full /optimize- assembly, so it is not an optimization artifact. The result was an empty
+		// locals list for a frame that plainly has locals, and the only way to reach them was to guess
+		// dnSpy's `V_n` slot alias, which nothing in the protocol had ever mentioned.
+		//
+		// ShowRawLocals is what makes the engine emit those slots. It is a fallback rather than the
+		// default because it renames *every* local: turning `h` and `i` into `V_0` and `V_1` for the
+		// frames that do report names would trade one invisible set of locals for a useless one. So: ask
+		// for names, and only when that comes back empty ask for slots, reporting which of the two the
+		// caller got.
+		// Slot probing is bounded and batched. Slots are contiguous, so the first V_n that fails to bind
+		// ends the method's locals; asking in blocks keeps the common case to a single engine round trip
+		// instead of one per local, and the ceiling stops a runaway on a frame where every name binds.
+		const int SlotProbeBatch=8,MaxProbedSlots=64;
+
+		DbgValueNode[] LocalsNodes(DbgLanguage language,DbgEvaluationInfo eval,DbgValueNodeEvaluationOptions options,out bool raw) {
+			var named=language.LocalsProvider.GetNodes(eval,options,DbgLocalsValueNodeEvaluationOptions.None).Select(n=>n.ValueNode).ToArray();
+			if (named.Length!=0) { raw=false; return named; }
+			// ShowRawLocals is what makes dnSpy's own locals window fall back to slot names, so it is the
+			// first thing to try. Measured against Gate.Verdict in a /debug:full /optimize- assembly it
+			// changes nothing: the provider returns an empty set either way, because it gives up before any
+			// locals option is consulted when it cannot recover debug info for the frame's method. The
+			// slots are still there and still bind -- `evaluate("V_0")` returns the local -- so the frame
+			// was reporting no locals for variables the engine could reach the whole time.
+			var slots=language.LocalsProvider.GetNodes(eval,options,DbgLocalsValueNodeEvaluationOptions.ShowRawLocals).Select(n=>n.ValueNode).ToArray();
+			if (slots.Length!=0) { raw=true; return slots; }
+			raw=false;
+			// Last resort: ask for the slots by name, exactly as a caller would. This is the only route
+			// left once the provider has declined, and it is what an agent had to reverse-engineer before.
+			var found=new List<DbgValueNode>();
+			for (var start=0;start<MaxProbedSlots;start+=SlotProbeBatch) {
+				var batch=Enumerable.Range(start,SlotProbeBatch).Select(i=>"V_"+i.ToString(CultureInfo.InvariantCulture)).ToArray();
+				DbgValueNode[] probed;
+				try { probed=CreateNodes(language,eval,batch,allowFuncEval:false,allowSideEffects:false); }
+				catch { break; }
+				var accepted=0;
+				// Keep the leading run that bound and close the rest: a gap would mean these are not slots.
+				while (accepted<probed.Length && probed[accepted].ErrorMessage is null) accepted++;
+				found.AddRange(probed.Take(accepted));
+				if (accepted!=probed.Length) { manager.Close(probed.Skip(accepted).ToArray()); break; }
+			}
+			raw=found.Count!=0;
+			return found.ToArray();
+		}
+
+		/// <summary>Names the caller could actually have used in this frame, for a not-found error. An
+		/// agent cannot guess a naming convention it has never been told about, and CS0103 on its own does
+		/// not distinguish "wrong name" from "this frame reports no names at all".</summary>
+		string? AddressableNames(CapturedFrame captured,DbgEvaluationInfo eval) {
+			try {
+				var nodes=LocalsNodes(captured.Language,eval,DbgValueNodeEvaluationOptions.NoFuncEval,out var raw);
+				try {
+					var names=nodes.Where(n=>n.CanEvaluateExpression && n.Expression.Length!=0).Select(n=>n.Expression).Distinct().ToArray();
+					if (names.Length==0) return null;
+					return $" Addressable in this frame: {string.Join(", ",names)}."
+						+(raw ? " This frame reports no source-level variable names, so its locals are the runtime's raw slots; V_n is an ordinary expression and can be assigned to." : "");
+				}
+				finally { manager.Close(nodes); }
+			}
+			// This runs only to improve an error that is already being returned. It must never replace it.
+			catch { return null; }
+		}
+
+		DbgValueNode[] CreateNodes(CapturedFrame captured,DbgEvaluationInfo eval,string[] expressions,bool allowFuncEval,bool allowSideEffects) =>
+			CreateNodes(captured.Language,eval,expressions,allowFuncEval,allowSideEffects);
+
+		DbgValueNode[] CreateNodes(DbgLanguage language,DbgEvaluationInfo eval,string[] expressions,bool allowFuncEval,bool allowSideEffects) {
 			var infos=expressions.Select(e=>new DbgExpressionEvaluationInfo(e,NodeOptions(allowFuncEval),EvaluationOptions(allowFuncEval,allowSideEffects),null)).ToArray();
-			return captured.Language.ValueNodeFactory.Create(eval,infos).Select(r=>r.ValueNode).ToArray();
+			return language.ValueNodeFactory.Create(eval,infos).Select(r=>r.ValueNode).ToArray();
 		}
 
 		async Task<EvaluatedValue> EvaluateAsync(RpcRequest req,CancellationToken cancellationToken) {
@@ -144,10 +226,19 @@ namespace dgSpy.Extension {
 			var allowSideEffects=(bool?)req.Arguments["allow_side_effects"] ?? false;
 			return await WithEvaluationAsync(req,(captured,eval)=>{
 				var nodes=CreateNodes(captured,eval,new[]{expression!},allowFuncEval,allowSideEffects);
-				try { return DescribeNode(nodes[0],eval,expression!,sideEffectsGrantable:true); }
+				try {
+					var described=DescribeNode(nodes[0],eval,expression!,sideEffectsGrantable:true);
+					if (NameNotFound(described.Error)) described.Error+=AddressableNames(captured,eval);
+					return described;
+				}
 				finally { manager.Close(nodes); }
 			},cancellationToken).ConfigureAwait(false);
 		}
+
+		/// <summary>"That name does not exist here", in C# and VB. Narrow on purpose: every other
+		/// compiler error is about the expression itself, and listing the frame's variables would be
+		/// noise against it.</summary>
+		static bool NameNotFound(string? error) => error is not null && (error.Contains("CS0103") || error.Contains("BC30451"));
 
 		async Task<MutationResult> InvokeExpressionAsync(RpcRequest req,string capability,CancellationToken cancellationToken) {
 			CheckSession(req);
@@ -240,8 +331,10 @@ namespace dgSpy.Extension {
 			var allowFuncEval=(bool?)req.Arguments["allow_func_eval"] ?? false;
 			return await WithEvaluationAsync(req,(captured,eval)=>{
 				var result=captured.Language.ExpressionEvaluator.Assign(eval,expression!,valueExpression,EvaluationOptions(allowFuncEval,allowSideEffects:true));
-				if (result.Error is not null)
-					return new AssignmentResult { Expression=expression!,Assigned=false,Error=result.Error,CompilerError=result.IsCompilerError,Recovery=FuncEvalDiagnostics.Recovery(result.Error),SessionId=sessionId,StateVersion=stateVersion };
+				if (result.Error is not null) {
+					var error=NameNotFound(result.Error) ? result.Error+AddressableNames(captured,eval) : result.Error;
+					return new AssignmentResult { Expression=expression!,Assigned=false,Error=error,CompilerError=result.IsCompilerError,Recovery=FuncEvalDiagnostics.Recovery(result.Error),SessionId=sessionId,StateVersion=stateVersion };
+				}
 				var nodes=CreateNodes(captured,eval,new[]{expression!},allowFuncEval,allowSideEffects:false);
 				try { return new AssignmentResult { Expression=expression!,Assigned=true,Value=DescribeNode(nodes[0],eval,expression!),SessionId=sessionId,StateVersion=stateVersion }; }
 				finally { manager.Close(nodes); }
@@ -308,12 +401,13 @@ namespace dgSpy.Extension {
 			var unknown=include.Where(i=>Array.IndexOf(KnownIncludes,i)<0).ToArray();
 			if (unknown.Length!=0) throw new RpcException("invalid_argument",$"Unknown include value(s) {string.Join(", ",unknown)}. Valid: {string.Join(", ",KnownIncludes)}.");
 			var allowFuncEval=(bool?)req.Arguments["allow_func_eval"] ?? false;
+			var rawLocals=false;
 			frame.Values=await WithEvaluationAsync(req,(captured,eval)=>{
 				var results=new List<EvaluatedValue>();
 				if (include.Contains("locals")) {
 					// Arguments come back from the same provider as locals — dnSpy does not separate them,
 					// which is why there is no separate "arguments" include pretending otherwise.
-					var nodes=captured.Language.LocalsProvider.GetNodes(eval,NodeOptions(allowFuncEval),DbgLocalsValueNodeEvaluationOptions.None).Select(n=>n.ValueNode).ToArray();
+					var nodes=LocalsNodes(captured.Language,eval,NodeOptions(allowFuncEval),out rawLocals);
 					try { results.AddRange(nodes.Select(n=>DescribeNode(n,eval,n.CanEvaluateExpression ? n.Expression : ""))); }
 					finally { manager.Close(nodes); }
 				}
@@ -326,6 +420,7 @@ namespace dgSpy.Extension {
 				}
 				return results.ToArray();
 			},cancellationToken).ConfigureAwait(false);
+			frame.RawLocals=rawLocals;
 			return frame;
 		}
 

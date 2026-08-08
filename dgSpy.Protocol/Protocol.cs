@@ -169,6 +169,13 @@ namespace dgSpy.Protocol {
 		/// <summary>Populated only when <c>get_frame</c> is called with <c>include</c>. Unlike
 		/// <see cref="Locals"/> this holds every requested value, objects included.</summary>
 		[JsonPropertyName("values"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public EvaluatedValue[]? Values { get; set; }
+		/// <summary>True when the locals reported for this frame are the runtime's raw slots, named
+		/// <c>V_0</c>, <c>V_1</c>, ... rather than by their source names. This is a fallback: it happens
+		/// when the engine can compile the frame's method but cannot recover source-level variable names
+		/// for it, in which case the named set comes back empty and the slots are the only way to reach
+		/// the variables. <c>V_n</c> is an ordinary expression - pass it to <c>evaluate</c>, <c>set_value</c>
+		/// and <c>get_members</c> like any other name.</summary>
+		[JsonPropertyName("raw_locals"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingDefault)] public bool RawLocals { get; set; }
 	}
 	public sealed class PrimitiveValue { [JsonPropertyName("name")] public string Name { get; set; }=""; [JsonPropertyName("type")] public string Type { get; set; }=""; [JsonPropertyName("value")] public object? Value { get; set; } }
 	public sealed class BreakpointInfo {
@@ -295,6 +302,21 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("causes_side_effects")] public bool CausesSideEffects { get; set; }
 		/// <summary>Null when dnSpy does not know without evaluating.</summary>
 		[JsonPropertyName("has_children"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? HasChildren { get; set; }
+		/// <summary>Target address of this value's storage, for <c>read_memory</c> and <c>write_memory</c>.
+		/// Absent when the runtime has no address for it, which is the normal answer for a value living in
+		/// a register and for an optimized-away local.
+		/// <para>For a string or an array this is the address of the element data, so it is directly
+		/// comparable to what <c>GCHandle.AddrOfPinnedObject</c> would return - and unlike that call it
+		/// costs no func-eval and leaks no pinned handle into the debuggee. For any other reference type it
+		/// is the start of the object, including the method table pointer. <see cref="AddressLength"/>
+		/// tells the two apart and bounds the read.</para>
+		/// <para><b>Valid only while the target is stopped, and only for this stop.</b> The address is not
+		/// re-checked on use: a moving GC relocates objects on every resume, so an address cached across a
+		/// <c>continue</c> and then written through corrupts whatever now occupies it. Re-read it after
+		/// each stop.</para></summary>
+		[JsonPropertyName("address"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public ulong? Address { get; set; }
+		/// <summary>Bytes of storage at <see cref="Address"/>. Reading or writing past it leaves this value.</summary>
+		[JsonPropertyName("address_length"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public ulong? AddressLength { get; set; }
 	}
 	/// <summary>One level of an object's members, paged. Expansion is never recursive: a cyclic object
 	/// graph would be unbounded, and the caller cannot cancel a walk it did not ask for.</summary>

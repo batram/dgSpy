@@ -1285,7 +1285,7 @@
     },
     {
       "name": "get_callstack",
-      "description": "Get a paused call stack and primitive locals. Pass thread_id for deterministic caller-selected inspection; omitting it preserves the managed-frame probe fallback.",
+      "description": "Get a paused call stack and primitive locals. Pass thread_id for deterministic caller-selected inspection; omitting it preserves the managed-frame probe fallback. A frame with raw_locals true reports its locals as the runtime\u0027s raw slots V_0, V_1, ... because the engine recovered no source-level names for it; see get_frame.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1317,7 +1317,7 @@
     },
     {
       "name": "get_frame",
-      "description": "Inspect one paused frame by caller-selected thread_id and zero-based frame_index. \u0060locals\u0060 holds primitive scalars only; pass include to also get objects and \u0060this\u0060 in \u0060values\u0060, which is one round trip against one evaluation context.",
+      "description": "Inspect one paused frame by caller-selected thread_id and zero-based frame_index. \u0060locals\u0060 holds primitive scalars only; pass include to also get objects and \u0060this\u0060 in \u0060values\u0060, which is one round trip against one evaluation context. Values carry \u0060address\u0060/\u0060address_length\u0060 when the runtime has one \u2014 see read_memory. When raw_locals is true the engine could not recover source-level variable names for this frame, so the locals are its raw slots named V_0, V_1, ...; those are ordinary expressions and can be evaluated, expanded and assigned to like any name.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1631,7 +1631,7 @@
     },
     {
       "name": "evaluate",
-      "description": "Evaluate an expression against a paused frame. Returns the raw scalar and dnSpy\u0027s formatted display text as separate fields, so numbers stay comparable without parsing display text. has_raw_value distinguishes a value of null from a value that is unavailable or optimized away. Running target code is guarded by TWO independent gates, both off by default and NOT interchangeable: allow_func_eval permits executing target code at all, allow_side_effects permits an expression dnSpy classifies as side-effecting. A property getter such as DateTime.Now.Ticks trips only the first, so allow_func_eval alone runs it \u2014 and it can deadlock a target holding a lock or mutate what you were inspecting, which is why it is off. An explicit method call such as Telemetry.ComputeReading(5) trips BOTH, and side effects are checked first, so passing allow_func_eval alone leaves the error \u0022This expression causes side effects and will not be evaluated\u0022 completely unchanged, which reads like the flag was ignored and is not. Pass both for a method call, or use invoke_method, which sets both and audits the call. One exception explains conflicting reports of this tool: dnSpy\u0027s \u0060ac\u0060 (\u0022always calculate\u0022) format specifier, appended as \u0060Some.Method(1), ac\u0060, opens the side-effects gate on its own, so that shape DOES succeed with allow_func_eval alone; it is dnSpy syntax rather than a dgSpy argument and bypasses the opt-in, so prefer allow_side_effects. Every refusal carries \u0060recovery\u0060 naming the gate that blocked it; never fall back to computing a method\u0027s result by hand. For an object, get_members expands it a level rather than guessing member names; get_autos returns what the current statement touches without naming anything; add_watch re-evaluates the same expression at every later stop, which a value read here cannot survive.",
+      "description": "Evaluate an expression against a paused frame. Returns the raw scalar and dnSpy\u0027s formatted display text as separate fields, so numbers stay comparable without parsing display text. has_raw_value distinguishes a value of null from a value that is unavailable or optimized away. Running target code is guarded by TWO independent gates, both off by default and NOT interchangeable: allow_func_eval permits executing target code at all, allow_side_effects permits an expression dnSpy classifies as side-effecting. A property getter such as DateTime.Now.Ticks trips only the first, so allow_func_eval alone runs it \u2014 and it can deadlock a target holding a lock or mutate what you were inspecting, which is why it is off. An explicit method call such as Telemetry.ComputeReading(5) trips BOTH, and side effects are checked first, so passing allow_func_eval alone leaves the error \u0022This expression causes side effects and will not be evaluated\u0022 completely unchanged, which reads like the flag was ignored and is not. Pass both for a method call, or use invoke_method, which sets both and audits the call. One exception explains conflicting reports of this tool: dnSpy\u0027s \u0060ac\u0060 (\u0022always calculate\u0022) format specifier, appended as \u0060Some.Method(1), ac\u0060, opens the side-effects gate on its own, so that shape DOES succeed with allow_func_eval alone; it is dnSpy syntax rather than a dgSpy argument and bypasses the opt-in, so prefer allow_side_effects. Every refusal carries \u0060recovery\u0060 naming the gate that blocked it; never fall back to computing a method\u0027s result by hand. For an object, get_members expands it a level rather than guessing member names; get_autos returns what the current statement touches without naming anything; add_watch re-evaluates the same expression at every later stop, which a value read here cannot survive. A value carries \u0060address\u0060/\u0060address_length\u0060 when the runtime has one, which is the supported way to reach a managed object with read_memory and write_memory. A CS0103 \u0022does not exist in the current context\u0022 error names the variables this frame can actually address, including V_n slots when it reports no source-level names.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1780,7 +1780,7 @@
     },
     {
       "name": "read_memory",
-      "description": "Read up to 65536 bytes from the selected debug process. Returns base64 and the runtime capability used.",
+      "description": "Read up to 65536 bytes from the selected debug process. Returns base64 and the runtime capability used. To get the address of a managed object, read the \u0060address\u0060 and \u0060address_length\u0060 fields that evaluate, get_members and get_frame report for every value that has one \u2014 for a string or an array that is the element data, so it is what you want for the bytes. Do NOT reach for GCHandle.Alloc(x, Pinned).AddrOfPinnedObject() through invoke_method: it costs a func-eval and leaks a pinned handle into the debuggee for the rest of its life, pinning the heap you were inspecting. An address is valid only for the current stop; a moving GC relocates objects on every resume, so re-read it after each stop rather than caching it across a continue.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1818,7 +1818,7 @@
     },
     {
       "name": "write_memory",
-      "description": "SIDE EFFECTING and audited. Write up to 65536 base64-encoded bytes to the selected debug process.",
+      "description": "SIDE EFFECTING and audited. Write up to 65536 base64-encoded bytes to the selected debug process. Get a managed object\u0027s address from the \u0060address\u0060/\u0060address_length\u0060 fields on evaluate, get_members and get_frame values, as described on read_memory. The address is checked against nothing here: it is valid only for the stop it was read at, and writing through one cached across a continue corrupts whatever the GC moved into that space. Re-read it after every stop, and stay inside address_length.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1905,7 +1905,7 @@
     },
     {
       "name": "get_registers",
-      "description": "Return a stopped x64 thread\u0027s integer and control registers for CorDebug or Mono soft-debugger protocol 2.3\u002B. Each row includes name, unsigned numeric value, fixed-width hexadecimal text, and bit width. The selected thread must be paused; frame_index selects and validates the managed frame whose OS-thread context is read.",
+      "description": "Return a stopped x64 thread\u0027s integer and control registers for CorDebug or Mono soft-debugger protocol 2.3\u002B. Each row includes name, unsigned numeric value, fixed-width hexadecimal text, and bit width. The selected thread must be paused. READ frame_relation BEFORE THE NUMBERS. This is the OS thread\u0027s context, which at a managed stop is usually NOT the managed frame\u0027s: the runtime suspends the thread inside its own stop machinery, so rip sits in ntdll, rcx holds a wait handle rather than \u0060this\u0060, and rbp is a sentinel rather than a frame base. Those are true readings of the machine and wrong answers about the frame, and nothing in the values themselves tells them apart. frame_relation is \u0022matched\u0022 (rip is inside this frame\u0027s JIT-compiled body, so the context does describe it), \u0022unrelated\u0022 (it does not \u2014 the usual result at a breakpoint, and always so for any frame_index above 0, since rip belongs to the leaf), or \u0022unknown\u0022 (the frame\u0027s native range could not be read). \u0060note\u0060 says why. When it is not \u0022matched\u0022, do not derive frame state from these registers: use get_frame, evaluate, or a value\u0027s \u0060address\u0060 instead.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1991,7 +1991,7 @@
     },
     {
       "name": "get_members",
-      "description": "Expand one object one level, paged. Pass a returned member\u0027s \u0060expression\u0060 back here to go deeper: depth is deliberately the caller\u0027s to control, because recursing server-side is unbounded on a cyclic object graph. A member whose \u0060expression\u0060 is empty cannot be addressed at all: either a compiler-generated member (auto-property backing field, async or iterator state machine field, lambda display class) whose name is not spellable in any language, or a grouping row such as \u0060Static members\u0060 that carries a type name rather than an expression. Its name, type and value are still accurate; do not retry it. Static members stay reachable by naming them directly, eg. \u0060Some.Type.SomeStaticField\u0060. Reports total and truncated.",
+      "description": "Expand one object one level, paged. Pass a returned member\u0027s \u0060expression\u0060 back here to go deeper: depth is deliberately the caller\u0027s to control, because recursing server-side is unbounded on a cyclic object graph. A member whose \u0060expression\u0060 is empty cannot be addressed at all: either a compiler-generated member (auto-property backing field, async or iterator state machine field, lambda display class) whose name is not spellable in any language, or a grouping row such as \u0060Static members\u0060 that carries a type name rather than an expression. Its name, type and value are still accurate; do not retry it. Static members stay reachable by naming them directly, eg. \u0060Some.Type.SomeStaticField\u0060. Reports total and truncated. Members carry \u0060address\u0060/\u0060address_length\u0060 when the runtime has one \u2014 see read_memory.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2041,7 +2041,7 @@
     },
     {
       "name": "set_value",
-      "description": "Assign to a local, parameter, field or property in the paused target. Always side-effecting: the assignment executes in the target. compiler_error=true means the expression did not compile and nothing ran; an error without it means the target may already have been touched. Executing in the target is not the same as needing a func-eval, and the difference decides what is still possible against an idle process. Storing a value that already exists over there is a direct write and succeeds even with every thread at an unsafe point; producing a value the engine must first create \u2014 a string literal, a boxed value, a new object \u2014 is a func-eval and is refused at an unsafe point like any other. The cost of the value is what matters, not whether the target is a primitive: assigning null to a reference is as free as assigning an int, while assigning a string literal to that same reference is refused. When it is refused, see invoke_method for how to reach a thread that can evaluate; note also that the unsafe-point thread\u0027s evaluable frame is often not frame 0, so pass frame_index for the frame whose locals you actually want.",
+      "description": "Assign to a local, parameter, field or property in the paused target. Always side-effecting: the assignment executes in the target. compiler_error=true means the expression did not compile and nothing ran; an error without it means the target may already have been touched. Executing in the target is not the same as needing a func-eval, and the difference decides what is still possible against an idle process. Storing a value that already exists over there is a direct write and succeeds even with every thread at an unsafe point; producing a value the engine must first create \u2014 a string literal, a boxed value, a new object \u2014 is a func-eval and is refused at an unsafe point like any other. The cost of the value is what matters, not whether the target is a primitive: assigning null to a reference is as free as assigning an int, while assigning a string literal to that same reference is refused. When it is refused, see invoke_method for how to reach a thread that can evaluate; note also that the unsafe-point thread\u0027s evaluable frame is often not frame 0, so pass frame_index for the frame whose locals you actually want. A CS0103 \u0022does not exist in the current context\u0022 error names the variables this frame can actually address: when the engine recovers no source-level names for a method its locals are reachable only as the raw slots V_0, V_1, ..., which assign like any other name.",
       "inputSchema": {
         "type": "object",
         "properties": {
