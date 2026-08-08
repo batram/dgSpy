@@ -782,10 +782,6 @@
           "expected_lifecycle_version": {
             "type": "integer",
             "description": "Required exact lifecycle_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -818,10 +814,6 @@
           "expected_lifecycle_version": {
             "type": "integer",
             "description": "Required exact lifecycle_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -851,10 +843,6 @@
           "expected_lifecycle_version": {
             "type": "integer",
             "description": "Required exact lifecycle_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -882,9 +870,6 @@
             "type": "string"
           },
           "process_id": {
-            "type": "integer"
-          },
-          "expected_state_version": {
             "type": "integer"
           },
           "expected_execution_version": {
@@ -917,9 +902,6 @@
             "type": "string"
           },
           "process_id": {
-            "type": "integer"
-          },
-          "expected_state_version": {
             "type": "integer"
           },
           "expected_execution_version": {
@@ -968,10 +950,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -990,7 +968,7 @@
     },
     {
       "name": "list_breakpoints",
-      "description": "List all dnSpy breakpoints with their binding state. Breakpoints are global and outlive a session.",
+      "description": "List all dnSpy breakpoints with their binding state. Breakpoints are global and outlive a session. engine_hit_count reports times the engine reached each breakpoint this session, counted before conditions run \u2014 a false-but-working condition still ticks it, distinguishing \u0027condition not yet true\u0027 from \u0027never reached\u0027.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1027,10 +1005,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -1062,10 +1036,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -1430,10 +1400,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -1481,10 +1447,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -1544,9 +1506,6 @@
             "type": "string",
             "description": "Defaults to the thread that carried the stop. Stepping the wrong thread resumes the target and stops somewhere unrelated, so pass this explicitly when several threads are interesting."
           },
-          "expected_state_version": {
-            "type": "integer"
-          },
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
@@ -1584,9 +1543,6 @@
           "thread_id": {
             "type": "string"
           },
-          "expected_state_version": {
-            "type": "integer"
-          },
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
@@ -1623,9 +1579,6 @@
           },
           "thread_id": {
             "type": "string"
-          },
-          "expected_state_version": {
-            "type": "integer"
           },
           "expected_execution_version": {
             "type": "integer",
@@ -1727,10 +1680,6 @@
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
           },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
-          },
           "expected_stop_id": {
             "type": "string",
             "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
@@ -1782,10 +1731,6 @@
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           },
           "expected_stop_id": {
             "type": "string",
@@ -1869,10 +1814,6 @@
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -2000,10 +1941,6 @@
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
           },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
-          },
           "expected_stop_id": {
             "type": "string",
             "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
@@ -2109,10 +2046,6 @@
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           },
           "expected_stop_id": {
             "type": "string",
@@ -2707,10 +2640,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -2933,10 +2862,6 @@
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
           },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
-          },
           "expected_stop_id": {
             "type": "string",
             "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
@@ -3056,10 +2981,6 @@
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3219,10 +3140,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3304,10 +3221,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3341,10 +3254,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3417,10 +3326,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3522,10 +3427,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3561,10 +3462,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3594,10 +3491,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3699,10 +3592,6 @@
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           },
           "expected_stop_id": {
             "type": "string",

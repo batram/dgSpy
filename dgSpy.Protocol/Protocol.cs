@@ -185,6 +185,11 @@ namespace dgSpy.Protocol {
 		/// existed there is no meaningful "just before", and emitting 0 would invite a caller to replay
 		/// the whole event log.</summary>
 		[JsonPropertyName("cursor_event_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public long? CursorEventId { get; set; }
+		/// <summary>Times the engine reached this breakpoint this session, counted BEFORE conditions,
+		/// hit counts, and filters run. A conditional breakpoint whose condition keeps evaluating false
+		/// still ticks this counter, which is how a working-but-never-true condition is distinguished
+		/// from a breakpoint that is never reached at all. Absent when no session is active.</summary>
+		[JsonPropertyName("engine_hit_count"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public long? EngineHitCount { get; set; }
 		[JsonPropertyName("state_version")] public long StateVersion { get; set; }
 		/// <summary>Condition expression, evaluated in the target when the breakpoint is reached. Absent
 		/// when the breakpoint is unconditional.</summary>

@@ -152,17 +152,18 @@ public class SessionControlTests {
 	}
 
 	[Fact]
-	public void Every_session_mutation_schema_advertises_scoped_version_guard_and_legacy_alias() {
+	public void Every_session_mutation_schema_advertises_scoped_version_guard_and_no_deprecated_alias() {
 		var tools=ProtocolJson.ToNode(ToolCatalog.All)!.AsArray();
 		foreach(var operation in CapabilityCatalog.Operations.Where(item=>item.MutatesSession)) {
 			var tool=tools.OfType<JsonObject>().Single(item=>(string?)item["name"]==operation.Operation);
 			if(tool["inputSchema"]?["properties"]?["session_id"] is not null)
 			{
 				var guard=MutationGuards.Argument(operation.Operation);
-				Assert.NotNull(tool["inputSchema"]?["properties"]?["expected_state_version"]);
+				// The deprecated expected_state_version alias is gone: a dead parameter on every mutating
+				// schema taxes exactly the schema-budgeted blind-driving scenario this server exists for.
+				Assert.Null(tool["inputSchema"]?["properties"]?["expected_state_version"]);
 				Assert.NotNull(tool["inputSchema"]?["properties"]?[guard]);
 				Assert.Contains(guard,ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
-				Assert.DoesNotContain("expected_state_version",ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
 				if(MutationGuards.RequiresStop(operation.Operation)) Assert.Contains("expected_stop_id",ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
 			}
 		}

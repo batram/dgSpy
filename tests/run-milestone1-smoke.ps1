@@ -399,6 +399,9 @@ try {
 	Assert-That 'the stop event is after the cursor' ($firstStop.event_id -gt $cursor)
 	Assert-That 'the normalized stop preserves its reason and target identity' ($firstStop.stop_reason -eq 'breakpoint' -and $firstStop.process_id -eq $targetId -and -not [string]::IsNullOrWhiteSpace($firstStop.thread_id))
 	Assert-That 'the normalized stop preserves breakpoint identity and IL location' ($firstStop.breakpoint_id -eq $breakpoint.breakpoint_id -and $firstStop.module -like '*Milestone1Target.exe' -and $firstStop.method_token -eq $methodToken -and $firstStop.il_offset -eq 0)
+	# Engine hits are counted before conditions run, so a hit breakpoint must show at least one.
+	$hitListing = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{}) | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id }
+	Assert-That 'list_breakpoints reports engine_hit_count after a hit' ($hitListing.engine_hit_count -ge 1) "(was $($hitListing.engine_hit_count))"
 	# A cursor beyond the stream can never be satisfied — the next events take the ids it would skip.
 	# It must fail loudly, not wait out its timeout and return a clean empty result.
 	$aheadWait = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = 999999999; timeout_ms = 1000 } -ExpectError
@@ -433,7 +436,7 @@ try {
 	$waiter2 = Start-Job -ScriptBlock $waitScript -ArgumentList $gatewayUrl,$token,$sessionId,$firstStop.event_id
 	Start-Sleep -Milliseconds 300
 	$beforeResume = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
-	Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId; expected_state_version = $beforeResume.state_version } | Out-Null
+	Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId; expected_execution_version = $beforeResume.execution_version } | Out-Null
 	$concurrent1 = (Receive-Job -Job $waiter1 -Wait -AutoRemoveJob) | ConvertFrom-Json
 	$concurrent2 = (Receive-Job -Job $waiter2 -Wait -AutoRemoveJob) | ConvertFrom-Json
 	$secondStop1 = @($concurrent1.events)[0]
@@ -1047,8 +1050,9 @@ try {
 	$reenabled = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true }
 	Assert-That 'the code breakpoint can be re-enabled after stepping' ($reenabled.enabled)
 
-	$stale = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId; expected_state_version = 1 } -ExpectError
-	Assert-That 'a stale expected_state_version is rejected' ($stale -match 'stale|Expected state')
+	$staleState = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
+	$stale = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId; expected_execution_version = $staleState.execution_version + 1000 } -ExpectError
+	Assert-That 'a stale expected_execution_version is rejected' ($stale -match 'stale|Expected execution')
 
 	# Evaluation runs off the dispatcher now, so a running target must be refused explicitly rather
 	# than racing against a stack that is being torn down.

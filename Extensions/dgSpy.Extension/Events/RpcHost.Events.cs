@@ -232,8 +232,6 @@ namespace dgSpy.Extension {
 		void CheckScopedVersion(RpcRequest req,string name,long current,string scope) {
 			var expected=(long?)req.Arguments[name];
 			if(expected.HasValue && expected.Value!=current) throw new RpcException("stale_"+scope,$"Expected {scope} version {expected.Value}, current {scope} version is {current}.");
-			var legacy=(long?)req.Arguments["expected_state_version"];
-			if(!expected.HasValue && legacy.HasValue && legacy.Value!=stateVersion) throw new RpcException("stale_state",$"Expected state {legacy.Value}, current state is {stateVersion}.");
 		}
 		void CheckOperationVersion(RpcRequest req) {
 			if(req.Arguments["session_id"] is not null) CheckSession(req);

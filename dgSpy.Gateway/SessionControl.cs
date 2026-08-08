@@ -97,7 +97,7 @@ public sealed class GatewayToolExecutor {
 	public GatewayToolExecutor(HostRouter router,SessionControllers controllers,GatewayAccessPolicy access,GatewayAuditLog audit,DeploymentService deployments) { this.router=router; this.controllers=controllers; this.access=access; this.audit=audit; this.deployments=deployments; }
 	internal GatewayToolExecutor(HostRouter router,SessionControllers controllers,GatewayAccessPolicy access,GatewayAuditLog audit) : this(router,controllers,access,audit,new DeploymentService()) { }
 	public async Task<RpcResponse> ExecuteAsync(string operation,JsonObject arguments,string clientId,CancellationToken token) {
-		var hostId=(string?)arguments["host_id"]; var sessionId=(string?)arguments["session_id"]; var guardArgument=MutationGuards.Argument(operation); var expected=(long?)arguments[guardArgument] ?? (long?)arguments["expected_state_version"];
+		var hostId=(string?)arguments["host_id"]; var sessionId=(string?)arguments["session_id"]; var guardArgument=MutationGuards.Argument(operation); var expected=(long?)arguments[guardArgument];
 		var mutates=CapabilityCatalog.Operations.Any(item=>item.Operation==operation && item.MutatesSession); var controlMutation=operation is "claim_session" or "release_session";
 		var auditId=mutates || controlMutation ? Guid.NewGuid().ToString("N") : null;
 		try {

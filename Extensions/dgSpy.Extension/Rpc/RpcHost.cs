@@ -35,7 +35,7 @@ namespace dgSpy.Extension {
 	sealed partial class RpcHost : IDisposable {
 		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DebuggerSettings debuggerSettings; readonly DbgCodeBreakpointsService breakpoints; readonly DbgModuleBreakpointsService moduleBreakpoints; readonly DbgObjectIdService objectIds; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions; readonly DbgMetadataService metadataService; readonly IDsDocumentService documentService; readonly Lazy<DbgModuleIdProvider>[] moduleIdProviders; readonly IDecompilerService decompilers;
 		readonly EvaluationQueue evaluations=new EvaluationQueue(); readonly SemaphoreSlim targetControl=new SemaphoreSlim(1,1);
-		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>();
+		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>(); readonly Dictionary<int,long> engineHitCounts=new Dictionary<int,long>();
 		long lifecycleVersion,executionVersion,breakpointsVersion; string? stopId; string? connectionState; DateTime lastGatewayHeartbeatUtc;
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		readonly RpcSecuritySettings rpcSecurity=RpcSecuritySettings.Load();
@@ -58,7 +58,14 @@ namespace dgSpy.Extension {
 		}
 		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDsDocumentService documentService, IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers) {
 			this.programs=programs; this.manager=manager; this.debuggerSettings=debuggerSettings; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.documentService=documentService; this.moduleIdProviders=moduleIdProviders.ToArray(); this.decompilers=decompilers;
-			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { NotifyConnectionStateChanged(); if (IsTargetRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => { NotifyConnectionStateChanged(); Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded); };
+			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e);
+			// MessageBoundBreakpoint fires on every engine hit, BEFORE dnSpy's condition/hit-count/filter
+			// pipeline decides whether to pause. Counting here is what makes a false-but-working condition
+			// observable: dnSpy's own hit-count service only increments after the condition passes.
+			// Never let counting break the host: at detach the bound breakpoint being reported is already
+			// being torn down, and a throw here runs unhandled on the debugger thread. A missed tick
+			// degrades a diagnostic counter; an exception would take dnSpy down.
+			manager.MessageBoundBreakpoint += (_,e) => { try { var id=e.BoundBreakpoint.Breakpoint.Id; lock(sync) { engineHitCounts.TryGetValue(id,out var hits); engineHitCounts[id]=hits+1; } } catch (Exception) { } }; manager.IsRunningChanged += (_,__) => { NotifyConnectionStateChanged(); if (IsTargetRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => { NotifyConnectionStateChanged(); Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded); };
 			breakpoints.BreakpointsChanged += (_,__) => IncrementBreakpointsVersion(); breakpoints.BreakpointsModified += (_,__) => IncrementBreakpointsVersion();
 			moduleBreakpoints.BreakpointsChanged += (_,__) => IncrementBreakpointsVersion(); moduleBreakpoints.BreakpointsModified += (_,__) => IncrementBreakpointsVersion();
 			exceptions.ExceptionsChanged += (_,__) => IncrementBreakpointsVersion(); exceptions.ExceptionSettingsModified += (_,__) => IncrementBreakpointsVersion();
@@ -334,7 +341,7 @@ namespace dgSpy.Extension {
 			var adding=sessionId is not null && await OnDebuggerAsync(()=>manager.IsDebugging).ConfigureAwait(false);
 			var oldProcessIds=adding ? await OnDebuggerAsync(()=>manager.Processes.Select(p=>p.Id).ToArray(),cancellationToken).ConfigureAwait(false) : Array.Empty<int>();
 			var rejected=await OnDebuggerAsync(()=>{
-				lock(sync) { if(!adding) { events.Reset(); output.Reset(); stateVersion=0; lifecycleVersion=0; executionVersion=0; stopId=null; attaching=true; faulted=false; faultMessage=null; terminalExitCode=null; terminalReason=null; sessionKind=kind; lifecycleAction=null; processLifecycleActions.Clear(); } lastUserMessage=null; }
+				lock(sync) { if(!adding) { events.Reset(); output.Reset(); stateVersion=0; lifecycleVersion=0; executionVersion=0; stopId=null; attaching=true; faulted=false; faultMessage=null; terminalExitCode=null; terminalReason=null; sessionKind=kind; lifecycleAction=null; processLifecycleActions.Clear(); engineHitCounts.Clear(); } lastUserMessage=null; }
 				var failure=start();
 				if (failure is null) { if(!adding) sessionId=Guid.NewGuid().ToString("N"); stateVersion++; }
 				else if(!adding) lock(sync) attaching=false;
@@ -488,6 +495,9 @@ namespace dgSpy.Extension {
 			await Task.Delay(250,cancellationToken).ConfigureAwait(false);
 			await OnDebuggerAsync(()=>true,cancellationToken).ConfigureAwait(false);
 		}
+		/// <summary>Engine hits for a breakpoint this session, or null with no session — zero would wrongly
+		/// read as "reached zero times" when nothing was measuring.</summary>
+		long? EngineHits(int breakpointId) { lock(sync) { if (sessionId is null) return null; engineHitCounts.TryGetValue(breakpointId,out var hits); return hits; } }
 		BreakpointInfo Describe(DbgCodeBreakpoint bp,uint? requested=null) {
 			var message=bp.BoundBreakpointsMessage;
 			var severity=message.Severity==DbgBoundCodeBreakpointSeverity.Error ? "error" : message.Severity==DbgBoundCodeBreakpointSeverity.Warning ? "warning" : "none";
@@ -504,6 +514,7 @@ namespace dgSpy.Extension {
 				Bound=bp.BoundBreakpoints.Length!=0 && message.Severity==DbgBoundCodeBreakpointSeverity.None,
 				BoundCount=bp.BoundBreakpoints.Length,Severity=severity,Message=message.Message.Length==0 ? null : message.Message,
 				SessionId=sessionId,StateVersion=stateVersion,
+				EngineHitCount=EngineHits(bp.Id),
 				Condition=bp.Condition?.Condition,
 				ConditionKind=bp.Condition is null ? null : bp.Condition.Value.Kind==DbgCodeBreakpointConditionKind.WhenChanged ? BreakpointConditionKinds.WhenChanged : BreakpointConditionKinds.IsTrue,
 				HitCount=bp.HitCount?.Count,

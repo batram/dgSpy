@@ -80,8 +80,9 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   `expected_lifecycle_version` for detach/terminate/restart, `expected_execution_version` for target and
   frame mutations, and `expected_breakpoints_version` for breakpoint/policy changes. Frame-bound
   mutations also require the opaque `expected_stop_id`. Missing or stale relevant guards fail before
-  acting; unrelated thread/module events do not invalidate them. `expected_state_version` remains an
-  optional compatibility alias but is no longer advertised as the required guard. `release_session` changes only
+  acting; unrelated thread/module events do not invalidate them. The deprecated `expected_state_version`
+  alias has been removed: only the scoped guards exist, and an `expected_state_version` argument is
+  ignored. `release_session` changes only
   ownership. An idle owner or Gateway restart leaves the target untouched and requires explicit
   `claim_session` before further mutations.
 - MCP disconnect, controller expiry, Gateway disconnect/restart, and remote-host disconnect never resume,
@@ -135,6 +136,11 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   `get_events`. The event carries PID, exit code, terminal reason, and a terminal flag. Call `detach` to
   clear the terminal session, or start the next session once the debugger has stopped.
 - `list_sessions` recovers a lost `session_id`.
+- `list_breakpoints` reports `engine_hit_count`: times the engine reached the breakpoint this
+  session, counted before conditions, hit counts, and filters run. A conditional breakpoint whose
+  condition keeps evaluating false still ticks it — that is how "working condition, not yet true" is
+  distinguished from "never reached" during an otherwise silent wait. Absent when no session is
+  active; reset when a new session starts.
 - `wait_for_stop`, `wait_for_event`, and `get_events` reject an `after_event_id` beyond the newest
   event with `cursor_ahead_of_stream` instead of waiting forever or returning a clean empty result —
   such a cursor would skip the very ids the next events take. The known way to produce one is feeding
