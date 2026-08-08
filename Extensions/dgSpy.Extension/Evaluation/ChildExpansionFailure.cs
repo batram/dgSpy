@@ -20,8 +20,11 @@ namespace dgSpy.Extension {
 		// dnSpy's sentences have no trailing period, so a bare space ran the two together
 		// ("...will not be evaluated Blocked by the side-effects gate..."). Supply the separator the
 		// engine text lacks, without doubling one it already has.
-		public static string Advice(string errorMessage) {
-			var recovery=FuncEvalDiagnostics.Recovery(errorMessage);
+		/// <param name="moduleName">The selected frame's module, when the caller has one. get_members
+		/// evaluates a root expression like any other tool, so it can fail with CS0103 for the same
+		/// frame-context reason, and its error string is the only place that answer can go.</param>
+		public static string Advice(string errorMessage,string? moduleName=null,string? modulePath=null) {
+			var recovery=FuncEvalDiagnostics.Recovery(errorMessage,moduleName,modulePath);
 			if (recovery is null) return "";
 			var trimmed=errorMessage.TrimEnd();
 			var terminated=trimmed.Length!=0 && (trimmed[trimmed.Length-1]=='.' || trimmed[trimmed.Length-1]=='!' || trimmed[trimmed.Length-1]=='?');

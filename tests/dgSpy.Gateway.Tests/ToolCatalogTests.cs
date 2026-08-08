@@ -49,10 +49,54 @@ public sealed class ToolCatalogTests {
 	}
 
 	[Fact]
-	public void Deadline_recovery_recommends_narrowing_the_query() {
+	public void Deadline_recovery_never_blindly_retries_a_mutation() {
 		var guidance=ToolCatalog.ErrorGuidance("deadline_exceeded");
-		Assert.Contains("Narrow",guidance.Recovery);
-		Assert.NotEqual("doctor",guidance.Tool);
+		Assert.Contains("assume it may have applied",guidance.Recovery,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("get_session_state",guidance.Recovery,StringComparison.Ordinal);
+		Assert.Contains("read-only",guidance.Recovery,StringComparison.OrdinalIgnoreCase);
+		Assert.Equal("get_session_state",guidance.Tool);
+	}
+
+	[Fact]
+	public void Il_breakpoint_description_matches_the_sequence_point_snap_policy() {
+		var tool=ToolCatalog.All.Single(t=>Name(t)=="set_il_breakpoint");
+		var description=Description(tool);
+		Assert.Contains("at or after",description,StringComparison.Ordinal);
+		Assert.Contains("final preceding",description,StringComparison.Ordinal);
+		Assert.DoesNotContain("retried at method entry",description,StringComparison.OrdinalIgnoreCase);
+		var snap=InputProperties(tool)["snap_to_sequence_point"];
+		var snapDescription=(string)snap.GetType().GetProperty("description")!.GetValue(snap)!;
+		Assert.Contains("at or after",snapDescription,StringComparison.Ordinal);
+		Assert.Contains("final preceding",snapDescription,StringComparison.Ordinal);
+	}
+
+	[Theory]
+	[InlineData("list_threads")]
+	[InlineData("invoke_method")]
+	public void Unsafe_point_entry_tools_name_the_composed_run_to_workflows(string name) {
+		var description=Description(ToolCatalog.All.Single(t=>Name(t)==name));
+		Assert.Contains("run_to_method",description,StringComparison.Ordinal);
+		Assert.Contains("run_to_location",description,StringComparison.Ordinal);
+		Assert.Contains("drive",description,StringComparison.OrdinalIgnoreCase);
+	}
+
+	[Theory]
+	[InlineData("evaluate")]
+	[InlineData("invoke_method")]
+	[InlineData("get_members")]
+	public void Frame_context_entry_tools_explain_module_scoped_compilation(string name) {
+		var description=Description(ToolCatalog.All.Single(t=>Name(t)==name));
+		Assert.Contains("module",description,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("frame",description,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("get_callstack",description,StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void Callstack_description_exposes_frame_module_selection() {
+		var description=Description(ToolCatalog.All.Single(t=>Name(t)=="get_callstack"));
+		Assert.Contains("module",description,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("frame_index",description,StringComparison.Ordinal);
+		Assert.Contains("fully qualified",description,StringComparison.OrdinalIgnoreCase);
 	}
 
 	[Fact]
@@ -192,6 +236,7 @@ public sealed class ToolCatalogTests {
 		Assert.DoesNotContain("plan_local_deployment",names); Assert.DoesNotContain("deploy_local_host",names); Assert.DoesNotContain("plan_remote_host_package",names);
 		Assert.Contains("get_started",ToolCatalog.Instructions,StringComparison.Ordinal);
 		Assert.NotNull(ToolCatalog.ReadResource("dgspy://guide/getting-started"));
+		Assert.NotNull(ToolCatalog.ReadResource("dgspy://guide/workflows"));
 		Assert.Null(ToolCatalog.ReadResource("dgspy://guide/missing"));
 		var serialized=System.Text.Json.JsonSerializer.Serialize(ToolCatalog.All.Single(tool=>Name(tool)=="uninstall_local_deployment"));
 		Assert.Contains("\"destructiveHint\":true",serialized,StringComparison.Ordinal);
@@ -204,5 +249,19 @@ public sealed class ToolCatalogTests {
 
 		var resource=System.Text.Json.JsonSerializer.Serialize(ToolCatalog.ReadResource("dgspy://guide/getting-started"));
 		Assert.Contains(ToolCatalog.Instructions,resource,StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void Workflow_help_schema_and_resource_render_the_authoritative_catalog() {
+		var help=ToolCatalog.All.Single(tool=>Name(tool)=="get_workflow_help");
+		var topic=InputProperties(help)["topic"];
+		var advertised=(string[])topic.GetType().GetProperty("enum")!.GetValue(topic)!;
+		Assert.Equal(WorkflowCatalog.Topics.Select(item=>item.Topic),advertised);
+
+		var resource=System.Text.Json.JsonSerializer.Serialize(ToolCatalog.ReadResource("dgspy://guide/workflows"));
+		foreach(var workflow in WorkflowCatalog.Topics) {
+			Assert.Contains($"\\u0022topic\\u0022:\\u0022{workflow.Topic}\\u0022",resource,StringComparison.Ordinal);
+			foreach(var tool in workflow.Tools) Assert.Contains(tool,resource,StringComparison.Ordinal);
+		}
 	}
 }

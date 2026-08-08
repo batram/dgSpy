@@ -30,7 +30,7 @@
     },
     {
       "name": "get_workflow_help",
-      "description": "Return focused guidance for setup, local_deployment, remote_deployment, attach, discovery, stepping, recovery, or shutdown.",
+      "description": "Return one focused workflow from the same authoritative grouping exposed at dgspy://guide/workflows. Each result includes concise guidance and exact recommended tool names.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -43,7 +43,13 @@
               "attach",
               "discovery",
               "stepping",
+              "safe_evaluation",
+              "raw_memory",
+              "object_ids",
+              "static_analysis",
+              "breakpoint_configuration",
               "recovery",
+              "cleanup",
               "shutdown"
             ]
           }
@@ -939,7 +945,7 @@
     },
     {
       "name": "set_il_breakpoint",
-      "description": "Set an exact module/token/IL-offset breakpoint and report whether the engine actually bound it. Check \u0060bound\u0060: false with severity \u0022error\u0022 will never be hit, false with no error is pending a module load. On Mono/Unity a breakpoint can only sit on a sequence point; many offsets qualify but a frame\u0027s own il_offset often does not, and a refused one is retried at method entry (offset 0) unless snap_to_sequence_point is false \u2014 when that happens \u0060snapped\u0060 is true and it stops earlier than requested. Pass the returned \u0060cursor_event_id\u0060 to wait_for_stop as after_event_id: a cursor read after this call has already missed the first hit on a hot method. The breakpoint starts unconditional \u2014 attach a condition, hit count or trace message by passing the returned breakpoint_id to update_breakpoint. Use get_il to see which offsets are sequence points before choosing one.",
+      "description": "Set an exact module/token/IL-offset breakpoint and report whether the engine actually bound it. Check \u0060bound\u0060: false with severity \u0022error\u0022 will never be hit, false with no error is pending a module load. On Mono/Unity a breakpoint can only sit on a sequence point; many offsets qualify but a frame\u0027s own il_offset often does not. By default, when the engine refuses the requested offset, dgSpy snaps to the first legal sequence point at or after it; only when no later point exists does it use the method\u0027s final preceding sequence point. \u0060snapped\u0060, \u0060requested_il_offset\u0060, and \u0060il_offset\u0060 report exactly what happened. Pass snap_to_sequence_point=false to keep the refusal instead. Pass the returned \u0060cursor_event_id\u0060 to wait_for_stop as after_event_id: a cursor read after this call has already missed the first hit on a hot method. The breakpoint starts unconditional \u2014 attach a condition, hit count or trace message by passing the returned breakpoint_id to update_breakpoint. Use get_il to see which offsets are sequence points before choosing one.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -962,7 +968,7 @@
           },
           "snap_to_sequence_point": {
             "type": "boolean",
-            "description": "Default true. Retry at method entry when the engine refuses the requested offset."
+            "description": "Default true. On refusal, use the first legal sequence point at or after the requested offset; when none exists, use the method\u0027s final preceding sequence point."
           },
           "expected_breakpoints_version": {
             "type": "integer",
@@ -1257,7 +1263,7 @@
     },
     {
       "name": "list_threads",
-      "description": "List paused target threads with stable thread_id values. It does not eagerly fetch every stack because Unity threads can exit during frame retrieval; select a returned thread_id with get_callstack or get_frame. Do not try to predict func-eval viability from \u0060states\u0060: CorDebug publishes UnsafePoint there and Mono publishes no equivalent at all, so a rule learned on one engine is wrong on the other. Pass include_evaluability instead.",
+      "description": "List paused target threads with stable thread_id values. It does not eagerly fetch every stack because Unity threads can exit during frame retrieval; select a returned thread_id with get_callstack or get_frame. Do not try to predict func-eval viability from \u0060states\u0060: CorDebug publishes UnsafePoint there and Mono publishes no equivalent at all, so a rule learned on one engine is wrong on the other. Pass include_evaluability instead. If no thread can evaluate, prepare or drive the target state and use run_to_method or run_to_location to reach an evaluable managed frame; those workflows wait for reachable code, they do not make an otherwise unreachable method execute.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1285,7 +1291,7 @@
     },
     {
       "name": "get_callstack",
-      "description": "Get a paused call stack and primitive locals. Pass thread_id for deterministic caller-selected inspection; omitting it preserves the managed-frame probe fallback. A frame with raw_locals true reports its locals as the runtime\u0027s raw slots V_0, V_1, ... because the engine recovered no source-level names for it; see get_frame.",
+      "description": "Get a paused call stack and primitive locals. Pass thread_id for deterministic caller-selected inspection; omitting it preserves the managed-frame probe fallback. Expression compilation uses the selected frame\u0027s module context: choose the nearest managed frame whose module/module_name is the target assembly, then pass its thread_id and frame_index to evaluation tools. A fully qualified target type still cannot resolve from an unrelated module such as a Thread.Sleep frame. A frame with raw_locals true reports its locals as the runtime\u0027s raw slots V_0, V_1, ... because the engine recovered no source-level names for it; see get_frame.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1631,7 +1637,7 @@
     },
     {
       "name": "evaluate",
-      "description": "Evaluate an expression against a paused frame. Returns the raw scalar and dnSpy\u0027s formatted display text as separate fields, so numbers stay comparable without parsing display text. has_raw_value distinguishes a value of null from a value that is unavailable or optimized away. Running target code is guarded by TWO independent gates, both off by default and NOT interchangeable: allow_func_eval permits executing target code at all, allow_side_effects permits an expression dnSpy classifies as side-effecting. A property getter such as DateTime.Now.Ticks trips only the first, so allow_func_eval alone runs it \u2014 and it can deadlock a target holding a lock or mutate what you were inspecting, which is why it is off. An explicit method call such as Telemetry.ComputeReading(5) trips BOTH, and side effects are checked first, so passing allow_func_eval alone leaves the error \u0022This expression causes side effects and will not be evaluated\u0022 completely unchanged, which reads like the flag was ignored and is not. Pass both for a method call, or use invoke_method, which sets both and audits the call. One exception explains conflicting reports of this tool: dnSpy\u0027s \u0060ac\u0060 (\u0022always calculate\u0022) format specifier, appended as \u0060Some.Method(1), ac\u0060, opens the side-effects gate on its own, so that shape DOES succeed with allow_func_eval alone; it is dnSpy syntax rather than a dgSpy argument and bypasses the opt-in, so prefer allow_side_effects. Every refusal carries \u0060recovery\u0060 naming the gate that blocked it; never fall back to computing a method\u0027s result by hand. For an object, get_members expands it a level rather than guessing member names; get_autos returns what the current statement touches without naming anything; add_watch re-evaluates the same expression at every later stop, which a value read here cannot survive. A value carries \u0060address\u0060/\u0060address_length\u0060 when the runtime has one, which is the supported way to reach a managed object with read_memory and write_memory. A CS0103 \u0022does not exist in the current context\u0022 error names the variables this frame can actually address, including V_n slots when it reports no source-level names.",
+      "description": "Evaluate an expression against a paused frame. Returns the raw scalar and dnSpy\u0027s formatted display text as separate fields, so numbers stay comparable without parsing display text. has_raw_value distinguishes a value of null from a value that is unavailable or optimized away. Running target code is guarded by TWO independent gates, both off by default and NOT interchangeable: allow_func_eval permits executing target code at all, allow_side_effects permits an expression dnSpy classifies as side-effecting. A property getter such as DateTime.Now.Ticks trips only the first, so allow_func_eval alone runs it \u2014 and it can deadlock a target holding a lock or mutate what you were inspecting, which is why it is off. An explicit method call such as Telemetry.ComputeReading(5) trips BOTH, and side effects are checked first, so passing allow_func_eval alone leaves the error \u0022This expression causes side effects and will not be evaluated\u0022 completely unchanged, which reads like the flag was ignored and is not. Pass both for a method call, or use invoke_method, which sets both and audits the call. One exception explains conflicting reports of this tool: dnSpy\u0027s \u0060ac\u0060 (\u0022always calculate\u0022) format specifier, appended as \u0060Some.Method(1), ac\u0060, opens the side-effects gate on its own, so that shape DOES succeed with allow_func_eval alone; it is dnSpy syntax rather than a dgSpy argument and bypasses the opt-in, so prefer allow_side_effects. Every refusal carries \u0060recovery\u0060 naming the gate that blocked it; never fall back to computing a method\u0027s result by hand. For an object, get_members expands it a level rather than guessing member names; get_autos returns what the current statement touches without naming anything; add_watch re-evaluates the same expression at every later stop, which a value read here cannot survive. A value carries \u0060address\u0060/\u0060address_length\u0060 when the runtime has one, which is the supported way to reach a managed object with read_memory and write_memory. Expressions compile in the selected frame\u0027s module context. After CS0103, use get_callstack and select the nearest managed frame in the target module with thread_id and frame_index; even a fully qualified target type cannot resolve from an unrelated module. The error also names variables this frame can address, including V_n slots when it reports no source-level names.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1676,7 +1682,7 @@
     },
     {
       "name": "invoke_method",
-      "description": "SIDE EFFECTING and audited. Evaluate a complete method-call expression in the paused target. Func-eval and side effects are always enabled by this tool boundary and cannot be downgraded or enabled accidentally through evaluate. On failure read compiler_error: true means the expression never compiled and nothing ran, so fix the expression; false means it compiled and the engine refused to execute it here, so the same call can succeed against another thread or another stop. A func-eval needs a thread the engine will let it start on \u2014 call list_threads with include_evaluability=true and pass a thread_id whose can_evaluate is true.",
+      "description": "SIDE EFFECTING and audited. Evaluate a complete method-call expression in the paused target. Func-eval and side effects are always enabled by this tool boundary and cannot be downgraded or enabled accidentally through evaluate. On failure read compiler_error: true means the expression never compiled and nothing ran, so fix the expression; false means it compiled and the engine refused to execute it here, so the same call can succeed against another thread or another stop. A func-eval needs a thread the engine will let it start on \u2014 call list_threads with include_evaluability=true and pass a thread_id whose can_evaluate is true. If none qualifies, prepare or drive the target state, then use run_to_method or run_to_location to reach a managed frame that can evaluate. For CS0103, use get_callstack and select the nearest frame in the target module; qualification alone does not make a type visible from an unrelated frame module.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1991,7 +1997,7 @@
     },
     {
       "name": "get_members",
-      "description": "Expand one object one level, paged. Pass a returned member\u0027s \u0060expression\u0060 back here to go deeper: depth is deliberately the caller\u0027s to control, because recursing server-side is unbounded on a cyclic object graph. A member whose \u0060expression\u0060 is empty cannot be addressed at all: either a compiler-generated member (auto-property backing field, async or iterator state machine field, lambda display class) whose name is not spellable in any language, or a grouping row such as \u0060Static members\u0060 that carries a type name rather than an expression. Its name, type and value are still accurate; do not retry it. Static members stay reachable by naming them directly, eg. \u0060Some.Type.SomeStaticField\u0060. Reports total and truncated. Members carry \u0060address\u0060/\u0060address_length\u0060 when the runtime has one \u2014 see read_memory.",
+      "description": "Expand one object one level, paged. Pass a returned member\u0027s \u0060expression\u0060 back here to go deeper: depth is deliberately the caller\u0027s to control, because recursing server-side is unbounded on a cyclic object graph. A member whose \u0060expression\u0060 is empty cannot be addressed at all: either a compiler-generated member (auto-property backing field, async or iterator state machine field, lambda display class) whose name is not spellable in any language, or a grouping row such as \u0060Static members\u0060 that carries a type name rather than an expression. Its name, type and value are still accurate; do not retry it. Static members stay reachable by naming them directly, eg. \u0060Some.Type.SomeStaticField\u0060, but expression compilation still uses the selected frame\u0027s module; after CS0103 use get_callstack and select the nearest frame in the target module. Reports total and truncated. Members carry \u0060address\u0060/\u0060address_length\u0060 when the runtime has one \u2014 see read_memory.",
       "inputSchema": {
         "type": "object",
         "properties": {

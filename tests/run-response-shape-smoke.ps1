@@ -151,6 +151,20 @@ try {
 
 	Write-Section 'select the frame the target expressions compile against'
 	$firstPause = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId; expected_execution_version = $attached.versions.execution_version }
+	# A fully qualified name still compiles in the selected frame's module. PuzzleBox spends its idle
+	# time in Thread.Sleep, so deliberately reproduce the blind-run mistake before selecting its frame.
+	$foreignFrames = @(Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ } | Where-Object { $_.module_name -notlike '*PuzzleBox*' })
+	$foreignFrame = @($foreignFrames | Select-Object -First 1)[0]
+	Assert-That 'the paused target exposes a non-PuzzleBox frame for context recovery' ($null -ne $foreignFrame)
+	if ($null -ne $foreignFrame) {
+		$contextMiss = Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $sessionId; expression = 'PuzzleBox.Gate.Stage'
+			thread_id = $foreignFrame.thread_id; frame_index = $foreignFrame.frame_index }
+		Assert-That 'CS0103 names the selected frame module and the exact frame-selection recovery' `
+			($contextMiss.error -like '*CS0103*' -and $contextMiss.recovery -like "*$($foreignFrame.module_name)*" -and
+			 $contextMiss.recovery -like '*get_callstack*' -and $contextMiss.recovery -like '*thread_id*' -and
+			 $contextMiss.recovery -like '*frame_index*' -and $contextMiss.recovery -like '*fully qualified*') `
+			"(module=$($foreignFrame.module_name), error='$($contextMiss.error)', recovery='$($contextMiss.recovery)')"
+	}
 	Assert-That 'the target has a frame in PuzzleBox itself' (Select-TargetFrame -SessionId $sessionId)
 	Write-Host "        driving through thread $script:driveThread frame $script:driveFrame" -ForegroundColor Gray
 	$null = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId; expected_execution_version = $firstPause.versions.execution_version }

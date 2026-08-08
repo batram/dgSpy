@@ -80,6 +80,94 @@ public sealed class FuncEvalDiagnosticsTests {
 		Assert.Contains("include_evaluability=true",recovery,StringComparison.Ordinal);
 	}
 
+	/// <summary>Two blind agents hit this refusal, were told to set a breakpoint by hand, and never found
+	/// the composites that already do the whole breakpoint/continue/wait/cleanup round. The tool names
+	/// have to appear verbatim: an agent that has not browsed the full tool list cannot infer them.</summary>
+	[Fact]
+	public void The_unsafe_point_refusal_names_both_run_to_workflows_by_tool_name() {
+		var recovery=FuncEvalDiagnostics.Recovery(UnsafePoint);
+
+		Assert.NotNull(recovery);
+		Assert.Contains("run_to_method",recovery,StringComparison.Ordinal);
+		Assert.Contains("run_to_location",recovery,StringComparison.Ordinal);
+	}
+
+	/// <summary>The two halves that stop a run-to workflow from being read as magic. It cannot make
+	/// unreachable code execute, and reaching a point that needs a stimulus means calling first and
+	/// triggering second — the opposite order silently misses the stop.</summary>
+	[Fact]
+	public void The_unsafe_point_refusal_bounds_what_a_run_to_workflow_can_do() {
+		var recovery=FuncEvalDiagnostics.Recovery(UnsafePoint);
+
+		Assert.NotNull(recovery);
+		Assert.Contains("Neither makes unreachable code execute",recovery,StringComparison.Ordinal);
+		Assert.Contains("prepare it first",recovery,StringComparison.Ordinal);
+		Assert.Contains("issue the run_to call first and trigger the stimulus",recovery,StringComparison.Ordinal);
+	}
+
+	/// <summary>The second failure this class grew for: `PuzzleBox.Gate.Stage` from a Thread.Sleep frame
+	/// is CS0103, and the agent that saw it kept re-qualifying a name that was already fully qualified.
+	/// The answer has to name the module that compiled the expression and the exact arguments that select
+	/// a different one.</summary>
+	[Fact]
+	public void The_name_not_found_error_names_the_frames_module_and_how_to_pick_another_frame() {
+		var recovery=FuncEvalDiagnostics.Recovery("error CS0103: The name 'PuzzleBox' does not exist in the current context","mscorlib.dll","C:\\Windows\\...\\mscorlib.dll");
+
+		Assert.NotNull(recovery);
+		Assert.Contains("mscorlib.dll",recovery,StringComparison.Ordinal);
+		Assert.Contains("get_callstack",recovery,StringComparison.Ordinal);
+		Assert.Contains("thread_id",recovery,StringComparison.Ordinal);
+		Assert.Contains("frame_index",recovery,StringComparison.Ordinal);
+	}
+
+	/// <summary>Qualification is the remedy an agent reaches for on its own, and it does not work. Saying
+	/// so explicitly is the difference between one retry and a budget spent on longer names.</summary>
+	[Fact]
+	public void The_name_not_found_error_says_a_fully_qualified_name_is_not_the_remedy() {
+		var recovery=FuncEvalDiagnostics.FrameContextAdvice("error CS0103: The name 'PuzzleBox' does not exist in the current context","PuzzleBox.dll");
+
+		Assert.NotNull(recovery);
+		Assert.Contains("fully qualified name does not help",recovery,StringComparison.Ordinal);
+		Assert.Contains("Namespace.Type.Member",recovery,StringComparison.Ordinal);
+	}
+
+	/// <summary>VB reports the same condition under its own number, and it has always been treated as the
+	/// same condition by the addressable-names path.</summary>
+	[Theory]
+	[InlineData("error CS0103: The name 'x' does not exist in the current context")]
+	[InlineData("error BC30451: 'x' is not declared")]
+	public void Both_languages_name_not_found_errors_get_frame_context_advice(string error) =>
+		Assert.NotNull(FuncEvalDiagnostics.FrameContextAdvice(error,"Milestone1Target.exe"));
+
+	/// <summary>A frame with no module still has to produce a sentence a caller can read, not a blank or
+	/// a dangling "this frame's module is .".</summary>
+	[Fact]
+	public void A_frame_with_no_module_name_falls_back_to_the_path_and_then_to_a_clear_label() {
+		Assert.Contains("C:\\target\\App.exe",FuncEvalDiagnostics.FrameContextAdvice("error CS0103: nope","","C:\\target\\App.exe"),StringComparison.Ordinal);
+		Assert.Contains("an unknown module",FuncEvalDiagnostics.FrameContextAdvice("error CS0103: nope","",""),StringComparison.Ordinal);
+	}
+
+	/// <summary>Module context explains exactly one compiler error. Attaching it to the rest would bury
+	/// the real diagnostic under advice about a frame that is fine.</summary>
+	[Theory]
+	[InlineData("error CS0571: cannot explicitly call operator or accessor")]
+	[InlineData("error CS0119: 'X' is a type, which is not valid in the given context")]
+	[InlineData("error BC30456: 'Nope' is not a member")]
+	[InlineData(null)]
+	public void A_compiler_error_that_is_not_name_not_found_gets_no_module_context_advice(string? error) {
+		Assert.Null(FuncEvalDiagnostics.FrameContextAdvice(error,"mscorlib.dll"));
+		Assert.Null(FuncEvalDiagnostics.Recovery(error,"mscorlib.dll",null));
+	}
+
+	/// <summary>The composed entry point must not let the new advice displace a gate refusal, or the
+	/// argument that opens the gate goes unnamed again.</summary>
+	[Fact]
+	public void The_composed_recovery_still_answers_a_gate_refusal_with_the_gate() {
+		Assert.Equal(FuncEvalDiagnostics.Recovery(SideEffects,sideEffectsGrantable:true),FuncEvalDiagnostics.Recovery(SideEffects,"mscorlib.dll",null,sideEffectsGrantable:true));
+		Assert.Equal(FuncEvalDiagnostics.Recovery(FuncEvalOff),FuncEvalDiagnostics.Recovery(FuncEvalOff,"mscorlib.dll",null));
+		Assert.Equal(FuncEvalDiagnostics.Recovery(UnsafePoint),FuncEvalDiagnostics.Recovery(UnsafePoint,"mscorlib.dll",null));
+	}
+
 	[Theory]
 	[InlineData(null)]
 	[InlineData("error CS0103: The name 'nope' does not exist in the current context")]

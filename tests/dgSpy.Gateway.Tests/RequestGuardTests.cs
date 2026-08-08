@@ -248,6 +248,8 @@ public class HostRegistryTests {
 			var response=await router.CallAsync(new RpcRequest { Operation="search_symbols",Arguments=new JsonObject { ["host_id"]="host-a" } },canceled.Token);
 
 			Assert.Equal("deadline_exceeded",response.Error?.Code);
+			Assert.Contains("assume it may have applied",response.Error?.Message,StringComparison.OrdinalIgnoreCase);
+			Assert.Contains("get_session_state",response.Error?.Message,StringComparison.Ordinal);
 		}
 		finally { Directory.Delete(directory,true); }
 	}

@@ -87,7 +87,7 @@ namespace dgSpy.Extension {
 		/// <param name="sideEffectsGrantable">True only from evaluate, the one caller whose tool surface has
 		/// an allow_side_effects argument. It selects which of two remedies the recovery text names; see
 		/// FuncEvalDiagnostics.</param>
-		EvaluatedValue DescribeNode(DbgValueNode node,DbgEvaluationInfo eval,string expression,bool sideEffectsGrantable=false) {
+		EvaluatedValue DescribeNode(CapturedFrame captured,DbgValueNode node,DbgEvaluationInfo eval,string expression,bool sideEffectsGrantable=false) {
 			var name=new DbgStringBuilderTextWriter(); var type=new DbgStringBuilderTextWriter(); var display=new DbgStringBuilderTextWriter();
 			// Error nodes still carry useful identity. In particular, a property blocked by NoFuncEval has
 			// an error value but FormatName reports the property name; skipping it made every such child
@@ -136,8 +136,10 @@ namespace dgSpy.Extension {
 				Error=node.ErrorMessage,
 				// A gate refusal is indistinguishable from a broken expression unless the answer names the
 				// argument that opens the gate. See FuncEvalDiagnostics for why that mattered enough to
-				// carry on every evaluated value rather than on the mutation tools alone.
-				Recovery=FuncEvalDiagnostics.Recovery(node.ErrorMessage,sideEffectsGrantable),
+				// carry on every evaluated value rather than on the mutation tools alone. CS0103 is the
+				// mirror image: a real compiler error whose cause is the frame, not the expression, so the
+				// frame's module is named here for the same reason the gate is.
+				Recovery=FuncEvalDiagnostics.Recovery(node.ErrorMessage,captured.Info.ModuleName,captured.Info.Module,sideEffectsGrantable),
 				ReadOnly=node.IsReadOnly,
 				CausesSideEffects=node.CausesSideEffects,
 				HasChildren=node.HasChildren,
@@ -227,7 +229,7 @@ namespace dgSpy.Extension {
 			return await WithEvaluationAsync(req,(captured,eval)=>{
 				var nodes=CreateNodes(captured,eval,new[]{expression!},allowFuncEval,allowSideEffects);
 				try {
-					var described=DescribeNode(nodes[0],eval,expression!,sideEffectsGrantable:true);
+					var described=DescribeNode(captured,nodes[0],eval,expression!,sideEffectsGrantable:true);
 					if (NameNotFound(described.Error)) described.Error+=AddressableNames(captured,eval);
 					return described;
 				}
@@ -237,8 +239,9 @@ namespace dgSpy.Extension {
 
 		/// <summary>"That name does not exist here", in C# and VB. Narrow on purpose: every other
 		/// compiler error is about the expression itself, and listing the frame's variables would be
-		/// noise against it.</summary>
-		static bool NameNotFound(string? error) => error is not null && (error.Contains("CS0103") || error.Contains("BC30451"));
+		/// noise against it. One definition, shared with the frame-module advice that answers the same
+		/// error from the other side — see FuncEvalDiagnostics.FrameContextAdvice.</summary>
+		static bool NameNotFound(string? error) => FuncEvalDiagnostics.IsNameNotFound(error);
 
 		async Task<MutationResult> InvokeExpressionAsync(RpcRequest req,string capability,CancellationToken cancellationToken) {
 			CheckSession(req);
@@ -248,13 +251,15 @@ namespace dgSpy.Extension {
 			return await WithEvaluationAsync(req,(captured,eval)=>{
 				var nodes=CreateNodes(captured,eval,new[]{expression!},allowFuncEval:true,allowSideEffects:true);
 				try {
-					var value=DescribeNode(nodes[0],eval,expression!);
+					var value=DescribeNode(captured,nodes[0],eval,expression!);
 					// A failure here is either "this never compiled" or "it compiled and the engine refused to
 					// run it". They need opposite responses -- fix the expression versus retry against a thread
 					// that can evaluate -- and dnSpy's value-node contract reports only a string, so classify it
 					// rather than leaving the caller to guess. set_value has carried this distinction all along.
 					return new MutationResult { Completed=value.Error is null,CausesSideEffects=true,AuditId=auditId,Value=value.Error is null ? value : null,Error=value.Error,Capability=capability,
-						CompilerError=value.Error is null ? null : FuncEvalDiagnostics.IsCompilerError(value.Error),Recovery=FuncEvalDiagnostics.Recovery(value.Error) };
+						// DescribeNode already composed the recovery for this frame, gate refusal or CS0103
+						// alike; recomputing it here is how the two drifted apart before.
+						CompilerError=value.Error is null ? null : FuncEvalDiagnostics.IsCompilerError(value.Error),Recovery=value.Recovery };
 				}
 				finally { manager.Close(nodes); }
 			},cancellationToken).ConfigureAwait(false);
@@ -282,7 +287,7 @@ namespace dgSpy.Extension {
 					var root=roots[0];
 					// Thrown, not returned, so DescribeNode never runs and the gate would go unnamed. See
 					// ChildExpansionFailure.Advice.
-					if (root.ErrorMessage is not null) throw new RpcException("evaluation_failed",root.ErrorMessage+ChildExpansionFailure.Advice(root.ErrorMessage));
+					if (root.ErrorMessage is not null) throw new RpcException("evaluation_failed",root.ErrorMessage+ChildExpansionFailure.Advice(root.ErrorMessage,captured.Info.ModuleName,captured.Info.Module));
 					if (root.HasChildren==false) return new MemberList { Expression=expression!,Total=0,Offset=offset,Members=Array.Empty<EvaluatedValue>(),SessionId=sessionId,StateVersion=stateVersion };
 					var total=root.GetChildCount(eval);
 					var pageCount=MemberPagination.Count(total,offset,count);
@@ -297,7 +302,7 @@ namespace dgSpy.Extension {
 							// not fit in a long is not a real object graph, and JSON has no ulong anyway.
 							Total=total>long.MaxValue ? long.MaxValue : (long)total,
 							Offset=offset,Truncated=(ulong)(offset+children.Length)<total,
-							Members=children.Select(c=>DescribeNode(c,eval,expression!)).ToArray(),
+							Members=children.Select(c=>DescribeNode(captured,c,eval,expression!)).ToArray(),
 							SessionId=sessionId,StateVersion=stateVersion,
 						};
 					}
@@ -333,10 +338,11 @@ namespace dgSpy.Extension {
 				var result=captured.Language.ExpressionEvaluator.Assign(eval,expression!,valueExpression,EvaluationOptions(allowFuncEval,allowSideEffects:true));
 				if (result.Error is not null) {
 					var error=NameNotFound(result.Error) ? result.Error+AddressableNames(captured,eval) : result.Error;
-					return new AssignmentResult { Expression=expression!,Assigned=false,Error=error,CompilerError=result.IsCompilerError,Recovery=FuncEvalDiagnostics.Recovery(result.Error),SessionId=sessionId,StateVersion=stateVersion };
+					return new AssignmentResult { Expression=expression!,Assigned=false,Error=error,CompilerError=result.IsCompilerError,
+						Recovery=FuncEvalDiagnostics.Recovery(result.Error,captured.Info.ModuleName,captured.Info.Module),SessionId=sessionId,StateVersion=stateVersion };
 				}
 				var nodes=CreateNodes(captured,eval,new[]{expression!},allowFuncEval,allowSideEffects:false);
-				try { return new AssignmentResult { Expression=expression!,Assigned=true,Value=DescribeNode(nodes[0],eval,expression!),SessionId=sessionId,StateVersion=stateVersion }; }
+				try { return new AssignmentResult { Expression=expression!,Assigned=true,Value=DescribeNode(captured,nodes[0],eval,expression!),SessionId=sessionId,StateVersion=stateVersion }; }
 				finally { manager.Close(nodes); }
 			},cancellationToken).ConfigureAwait(false);
 		}
@@ -348,7 +354,7 @@ namespace dgSpy.Extension {
 			var allowFuncEval=(bool?)req.Arguments["allow_func_eval"] ?? false;
 			return await WithEvaluationAsync(req,(captured,eval)=>{
 				var nodes=captured.Language.ExceptionsProvider.GetNodes(eval,NodeOptions(allowFuncEval));
-				try { return nodes.Select(n=>DescribeNode(n,eval,"$exception")).ToArray(); }
+				try { return nodes.Select(n=>DescribeNode(captured,n,eval,"$exception")).ToArray(); }
 				finally { manager.Close(nodes); }
 			},cancellationToken).ConfigureAwait(false);
 		}
@@ -386,7 +392,7 @@ namespace dgSpy.Extension {
 			return await WithEvaluationAsync(req,(captured,eval)=>{
 				var nodes=CreateNodes(captured,eval,stored.Select(s=>s.Value).ToArray(),allowFuncEval,allowSideEffects:false);
 				try {
-					return stored.Select((s,index)=>new WatchInfo { WatchId=s.Key,Expression=s.Value,Value=DescribeNode(nodes[index],eval,s.Value) }).ToArray();
+					return stored.Select((s,index)=>new WatchInfo { WatchId=s.Key,Expression=s.Value,Value=DescribeNode(captured,nodes[index],eval,s.Value) }).ToArray();
 				}
 				finally { manager.Close(nodes); }
 			},cancellationToken).ConfigureAwait(false);
@@ -408,14 +414,14 @@ namespace dgSpy.Extension {
 					// Arguments come back from the same provider as locals — dnSpy does not separate them,
 					// which is why there is no separate "arguments" include pretending otherwise.
 					var nodes=LocalsNodes(captured.Language,eval,NodeOptions(allowFuncEval),out rawLocals);
-					try { results.AddRange(nodes.Select(n=>DescribeNode(n,eval,n.CanEvaluateExpression ? n.Expression : ""))); }
+					try { results.AddRange(nodes.Select(n=>DescribeNode(captured,n,eval,n.CanEvaluateExpression ? n.Expression : ""))); }
 					finally { manager.Close(nodes); }
 				}
 				if (include.Contains("this")) {
 					var nodes=CreateNodes(captured,eval,new[]{"this"},allowFuncEval,allowSideEffects:false);
 					// A static method has no this, and dnSpy reports that as an evaluation error. That is
 					// not worth surfacing as a failed include.
-					try { if (nodes[0].ErrorMessage is null) results.Add(DescribeNode(nodes[0],eval,"this")); }
+					try { if (nodes[0].ErrorMessage is null) results.Add(DescribeNode(captured,nodes[0],eval,"this")); }
 					finally { manager.Close(nodes); }
 				}
 				return results.ToArray();

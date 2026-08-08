@@ -175,7 +175,7 @@ namespace dgSpy.Extension {
 				var remaining=req.DeadlineUtc is DateTime deadline ? deadline-DateTime.UtcNow : TimeSpan.FromSeconds(8);
 				refreshCancellation.CancelAfter(remaining>TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
 				try { response.Result=await OnDebuggerAsync(State,refreshCancellation.Token).ConfigureAwait(false); }
-				catch (OperationCanceledException) { response=RpcResponse.Failure(req.RequestId,"deadline_exceeded","The operation exceeded its deadline while refreshing its final session state."); }
+				catch (OperationCanceledException) { response=RpcResponse.Failure(req.RequestId,"deadline_exceeded","The execution change was issued and may already have applied, but its final session state could not be refreshed before the deadline. Read get_session_state and do not repeat the mutation unless that state proves the intended change did not occur."); }
 			}
 			response=StampVersions(req,response);
 			started.Stop();

@@ -79,7 +79,47 @@ namespace dgSpy.Extension {
 			return "The engine parked this thread where a func-eval cannot start; the expression itself is fine. "+
 				"Do not step: on an idle process every thread is blocked in a native wait and stepping cannot advance any of them. "+
 				"Call list_threads with include_evaluability=true to find a thread with can_evaluate=true and pass its thread_id. "+
-				"If no thread qualifies, set_breakpoint on a method the target will actually reach, continue, drive the target to it, and evaluate at the hit.";
+				"If no thread qualifies, reach an evaluable managed frame with run_to_method (name a method the target will actually call) or "+
+				"run_to_location (module plus method_token and il_offset); each sets a temporary breakpoint, continues, waits boundedly and removes it again, "+
+				"and the stop it produces is a managed frame you can evaluate in. "+
+				"Neither makes unreachable code execute: the target still has to arrive there. "+
+				"If the state that leads there can be prepared while paused — set_value on a flag, an input or a counter — prepare it first and then run to the location. "+
+				"If arrival needs an external stimulus, issue the run_to call first and trigger the stimulus while it is waiting.";
 		}
+
+		/// <summary>"That name does not exist here", in C# and VB. Narrow on purpose: every other compiler
+		/// error is about the expression itself, and frame-module context would be noise against it.</summary>
+		public static bool IsNameNotFound(string? error) =>
+			error is not null && (error.IndexOf("CS0103",StringComparison.Ordinal)>=0 || error.IndexOf("BC30451",StringComparison.Ordinal)>=0);
+
+		/// <summary>Why a name the caller knows exists is still not found here, for the one compiler error
+		/// that is about the frame rather than the expression.
+		///
+		/// dnSpy compiles an expression by emitting a method into the *selected frame's module* and handing
+		/// it to that module's compilation. A type the module does not reference is not in scope, and
+		/// writing the name out in full does not import it — a fully qualified <c>PuzzleBox.Gate.Stage</c>
+		/// evaluated from a <c>Thread.Sleep</c> frame in mscorlib fails with the same CS0103 as the bare
+		/// name. The remedy is never a longer name; it is a different frame. Two blind agents spent their
+		/// budget re-qualifying the expression because the response never said which module compiled it.</summary>
+		/// <param name="moduleName">CapturedFrame.Info.ModuleName — the frame's module as dnSpy names it.</param>
+		/// <param name="modulePath">CapturedFrame.Info.Module, the on-disk path, used when the name is empty.</param>
+		public static string? FrameContextAdvice(string? error,string? moduleName,string? modulePath=null) {
+			if (!IsNameNotFound(error)) return null;
+			var module=!string.IsNullOrWhiteSpace(moduleName) ? moduleName!
+				: !string.IsNullOrWhiteSpace(modulePath) ? modulePath!
+				: "an unknown module (this frame reports no module)";
+			return $"Expressions compile in the selected frame's module context, and this frame's module is {module}. "+
+				"A type that module cannot resolve is not in scope here, so a fully qualified name does not help: "+
+				"Namespace.Type.Member still requires a frame whose module can resolve Namespace.Type. "+
+				"Call get_callstack, find the nearest managed frame belonging to the module that declares the target type, "+
+				"and re-run this call with that frame's thread_id and frame_index. "+
+				"If the stack has no such frame, run_to_method into that module first.";
+		}
+
+		/// <summary>Gate recovery when the engine refused, frame-module recovery when the compiler did not
+		/// find the name. They are mutually exclusive — Recovery matches only refusal sentences and
+		/// FrameContextAdvice only a Roslyn diagnostic — so one call site can ask for both.</summary>
+		public static string? Recovery(string? error,string? moduleName,string? modulePath,bool sideEffectsGrantable=false) =>
+			Recovery(error,sideEffectsGrantable) ?? FrameContextAdvice(error,moduleName,modulePath);
 	}
 }

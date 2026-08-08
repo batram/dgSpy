@@ -147,7 +147,7 @@ public sealed class HostRouter {
 		}
 		catch (HostRoutingException ex) { return RpcResponse.Failure(request.RequestId,ex.Code,ex.Message); }
 		catch (OperationCanceledException) {
-			return RpcResponse.Failure(request.RequestId,"deadline_exceeded","The debugger operation exceeded its deadline. Narrow the query or filters, then retry.");
+			return RpcResponse.Failure(request.RequestId,"deadline_exceeded","The debugger operation exceeded its deadline. If it can mutate debugger or target state, assume it may have applied: read get_session_state and the relevant list/read tool before deciding whether to retry. For a read-only query, narrow its filters and retry.");
 		}
 		catch (Exception ex) when (ex is IOException || ex is SocketException) {
 			var recovery=endpoint is not null && !endpoint.IsOutbound
