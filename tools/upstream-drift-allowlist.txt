@@ -150,3 +150,13 @@ Extensions/dnSpy.Debugger/dnSpy.Debugger/DbgUI/WpfCurrentStatementUpdater.cs  su
 # or mistaking the older managed ThreadId fallback for a Windows thread id.
 dnSpy/dnSpy.Contracts.Debugger.DotNet.Mono/DbgMonoThreadInfo.cs              expose negotiated system-thread identity provenance
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/Impl/DbgEngineImpl.Threads.cs  attach Mono system-thread identity provenance
+
+# Console redirection on launch. A console debuggee launched through dgSpy printed
+# into a void: both engines redirected only when the user setting was on AND the
+# target was a GUI app, so a console program kept its own std handles and no
+# caller could read its output. StartDebuggingOptions carries an explicit
+# tri-state that both engines honour, null preserving upstream's GUI-only rule.
+# See commit cadf91b4c.
+dnSpy/dnSpy.Contracts.Debugger/StartDebuggingOptions.cs                                 tri-state RedirectConsoleOutput for programmatic launch
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DbgEngineImpl.cs           honour the explicit redirect request on launch
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/Impl/DbgEngineImpl.cs               honour the explicit redirect request on launch
