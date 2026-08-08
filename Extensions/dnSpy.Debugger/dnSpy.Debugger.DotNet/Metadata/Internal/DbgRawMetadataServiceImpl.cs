@@ -44,8 +44,9 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 			// Instead: mark everything disposed first, so no reader that starts later can obtain the
 			// addresses, then post the free onto the engine dispatcher itself. The free then runs
 			// behind any in-flight evaluation on the only thread reads happen on, so read and free
-			// can no longer overlap. If the dispatcher is gone (it silently drops posts once its
-			// shutdown starts), the frees never run and the finalizers reclaim the buffers instead.
+			// can no longer overlap. ForceDispose suppresses finalization before the post: if the
+			// dispatcher silently drops it during shutdown, the buffers remain allocated until process
+			// exit rather than being freed concurrently on the finalizer thread.
 			// See docs/local/dnspy-raw-metadata-use-after-free.md.
 			public void Dispose() {
 				DbgRawMetadataImpl[] all;

@@ -72,9 +72,11 @@ Extensions/dnSpy.Debugger/dnSpy.Debugger/Attach/AttachableProcessImpl.cs  stable
 # arrangement. The fix carried now quiesces instead: teardown only marks every
 # raw metadata disposed, and the actual free is posted to the engine's
 # DbgDotNetDispatcher -- the one thread all metadata readers run on -- so a free
-# runs behind any in-flight Roslyn compilation and can never overlap a read. If
-# the dispatcher is already shut down the post is dropped and the finalizer
-# reclaims the buffers. Release() on an already-disposed object stays a no-op
+# runs behind any in-flight Roslyn compilation and can never overlap a read.
+# Finalization is suppressed first: if dispatcher shutdown drops the post, the
+# allocation is deliberately left for process exit because finalizer-thread
+# reclamation cannot prove the last engine read has quiesced. Release() on an
+# already-disposed object stays a no-op
 # (it used to throw and abort DbgManagerImpl's close batch). See
 # docs/local/dnspy-raw-metadata-use-after-free.md.
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Metadata/Internal/DbgRawMetadataImpl.cs        upstream use-after-free on runtime teardown, fix carried pending an upstream PR

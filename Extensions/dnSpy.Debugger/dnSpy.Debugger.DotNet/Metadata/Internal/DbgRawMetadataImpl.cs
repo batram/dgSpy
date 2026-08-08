@@ -135,10 +135,9 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 			return (IntPtr.Zero, 0);
 		}
 
-		// Reaching the finalizer means process shutdown, a holder that never called Release, or the
-		// deliberate case where the teardown free posted by DbgRawMetadataServiceImpl was dropped
-		// because the engine dispatcher had already shut down. All are recoveries rather than bugs to
-		// assert on, and the buffers must be handed back either way.
+		// A teardown object suppresses this finalizer in ForceDispose: if its engine-thread free is
+		// dropped during dispatcher shutdown, freeing here could race the engine thread's last read.
+		// That rare allocation is deliberately left for process exit instead.
 		~DbgRawMetadataImpl() => Dispose();
 
 		public unsafe override void UpdateMemory() {
@@ -208,13 +207,16 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 		// guards set here. Zeroing the reference count makes every later Release() a no-op, so the
 		// module references closed later in this same teardown can neither throw (which used to
 		// abort DbgManagerImpl's close batch) nor trigger a free on the wrong thread. If the posted
-		// callback is dropped because the engine dispatcher already shut down, the finalizer stays
-		// armed and reclaims the buffers. See docs/local/dnspy-raw-metadata-use-after-free.md.
+		// callback is dropped because the engine dispatcher already shut down, ForceDispose suppresses
+		// the finalizer and deliberately leaves the allocation for process exit. A finalizer-thread free
+		// cannot prove the engine's last read has quiesced and would recreate the original race. See
+		// docs/local/dnspy-raw-metadata-use-after-free.md.
 		internal void ForceDispose() {
 			lock (lockObj) {
 				disposed = true;
 				referenceCounter = 0;
 			}
+			GC.SuppressFinalize(this);
 		}
 
 		// Runs on the engine's DbgDotNetDispatcher thread, after ForceDispose, behind any in-flight

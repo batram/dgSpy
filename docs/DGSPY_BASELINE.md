@@ -285,7 +285,10 @@ metadata on runtime teardown while Roslyn was still reading it, killing the proc
 uncatchable `AccessViolationException` — and, per the paragraph above, its debuggee with it. Two
 refcount-based mitigations were measured to fail; the carried fix quiesces instead: teardown only
 marks the raw metadata disposed, and the free is posted to the engine's evaluation dispatcher — the
-one thread every metadata reader runs on — so a read and a free can no longer overlap. Verified at
+one thread every metadata reader runs on — so a read and a free can no longer overlap. Finalization
+is suppressed before posting; a post dropped during dispatcher shutdown deliberately leaves its
+small native allocation for process exit because finalizer-thread reclamation cannot prove that the
+last engine-thread read has quiesced. Verified at
 zero new `.NET Runtime` 1026 records across 12 consecutive CorDebug gate runs; full account and the
 mechanism argument in `docs/local/dnspy-raw-metadata-use-after-free.md`. If a host nonetheless
 vanishes shortly after a detach, check the Windows Application log for a 1026 record naming
