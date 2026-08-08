@@ -1575,7 +1575,7 @@
     },
     {
       "name": "step_out",
-      "description": "Run to the caller of the current frame. See step_into for how completion is reported.",
+      "description": "Run to the caller of the current frame. See step_into for how completion is reported. An active breakpoint in the method being left hits first: the step reports completed:false and the next stop is that breakpoint, not the caller. Remove it first when the point is to reach the frame above.",
       "inputSchema": {
         "type": "object",
         "properties": {
