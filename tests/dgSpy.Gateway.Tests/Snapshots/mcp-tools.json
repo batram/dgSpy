@@ -331,7 +331,7 @@
     },
     {
       "name": "run_to_method",
-      "description": "SIDE EFFECTING and audited. Set a temporary method breakpoint, continue, wait boundedly, and always remove the temporary breakpoint.",
+      "description": "SIDE EFFECTING and audited. The composed way to reach or arrive at a method through the target\u0027s natural control flow: set a temporary method breakpoint, continue, wait boundedly, and always remove the temporary breakpoint. It does not invoke the method or make unreachable code execute. Read wait.timed_out: true means no arrival, the temporary breakpoint is gone, and the target is running again.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -388,7 +388,7 @@
     },
     {
       "name": "run_to_location",
-      "description": "SIDE EFFECTING and audited. Set a temporary IL breakpoint, continue, wait boundedly, and always remove the temporary breakpoint.",
+      "description": "SIDE EFFECTING and audited. The composed way to reach or arrive at an IL location through the target\u0027s natural control flow: set a temporary IL breakpoint, continue, wait boundedly, and always remove the temporary breakpoint. It does not invoke code or make an unreachable location execute. Read wait.timed_out: true means no arrival, the temporary breakpoint is gone, and the target is running again.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1263,7 +1263,7 @@
     },
     {
       "name": "list_threads",
-      "description": "List paused target threads with stable thread_id values. It does not eagerly fetch every stack because Unity threads can exit during frame retrieval; select a returned thread_id with get_callstack or get_frame. Do not try to predict func-eval viability from \u0060states\u0060: CorDebug publishes UnsafePoint there and Mono publishes no equivalent at all, so a rule learned on one engine is wrong on the other. Pass include_evaluability instead. If no thread can evaluate, prepare or drive the target state and use run_to_method or run_to_location to reach an evaluable managed frame; those workflows wait for reachable code, they do not make an otherwise unreachable method execute.",
+      "description": "List paused target threads with stable thread_id values. It does not eagerly fetch every stack because Unity threads can exit during frame retrieval; select a returned thread_id with get_callstack or get_frame. Do not try to predict func-eval viability from \u0060states\u0060: CorDebug publishes UnsafePoint there and Mono publishes no equivalent at all, so a rule learned on one engine is wrong on the other. Pass include_evaluability instead. A blocked result carries recovery at the point of decision: use the composed run_to_method or run_to_location workflow rather than manually assembling breakpoint, continue, wait, and cleanup. Those workflows wait for reachable code; they do not make an otherwise unreachable method execute. If arrival needs an external stimulus, issue the run-to call first and drive the stimulus while it waits.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1276,7 +1276,7 @@
           },
           "include_evaluability": {
             "type": "boolean",
-            "description": "Default false. True probes each thread and adds can_evaluate plus evaluate_blocked_reason (no_frames, native_frame, or unsafe_point), which is the signal invoke_method, create_object and reference-valued set_value actually depend on. Costs one bounded stack walk per thread; on Unity that is the call a disappearing thread can stall, which is why it is opt-in."
+            "description": "Default false. True probes each thread and adds can_evaluate, evaluate_blocked_reason (no_frames, native_frame, or unsafe_point), and recovery when blocked. Follow that recovery directly; it names the composed run-to workflow. Costs one bounded stack walk per thread; on Unity that is the call a disappearing thread can stall, which is why it is opt-in."
           }
         },
         "required": [
@@ -1682,7 +1682,7 @@
     },
     {
       "name": "invoke_method",
-      "description": "SIDE EFFECTING and audited. Evaluate a complete method-call expression in the paused target. Func-eval and side effects are always enabled by this tool boundary and cannot be downgraded or enabled accidentally through evaluate. On failure read compiler_error: true means the expression never compiled and nothing ran, so fix the expression; false means it compiled and the engine refused to execute it here, so the same call can succeed against another thread or another stop. A func-eval needs a thread the engine will let it start on \u2014 call list_threads with include_evaluability=true and pass a thread_id whose can_evaluate is true. If none qualifies, prepare or drive the target state, then use run_to_method or run_to_location to reach a managed frame that can evaluate. For CS0103, use get_callstack and select the nearest frame in the target module; qualification alone does not make a type visible from an unrelated frame module.",
+      "description": "SIDE EFFECTING and audited. Evaluate a complete method-call expression in the paused target. This injects a nested func-eval; it is not natural-control-flow arrival at the method, and breakpoints inside the invoked call are not serviced. Never use it to satisfy a request to reach or arrive at code: use run_to_method or run_to_location, whose timed_out result proves whether natural execution arrived. Func-eval and side effects are always enabled by this tool boundary and cannot be downgraded or enabled accidentally through evaluate. On failure read compiler_error: true means the expression never compiled and nothing ran, so fix the expression; false means it compiled and the engine refused to execute it here, so the same call can succeed against another thread or another stop. A func-eval needs a thread the engine will let it start on \u2014 call list_threads with include_evaluability=true and pass a thread_id whose can_evaluate is true. If none qualifies, prepare or drive the target state, then use run_to_method or run_to_location to reach a managed frame that can evaluate. For CS0103, use get_callstack and select the nearest frame in the target module; qualification alone does not make a type visible from an unrelated frame module.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2047,7 +2047,7 @@
     },
     {
       "name": "set_value",
-      "description": "Assign to a local, parameter, field or property in the paused target. Always side-effecting: the assignment executes in the target. compiler_error=true means the expression did not compile and nothing ran; an error without it means the target may already have been touched. Executing in the target is not the same as needing a func-eval, and the difference decides what is still possible against an idle process. Storing a value that already exists over there is a direct write and succeeds even with every thread at an unsafe point; producing a value the engine must first create \u2014 a string literal, a boxed value, a new object \u2014 is a func-eval and is refused at an unsafe point like any other. The cost of the value is what matters, not whether the target is a primitive: assigning null to a reference is as free as assigning an int, while assigning a string literal to that same reference is refused. When it is refused, see invoke_method for how to reach a thread that can evaluate; note also that the unsafe-point thread\u0027s evaluable frame is often not frame 0, so pass frame_index for the frame whose locals you actually want. A CS0103 \u0022does not exist in the current context\u0022 error names the variables this frame can actually address: when the engine recovers no source-level names for a method its locals are reachable only as the raw slots V_0, V_1, ..., which assign like any other name.",
+      "description": "Assign to a local, parameter, field or property in the paused target. Always side-effecting: the assignment executes in the target. When this assignment prepares a flag, input, or counter that makes the target call the next method, keep the target paused for the assignment and then use run_to_method or run_to_location; do not manually assemble breakpoint, continue, wait, and cleanup. compiler_error=true means the expression did not compile and nothing ran; an error without it means the target may already have been touched. Executing in the target is not the same as needing a func-eval, and the difference decides what is still possible against an idle process. Storing a value that already exists over there is a direct write and succeeds even with every thread at an unsafe point; producing a value the engine must first create \u2014 a string literal, a boxed value, a new object \u2014 is a func-eval and is refused at an unsafe point like any other. The cost of the value is what matters, not whether the target is a primitive: assigning null to a reference is as free as assigning an int, while assigning a string literal to that same reference is refused. When it is refused, see invoke_method for how to reach a thread that can evaluate; note also that the unsafe-point thread\u0027s evaluable frame is often not frame 0, so pass frame_index for the frame whose locals you actually want. A CS0103 \u0022does not exist in the current context\u0022 error names the variables this frame can actually address: when the engine recovers no source-level names for a method its locals are reachable only as the raw slots V_0, V_1, ..., which assign like any other name.",
       "inputSchema": {
         "type": "object",
         "properties": {

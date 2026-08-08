@@ -80,6 +80,31 @@ public sealed class ToolCatalogTests {
 		Assert.Contains("drive",description,StringComparison.OrdinalIgnoreCase);
 	}
 
+	[Fact]
+	public void Measured_blind_run_decision_points_distinguish_composed_arrival_from_manual_or_injected_execution() {
+		var threads=Description(ToolCatalog.All.Single(t=>Name(t)=="list_threads"));
+		Assert.Contains("recovery",threads,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("manually assembling",threads,StringComparison.OrdinalIgnoreCase);
+
+		var assignment=Description(ToolCatalog.All.Single(t=>Name(t)=="set_value"));
+		Assert.Contains("then use run_to_method or run_to_location",assignment,StringComparison.Ordinal);
+		Assert.Contains("do not manually assemble",assignment,StringComparison.OrdinalIgnoreCase);
+
+		var invocation=Description(ToolCatalog.All.Single(t=>Name(t)=="invoke_method"));
+		Assert.Contains("not natural-control-flow arrival",invocation,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("breakpoints inside the invoked call are not serviced",invocation,StringComparison.OrdinalIgnoreCase);
+	}
+
+	[Theory]
+	[InlineData("run_to_method")]
+	[InlineData("run_to_location")]
+	public void Run_to_tools_define_timeout_as_no_arrival_with_the_target_running(string name) {
+		var description=Description(ToolCatalog.All.Single(t=>Name(t)==name));
+		Assert.Contains("wait.timed_out",description,StringComparison.Ordinal);
+		Assert.Contains("no arrival",description,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("target is running again",description,StringComparison.OrdinalIgnoreCase);
+	}
+
 	[Theory]
 	[InlineData("evaluate")]
 	[InlineData("invoke_method")]

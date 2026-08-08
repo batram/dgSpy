@@ -92,6 +92,16 @@ public sealed class FuncEvalDiagnosticsTests {
 		Assert.Contains("run_to_location",recovery,StringComparison.Ordinal);
 	}
 
+	[Fact]
+	public void Proactive_evaluability_recovery_forbids_rebuilding_the_composite_by_hand() {
+		var recovery=FuncEvalDiagnostics.NoEvaluableThreadRecovery;
+
+		Assert.Contains("run_to_method",recovery,StringComparison.Ordinal);
+		Assert.Contains("run_to_location",recovery,StringComparison.Ordinal);
+		Assert.Contains("do not assemble that sequence manually",recovery,StringComparison.Ordinal);
+		Assert.Contains("prepare it first",recovery,StringComparison.Ordinal);
+	}
+
 	/// <summary>The two halves that stop a run-to workflow from being read as magic. It cannot make
 	/// unreachable code execute, and reaching a point that needs a stimulus means calling first and
 	/// triggering second — the opposite order silently misses the stop.</summary>

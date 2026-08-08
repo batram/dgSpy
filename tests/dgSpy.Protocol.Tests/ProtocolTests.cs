@@ -116,6 +116,7 @@ public class IdentityContractTests {
 	public void Thread_and_frame_selection_have_explicit_wire_identity() {
 		var thread = ProtocolJson.ParseObject(ProtocolJson.Serialize(new ThreadInfo {
 			ThreadId = "1234:99", ProcessId = 1234, OsThreadId = 99, ManagedThreadId = 7, HasManagedFrames = true,
+			CanEvaluate = false, EvaluateBlockedReason = "unsafe_point", Recovery = "use the composed workflow",
 		}));
 		var frame = ProtocolJson.ParseObject(ProtocolJson.Serialize(new FrameInfo {
 			FrameId = "session:5:1234:99:2", ThreadId = "1234:99", FrameIndex = 2,
@@ -125,6 +126,9 @@ public class IdentityContractTests {
 		Assert.Equal(99ul, (ulong?)thread["os_thread_id"]);
 		Assert.Equal(7ul, (ulong?)thread["managed_thread_id"]);
 		Assert.True((bool?)thread["has_managed_frames"]);
+		Assert.False((bool?)thread["can_evaluate"]);
+		Assert.Equal("unsafe_point",(string?)thread["evaluate_blocked_reason"]);
+		Assert.Equal("use the composed workflow",(string?)thread["recovery"]);
 		Assert.Equal("1234:99", (string?)frame["thread_id"]);
 		Assert.Equal(2, (int?)frame["frame_index"]);
 	}

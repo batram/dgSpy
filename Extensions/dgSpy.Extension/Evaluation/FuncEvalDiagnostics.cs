@@ -11,6 +11,12 @@ namespace dgSpy.Extension {
 	/// <c>error CS1234:</c> / <c>error BC1234:</c> prefix, while every execution refusal comes from
 	/// <c>PredefinedEvaluationErrorMessages</c> and is a plain localized sentence.</summary>
 	static class FuncEvalDiagnostics {
+		public const string NoEvaluableThreadRecovery=
+			"If no thread can evaluate, reach an evaluable managed frame with run_to_method (name a method the target will actually call) or "+
+			"run_to_location (module plus method_token and il_offset). These are the composed breakpoint/continue/wait/cleanup workflows; "+
+			"do not assemble that sequence manually. Neither makes unreachable code execute: the target still has to arrive there. "+
+			"If the state that leads there can be prepared while paused - set_value on a flag, an input or a counter - prepare it first and then run to the location. "+
+			"If arrival needs an external stimulus, issue the run_to call first and trigger the stimulus while it is waiting.";
 		/// <summary>True for a Roslyn diagnostic, ie. the expression never compiled and nothing ran in the
 		/// target. Matches "error CS0571: ..." and its Visual Basic equivalent.</summary>
 		public static bool IsCompilerError(string? error) {

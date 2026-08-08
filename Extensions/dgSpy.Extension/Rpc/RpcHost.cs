@@ -668,7 +668,7 @@ namespace dgSpy.Extension {
 					var info=new ThreadInfo { ThreadId=ThreadId(thread),ProcessId=thread.Process.Id,OsThreadId=thread.Id,ManagedThreadId=thread.ManagedId,
 						Name=thread.Name,Kind=thread.Kind,IsMain=thread.IsMain,IsCurrent=thread==manager.CurrentThread.Current,
 						SuspendedCount=thread.SuspendedCount,States=states };
-					if (evaluability) { var reason=EvaluationBlocker(thread,states); info.CanEvaluate=reason is null; info.EvaluateBlockedReason=reason; }
+					if (evaluability) { var reason=EvaluationBlocker(thread,states); info.CanEvaluate=reason is null; info.EvaluateBlockedReason=reason; if(reason is not null) info.Recovery=FuncEvalDiagnostics.NoEvaluableThreadRecovery; }
 					return info;
 				}).OrderBy(thread=>thread.ProcessId).ThenBy(thread=>thread.OsThreadId).ToArray();
 			},cancellationToken).ConfigureAwait(false);

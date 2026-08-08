@@ -150,6 +150,9 @@ namespace dgSpy.Protocol {
 		/// or <c>unsafe_point</c> (frames are fine but the engine parked the thread where a func-eval cannot
 		/// start). Reported in the order the engine itself checks them.</summary>
 		[JsonPropertyName("evaluate_blocked_reason"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? EvaluateBlockedReason { get; set; }
+		/// <summary>Actionable recovery when <see cref="CanEvaluate"/> is false. Kept on the measured
+		/// response because callers that proactively probe evaluability never receive an evaluation error.</summary>
+		[JsonPropertyName("recovery"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Recovery { get; set; }
 	}
 	public sealed class FrameInfo {
 		[JsonPropertyName("frame_id")] public string FrameId { get; set; }="";
