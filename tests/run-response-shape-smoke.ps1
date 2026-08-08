@@ -237,7 +237,17 @@ try {
 	# Stage was last 1, so writing 3 makes the target run Descend -> Probe once more.
 	$null = Select-TargetFrame -SessionId $sessionId
 	$assigned = Set-Stage -SessionId $sessionId -Stage 3 -Versions $updated.versions
-	$null = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId; expected_execution_version = $assigned.versions.execution_version }
+	$resumedToProbe = Invoke-Tool -Name 'continue' -Arguments @{ session_id = $sessionId; expected_execution_version = $assigned.versions.execution_version }
+	# Probe is hot enough to hit its breakpoint before continue returns. The response used to combine
+	# the running SessionState captured by ContinueProcessAsync with the later stopped version vector.
+	Assert-That 'continue returns one observation instant after an immediate breakpoint hit' `
+		($resumedToProbe.state -eq 'paused' -and
+		 $resumedToProbe.lifecycle_version -eq $resumedToProbe.versions.lifecycle_version -and
+		 $resumedToProbe.execution_version -eq $resumedToProbe.versions.execution_version -and
+		 $resumedToProbe.breakpoints_version -eq $resumedToProbe.versions.breakpoints_version -and
+		 $resumedToProbe.stop_id -eq $resumedToProbe.versions.stop_id -and
+		 $resumedToProbe.last_event_id -eq $resumedToProbe.versions.last_event_id) `
+		"(state=$($resumedToProbe.state), lifecycle=$($resumedToProbe.lifecycle_version)/$($resumedToProbe.versions.lifecycle_version), execution=$($resumedToProbe.execution_version)/$($resumedToProbe.versions.execution_version), breakpoints=$($resumedToProbe.breakpoints_version)/$($resumedToProbe.versions.breakpoints_version), stop=$($resumedToProbe.stop_id)/$($resumedToProbe.versions.stop_id), event=$($resumedToProbe.last_event_id)/$($resumedToProbe.versions.last_event_id))"
 	$stopped = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId
 		after_event_id = $stopCursor; timeout_ms = 10000 }
 	# engine_hit_count is counted before the condition runs, so it separates the two ways this can fail:

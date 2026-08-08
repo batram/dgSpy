@@ -166,6 +166,17 @@ namespace dgSpy.Extension {
 			long executionBefore; lock(sync) executionBefore=executionVersion;
 			var response=await DispatchCoreAsync(req).ConfigureAwait(false);
 			await SettleExecutionChangeAsync(req,response,executionBefore).ConfigureAwait(false);
+			// pause and continue return SessionState directly. The engine can stop again while the settle
+			// wait is observing the execution event, so the state composed inside the operation may already
+			// be older than the version vector below. Re-read the whole state after settling; replacing only
+			// its counters would leave state, process_ids, and terminal details from different instants.
+			if (response.Error is null && response.Result is SessionState && executionChangingOperations.Contains(req.Operation)) {
+				using var refreshCancellation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
+				var remaining=req.DeadlineUtc is DateTime deadline ? deadline-DateTime.UtcNow : TimeSpan.FromSeconds(8);
+				refreshCancellation.CancelAfter(remaining>TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
+				try { response.Result=await OnDebuggerAsync(State,refreshCancellation.Token).ConfigureAwait(false); }
+				catch (OperationCanceledException) { response=RpcResponse.Failure(req.RequestId,"deadline_exceeded","The operation exceeded its deadline while refreshing its final session state."); }
+			}
 			response=StampVersions(req,response);
 			started.Stop();
 			try { McpActivityLog.Instance.Record(req,response,started.Elapsed); }
@@ -220,13 +231,24 @@ namespace dgSpy.Extension {
 		}
 		RpcResponse StampVersions(RpcRequest req,RpcResponse response) {
 			if (response.Error is not null || !versionStampedOperations.Contains(req.Operation)) return response;
+			var sessionState=response.Result as SessionState;
 			// restore_exception_defaults returns a bare bool; everything else in the set is an object.
 			if (ProtocolJson.ToNode(response.Result) is not JsonObject node) return response;
 			long lifecycle,execution,breakpointsRevision; string? stop;
-			lock(sync) { lifecycle=lifecycleVersion; execution=executionVersion; breakpointsRevision=breakpointsVersion; stop=stopId; }
+			long lastEvent;
+			if (sessionState is not null) {
+				// The duplicated top-level fields and nested vector are one contract observation. Never
+				// re-read live counters after State(), because another stop can land in that gap.
+				lifecycle=sessionState.LifecycleVersion; execution=sessionState.ExecutionVersion;
+				breakpointsRevision=sessionState.BreakpointsVersion; stop=sessionState.StopId; lastEvent=sessionState.LastEventId;
+			}
+			else {
+				lock(sync) { lifecycle=lifecycleVersion; execution=executionVersion; breakpointsRevision=breakpointsVersion; stop=stopId; }
+				lastEvent=events.LastEventId;
+			}
 			node["versions"]=new JsonObject {
 				["lifecycle_version"]=lifecycle,["execution_version"]=execution,["breakpoints_version"]=breakpointsRevision,
-				["stop_id"]=stop,["last_event_id"]=events.LastEventId,
+				["stop_id"]=stop,["last_event_id"]=lastEvent,
 			};
 			response.Result=node;
 			return response;
