@@ -78,6 +78,9 @@ namespace dgSpy.Extension {
 			// RPC, but it does leave a dialog nobody headless will dismiss.
 			manager.MessageUserMessage += (_,e) => { lock(sync) lastUserMessage=e.Message; };
 			manager.DbgManagerMessage += (_,e) => output.Add(e.MessageKind,e.Message);
+			// Managed debugger log messages (Debugger.Log on CorDebug). Unlike console handles, the debugger receives these for
+			// attached targets too. Capture the event itself rather than scraping dnSpy's filtered GUI pane.
+			manager.MessageProgramMessage += (_,e) => { try { programOutput.Append(new ProgramOutputOrigin(OutputCategories.DebugOutput,e.Runtime.Process.Id,e.Runtime.Guid.ToString("D")),e.Message); } catch (Exception) { } };
 			// The debuggee's own stdout/stderr. dnSpy raises these only when the engine was asked to redirect
 			// the streams, which launch now does by default; an attached target's console was never ours to
 			// capture, so nothing arrives for those.

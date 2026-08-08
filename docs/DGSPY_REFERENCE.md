@@ -306,14 +306,16 @@ The text stream interleaves two sources, told apart by each message's `category`
 
 | Category | Source |
 |---|---|
+| `DebugOutput` | Managed debugger log messages such as `Debugger.Log` on CorDebug, including from attached targets |
 | `StandardOutput`, `StandardError` | The debugged program's own console streams, reassembled into whole lines |
 | `Output`, `ErrorUser`, `StepFilter` | Host commentary from dnSpy and dgSpy, including the `dgSpy audit <id>:` line every side-effecting call writes |
 
-Program output only exists for a target dgSpy **launched**, and only while `redirect_output` is on
+`DebugOutput` is delivered by the debugger and therefore works for launched and attached targets.
+Console output only exists for a target dgSpy **launched**, and only while `redirect_output` is on
 (the default). The engine then creates the process with its stdout/stderr on pipes it owns. An attached
-process's console handles were never dgSpy's, so nothing can be captured from one after the fact, and
-for those sessions `get_output` carries host commentary alone. That is a property of process creation
-on Windows, not a gap in the tool: retro-fitting handles onto a running process is not possible.
+process's console handles were never dgSpy's, so its stdout/stderr cannot be captured after the fact.
+That is a property of process creation on Windows, not a gap in the tool: retro-fitting handles onto a
+running process is not possible.
 
 ### An interrupted `launch` is not a failed one
 

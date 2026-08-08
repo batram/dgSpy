@@ -3065,7 +3065,7 @@
     },
     {
       "name": "get_output",
-      "description": "Read the bounded non-destructive TEXT stream after a cursor: the debugged program\u0027s own console output plus the host\u0027s commentary, interleaved in one ring and told apart by each message\u0027s category. StandardOutput and StandardError are the program\u0027s stdout/stderr, reassembled into whole lines. Output, ErrorUser and StepFilter are host records, including the audit line every side-effecting call writes. Program output exists only for a target this dgSpy launched with redirect_output (the default): an attached process\u0027s console handles were never ours, so nothing can be captured from one, and get_output then carries host records alone. To block until the next line arrives instead of polling, use wait_for_output. Structured events \u2014 breakpoint hits, steps, exceptions, process exit \u2014 are not here; they are get_events.",
+      "description": "Read the bounded non-destructive TEXT stream after a cursor: the debugged program\u0027s text plus the host\u0027s commentary, interleaved in one ring and told apart by category. DebugOutput is a managed debugger log message (for example Debugger.Log on CorDebug) and is available for attached as well as launched targets. StandardOutput and StandardError are a launched program\u0027s redirected stdout/stderr, reassembled into whole lines. Output, ErrorUser and StepFilter are host records, including the audit line every side-effecting call writes. An attached process\u0027s console handles were never ours, so its stdout/stderr cannot be captured after the fact. To block until the next line arrives instead of polling, use wait_for_output. Structured events \u2014 breakpoint hits, steps, exceptions, process exit \u2014 are not here; they are get_events.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3094,7 +3094,7 @@
     },
     {
       "name": "wait_for_output",
-      "description": "Wait, without consuming, for new text on exactly the stream get_output returns \u2014 program stdout/stderr and host commentary. Use it to wait for something the program prints; use wait_for_stop or wait_for_event to wait for a debugger event. A trailing line the program wrote without a newline is published after a short quiet period rather than held until its next write, so a prompt still arrives.",
+      "description": "Wait, without consuming, for new text on exactly the stream get_output returns \u2014 debug output, launched-program stdout/stderr, and host commentary. Use it to wait for something the program writes; use wait_for_stop or wait_for_event to wait for a debugger event. A trailing line written without a newline is published after a short quiet period rather than held until its next write, so a prompt still arrives.",
       "inputSchema": {
         "type": "object",
         "properties": {

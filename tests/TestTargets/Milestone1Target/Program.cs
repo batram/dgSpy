@@ -56,6 +56,8 @@ namespace Milestone1Target {
 		static volatile bool loadDeferredModule;
 		static volatile bool unloadDeferredModule;
 		static volatile bool throwPhase8Exception;
+		static int debugOutputTick;
+		static int debugOutputAttempts;
 		static int observedWorkerValue;
 		static event Action Phase8Event;
 
@@ -77,6 +79,14 @@ namespace Milestone1Target {
 			var aggregate=new AggregateFixture();
 			ExercisePhase8Relationships();
 			while (keepRunning) {
+				// The process starts before the smoke attaches, so a startup message would be lost. Emit at a
+				// bounded one-per-second rate long enough for CorDebug to attach. Debugger.IsAttached is not a
+				// usable gate here: this engine configuration reports false even while events are being received.
+				if (++debugOutputTick==10 && debugOutputAttempts<120) {
+					debugOutputTick=0;
+					debugOutputAttempts++;
+					System.Diagnostics.Debugger.Log(0,"dgSpy","DGSPY_DEBUG_OUTPUT_ATTACHED\n");
+				}
 				if (loadDeferredModule) { LoadDeferredPayload(); loadDeferredModule=false; }
 				if (unloadDeferredModule) { CycleDeferredPayload(); unloadDeferredModule=false; }
 				if (throwPhase8Exception) { throwPhase8Exception=false; try { throw new Phase8FixtureException(); } catch (Phase8FixtureException) { } }

@@ -173,5 +173,6 @@ public class ProgramOutputAssemblerTests {
 		Assert.Equal(new ProgramOutputOrigin("StandardOutput",7,"r"),new ProgramOutputOrigin("StandardOutput",7,"r"));
 		Assert.NotEqual(new ProgramOutputOrigin("StandardOutput",7,"r"),new ProgramOutputOrigin("StandardError",7,"r"));
 		Assert.NotEqual(new ProgramOutputOrigin("StandardOutput",7,"r"),new ProgramOutputOrigin("StandardOutput",8,"r"));
+		Assert.NotEqual(new ProgramOutputOrigin("StandardOutput",7,"r"),new ProgramOutputOrigin("DebugOutput",7,"r"));
 	}
 }

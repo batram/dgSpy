@@ -7,8 +7,9 @@ using dgSpy.Protocol;
 
 namespace dgSpy.Extension {
 	// OutputMessage.Category values. The first three are dnSpy's own PredefinedDbgManagerMessageKinds, ie.
-	// host-side commentary; the last two are the debugged program's own console streams.
+	// host-side commentary; the last three are the debugged program's own text streams.
 	static class OutputCategories {
+		public const string DebugOutput="DebugOutput";
 		public const string StandardOutput="StandardOutput";
 		public const string StandardError="StandardError";
 	}
