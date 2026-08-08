@@ -107,14 +107,18 @@ function Set-Stage {
 	$readback = '(unread)'
 	try { $readback = (Invoke-Tool -Name 'evaluate' -Arguments @{ session_id = $SessionId; expression = 'PuzzleBox.Gate.Stage'; thread_id = $thread.thread_id; frame_index = $frame }).value } catch { $readback = "(threw: $($_.Exception.Message))" }
 	$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $SessionId }
-	# Reported, not asserted: after a pause plus a set_value this target keeps reporting itself paused well
-	# past continue, with or without output redirection, and comes back on the next evaluation. Record what
-	# happened rather than waiting it out - nothing below depends on the resume being prompt.
+	# This used to remain reported paused until the next evaluation. The launch call now returns only
+	# after its requested entry-point stop, so the pause/write/resume sequence starts from one stable stop
+	# and continue must make forward progress without another evaluation nudging it.
 	$clock = [Diagnostics.Stopwatch]::StartNew()
-	$resumed = Wait-Until { (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $SessionId }).state -eq 'running' } 15
+	$resumed = Wait-Until { (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $SessionId }).state -eq 'running' } 5
 	$clock.Stop()
 	$state = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $SessionId }).state
 	Write-Host "        stage=$Stage written on $($thread.thread_id)/frame$frame, read back '$readback', resumed=$resumed in $([int]$clock.Elapsed.TotalSeconds) s, state=$state"
+	if ($Stage -ne 9) {
+		Assert-That "continue resumes promptly after pause plus set_value (stage $Stage)" ($resumed -and $state -eq 'running') `
+			"(resumed=$resumed state=$state elapsed=$([int]$clock.Elapsed.TotalSeconds)s)"
+	}
 }
 
 try {
@@ -171,12 +175,8 @@ try {
 		Assert-That 'program output carries the target process id' ($readyMessage.process_id -eq $launchedPid) "(process_id $($readyMessage.process_id))"
 	}
 
-	# Drive the stages that make the target print more than its startup line. Deliberately no per-stage
-	# wait: after a pause plus a set_value this target keeps being REPORTED paused long after continue,
-	# and it resumes on the next evaluation instead. That is a separate pre-existing behaviour - the
-	# control run reproduces it with redirect_output=false, so output capture is not involved - and a
-	# smoke for the output path must not fail on it. What matters here is that whatever the program
-	# eventually prints is carried, which the record comparison below checks against its own log.
+	# Drive the stages that make the target print more than its startup line. Set-Stage also asserts that
+	# each nonterminal pause/write/continue cycle resumes without needing a later evaluation.
 	Write-Section 'drive the target through its printing stages'
 	Set-Stage -SessionId $sessionId -Stage 1
 	Set-Stage -SessionId $sessionId -Stage 4
