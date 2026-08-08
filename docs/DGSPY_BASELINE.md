@@ -280,13 +280,16 @@ attachment that is still live when the host process ends destroys the process be
 logs it. From the agent's side a target simply vanishes, which is why this was suspected for a long
 time before it was tested.
 
-**The host can still die on its own, and this is the open defect.** An upstream use-after-free frees
-native module metadata on runtime teardown while Roslyn is still reading it, killing the process with
-an uncatchable `AccessViolationException` — and, per the paragraph above, its debuggee with it. Two
-mitigations have been tried and measured; neither closes it. Full account, including the two
-approaches that can, in `docs/local/dnspy-raw-metadata-use-after-free.md`. Treat a host that vanishes
-shortly after a detach as this, and check the Windows Application log for a `.NET Runtime` 1026
-record naming `CompileGetLocals` before looking anywhere else.
+**The host's own crash-on-detach is closed.** An upstream use-after-free freed native module
+metadata on runtime teardown while Roslyn was still reading it, killing the process with an
+uncatchable `AccessViolationException` — and, per the paragraph above, its debuggee with it. Two
+refcount-based mitigations were measured to fail; the carried fix quiesces instead: teardown only
+marks the raw metadata disposed, and the free is posted to the engine's evaluation dispatcher — the
+one thread every metadata reader runs on — so a read and a free can no longer overlap. Verified at
+zero new `.NET Runtime` 1026 records across 12 consecutive CorDebug gate runs; full account and the
+mechanism argument in `docs/local/dnspy-raw-metadata-use-after-free.md`. If a host nonetheless
+vanishes shortly after a detach, check the Windows Application log for a 1026 record naming
+`CompileGetLocals` before looking anywhere else.
 
 Everything else in this section follows from that:
 

@@ -135,10 +135,10 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 			return (IntPtr.Zero, 0);
 		}
 
-		// Reaching the finalizer means either process shutdown or a holder that never called Release --
-		// including the deliberate case where ForceDispose deferred the free because references were
-		// still outstanding. Both are recoveries rather than bugs to assert on, and the buffers must be
-		// handed back either way.
+		// Reaching the finalizer means process shutdown, a holder that never called Release, or the
+		// deliberate case where the teardown free posted by DbgRawMetadataServiceImpl was dropped
+		// because the engine dispatcher had already shut down. All are recoveries rather than bugs to
+		// assert on, and the buffers must be handed back either way.
 		~DbgRawMetadataImpl() => Dispose();
 
 		public unsafe override void UpdateMemory() {
@@ -192,39 +192,36 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 			FreeBuffers();
 		}
 
-		// Called on runtime teardown. It marks the object disposed so no new reader can obtain the
-		// addresses -- every reader above guards on `disposed`, and freeing without setting it left
-		// those guards passing while the addresses were gone. Readers then dereferenced freed memory
-		// through Roslyn MetadataBlock pointers and the process died of an AccessViolationException on
-		// the engine thread, under CompileGetLocals, with no managed exception to explain it. That is
-		// not catchable and takes the whole host down -- and since a host holding an ICorDebug
-		// attachment kills its debuggee when it dies, it destroys the target too.
+		// Called on runtime teardown, on the DbgManager dispatcher thread. It only marks the object
+		// disposed -- it must never free, because the Roslyn expression compiler may at this moment be
+		// reading these buffers on the engine thread through MetadataBlock raw pointers captured
+		// earlier. Freeing here dereferences freed memory under CompileGetLocals and kills the process
+		// with an uncatchable AccessViolationException -- and a host holding an ICorDebug attachment
+		// kills its debuggee when it dies, so it destroys the target too. Both freeing eagerly here
+		// and deferring the free to the last Release() were measured to still crash: the reference
+		// holders die in the same teardown microseconds later, and the racing reader holds no
+		// reference at all, so no refcount arrangement can close the window.
 		//
-		// The buffers are freed here only when nothing holds a reference; otherwise the free is
-		// deferred to the last Release, with the finalizer left armed as the backstop.
-		//
-		// BE CLEAR ABOUT WHAT THIS BUYS: it does NOT close the race, and it has been measured not to.
-		// A gate run carrying exactly this code still died with the same AccessViolation. Deferring to
-		// the last Release only moves the free from DbgRuntimeImpl.CloseCore to
-		// DbgManagerImpl.CloseObjects_DbgThread -- both on the dispatcher thread, microseconds apart,
-		// inside the same teardown -- because the reference holders are destroyed by the very event
-		// that frees. And the racing reader holds no reference at all: Roslyn reads through raw
-		// MetadataBlock pointers captured earlier. Reference counting therefore cannot fix this, in
-		// any arrangement. Closing it means either never freeing eagerly (leak to the finalizer) or
-		// quiescing engine-thread evaluation before the runtime closes.
-		//
-		// What deferral does earn is the cheap half: Release() below no longer throws on this path,
-		// which used to abort the whole close batch. See docs/local/dnspy-raw-metadata-use-after-free.md.
+		// The free happens in FreeAfterQuiesce below, which DbgRawMetadataServiceImpl posts to the
+		// engine's DbgDotNetDispatcher -- the one thread every metadata reader runs on -- so a free
+		// cannot overlap an in-flight read, and a read that starts after it hits the `disposed`
+		// guards set here. Zeroing the reference count makes every later Release() a no-op, so the
+		// module references closed later in this same teardown can neither throw (which used to
+		// abort DbgManagerImpl's close batch) nor trigger a free on the wrong thread. If the posted
+		// callback is dropped because the engine dispatcher already shut down, the finalizer stays
+		// armed and reclaims the buffers. See docs/local/dnspy-raw-metadata-use-after-free.md.
 		internal void ForceDispose() {
-			bool free;
 			lock (lockObj) {
 				disposed = true;
-				free = referenceCounter <= 0;
+				referenceCounter = 0;
 			}
-			if (free) {
-				GC.SuppressFinalize(this);
-				FreeBuffers();
-			}
+		}
+
+		// Runs on the engine's DbgDotNetDispatcher thread, after ForceDispose, behind any in-flight
+		// evaluation. This is the only place the teardown path frees.
+		internal void FreeAfterQuiesce() {
+			GC.SuppressFinalize(this);
+			FreeBuffers();
 		}
 
 		void FreeBuffers() {

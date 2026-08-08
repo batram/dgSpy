@@ -66,16 +66,19 @@ Extensions/dnSpy.Debugger/dnSpy.Debugger/Attach/AttachableProcessImpl.cs  stable
 # entry when they take it. Setting `disposed` was a mitigation, not a cure, and
 # the crash recurred at roughly one run in 25 -- a host would vanish a minute or
 # so after a detach with nothing in any log. Deferring the free until the last
-# reference is released was tried next and MEASURED NOT TO WORK: a gate run
-# carrying it crashed with the same AccessViolation. The reference holders are
-# destroyed by the same teardown that frees, and the racing reader holds no
-# reference at all, so refcounting cannot close this window. The AccessViolation
-# is still open; see docs/local/dnspy-raw-metadata-use-after-free.md for the two
-# approaches that can close it. What the change did fix is the other half:
-# Release() was throwing ObjectDisposedException on the teardown path, which
-# aborted DbgManagerImpl's close batch and faulted the dispatcher; releasing
-# something already disposed is now a no-op.
-Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Metadata/Internal/DbgRawMetadataImpl.cs  upstream use-after-free on runtime teardown, fix carried pending an upstream PR
+# reference is released was tried next and MEASURED NOT TO WORK: the reference
+# holders are destroyed by the same teardown that frees, and the racing reader
+# holds no reference at all, so refcounting cannot close this window in any
+# arrangement. The fix carried now quiesces instead: teardown only marks every
+# raw metadata disposed, and the actual free is posted to the engine's
+# DbgDotNetDispatcher -- the one thread all metadata readers run on -- so a free
+# runs behind any in-flight Roslyn compilation and can never overlap a read. If
+# the dispatcher is already shut down the post is dropped and the finalizer
+# reclaims the buffers. Release() on an already-disposed object stays a no-op
+# (it used to throw and abort DbgManagerImpl's close batch). See
+# docs/local/dnspy-raw-metadata-use-after-free.md.
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Metadata/Internal/DbgRawMetadataImpl.cs        upstream use-after-free on runtime teardown, fix carried pending an upstream PR
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Metadata/Internal/DbgRawMetadataServiceImpl.cs upstream use-after-free on runtime teardown, fix carried pending an upstream PR
 
 # get_members: child expansion must surface errors instead of swallowing them,
 # and must page correctly across an aggregate provider's tail.
