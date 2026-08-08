@@ -105,6 +105,22 @@ function Write-StopDiagnostics {
 			"`n          thread $($_.thread_id): " + (@($frames | ForEach-Object { $_.name }) -join ' <- ')
 		}) -join ''
 	}
+	# One stack sample cannot tell "the target never resumed" from "the target is running and the
+	# breakpoint is dead": a single pause can legitimately land anywhere, including back at the frame
+	# the last stop was on. Two samples with a resume between them can. Identical frames across both
+	# means the thread is not moving; different frames mean it is, and the breakpoint is the suspect.
+	if ($state.state -eq 'running') {
+		Show-Probe 'second stack sample after a further resume' {
+			$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $SessionId }
+			Start-Sleep -Milliseconds 1500
+			$null = Invoke-MutatingTool -Name 'pause' -Arguments @{ session_id = $SessionId }
+			$threads = @(Invoke-Tool -Name 'list_threads' -Arguments @{ session_id = $SessionId } | ForEach-Object { $_ })
+			($threads | Select-Object -First 8 | ForEach-Object {
+				$frames = @(Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $SessionId; thread_id = $_.thread_id; max_frames = 8 } | ForEach-Object { $_ })
+				"`n          thread $($_.thread_id): " + (@($frames | ForEach-Object { $_.name }) -join ' <- ')
+			}) -join ''
+		}
+	}
 	if ($null -ne $targetProcess) {
 		$targetProcess.Refresh()
 		$exited = $targetProcess.HasExited
@@ -553,6 +569,34 @@ try {
 	$returnStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $returnCursor; timeout_ms = 8000 }
 	Assert-That 'the target resumes from the exception into the normal fixture breakpoint' (-not $returnStop.timed_out)
 	if ($returnStop.timed_out) {
+		# Only two things can produce this timeout: the target never resumed from the exception, or it
+		# resumed and the recreated breakpoint is dead. Both readings below are taken before
+		# Write-StopDiagnostics pauses the session, because both need it running.
+		#
+		# CPU time is the one signal that does not go through the debugger at all. A thread parked at
+		# the exception site burns none; the fixture loop burns a little even with Tick's 100ms sleep.
+		if ($null -ne $targetProcess) {
+			try {
+				$targetProcess.Refresh(); $cpuBefore = $targetProcess.TotalProcessorTime
+				Start-Sleep -Seconds 2
+				$targetProcess.Refresh(); $cpuAfter = $targetProcess.TotalProcessorTime
+				Write-Host "  DIAG  target CPU time over 2s of nominal running: $(($cpuAfter - $cpuBefore).TotalMilliseconds) ms"
+			}
+			catch { Write-Host "  DIAG  CPU time read threw: $($_.Exception.Message)" -ForegroundColor DarkYellow }
+		}
+		# A breakpoint at a location this run has never touched is hit if and only if the target is
+		# executing. The recreated breakpoint cannot say that, because being dead is the hypothesis.
+		# UseWorker is called from Tick on every iteration of the fixture loop.
+		try {
+			$probeMember = (Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.Program'; name_pattern = 'UseWorker' }).symbols |
+				Where-Object { $_.name -eq 'UseWorker' } | Select-Object -First 1
+			$probeCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
+			$probe = Invoke-MutatingTool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $probeMember.method_token; il_offset = 0 }
+			Write-Host "  DIAG  fresh-location probe breakpoint: $($probe | ConvertTo-Json -Compress -Depth 5)"
+			$probeStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $probeCursor; timeout_ms = 6000 }
+			Write-Host "  DIAG  fresh-location probe hit: $(-not $probeStop.timed_out) (true means the target is executing and the recreated breakpoint is the problem)"
+		}
+		catch { Write-Host "  DIAG  fresh-location probe threw: $($_.Exception.Message)" -ForegroundColor DarkYellow }
 		Write-StopDiagnostics -SessionId $sessionId -AfterEventId $returnCursor -What 'no stop after resuming from the fixture exception'
 		throw 'The target never stopped again after the fixture exception; every later check needs that stop.'
 	}
