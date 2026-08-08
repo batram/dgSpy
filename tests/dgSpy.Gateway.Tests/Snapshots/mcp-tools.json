@@ -2,7 +2,7 @@
   "tools": [
     {
       "name": "get_started",
-      "description": "Summarize Gateway, deployment, and host state and recommend the next safe action. Names the Gateway\u0027s own build, which is where these tool descriptions and response shapes come from, and flags skew against the debugger host builds. Quote gateway_build and build_skew in anything reported about tool behaviour.",
+      "description": "Start with get_started. Choose a local deployment or a provisioned remote host, then attach or launch, inspect capabilities, debug, and detach safely. Stepping and call tracing are best-effort and cannot expose optimized, native, runtime, or missing-sequence-point calls. Summarize Gateway, deployment, and host state and recommend the next safe action. Names the Gateway\u0027s own build, which is where these tool descriptions and response shapes come from, and flags skew against the debugger host builds. Quote gateway_build and build_skew in anything reported about tool behaviour.",
       "inputSchema": {
         "type": "object",
         "properties": {},

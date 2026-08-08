@@ -196,4 +196,13 @@ public sealed class ToolCatalogTests {
 		var serialized=System.Text.Json.JsonSerializer.Serialize(ToolCatalog.All.Single(tool=>Name(tool)=="uninstall_local_deployment"));
 		Assert.Contains("\"destructiveHint\":true",serialized,StringComparison.Ordinal);
 	}
+
+	[Fact]
+	public void Shared_instructions_are_not_systemically_repeated_across_tool_descriptions() {
+		var prefixed=ToolCatalog.All.Where(tool=>Description(tool).StartsWith(ToolCatalog.Instructions,StringComparison.Ordinal)).ToArray();
+		Assert.Equal("get_started",Name(Assert.Single(prefixed)));
+
+		var resource=System.Text.Json.JsonSerializer.Serialize(ToolCatalog.ReadResource("dgspy://guide/getting-started"));
+		Assert.Contains(ToolCatalog.Instructions,resource,StringComparison.Ordinal);
+	}
 }

@@ -127,7 +127,7 @@ public static class ToolCatalog {
 		return bound<=0 ? 8 : (int)Math.Ceiling(bound/1000.0)+MarginSeconds;
 	}
 	public static readonly object[] All = {
-		Tool("get_started", "Summarize Gateway, deployment, and host state and recommend the next safe action. Names the Gateway's own build, which is where these tool descriptions and response shapes come from, and flags skew against the debugger host builds. Quote gateway_build and build_skew in anything reported about tool behaviour.", new {},routed:false,readOnly:true),
+		Tool("get_started", Instructions+" Summarize Gateway, deployment, and host state and recommend the next safe action. Names the Gateway's own build, which is where these tool descriptions and response shapes come from, and flags skew against the debugger host builds. Quote gateway_build and build_skew in anything reported about tool behaviour.", new {},routed:false,readOnly:true),
 		Tool("doctor", "Run bounded read-only diagnostics for Gateway state, deployment roots, host registry, ports, and registered debugger hosts. Includes a build_skew check that fails when the Gateway and a host come from different commits, or when dgSpy was reinstalled after this Gateway process started.", new {},routed:false,readOnly:true),
 		Tool("get_workflow_help", "Return focused guidance for setup, local_deployment, remote_deployment, attach, discovery, stepping, recovery, or shutdown.", new { topic=new { type="string", @enum=new[]{"setup","local_deployment","remote_deployment","attach","discovery","stepping","recovery","shutdown"} } },routed:false,readOnly:true),
 		Tool("get_local_deployment", "Report the active and previous managed local deployment.", new {},routed:false,readOnly:true),
