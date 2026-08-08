@@ -23,8 +23,10 @@
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Evaluation\MemberPagination.cs" Link="Evaluation\MemberPagination.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Evaluation\ChildExpansionFailure.cs" Link="Evaluation\ChildExpansionFailure.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Evaluation\ExpressionAddressability.cs" Link="Evaluation\ExpressionAddressability.cs" />
+	<Compile Include="..\..\Extensions\dgSpy.Extension\Evaluation\FuncEvalDiagnostics.cs" Link="Evaluation\FuncEvalDiagnostics.cs" />
 	<Compile Include="..\..\Extensions\dnSpy.Debugger\dnSpy.Debugger\Shared\Dispatcher.cs" Link="Debugger\Dispatcher.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\DebugEventBuffer.cs" Link="Events\DebugEventBuffer.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Events\EventCursorGuard.cs" Link="Events\EventCursorGuard.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\StateRevisionKinds.cs" Link="Events\StateRevisionKinds.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\OutputBuffer.cs" Link="Events\OutputBuffer.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\ToolWindows\McpActivityLog.cs" Link="ToolWindows\McpActivityLog.cs" />

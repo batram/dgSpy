@@ -104,11 +104,25 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("exit_code"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? ExitCode { get; set; }
 		[JsonPropertyName("reason"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Reason { get; set; }
 	}
+	/// <summary>A page of the bounded per-session event buffer, read from a cursor the caller owns.
+	/// Reads are non-destructive by design — concurrent waiters must not consume each other's events —
+	/// so the server holds no per-caller position and cannot infer "what is new for you". The caller
+	/// therefore has to advance <see cref="LastEventId"/> into the next request's <c>after_event_id</c>;
+	/// a caller that keeps omitting it re-reads the same history on every call.</summary>
 	public class EventResult {
 		[JsonPropertyName("events")] public DebugEvent[] Events { get; set; }=Array.Empty<DebugEvent>();
+		/// <summary>The oldest event id still retained. Older ids have aged out of the bounded buffer.</summary>
 		[JsonPropertyName("oldest_event_id")] public long OldestEventId { get; set; }
+		/// <summary>The cursor to resume from after falling behind the buffer, ie. when
+		/// <see cref="Truncated"/> is true.</summary>
 		[JsonPropertyName("oldest_available_cursor")] public long OldestAvailableCursor { get; set; }
+		/// <summary>The next cursor. Pass this as <c>after_event_id</c> on the following get_events,
+		/// wait_for_stop or wait_for_event to see only what happens after this response — including when
+		/// <see cref="Events"/> came back empty, because the buffer can have advanced past a filtered-out
+		/// event.</summary>
 		[JsonPropertyName("last_event_id")] public long LastEventId { get; set; }
+		/// <summary>True when the requested cursor was older than retained history, so events were
+		/// dropped rather than returned. Resume from <see cref="OldestAvailableCursor"/>.</summary>
 		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
 	}
 	public sealed class WaitResult : EventResult { [JsonPropertyName("timed_out")] public bool TimedOut { get; set; } }
@@ -258,8 +272,15 @@ namespace dgSpy.Protocol {
 		/// <c>has_raw_value: false</c> and usually an <c>error</c> saying which.</summary>
 		[JsonPropertyName("has_raw_value")] public bool HasRawValue { get; set; }
 		[JsonPropertyName("error"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Error { get; set; }
+		/// <summary>What to do about <see cref="Error"/>, when dgSpy recognizes it. Present above all for
+		/// the two evaluation gates, whose stock dnSpy text describes the gate but never names the argument
+		/// that opens it — see <c>FuncEvalDiagnostics</c>. Mirrors invoke_method's field of the same
+		/// name.</summary>
+		[JsonPropertyName("recovery"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Recovery { get; set; }
 		[JsonPropertyName("read_only")] public bool ReadOnly { get; set; }
-		/// <summary>True when reading this value ran target code, eg. a property getter.</summary>
+		/// <summary>True when reading this value ran target code, eg. a property getter. Note that this is
+		/// dnSpy's classification of the expression, not a report that code ran: it is true on a refusal
+		/// too, which is what the refusal was about.</summary>
 		[JsonPropertyName("causes_side_effects")] public bool CausesSideEffects { get; set; }
 		/// <summary>Null when dnSpy does not know without evaluating.</summary>
 		[JsonPropertyName("has_children"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? HasChildren { get; set; }

@@ -128,6 +128,55 @@ public sealed class ExtensionCoreTests {
 		Assert.Equal(1,Assert.Single(buffer.Snapshot(0,new[]{"stopped"}).Events).EventId);
 	}
 
+	/// <summary>A cursor of 0 replays the whole retained buffer, and it has to: reads are non-destructive
+	/// so the buffer holds no per-caller position, and defaulting to "the end" instead would silently drop
+	/// a stop that landed between two calls. A repeated stop is recoverable, a lost one is not.
+	///
+	/// The cost is that a caller polling wait_for_stop without advancing after_event_id re-reads stops it
+	/// already handled — which happened, and read as the target hitting breakpoints it had hit minutes
+	/// earlier. The remedy is that last_event_id is the next cursor and the tool text now says so; this
+	/// test pins the behavior those words describe, in both directions.</summary>
+	[Fact]
+	public void ReadingFromCursorZeroReplaysHistoryAndLastEventIdIsTheCursorThatDoesNot() {
+		var buffer=new DebugEventBuffer();
+		buffer.Add(new DebugEvent { Kind="stopped",StopReason="breakpoint" },1);
+		var handled=buffer.Snapshot(0,new[]{"stopped"});
+		Assert.Equal(1,Assert.Single(handled.Events).EventId);
+
+		buffer.Add(new DebugEvent { Kind="stopped",StopReason="breakpoint" },2);
+
+		// The trap: the same bare call returns the already-handled stop alongside the new one.
+		Assert.Equal(new long[]{1,2},buffer.Snapshot(0,new[]{"stopped"}).Events.Select(e=>e.EventId));
+		// The documented way out, and the reason no server-side cursor is needed.
+		var onlyNew=buffer.Snapshot(handled.LastEventId,new[]{"stopped"});
+		Assert.Equal(2,Assert.Single(onlyNew.Events).EventId);
+		Assert.False(onlyNew.Truncated);
+		Assert.Empty(buffer.Snapshot(onlyNew.LastEventId,new[]{"stopped"}).Events);
+	}
+
+	/// <summary>A cursor past the last event id can never be satisfied, and left alone it produced
+	/// `timed_out: true` with no events — byte-identical to "the target did not stop". Two agents hit
+	/// this; one burned three calls on it. Verified live on 2026-08-08: after_event_id 99999 against a
+	/// stream whose last id was 62 returned a clean timeout and no error.
+	///
+	/// The boundary is the whole point: after == last is the ordinary caught-up caller and must be
+	/// allowed to wait, after == last + 1 cannot be.</summary>
+	[Theory]
+	[InlineData(0,62,false)]
+	[InlineData(61,62,false)]
+	[InlineData(62,62,false)]
+	[InlineData(63,62,true)]
+	[InlineData(99999,62,true)]
+	[InlineData(1,0,true)]
+	public void AnUnreachableEventCursorIsRejectedRatherThanWaitedOn(long after,long last,bool rejected) {
+		Assert.Equal(rejected,EventCursorGuard.IsAheadOfStream(after,last));
+		if (!rejected) { EventCursorGuard.EnsureReachable(after,last); return; }
+
+		var error=Assert.Throws<RpcException>(()=>EventCursorGuard.EnsureReachable(after,last));
+		Assert.Equal("cursor_ahead_of_stream",error.Code);
+		Assert.Contains("last_event_id",error.Message,StringComparison.Ordinal);
+	}
+
 	[Fact]
 	public async Task WaiterCancellationDoesNotPreventLaterWaiters() {
 		var buffer=new DebugEventBuffer();
@@ -260,6 +309,25 @@ public sealed class ExtensionCoreTests {
 		Assert.Equal("evaluation_failed",error.Code);
 		Assert.Contains("this.items",error.Message);
 		Assert.Contains("InvalidOperationException: engine went away",error.Message);
+		// Nothing to add for an engine fault, so nothing is invented.
+		Assert.DoesNotContain("gate",error.Message);
+	}
+
+	/// <summary>get_members and its child expansion throw rather than return, so DescribeNode never runs
+	/// and these were the last evaluation answers still handing back dnSpy's bare sentence. Observed live
+	/// on 2026-08-08: get_members on a method-call expression returned "This expression causes side
+	/// effects and will not be evaluated" with no gate named at all. Neither tool can grant side effects,
+	/// so the advice must point at evaluate/invoke_method, never at a flag they do not accept.</summary>
+	[Fact]
+	public void A_thrown_expansion_failure_still_names_the_gate_that_blocked_it() {
+		var error=ChildExpansionFailure.ToRpcException("Some.Method(5)","This expression causes side effects and will not be evaluated");
+
+		Assert.Equal("evaluation_failed",error.Code);
+		Assert.Contains("no allow_side_effects argument",error.Message);
+		Assert.Contains("invoke_method",error.Message);
+		// The Gateway prefixes its own "Recovery:" when rendering the error; adding a second label here
+		// put the word twice on one line with different text after each.
+		Assert.DoesNotContain("Recovery:",error.Message);
 	}
 
 	[Fact]

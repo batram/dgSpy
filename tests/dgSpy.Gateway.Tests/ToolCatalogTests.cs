@@ -76,6 +76,40 @@ public sealed class ToolCatalogTests {
 		Assert.Contains("SIDE EFFECTING",Description(ToolCatalog.All.Single(t=>Name(t)=="write_value_export")));
 	}
 
+	/// <summary>An agent that passed allow_func_eval:true to call a pure static method was refused with
+	/// "This expression causes side effects", concluded the override flag did not work, and computed the
+	/// answer by hand — wrongly. The flag was honored; the side-effects gate is a separate one and is
+	/// checked first. Nothing in the tool text said so, so keep it said.</summary>
+	[Fact]
+	public void Evaluate_says_that_a_method_call_needs_both_gates_not_just_allow_func_eval() {
+		var tool=ToolCatalog.All.Single(t=>Name(t)=="evaluate");
+		var description=Description(tool);
+		Assert.Contains("allow_side_effects",description,StringComparison.Ordinal);
+		Assert.Contains("BOTH",description,StringComparison.Ordinal);
+		var properties=InputProperties(tool);
+		var funcEval=(string)properties["allow_func_eval"].GetType().GetProperty("description")!.GetValue(properties["allow_func_eval"])!;
+		var sideEffects=(string)properties["allow_side_effects"].GetType().GetProperty("description")!.GetValue(properties["allow_side_effects"])!;
+		Assert.Contains("does NOT imply allow_side_effects",funcEval,StringComparison.Ordinal);
+		Assert.Contains("allow_func_eval",sideEffects,StringComparison.Ordinal);
+	}
+
+	/// <summary>wait_for_stop's cursor is caller-supplied and reads are non-destructive, so a bare call
+	/// replays retained history. That is defensible — losing a stop is worse than repeating one — but only
+	/// if the tool says it, and names the field to pass next. An agent polling it blind re-processed old
+	/// stops and had to discover after_event_id by trial and error.</summary>
+	[Theory]
+	[InlineData("wait_for_stop")]
+	[InlineData("wait_for_event")]
+	[InlineData("get_events")]
+	public void Event_cursor_tools_state_that_the_caller_owns_the_cursor(string name) {
+		var tool=ToolCatalog.All.Single(t=>Name(t)==name);
+		Assert.Contains("last_event_id",Description(tool),StringComparison.Ordinal);
+		var cursor=InputProperties(tool)["after_event_id"];
+		var description=(string)cursor.GetType().GetProperty("description")!.GetValue(cursor)!;
+		Assert.Contains("last_event_id",description,StringComparison.Ordinal);
+		Assert.Contains("Default 0",description,StringComparison.Ordinal);
+	}
+
 	[Fact]
 	public void Multi_target_lifecycle_tools_expose_process_selectors() {
 		foreach(var name in new[]{"pause","continue","detach","terminate"}) {

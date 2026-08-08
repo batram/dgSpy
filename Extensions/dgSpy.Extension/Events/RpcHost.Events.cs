@@ -14,9 +14,14 @@ namespace dgSpy.Extension {
 		Task<WaitResult> WaitForStopAsync(RpcRequest req,CancellationToken cancellationToken) => WaitForEventsAsync(req,new[]{EventKinds.Stopped},cancellationToken);
 		Task<WaitResult> WaitForEventAsync(RpcRequest req,CancellationToken cancellationToken) => WaitForEventsAsync(req,ReadKinds(req),cancellationToken);
 
+		/// <summary>Not racy: a cursor ahead of the stream can only become reachable once more events
+		/// arrive, and the caller cannot have obtained it from any of them. See EventCursorGuard.</summary>
+		void CheckEventCursor(long after) => EventCursorGuard.EnsureReachable(after,events.LastEventId);
+
 		async Task<WaitResult> WaitForEventsAsync(RpcRequest req,IReadOnlyCollection<string>? kinds,CancellationToken cancellationToken) {
 			CheckSession(req);
 			long after=(long?)req.Arguments["after_event_id"] ?? 0;
+			CheckEventCursor(after);
 			int timeout=Math.Min(10000,Math.Max(1,(int?)req.Arguments["timeout_ms"] ?? 5000));
 			using var wait=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 			wait.CancelAfter(timeout);
@@ -36,6 +41,7 @@ namespace dgSpy.Extension {
 		EventResult GetEvents(RpcRequest req) {
 			CheckSession(req);
 			long after=(long?)req.Arguments["after_event_id"] ?? 0;
+			CheckEventCursor(after);
 			return EventResult(events.Snapshot(after,ReadKinds(req)));
 		}
 

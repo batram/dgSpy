@@ -83,7 +83,10 @@ namespace dgSpy.Extension {
 			},cancellationToken).ConfigureAwait(false);
 		}
 
-		EvaluatedValue DescribeNode(DbgValueNode node,DbgEvaluationInfo eval,string expression) {
+		/// <param name="sideEffectsGrantable">True only from evaluate, the one caller whose tool surface has
+		/// an allow_side_effects argument. It selects which of two remedies the recovery text names; see
+		/// FuncEvalDiagnostics.</param>
+		EvaluatedValue DescribeNode(DbgValueNode node,DbgEvaluationInfo eval,string expression,bool sideEffectsGrantable=false) {
 			var name=new DbgStringBuilderTextWriter(); var type=new DbgStringBuilderTextWriter(); var display=new DbgStringBuilderTextWriter();
 			// Error nodes still carry useful identity. In particular, a property blocked by NoFuncEval has
 			// an error value but FormatName reports the property name; skipping it made every such child
@@ -118,6 +121,10 @@ namespace dgSpy.Extension {
 				// "No raw value" is not "null". A null reference has a raw value of null; an optimized-away
 				// or unavailable local has none at all, and the error message says which.
 				Error=node.ErrorMessage,
+				// A gate refusal is indistinguishable from a broken expression unless the answer names the
+				// argument that opens the gate. See FuncEvalDiagnostics for why that mattered enough to
+				// carry on every evaluated value rather than on the mutation tools alone.
+				Recovery=FuncEvalDiagnostics.Recovery(node.ErrorMessage,sideEffectsGrantable),
 				ReadOnly=node.IsReadOnly,
 				CausesSideEffects=node.CausesSideEffects,
 				HasChildren=node.HasChildren,
@@ -137,7 +144,7 @@ namespace dgSpy.Extension {
 			var allowSideEffects=(bool?)req.Arguments["allow_side_effects"] ?? false;
 			return await WithEvaluationAsync(req,(captured,eval)=>{
 				var nodes=CreateNodes(captured,eval,new[]{expression!},allowFuncEval,allowSideEffects);
-				try { return DescribeNode(nodes[0],eval,expression!); }
+				try { return DescribeNode(nodes[0],eval,expression!,sideEffectsGrantable:true); }
 				finally { manager.Close(nodes); }
 			},cancellationToken).ConfigureAwait(false);
 		}
@@ -182,7 +189,9 @@ namespace dgSpy.Extension {
 				var roots=CreateNodes(captured,eval,new[]{expression!},allowFuncEval,allowSideEffects:false);
 				try {
 					var root=roots[0];
-					if (root.ErrorMessage is not null) throw new RpcException("evaluation_failed",root.ErrorMessage);
+					// Thrown, not returned, so DescribeNode never runs and the gate would go unnamed. See
+					// ChildExpansionFailure.Advice.
+					if (root.ErrorMessage is not null) throw new RpcException("evaluation_failed",root.ErrorMessage+ChildExpansionFailure.Advice(root.ErrorMessage));
 					if (root.HasChildren==false) return new MemberList { Expression=expression!,Total=0,Offset=offset,Members=Array.Empty<EvaluatedValue>(),SessionId=sessionId,StateVersion=stateVersion };
 					var total=root.GetChildCount(eval);
 					var pageCount=MemberPagination.Count(total,offset,count);

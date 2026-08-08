@@ -1081,7 +1081,7 @@
     },
     {
       "name": "wait_for_stop",
-      "description": "Wait without polling for the next normalized stop after an event cursor. Concurrent waiters do not consume events. A truncated result supplies oldest_available_cursor so the caller can recover.",
+      "description": "Wait without polling for stops after an event cursor. THE CURSOR IS YOURS TO TRACK: reads are non-destructive, so the server keeps no per-caller position and nothing is consumed by reading it. Every response carries last_event_id \u2014 pass it as the next call\u0027s after_event_id. Omitting after_event_id means \u0022from the start of the session\u0022, NOT \u0022only what is new\u0022: a bare call replays every retained stop, so a poll loop that never passes it re-processes stops it already handled and will conclude the target is hitting breakpoints it hit minutes ago. The default is deliberately the replaying one, because the opposite default would silently drop a stop that landed between two calls, and a duplicate is recoverable where a lost stop is not. Seed the first cursor from set_breakpoint\u0027s cursor_event_id or attach\u0027s last_event_id rather than reading one afterwards. A truncated result supplies oldest_available_cursor so a caller that fell behind the bounded buffer can recover.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1093,7 +1093,8 @@
             "type": "string"
           },
           "after_event_id": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Exclusive cursor: return only events with a higher id. Pass the previous response\u0027s last_event_id. Default 0 replays the whole retained session. A cursor past the last event id is rejected with cursor_ahead_of_stream rather than waiting out the timeout on an event that can never arrive."
           },
           "timeout_ms": {
             "type": "integer",
@@ -1114,7 +1115,7 @@
     },
     {
       "name": "wait_for_event",
-      "description": "Wait without polling for any requested event kinds after a cursor. Returns immediately when a matching buffered event already exists; concurrent waiters are non-destructive.",
+      "description": "Wait without polling for any requested event kinds after a cursor. Returns immediately when a matching buffered event already exists; concurrent waiters are non-destructive. The cursor is caller-supplied on exactly the terms described on wait_for_stop: advance after_event_id with each response\u0027s last_event_id, and note that omitting it replays the session\u0027s retained history rather than returning only new events.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1126,7 +1127,8 @@
             "type": "string"
           },
           "after_event_id": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Exclusive cursor: return only events with a higher id. Pass the previous response\u0027s last_event_id. Default 0 replays the whole retained session. A cursor past the last event id is rejected with cursor_ahead_of_stream rather than waiting out the timeout on an event that can never arrive."
           },
           "kinds": {
             "type": "array",
@@ -1180,7 +1182,7 @@
     },
     {
       "name": "get_events",
-      "description": "Read normalized lifecycle and debugger events without consuming them. Optional kinds filter the bounded per-session stream; truncated reports when the requested cursor is older than retained history.",
+      "description": "Read normalized lifecycle and debugger events without consuming them. Optional kinds filter the bounded per-session stream; truncated reports when the requested cursor is older than retained history. Shares one bounded buffer and one caller-supplied cursor with wait_for_stop and wait_for_event \u2014 advance after_event_id with each response\u0027s last_event_id, and note that omitting it returns the session\u0027s retained history rather than only what is new.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1192,7 +1194,8 @@
             "type": "string"
           },
           "after_event_id": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Exclusive cursor: return only events with a higher id. Pass the previous response\u0027s last_event_id. Default 0 returns the whole retained session. A cursor past the last event id is rejected with cursor_ahead_of_stream."
           },
           "kinds": {
             "type": "array",
@@ -1650,7 +1653,7 @@
     },
     {
       "name": "evaluate",
-      "description": "Evaluate an expression against a paused frame. Returns the raw scalar and dnSpy\u0027s formatted display text as separate fields, so numbers stay comparable without parsing display text. has_raw_value distinguishes a value of null from a value that is unavailable or optimized away. Func-eval is OFF by default: an expression that calls a property getter runs code inside the target, which can deadlock a target holding a lock and can mutate what you were inspecting.",
+      "description": "Evaluate an expression against a paused frame. Returns the raw scalar and dnSpy\u0027s formatted display text as separate fields, so numbers stay comparable without parsing display text. has_raw_value distinguishes a value of null from a value that is unavailable or optimized away. Running target code is guarded by TWO independent gates, both off by default, and they are not interchangeable: allow_func_eval permits executing target code at all, and allow_side_effects permits an expression dnSpy classifies as side-effecting. A property getter such as DateTime.Now.Ticks trips only the first, so allow_func_eval alone runs it. An explicit method call such as Telemetry.ComputeReading(5) trips BOTH, and side effects are checked first \u2014 so passing allow_func_eval alone leaves the error \u0022This expression causes side effects and will not be evaluated\u0022 completely unchanged, which reads like the flag was ignored and is not. Pass both for a method call, or use invoke_method, which sets both and audits the call. One exception explains conflicting reports of this tool: dnSpy\u0027s \u0060ac\u0060 (\u0022always calculate\u0022) format specifier, appended to the expression as \u0060Some.Method(1), ac\u0060, opens the side-effects gate on its own, so that shape DOES succeed with allow_func_eval alone. It is dnSpy syntax rather than a dgSpy argument and it bypasses the side-effects opt-in, so prefer allow_side_effects. Every refusal carries \u0060recovery\u0060 naming the gate that blocked it; never fall back to computing a method\u0027s result by hand.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1675,11 +1678,11 @@
           },
           "allow_func_eval": {
             "type": "boolean",
-            "description": "Default false. True permits running target code, eg. property getters and ToString."
+            "description": "Default false. True permits running target code, eg. property getters and ToString. It does NOT imply allow_side_effects and cannot substitute for it."
           },
           "allow_side_effects": {
             "type": "boolean",
-            "description": "Default false."
+            "description": "Default false. True permits an expression dnSpy classifies as side-effecting, which every explicit method call is. Required in addition to allow_func_eval to call a method, including a pure one \u2014 dnSpy classifies by expression shape, not by what the method actually does."
           }
         },
         "required": [
