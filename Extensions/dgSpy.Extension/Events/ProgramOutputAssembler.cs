@@ -22,6 +22,23 @@ namespace dgSpy.Extension {
 		readonly Action<ProgramOutputOrigin,string> emit; readonly TimeSpan quiet; readonly int maxPending;
 		readonly Dictionary<ProgramOutputOrigin,StringBuilder> pending=new Dictionary<ProgramOutputOrigin,StringBuilder>();
 		readonly object sync=new object(); Timer? flushTimer; bool disposed;
+		// Records are ordered when they leave the buffer, then emitted in exactly that order.
+		//
+		// Taking text out of the buffer under `sync` and emitting it after the lock is released loses
+		// that order: a thread descheduled between the two lets a later Append or the quiet-period timer
+		// emit newer text first, and since `emit` is what assigns output_id, the newer fragment ends up
+		// with the lower id. wait_for_output then reports a target's console output out of order, which
+		// is indistinguishable from the target having printed it that way. Both Append and FlushCore had
+		// this shape, so fixing one alone would still leave Append racing Append.
+		//
+		// `emit` is a caller-supplied callback that reaches the RPC host, so it must not run under
+		// `sync`. Instead the queue fixes the order while `sync` is held, and `emitGate` serializes the
+		// draining: FIFO plus one drainer at a time means emission order is enqueue order. A drainer
+		// takes emitGate then sync; an enqueuer releases sync before taking emitGate, so the two never
+		// nest in conflicting directions. Blocking on emitGate rather than handing off also keeps Flush
+		// synchronous -- it returns only once its own records are out.
+		readonly Queue<KeyValuePair<ProgramOutputOrigin,string>> outbox=new Queue<KeyValuePair<ProgramOutputOrigin,string>>();
+		readonly object emitGate=new object();
 
 		public ProgramOutputAssembler(Action<ProgramOutputOrigin,string> emit,TimeSpan? quietPeriod=null,int maxPendingChars=4096) {
 			this.emit=emit; quiet=quietPeriod ?? TimeSpan.FromMilliseconds(250); maxPending=maxPendingChars;
@@ -37,10 +54,11 @@ namespace dgSpy.Extension {
 				TakeLines(buffer,complete);
 				// A newline-less flood must not grow without bound; emit it as its own record instead.
 				if (buffer.Length>=maxPending) { complete.Add(buffer.ToString()); buffer.Clear(); }
+				foreach (var line in complete) outbox.Enqueue(new KeyValuePair<ProgramOutputOrigin,string>(origin,line));
 				flushTimer ??= new Timer(_=>Flush(),null,Timeout.Infinite,Timeout.Infinite);
 				flushTimer.Change(quiet,Timeout.InfiniteTimeSpan);
 			}
-			foreach (var line in complete) emit(origin,line);
+			Drain();
 		}
 
 		// Emit everything still buffered, eg. a final line written without a trailing newline before the
@@ -56,17 +74,28 @@ namespace dgSpy.Extension {
 		}
 
 		void FlushCore(Func<ProgramOutputOrigin,bool> include) {
-			var flushed=new List<KeyValuePair<ProgramOutputOrigin,string>>();
 			lock(sync) {
 				if (disposed) return;
 				foreach (var entry in pending) {
 					if (!include(entry.Key)) continue;
 					if (entry.Value.Length==0) continue;
-					flushed.Add(new KeyValuePair<ProgramOutputOrigin,string>(entry.Key,entry.Value.ToString()));
+					outbox.Enqueue(new KeyValuePair<ProgramOutputOrigin,string>(entry.Key,entry.Value.ToString()));
 					entry.Value.Clear();
 				}
 			}
-			foreach (var entry in flushed) emit(entry.Key,entry.Value);
+			Drain();
+		}
+
+		/// <summary>Emits queued records in enqueue order. One drainer at a time, so a caller that finds
+		/// the gate taken blocks until the records ahead of its own are out, and then drains its own.</summary>
+		void Drain() {
+			lock(emitGate) {
+				while(true) {
+					KeyValuePair<ProgramOutputOrigin,string> record;
+					lock(sync) { if (outbox.Count==0) return; record=outbox.Dequeue(); }
+					emit(record.Key,record.Value);
+				}
+			}
 		}
 
 		// Drop partial lines left over from a previous session rather than prefixing them onto the next one.

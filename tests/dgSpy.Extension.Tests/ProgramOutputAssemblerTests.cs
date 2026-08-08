@@ -14,6 +14,72 @@ public class ProgramOutputAssemblerTests {
 		return (assembler,lines);
 	}
 
+	/// <summary>Output must leave in the order it left the buffer, even when a second thread arrives
+	/// while the first is inside emit.
+	///
+	/// The regression: Append and FlushCore both took text out under the lock and emitted after
+	/// releasing it. A thread descheduled in that gap let a later writer emit first, and because emit is
+	/// what assigns output_id, the newer fragment got the lower id — wait_for_output then reported the
+	/// target's console output in an order the target never wrote it in.
+	///
+	/// Deterministic rather than timing-based: the first emit blocks inside the callback until this test
+	/// releases it, so the interleaving is forced rather than hoped for. Before the fix the second
+	/// thread sailed past and "second" was recorded first; now it waits behind the record ahead of
+	/// it.</summary>
+	[Fact]
+	public void ConcurrentWritersEmitInBufferOrderEvenWhenEmitBlocks() {
+		var lines=new List<string>();
+		using var insideFirstEmit=new ManualResetEventSlim(false);
+		using var releaseFirstEmit=new ManualResetEventSlim(false);
+		var emitted=0;
+		var assembler=new ProgramOutputAssembler((_,line) => {
+			// Only the first record blocks; the point is to hold the gate, not to deadlock the drain.
+			if (Interlocked.Increment(ref emitted)==1) { insideFirstEmit.Set(); Assert.True(releaseFirstEmit.Wait(TimeSpan.FromSeconds(10))); }
+			lock(lines) lines.Add(line);
+		},TimeSpan.FromHours(1));
+
+		var first=Task.Run(() => assembler.Append(Out(),"first\n"));
+		Assert.True(insideFirstEmit.Wait(TimeSpan.FromSeconds(10)),"the first Append never reached emit");
+
+		// Arrives while "first" is mid-emit. It must not overtake it.
+		var second=Task.Run(() => assembler.Append(Out(),"second\n"));
+		// Give the second thread every chance to overtake, which is what it used to do.
+		Thread.Sleep(150);
+		lock(lines) Assert.Empty(lines);
+
+		releaseFirstEmit.Set();
+		Assert.True(Task.WhenAll(first,second).Wait(TimeSpan.FromSeconds(10)),"an Append never completed");
+		Assert.Equal(new[]{"first","second"},lines);
+		assembler.Dispose();
+	}
+
+	/// <summary>The same ordering guarantee across the two entry points: a Flush landing while an Append
+	/// is mid-emit must not publish the trailing fragment ahead of the completed line.</summary>
+	[Fact]
+	public void AFlushDoesNotOvertakeAnAppendThatIsMidEmit() {
+		var lines=new List<string>();
+		using var insideFirstEmit=new ManualResetEventSlim(false);
+		using var releaseFirstEmit=new ManualResetEventSlim(false);
+		var emitted=0;
+		var assembler=new ProgramOutputAssembler((_,line) => {
+			if (Interlocked.Increment(ref emitted)==1) { insideFirstEmit.Set(); Assert.True(releaseFirstEmit.Wait(TimeSpan.FromSeconds(10))); }
+			lock(lines) lines.Add(line);
+		},TimeSpan.FromHours(1));
+
+		// "done" completes a line and starts a trailing fragment in one write.
+		var append=Task.Run(() => assembler.Append(Out(),"done\ntrailing"));
+		Assert.True(insideFirstEmit.Wait(TimeSpan.FromSeconds(10)),"the Append never reached emit");
+
+		var flush=Task.Run(() => assembler.Flush());
+		Thread.Sleep(150);
+		lock(lines) Assert.Empty(lines);
+
+		releaseFirstEmit.Set();
+		Assert.True(Task.WhenAll(append,flush).Wait(TimeSpan.FromSeconds(10)),"a writer never completed");
+		Assert.Equal(new[]{"done","trailing"},lines);
+		assembler.Dispose();
+	}
+
 	[Fact]
 	public void EmitsCompleteLinesAndStripsTheLineBreak() {
 		var (assembler,lines)=New();

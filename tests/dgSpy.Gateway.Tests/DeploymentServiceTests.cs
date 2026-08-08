@@ -92,6 +92,34 @@ public sealed class DeploymentServiceTests : IDisposable {
 		DeploymentService.RequireReplacementSessionVisibility(2,new JsonObject(),true);
 	}
 
+	/// <summary>A replacement that did not replace anything must not report success. Both waits in
+	/// ReplaceRunningHostAsync are bounded and neither was checked -- WaitForExit's Boolean was discarded
+	/// and the poll loop just ran out of attempts -- so a host that outlived them let the caller start a
+	/// second dnSpy into the endpoint the first still held. That is the two-hosts contention the
+	/// replacement path exists to prevent, arrived at through the path meant to prevent it.
+	///
+	/// The boundary worth pinning is one survivor among the dead: an "any exited, so we are fine" reading
+	/// passes that case and is wrong.</summary>
+	[Fact]
+	public void Replacement_fails_rather_than_launching_beside_a_host_that_would_not_exit() {
+		DeploymentService.RequireReplacedHostsExited(Array.Empty<(int,bool)>());
+		DeploymentService.RequireReplacedHostsExited(new[]{(1234,false)});
+		DeploymentService.RequireReplacedHostsExited(new[]{(1234,false),(5678,false)});
+
+		var survivor=Assert.Throws<GatewayControlException>(()=>DeploymentService.RequireReplacedHostsExited(new[]{(1234,false),(5678,true)}));
+		Assert.Equal("replace_failed",survivor.Code);
+		Assert.Contains("pid 5678",survivor.Message);
+		// The one that died is not what the operator has to act on, so it is not named.
+		Assert.DoesNotContain("pid 1234",survivor.Message);
+		Assert.Contains("two hosts",survivor.Message);
+
+		var several=Assert.Throws<GatewayControlException>(()=>DeploymentService.RequireReplacedHostsExited(new[]{(1234,true),(5678,true)}));
+		Assert.Equal("replace_failed",several.Code);
+		Assert.Contains("pid 1234",several.Message);
+		Assert.Contains("pid 5678",several.Message);
+		Assert.Contains("hosts",several.Message);
+	}
+
 	[Fact]
 	public void Replacement_treats_failed_or_malformed_session_reads_as_unknown_not_empty() {
 		var failed=Assert.Throws<GatewayControlException>(()=>DeploymentService.ReadLocalSessions(RpcResponse.Failure("request","host_unavailable","gone"),false));

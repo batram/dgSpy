@@ -328,6 +328,22 @@ public sealed class ExtensionCoreTests {
 		// The Gateway prefixes its own "Recovery:" when rendering the error; adding a second label here
 		// put the word twice on one line with different text after each.
 		Assert.DoesNotContain("Recovery:",error.Message);
+		// dnSpy's sentences carry no trailing period, so the two used to run together as
+		// "...will not be evaluated Blocked by the side-effects gate...".
+		Assert.Contains("will not be evaluated. Blocked by",error.Message);
+	}
+
+	[Theory]
+	// No terminator: supply one.
+	[InlineData("This expression causes side effects and will not be evaluated")]
+	// Already terminated: do not double it.
+	[InlineData("This expression causes side effects and will not be evaluated.")]
+	public void The_appended_advice_is_separated_from_the_engine_sentence_exactly_once(string engineError) {
+		var message=engineError+ChildExpansionFailure.Advice(engineError);
+
+		Assert.Contains("evaluated. Blocked",message,StringComparison.Ordinal);
+		Assert.DoesNotContain("evaluated.. ",message,StringComparison.Ordinal);
+		Assert.DoesNotContain("evaluated  ",message,StringComparison.Ordinal);
 	}
 
 	[Fact]

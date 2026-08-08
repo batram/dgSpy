@@ -16,9 +16,16 @@ namespace dgSpy.Extension {
 		// Deliberately unlabeled: the Gateway already renders every error as
 		// "<code>: <message> Recovery: <guidance>", so labeling this "Recovery:" too produced one line
 		// carrying the word twice with different text after each.
+		//
+		// dnSpy's sentences have no trailing period, so a bare space ran the two together
+		// ("...will not be evaluated Blocked by the side-effects gate..."). Supply the separator the
+		// engine text lacks, without doubling one it already has.
 		public static string Advice(string errorMessage) {
 			var recovery=FuncEvalDiagnostics.Recovery(errorMessage);
-			return recovery is null ? "" : " "+recovery;
+			if (recovery is null) return "";
+			var trimmed=errorMessage.TrimEnd();
+			var terminated=trimmed.Length!=0 && (trimmed[trimmed.Length-1]=='.' || trimmed[trimmed.Length-1]=='!' || trimmed[trimmed.Length-1]=='?');
+			return (terminated ? " " : ". ")+recovery;
 		}
 	}
 }

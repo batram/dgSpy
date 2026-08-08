@@ -148,8 +148,31 @@ public sealed class DeploymentService {
 		}
 		// The listener socket is not free the instant the process is, and starting into a taken port is
 		// exactly the two-hosts state this method exists to avoid.
-		for(var attempt=0;attempt<20 && running.Any(process=>{ try { return !process.HasExited; } catch { return false; } });attempt++) await Task.Delay(250,token);
+		for(var attempt=0;attempt<20 && running.Any(IsStillAlive);attempt++) await Task.Delay(250,token);
 		await Task.Delay(500,token);
+		// Both waits above are bounded, and neither was checked: WaitForExit's Boolean result was
+		// discarded and the poll loop simply ran out of attempts. A host that outlived them returned as
+		// success, and the caller then started a second dnSpy into the endpoint the first still holds --
+		// the exact contention this method exists to prevent, reached by the path meant to prevent it.
+		// Prove it instead, and fail without launching when the proof does not hold.
+		RequireReplacedHostsExited(running.Select(process=>(Pid:SafePid(process),Alive:IsStillAlive(process))).ToArray());
+	}
+
+	/// <summary>Whether a process this method killed is still running. A Process object that can no
+	/// longer be queried describes something that is gone, not something alive, so a throwing
+	/// <c>HasExited</c> counts as exited -- the conservative reading would refuse every replacement on a
+	/// recycled handle.</summary>
+	static bool IsStillAlive(Process process) { try { return !process.HasExited; } catch { return false; } }
+	static int SafePid(Process process) { try { return process.Id; } catch { return 0; } }
+
+	/// <summary>Refuses to report a replacement that did not happen. Separated from the process handling
+	/// so the boundary that matters -- one surviving host among several dead ones -- is testable without
+	/// an unkillable process.</summary>
+	internal static void RequireReplacedHostsExited(IReadOnlyList<(int Pid,bool Alive)> hosts) {
+		var alive=hosts.Where(host=>host.Alive).Select(host=>host.Pid).ToArray();
+		if(alive.Length==0) return;
+		throw new GatewayControlException("replace_failed",
+			$"The managed dnSpy host{(alive.Length==1 ? "" : "s")} {string.Join(", ",alive.Select(pid=>"pid "+pid))} did not exit after being closed, so no replacement was started: launching one now would leave two hosts fighting for the same RPC endpoint. Close {(alive.Length==1 ? "it" : "them")} manually, then call launch_local_host again.");
 	}
 	internal static void RequireReplacementSessionVisibility(int runningCount,JsonNode? live,bool allowTerminate) {
 		if(allowTerminate) return;
