@@ -572,13 +572,16 @@ try {
 	$exceptionValues = Invoke-Tool -Name 'get_exception' -Arguments @{ session_id = $sessionId; thread_id = $exceptionEvent.thread_id; frame_index = 0 }
 	Assert-That 'get_exception exposes the stopped Phase 8 fixture exception' (@($exceptionValues).Count -gt 0 -and (($exceptionValues | ConvertTo-Json -Compress -Depth 5) -match 'Phase8FixtureException'))
 	$null = Invoke-MutatingTool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' }
-	# The earlier settings checks intentionally left a hit-count rule on this breakpoint. Recreate it
-	# here so this recovery assertion tests exception-policy removal, not residual breakpoint settings.
-	$null = Invoke-MutatingTool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id }
-	$breakpoint = Invoke-MutatingTool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
-	# Asserted here as well as at the first creation: an unbound recreate would look exactly like a
-	# resume that never stopped, and the two have completely different causes.
-	Assert-That 'the fixture breakpoint rebinds after the exception stop' ($breakpoint.bound) "(payload $($breakpoint | ConvertTo-Json -Compress -Depth 5))"
+	# The earlier settings checks intentionally disabled this breakpoint and left a hit-count rule on
+	# it. Reset those settings in place. Removing and recreating a native CorDebug breakpoint while
+	# stopped inside an exception callback is timing-sensitive: the replacement can report bound yet
+	# neither it nor any breakpoint added afterwards reaches the engine on resume. That was a harness
+	# operation unrelated to the assertion here, which is exception-policy recovery.
+	$breakpoint = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{
+		breakpoint_id = $breakpoint.breakpoint_id; enabled = $true
+		condition = ''; hit_count = 1; hit_count_kind = 'at_least'
+	}
+	Assert-That 'the fixture breakpoint stays bound after the exception stop' ($breakpoint.bound) "(payload $($breakpoint | ConvertTo-Json -Compress -Depth 5))"
 	$returnCursor =(Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
 	$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId }
 	$returnStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $returnCursor; timeout_ms = 8000 }

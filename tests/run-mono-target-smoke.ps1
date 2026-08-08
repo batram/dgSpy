@@ -124,13 +124,19 @@ try {
 		session_id = $script:activeSessionId; module = $harnessModule
 		type = 'UchDebugTarget.DebugTargetHarness'; method = 'TickLoop'
 	}
-	Assert-That 'the breakpoint binds in the harness' ($breakpoint.bound) "bound=$($breakpoint.bound) msg='$($breakpoint.message)'"
+	# Mono briefly pauses internally while reporting the newly loaded assembly. A breakpoint created
+	# in that window is accepted as pending with "Can't set a breakpoint when the process is paused",
+	# then installed when execution resumes. Treating that transient response as a permanent binding
+	# failure made CI red even though the very next assertion observed the breakpoint being hit.
+	Assert-That 'the breakpoint is accepted for the harness' ($breakpoint.breakpoint_id -gt 0) "payload=$($breakpoint | ConvertTo-Json -Compress -Depth 5)"
 	Assert-That 'the breakpoint returns a cursor' ($null -ne $breakpoint.cursor_event_id)
 
 	$stop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{
 		session_id = $script:activeSessionId; after_event_id = $breakpoint.cursor_event_id; timeout_ms = 30000
 	}
 	Assert-That 'the harness loop reaches the breakpoint' (-not $stop.timed_out -and @($stop.events).Count -gt 0)
+	$hitBreakpoint = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{} | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id })[0]
+	Assert-That 'the harness breakpoint binds and reaches the engine' ($hitBreakpoint.engine_hit_count -gt 0) "payload=$($hitBreakpoint | ConvertTo-Json -Compress -Depth 5)"
 
 	Write-Section 'threads and stacks'
 	$paused = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $script:activeSessionId }
