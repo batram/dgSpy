@@ -581,6 +581,15 @@ try {
 		breakpoint_id = $breakpoint.breakpoint_id; enabled = $true
 		condition = ''; hit_count = 1; hit_count_kind = 'at_least'
 	}
+	# get_exception can cause framework support modules to finish loading after it returns. CorDebug
+	# temporarily unbinds code breakpoints across that module-load update, then rebinds them on its
+	# engine thread. The hosted runner exposes the interval; a warm local machine usually hides it.
+	$rebound = Wait-Until {
+		$current = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{} | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id })[0]
+		if ($null -ne $current) { $script:reboundBreakpoint = $current }
+		$null -ne $current -and $current.bound
+	} 10
+	if ($null -ne $script:reboundBreakpoint) { $breakpoint = $script:reboundBreakpoint }
 	Assert-That 'the fixture breakpoint stays bound after the exception stop' ($breakpoint.bound) "(payload $($breakpoint | ConvertTo-Json -Compress -Depth 5))"
 	$returnCursor =(Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
 	$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId }

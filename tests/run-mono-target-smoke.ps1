@@ -128,7 +128,9 @@ try {
 	# in that window is accepted as pending with "Can't set a breakpoint when the process is paused",
 	# then installed when execution resumes. Treating that transient response as a permanent binding
 	# failure made CI red even though the very next assertion observed the breakpoint being hit.
-	Assert-That 'the breakpoint is accepted for the harness' ($breakpoint.breakpoint_id -gt 0) "payload=$($breakpoint | ConvertTo-Json -Compress -Depth 5)"
+	# IDs are zero-based; the first breakpoint in a clean host legitimately has id 0. A bound object
+	# proves acceptance even while its warning says engine installation is deferred until resume.
+	Assert-That 'the breakpoint is accepted for the harness' ($breakpoint.bound_count -gt 0) "payload=$($breakpoint | ConvertTo-Json -Compress -Depth 5)"
 	Assert-That 'the breakpoint returns a cursor' ($null -ne $breakpoint.cursor_event_id)
 
 	$stop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{
@@ -150,7 +152,10 @@ try {
 	$withFrames = $null
 	foreach ($thread in $threads) {
 		$stack = @(Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $script:activeSessionId; thread_id = $thread.thread_id; max_frames = 20 })
-		if ($stack.Count -gt 0) { $withFrames = @{ Thread = $thread; Stack = $stack }; break }
+		# Finalizer/native-transition rows are useful stack context but are not managed frames and have
+		# neither a method name nor an IL offset. Select a thread that actually has managed frames.
+		$managed = @($stack | Where-Object { -not [string]::IsNullOrWhiteSpace($_.name) -and $null -ne $_.il_offset })
+		if ($managed.Count -gt 0) { $withFrames = @{ Thread = $thread; Stack = $managed }; break }
 	}
 	Assert-That 'at least one thread has a managed call stack' ($null -ne $withFrames)
 
@@ -164,11 +169,12 @@ try {
 		# and then read it back to learn which thread it had picked, so the first call after a pause
 		# could silently answer from the thread that carried the stop instead.
 		$deepest = [Math]::Min($withFrames.Stack.Count - 1, 5)
+		$requestedFrameIndex = $withFrames.Stack[$deepest].frame_index
 		$frame = Invoke-Tool -Name 'get_frame' -Arguments @{
-			session_id = $script:activeSessionId; thread_id = $threadId; frame_index = $deepest; include = @('locals','this')
+			session_id = $script:activeSessionId; thread_id = $threadId; frame_index = $requestedFrameIndex; include = @('locals','this')
 		}
 		Assert-That 'get_frame answers on the requested thread' ($frame.thread_id -eq $threadId) "asked $threadId, got $($frame.thread_id)"
-		Assert-That 'get_frame answers at the requested index' ($frame.frame_index -eq $deepest)
+		Assert-That 'get_frame answers at the requested index' ($frame.frame_index -eq $requestedFrameIndex)
 		Assert-That 'the returned frame matches the call stack' ($frame.name -eq $withFrames.Stack[$deepest].name)
 	}
 
