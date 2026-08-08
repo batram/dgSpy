@@ -151,7 +151,12 @@ namespace dgSpy.Extension {
 				var nodes=CreateNodes(captured,eval,new[]{expression!},allowFuncEval:true,allowSideEffects:true);
 				try {
 					var value=DescribeNode(nodes[0],eval,expression!);
-					return new MutationResult { Completed=value.Error is null,CausesSideEffects=true,AuditId=auditId,Value=value.Error is null ? value : null,Error=value.Error,Capability=capability };
+					// A failure here is either "this never compiled" or "it compiled and the engine refused to
+					// run it". They need opposite responses -- fix the expression versus retry against a thread
+					// that can evaluate -- and dnSpy's value-node contract reports only a string, so classify it
+					// rather than leaving the caller to guess. set_value has carried this distinction all along.
+					return new MutationResult { Completed=value.Error is null,CausesSideEffects=true,AuditId=auditId,Value=value.Error is null ? value : null,Error=value.Error,Capability=capability,
+						CompilerError=value.Error is null ? null : FuncEvalDiagnostics.IsCompilerError(value.Error),Recovery=FuncEvalDiagnostics.Recovery(value.Error) };
 				}
 				finally { manager.Close(nodes); }
 			},cancellationToken).ConfigureAwait(false);
@@ -204,6 +209,19 @@ namespace dgSpy.Extension {
 
 		// Assignment always executes in the target, so it is side-effecting by definition and says so.
 		// A compiler error means nothing ran; anything else means the target may have been touched.
+		//
+		// "Executes in the target" is not the same as "needs a func-eval", and the difference decides what
+		// is still possible against an idle process. Storing a value that already exists over there is a
+		// direct write and succeeds even at an unsafe point; producing a value the engine must first
+		// create -- a string literal, a boxed value, a new object -- is a func-eval and is refused at an
+		// unsafe point like any other. The line is what the value costs, not whether the target is a
+		// primitive: null into a reference is as free as an int.
+		//
+		// Measured on CorDebug against Milestone1Target, one thread parked at an unsafe point inside
+		// Thread.Sleep, evaluating in its caller's frame (Program.Tick, frame_index 1):
+		//   answer = 1717                    -> assigned
+		//   label  = "changed-at-unsafe..."  -> compiler_error=false, "at an unsafe point"
+		//   label  = null                    -> assigned
 		async Task<AssignmentResult> SetValueAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
 			var expression=(string?)req.Arguments["expression"];
@@ -214,7 +232,7 @@ namespace dgSpy.Extension {
 			return await WithEvaluationAsync(req,(captured,eval)=>{
 				var result=captured.Language.ExpressionEvaluator.Assign(eval,expression!,valueExpression,EvaluationOptions(allowFuncEval,allowSideEffects:true));
 				if (result.Error is not null)
-					return new AssignmentResult { Expression=expression!,Assigned=false,Error=result.Error,CompilerError=result.IsCompilerError,SessionId=sessionId,StateVersion=stateVersion };
+					return new AssignmentResult { Expression=expression!,Assigned=false,Error=result.Error,CompilerError=result.IsCompilerError,Recovery=FuncEvalDiagnostics.Recovery(result.Error),SessionId=sessionId,StateVersion=stateVersion };
 				var nodes=CreateNodes(captured,eval,new[]{expression!},allowFuncEval,allowSideEffects:false);
 				try { return new AssignmentResult { Expression=expression!,Assigned=true,Value=DescribeNode(nodes[0],eval,expression!),SessionId=sessionId,StateVersion=stateVersion }; }
 				finally { manager.Close(nodes); }

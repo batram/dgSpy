@@ -21,6 +21,10 @@ public sealed class McpClientSessions {
 	public string Resolve(string? presented) { var id=string.IsNullOrWhiteSpace(presented) ? LegacyClient : presented.Trim(); Touch(id); return id; }
 	public void Touch(string clientId) { lock(sync) seen[clientId]=DateTime.UtcNow; }
 	public bool IsActive(string clientId) { lock(sync) return seen.TryGetValue(clientId,out var last) && DateTime.UtcNow-last<=idleTimeout; }
+	/// <summary>When this client's lease lapses if it never calls again, or null if it is already unknown.
+	/// A caller that lost its transport cannot renew the lease and cannot claim the session until then, so
+	/// without this it can only poll blind.</summary>
+	public DateTime? ExpiresUtc(string clientId) { lock(sync) return seen.TryGetValue(clientId,out var last) ? last+idleTimeout : (DateTime?)null; }
 	internal void SetLastSeen(string clientId,DateTime value) { lock(sync) seen[clientId]=value; }
 }
 
@@ -49,6 +53,13 @@ public sealed class SessionControllers {
 	}
 	public void ReleaseTerminal(string sessionId) { lock(sync) owners.Remove(sessionId); }
 	public SessionControllerInfo? Get(string sessionId) { lock(sync) { if(!owners.TryGetValue(sessionId,out var value)) return null; if(clients.IsActive(value.ClientId)) return value; owners.Remove(sessionId); return null; } }
+	/// <summary>The live controller and when its lease lapses. claim_session correctly refuses while another
+	/// controller is active, so a caller whose own transport was replaced -- which happens whenever the MCP
+	/// client restarts its stdio server -- has to wait the lease out. Reporting the deadline makes that wait
+	/// deterministic instead of a poll loop against an unknown bound.</summary>
+	public (SessionControllerInfo? Owner,DateTime? ExpiresUtc) Inspect(string sessionId) {
+		lock(sync) { var owner=Get(sessionId); return (owner,owner is null ? null : clients.ExpiresUtc(owner.ClientId)); }
+	}
 }
 
 public sealed record SessionControllerInfo(string SessionId,string? HostId,string ClientId,DateTime ClaimedUtc);
@@ -97,7 +108,13 @@ public sealed class GatewayToolExecutor {
 				if(auditId is not null || DeploymentService.IsMutation(operation)) audit.Write(auditId ?? Guid.NewGuid().ToString("N"),clientId,hostId,sessionId,operation,null,"succeeded",null);
 				return RpcResponse.Success(Guid.NewGuid().ToString("N"),result);
 			}
-			if(operation=="get_session_controller") { if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var current=controllers.Get(sessionId); return RpcResponse.Success(Guid.NewGuid().ToString("N"),current is null ? new { session_id=sessionId,owned=false,controller_id=(string?)null } : new { session_id=sessionId,owned=true,controller_id=(string?)current.ClientId }); }
+			if(operation=="get_session_controller") {
+				if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required.");
+				var (current,expires)=controllers.Inspect(sessionId);
+				if(current is null) return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,owned=false,controller_id=(string?)null,controller_is_caller=false,controller_expires_utc=(string?)null,controller_expires_in_seconds=(int?)null });
+				var remaining=expires is null ? (int?)null : Math.Max(0,(int)Math.Ceiling((expires.Value-DateTime.UtcNow).TotalSeconds));
+				return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,owned=true,controller_id=(string?)current.ClientId,controller_is_caller=current.ClientId==clientId,controller_expires_utc=expires?.ToString("O"),controller_expires_in_seconds=remaining });
+			}
 			if(operation=="claim_session") { access.AuthorizeMutation(operation); if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var state=await GetStateAsync(arguments,token); var claimed=controllers.Claim(sessionId,hostId,clientId); var node=ProtocolJson.ToNode(state)!; audit.Write(auditId!,clientId,hostId,sessionId,operation,null,"succeeded",null); return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,controller_id=claimed.ClientId,state_version=(long?)node["state_version"],lifecycle_version=(long?)node["lifecycle_version"],execution_version=(long?)node["execution_version"],breakpoints_version=(long?)node["breakpoints_version"],stop_id=(string?)node["stop_id"] }); }
 			if(operation=="release_session") { access.AuthorizeMutation(operation); if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var released=controllers.Release(sessionId,clientId); audit.Write(auditId!,clientId,hostId,sessionId,operation,null,"succeeded",null); return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,released=true,controller_id=released.ClientId }); }
 			if(mutates) {
@@ -170,13 +187,29 @@ public sealed class GatewayToolExecutor {
 	static bool Matches(JsonObject arguments,string text) { foreach(var property in new[]{"module_filter","namespace_filter","type_filter"}) { var filter=(string?)arguments[property]; if(!string.IsNullOrWhiteSpace(filter)&&!text.Contains(filter,StringComparison.OrdinalIgnoreCase)) return false; } return true; }
 	async Task<RpcResponse> RunToAsync(string operation,JsonObject arguments,CancellationToken token) {
 		Require(arguments,"expected_execution_version"); Require(arguments,"expected_breakpoints_version"); Require(arguments,"expected_stop_id");
-		var setOperation=operation=="run_to_method"?"set_breakpoint":"set_il_breakpoint"; var breakpointArgs=BaseArgs(arguments); foreach(var name in new[]{"type","method","signature","method_token","il_offset"}) if(arguments[name] is not null) breakpointArgs[name]=arguments[name]!.DeepClone();
+		// module and expected_breakpoints_version belong to the temporary breakpoint, not to this call's
+		// own guards: both set_breakpoint and set_il_breakpoint require them, and BaseArgs carries neither.
+		// Without them every run_to_* attempt died on the host's "module is required" before the target
+		// ever ran, which read as a caller mistake because the caller had in fact passed module.
+		var setOperation=operation=="run_to_method"?"set_breakpoint":"set_il_breakpoint"; var breakpointArgs=BaseArgs(arguments); foreach(var name in new[]{"module","type","method","signature","method_token","il_offset","expected_breakpoints_version"}) if(arguments[name] is not null) breakpointArgs[name]=arguments[name]!.DeepClone();
 		var created=await RouteAsync(setOperation,breakpointArgs,token); if(created.Error is not null) return created; var createdNode=ProtocolJson.ToNode(created.Result)!.AsObject(); var breakpointId=(int?)createdNode["breakpoint_id"] ?? throw new GatewayControlException("invalid_state","Host returned no temporary breakpoint id."); var cursor=(long?)createdNode["cursor_event_id"] ?? 0;
 		try {
-			var continueArgs=BaseArgs(arguments,new JsonObject { ["expected_state_version"]=arguments["expected_execution_version"]?.DeepClone() }); var continued=await RouteAsync("continue",continueArgs,token); if(continued.Error is not null) return continued;
+			// Scoped guard, not the deprecated alias: expected_state_version is compared against state_version,
+			// which counts every state change in the session, while the caller's guard is an execution_version.
+			// The two are equal only until something else moves state, so the alias turned every run_to_* into
+			// a stale_state whose numbers ("expected 2, current 14") described a guard the caller never passed.
+			var continueArgs=BaseArgs(arguments,new JsonObject { ["expected_execution_version"]=arguments["expected_execution_version"]?.DeepClone() }); var continued=await RouteAsync("continue",continueArgs,token); if(continued.Error is not null) return continued;
 			var timeout=Math.Clamp((int?)arguments["timeout_ms"] ?? 10000,1,10000); var wait=await RouteAsync("wait_for_stop",BaseArgs(arguments,new JsonObject{{"after_event_id",cursor},{"timeout_ms",timeout}}),token);
 			return wait.Error is null ? RpcResponse.Success(Guid.NewGuid().ToString("N"),new { temporary_breakpoint=created.Result,wait=wait.Result }) : wait;
-		} finally { await RouteAsync("remove_breakpoint",BaseArgs(arguments,new JsonObject{{"breakpoint_id",breakpointId}}),CancellationToken.None); }
+		} finally {
+			// remove_breakpoint carries its own guard, and creating the temporary breakpoint already moved
+			// breakpoints_version past whatever the caller passed in, so the cleanup has to re-read state
+			// rather than reuse it. Getting this wrong leaves the temporary breakpoint behind, and a
+			// breakpoint nobody set outlives the session and rebinds on the next attach.
+			var cleanup=BaseArgs(arguments,new JsonObject{{"breakpoint_id",breakpointId}});
+			try { cleanup["expected_breakpoints_version"]=ProtocolJson.ToNode(await GetStateAsync(arguments,CancellationToken.None))!["breakpoints_version"]?.DeepClone(); } catch (Exception) { }
+			await RouteAsync("remove_breakpoint",cleanup,CancellationToken.None);
+		}
 	}
 	async Task<RpcResponse> RouteAsync(string operation,JsonObject args,CancellationToken token) => await router.CallAsync(new RpcRequest { Operation=operation,Arguments=args,DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds(operation)) },token);
 	static JsonObject BaseArgs(JsonObject source,JsonObject? additions=null) { var result=new JsonObject(); foreach(var name in new[]{"host_id","session_id","thread_id"}) if(source[name] is not null) result[name]=source[name]!.DeepClone(); if(additions is not null) foreach(var pair in additions) result[pair.Key]=pair.Value?.DeepClone(); return result; }

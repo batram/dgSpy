@@ -127,6 +127,15 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("has_managed_frames"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? HasManagedFrames { get; set; }
 		[JsonPropertyName("suspended_count")] public int SuspendedCount { get; set; }
 		[JsonPropertyName("states")] public string[] States { get; set; }=Array.Empty<string>();
+		/// <summary>Whether a func-eval issued against this thread can run right now. Present only when the
+		/// caller asked list_threads to probe for it; absent means not measured, never "no". `states` cannot
+		/// substitute for this — CorDebug publishes UnsafePoint there and Mono publishes nothing at all.</summary>
+		[JsonPropertyName("can_evaluate"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? CanEvaluate { get; set; }
+		/// <summary>Why <see cref="CanEvaluate"/> is false: <c>no_frames</c> (nothing to evaluate against),
+		/// <c>native_frame</c> (the innermost frame is native, so there is no managed context to call from),
+		/// or <c>unsafe_point</c> (frames are fine but the engine parked the thread where a func-eval cannot
+		/// start). Reported in the order the engine itself checks them.</summary>
+		[JsonPropertyName("evaluate_blocked_reason"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? EvaluateBlockedReason { get; set; }
 	}
 	public sealed class FrameInfo {
 		[JsonPropertyName("frame_id")] public string FrameId { get; set; }="";
@@ -275,6 +284,9 @@ namespace dgSpy.Protocol {
 		/// <summary>True when the expression did not compile, which means no target code ran. False with
 		/// an error means the target may already have been touched.</summary>
 		[JsonPropertyName("compiler_error"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? CompilerError { get; set; }
+		/// <summary>What to do about <see cref="Error"/>, when dgSpy recognizes it. Present only for errors
+		/// whose stock dnSpy text names the wrong remedy.</summary>
+		[JsonPropertyName("recovery"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Recovery { get; set; }
 		[JsonPropertyName("session_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? SessionId { get; set; }
 		[JsonPropertyName("state_version")] public long StateVersion { get; set; }
 	}
@@ -292,6 +304,13 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("audit_id")] public string AuditId { get; set; }="";
 		[JsonPropertyName("value"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public EvaluatedValue? Value { get; set; }
 		[JsonPropertyName("error"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Error { get; set; }
+		/// <summary>True when the expression did not compile, so nothing ran in the target and the fix is
+		/// local to the expression. False with an error means it compiled and the engine refused to execute
+		/// it — the same call can succeed elsewhere. Mirrors set_value's field of the same name; without it
+		/// a caller mistake and a transient engine refusal are indistinguishable.</summary>
+		[JsonPropertyName("compiler_error"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? CompilerError { get; set; }
+		/// <summary>What to do about <see cref="Error"/>, when dgSpy recognizes it.</summary>
+		[JsonPropertyName("recovery"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Recovery { get; set; }
 		[JsonPropertyName("capability")] public string Capability { get; set; }="";
 	}
 	/// <summary>A stored expression, re-evaluated on demand. Deliberately not a retained value handle:

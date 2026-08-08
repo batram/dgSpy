@@ -145,6 +145,37 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   request. Pass an ID to `get_callstack` for a caller-owned stack walk of that exact thread; this does
   not depend on dnSpy's UI callstack asynchronously following `CurrentThread`. Omit it to retain the
   best-effort managed-frame probe. `get_frame(thread_id, frame_index)` inspects exactly one frame.
+- **`states` does not predict whether a func-eval can run; `include_evaluability` does.** CorDebug
+  publishes `UnsafePoint` in `states`, Mono publishes no states at all, so a rule learned on one engine
+  is silently wrong on the other. `list_threads(include_evaluability=true)` probes each thread and adds
+  `can_evaluate` plus `evaluate_blocked_reason` — `no_frames`, `native_frame`, or `unsafe_point`, in the
+  order the engine itself checks them. It costs one bounded stack walk per thread, which is why it is
+  opt-in: on Unity that is the call a disappearing thread can stall. Measured against both engines, the
+  prediction matched what `invoke_method` actually did on every thread, in both directions.
+- **A func-eval is refused per thread, so pick the thread rather than stepping.** The stock dnSpy text
+  says "Step once or run until a breakpoint hits", and on an idle process the first half is useless:
+  every thread is blocked in a native wait and stepping cannot advance any of them. dgSpy adds a
+  `recovery` field to that error saying so. The reliable route is a breakpoint on a method the target
+  actually reaches. Note the evaluable frame is often not frame 0 — a thread parked in `Thread.Sleep`
+  evaluates in its caller's frame, so pass `frame_index`.
+- **`compiler_error` separates your mistake from the engine's refusal.** True means the expression never
+  compiled and nothing ran in the target, so fix the expression; false with an error means it compiled
+  and the engine declined to execute it here, so the same call can succeed at another thread or stop.
+  `set_value` has always reported it; `invoke_method` and `create_object` now do too, classified from
+  the Roslyn diagnostic prefix because dnSpy's value-node contract returns only a string.
+- **"Executes in the target" is not "needs a func-eval", and `set_value` straddles the line.** Storing a
+  value that already exists over there is a direct write and succeeds even at an unsafe point; producing
+  one the engine must first create — a string literal, a boxed value, a new object — is a func-eval and
+  is refused like any other. The cost of the value decides it, not whether the target is a primitive.
+  Measured on CorDebug at an unsafe point: `answer = 1717` assigned, `label = null` assigned,
+  `label = "..."` refused with `compiler_error: false`.
+- **`get_autos` returns `capability_unsupported` on every engine.** dnSpy's Autos provider is a stub that
+  answers with a single `NYI` node; dgSpy used to pass that through as a successful empty-looking read.
+  Use `get_frame` with `include: ["locals", "this"]`, which is the provider dnSpy does implement.
+- `get_session_controller` reports `controller_expires_utc` and `controller_expires_in_seconds` when a
+  session is owned, plus `controller_is_caller`. A client that lost its transport — an MCP client
+  restarting its stdio server gives the session a new identity and strands the old lease on a dead one —
+  cannot renew or claim until the lease lapses, so the deadline turns a blind poll into a known wait.
 - Frame identity is `thread_id` + `frame_index` for paused selection, and `module` + `method_token` +
   `il_offset` for code identity and `set_il_breakpoint`. `name` is display-only and must not be parsed.
 - **On Mono/Unity, `il_offset` must be a sequence point** or the engine refuses the breakpoint. Many
@@ -154,6 +185,13 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   By default a refused offset is retried at method entry, which sets `snapped` and a `warning`; pass
   `snap_to_sequence_point=false` to get the failure instead. `bound` claims the engine installed the
   breakpoint, not that it will be reached.
+- **`run_to_method` and `run_to_location` are Gateway compositions, not host calls.** The Gateway sets a
+  temporary breakpoint, continues, waits, and removes it, building each inner call's arguments itself.
+  It used to drop `module` and `expected_breakpoints_version` on the way to `set_breakpoint`, and to
+  guard the resume with the deprecated `expected_state_version` alias carrying an `execution_version`
+  the host compares against a different counter. Both tools therefore always failed, and both failures
+  named a caller mistake — "module is required" to a caller who passed `module`, then a `stale_state`
+  quoting two numbers the caller never supplied.
 - **Take the event cursor before setting a breakpoint, not after.** Use the `cursor_event_id` that
   `set_il_breakpoint` returns as `wait_for_stop`'s `after_event_id`. On a hot method the breakpoint
   fires before a subsequent `get_session_state` returns, and a cursor read afterwards has already
