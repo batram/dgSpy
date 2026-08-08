@@ -107,14 +107,18 @@ if (-not $connected) {
 # test that other host's build. Ask the listener who it is and refuse anything but our process
 # running our deployed extension.
 . (Join-Path $PSScriptRoot 'Invoke-DgSpyRpc.ps1')
-$identity = Invoke-DgSpyRpc -OperationName 'get_host_info' -RpcPort $RpcPort -DeadlineSeconds 10
-if ($identity.dnspy_process_id -ne $process.Id) {
-	Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-	throw "Port $RpcPort is served by dnSpy pid $($identity.dnspy_process_id) (extension '$($identity.extension_path)'), not the host this script started (pid $($process.Id)). Another dgSpy holds the port; pick a different one or stop it."
+try {
+	$identity = Invoke-DgSpyRpc -OperationName 'get_host_info' -RpcPort $RpcPort -DeadlineSeconds 10
+	if ($identity.dnspy_process_id -ne $process.Id) {
+		throw "Port $RpcPort is served by dnSpy pid $($identity.dnspy_process_id) (extension '$($identity.extension_path)'), not the host this script started (pid $($process.Id)). Another dgSpy holds the port; pick a different one or stop it."
+	}
+	if (-not ([IO.Path]::GetFullPath($identity.extension_path)).StartsWith([IO.Path]::GetFullPath($dnSpyDir), [StringComparison]::OrdinalIgnoreCase)) {
+		throw "The started host loaded its extension from '$($identity.extension_path)', outside the tree it was launched from ($dnSpyDir). The deployment is stale or cross-wired; run .\build-dgspy.ps1 -TargetFramework $TargetFramework."
+	}
 }
-if (-not ([IO.Path]::GetFullPath($identity.extension_path)).StartsWith([IO.Path]::GetFullPath($dnSpyDir), [StringComparison]::OrdinalIgnoreCase)) {
+catch {
 	Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-	throw "The started host loaded its extension from '$($identity.extension_path)', outside the tree it was launched from ($dnSpyDir). The deployment is stale or cross-wired; run .\build-dgspy.ps1 -TargetFramework $TargetFramework."
+	throw
 }
 
 $process.Id
