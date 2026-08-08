@@ -122,11 +122,17 @@ namespace dgSpy.Extension {
 		async Task<ExceptionBreakpointList> ListExceptionBreakpointsAsync(RpcRequest req,CancellationToken cancellationToken) {
 			var includeSecondChance=(bool?)req.Arguments["include_second_chance"] ?? false;
 			var max=Math.Min(1000,Math.Max(1,(int?)req.Arguments["max_results"] ?? 200));
+			// Same category/name filters as list_exception_policies, which reports the same entries. The
+			// two tools disagreeing about how you narrow one lookup is the sibling asymmetry that made
+			// this pair read as two features instead of one.
+			var category=(string?)req.Arguments["category"]; var name=(string?)req.Arguments["name"];
 			return await OnDebuggerAsync(()=>{
 				var wanted=includeSecondChance ? DbgExceptionDefinitionFlags.StopFirstChance|DbgExceptionDefinitionFlags.StopSecondChance : DbgExceptionDefinitionFlags.StopFirstChance;
 				var matching=exceptions.Exceptions
 					.Where(e=>(e.Settings.Flags&wanted)!=0)
 					.Select(e=>DescribeException(e.Definition.Id,e.Settings))
+					.Where(e=>category is null||string.Equals(e.Category,category,StringComparison.OrdinalIgnoreCase))
+					.Where(e=>name is null||string.Equals(e.Name??"",name,StringComparison.Ordinal))
 					.OrderBy(e=>e.Category,StringComparer.Ordinal).ThenBy(e=>e.Name ?? "",StringComparer.Ordinal).ToArray();
 				return new ExceptionBreakpointList {
 					Entries=matching.Take(max).ToArray(),Total=matching.Length,Truncated=matching.Length>max,

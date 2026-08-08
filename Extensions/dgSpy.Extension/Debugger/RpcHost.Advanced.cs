@@ -43,8 +43,15 @@ namespace dgSpy.Extension {
 			var processId=(int?)req.Arguments["process_id"];
 			var processes=manager.Processes.ToArray();
 			if (processId is null && processes.Length==1) return processes[0];
-			return processes.FirstOrDefault(p=>p.Id==processId)
-				?? throw new RpcException(processId is null ? "ambiguous_target" : "process_not_found",processId is null ? "More than one process is active; pass process_id." : $"Process {processId} is not active.");
+			var selected=processes.FirstOrDefault(p=>p.Id==processId);
+			if (selected is not null) return selected;
+			if (processId is not null) throw new RpcException("process_not_found",$"Process {processId} is not active.");
+			// Zero and many are opposite problems and used to share one message. "More than one process
+			// is active; pass process_id" sent a caller looking for the second process when the real
+			// answer was that its target had exited and there was none -- a debugging cycle spent on a
+			// process_id that could never have existed.
+			if (processes.Length==0) throw new RpcException("no_active_process","No process is active in this session; the target exited or was detached.");
+			throw new RpcException("ambiguous_target",$"{processes.Length} processes are active ({string.Join(", ",processes.Select(p=>p.Id))}); pass process_id.");
 		}
 
 		async Task<SessionState> PauseProcessAsync(RpcRequest req,CancellationToken token) {

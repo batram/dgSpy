@@ -160,7 +160,10 @@ namespace dgSpy.Extension {
 		async Task<RpcResponse> DispatchAsync(RpcRequest req) {
 			// Fully qualified: a `using System.Diagnostics` here would collide with dnSpy.Contracts.Debugger.
 			var started=System.Diagnostics.Stopwatch.StartNew();
-			var response=StampVersions(req,await DispatchCoreAsync(req).ConfigureAwait(false));
+			long executionBefore; lock(sync) executionBefore=executionVersion;
+			var response=await DispatchCoreAsync(req).ConfigureAwait(false);
+			await SettleExecutionChangeAsync(req,response,executionBefore).ConfigureAwait(false);
+			response=StampVersions(req,response);
 			started.Stop();
 			try { McpActivityLog.Instance.Record(req,response,started.Elapsed); }
 			// The activity window is a diagnostic. It must never be able to fail an RPC call.
@@ -169,13 +172,49 @@ namespace dgSpy.Extension {
 		}
 		// Every operation that takes a version guard echoes the full current vector back, so the caller
 		// never needs a follow-up get_session_state just to learn the counter its next call must carry.
-		// The set is exactly the guarded set in CheckOperationVersion: read-only operations stay
-		// unstamped because nothing they enable depends on a counter.
+		// Read-only operations stay unstamped because nothing they enable depends on a counter, with one
+		// deliberate exception: the waits. A stop is what moves execution_version and stop_id, and
+		// wait_for_stop is where a caller learns the stop happened, so leaving it unstamped forced a
+		// get_session_state between every wait and the call that acts on what it found.
+		//
+		// attach, attach_endpoint and launch carry no guard of their own — there is no session yet to
+		// guard against — but they are stamped anyway, because they are precisely where a caller has no
+		// counters at all. Every session opens with a mutation (a breakpoint, a resume) whose guard the
+		// caller could otherwise only get from an interposed get_session_state, which made the read
+		// mandatory on the one call that had just created the state it would report.
 		static readonly HashSet<string> versionStampedOperations=new HashSet<string>(StringComparer.Ordinal) {
+			"attach","attach_endpoint","launch",
+			"wait_for_stop","wait_for_event",
 			"detach","terminate","restart",
 			"pause","continue","step_into","step_over","step_out","set_value","invoke_method","create_object","write_memory","set_instruction_pointer","create_object_id","release_object_id","write_value_export",
 			"set_il_breakpoint","set_breakpoint","remove_breakpoint","clear_breakpoints","update_breakpoint","set_exception_breakpoint","set_module_breakpoint","update_module_breakpoint","remove_module_breakpoint","import_breakpoints","set_exception_policy","remove_exception_policy","restore_exception_defaults",
 		};
+		// The operations whose whole purpose is to move execution. Their state change is not applied by
+		// the call itself: executionVersion moves when the engine's Continued or Stopped event is
+		// recorded on the debugger thread, which happens after the RPC has already composed its answer.
+		// Stamping without waiting therefore echoed the value from *before* the resume, and the very
+		// next guarded call died with "expected 6, current 7" quoting a number this response had just
+		// handed the caller. That is worse than returning nothing: it looks authoritative and is wrong.
+		static readonly HashSet<string> executionChangingOperations=new HashSet<string>(StringComparer.Ordinal) {
+			"pause","continue","step_into","step_over","step_out",
+		};
+		/// <summary>Wait, boundedly, for the execution change this operation asked for to be recorded, so
+		/// the vector stamped onto the response is the one after it applied. Best effort by design: a step
+		/// that never lands, or a resume the engine declines, must not turn into a failed call, so a
+		/// timeout stamps what is known and leaves the caller no worse off than before the echo existed.</summary>
+		async Task SettleExecutionChangeAsync(RpcRequest req,RpcResponse response,long executionBefore) {
+			if (response.Error is not null || !executionChangingOperations.Contains(req.Operation)) return;
+			using var bound=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
+			bound.CancelAfter(TimeSpan.FromMilliseconds(750));
+			while (true) {
+				// Read the cursor before re-testing the version, never after: an event recorded between
+				// the two reads would otherwise be waited past and the wait would hang out its bound.
+				var observed=events.LastEventId;
+				lock(sync) { if (executionVersion!=executionBefore) return; }
+				try { await events.WaitForChangeAsync(observed,bound.Token).ConfigureAwait(false); }
+				catch (OperationCanceledException) { return; }
+			}
+		}
 		RpcResponse StampVersions(RpcRequest req,RpcResponse response) {
 			if (response.Error is not null || !versionStampedOperations.Contains(req.Operation)) return response;
 			// restore_exception_defaults returns a bare bool; everything else in the set is an object.

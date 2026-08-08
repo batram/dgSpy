@@ -151,11 +151,35 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   stop and is cleared on resume.
 - Every operation that takes a version guard echoes the full current vector back in a `versions`
   object: `{lifecycle_version, execution_version, breakpoints_version, stop_id, last_event_id}`,
-  read after the operation applied. Feed the next mutation's `expected_*` guards and the next
-  `wait_for_stop` cursor from there instead of an interposed `get_session_state`. `stop_id` is `null`
+  read after the operation applied. Feed the next mutation's `expected_*` guards from there instead of
+  an interposed `get_session_state`. **`versions.last_event_id` is not a wait cursor for an event the
+  same call causes.** It is the newest event at response time, which is right for reading history with
+  `get_events` and wrong for `wait_for_stop` after a resume: a breakpoint on a hot path is hit before
+  `continue` returns, so the stamped cursor already includes that `stopped` event and waiting from it
+  waits for the next one. Measured, not theorised — a `Probe` breakpoint reported
+  `engine_hit_count: 1` while `wait_for_stop` reported `timed_out: true`. Capture the cursor before the
+  resume; `set_breakpoint` and `set_il_breakpoint` return one as `cursor_event_id`. `stop_id` is `null`
   while the target runs. The one exception is `restore_exception_defaults`, whose result is a bare
   boolean. For a step that returns `completed: false`, the vector describes the state at response
   time — the in-flight step's stop, when it lands, arrives on the event stream with its own versions.
+- `attach`, `attach_endpoint`, `launch`, `wait_for_stop` and `wait_for_event` carry the vector too,
+  though none of them takes a guard. They are where a caller has no counters at all: a session opens
+  with a mutation whose guard could otherwise only come from an interposed `get_session_state`, and a
+  wait is where the caller learns the stop that moved `execution_version` and `stop_id` happened.
+- **The vector for an execution change is stamped after that change is recorded, not when the call
+  returns.** `execution_version` moves when the engine's `Continued`/`Stopped` event reaches the event
+  buffer, which happens after the RPC has composed its answer. Stamping without waiting made `continue`
+  hand back the value from *before* the resume, so the next guarded call died with
+  `stale_execution: expected 6, current 7` — quoting a number that same response had supplied.
+  `pause`, `continue` and the three steps therefore wait, bounded at 750 ms, for their own execution
+  change to land. The wait is best effort: a step that never lands must not fail the call, so a timeout
+  stamps what is known and leaves the caller no worse off than before the echo existed.
+- Gateway compositions (`step_and_inspect`, `run_to_method`, `run_to_location`, `trace_calls`) lift a
+  `versions` object to the top of their result. A composition is where the counters are hardest to
+  guess, because several guarded calls moved them and only the Gateway saw the intermediate responses.
+  The source is the call that observed the final state: the wait for the stepping tools, and the
+  temporary-breakpoint removal for `run_to_*` — removing it moves `breakpoints_version` again, so
+  stamping from the wait would return a guard that is stale on arrival.
 - `list_threads` requires a paused session and returns stable `thread_id` values as
   `process_id:os_thread_id`, including managed ID, name and state. It deliberately does not fetch every
   stack: Unity threads can exit during frame retrieval, and some Mono runtimes never answer that raced
@@ -329,7 +353,16 @@ delayed rather than withheld.
   `set_exception_policy` write the same dnSpy entry (the policy form additionally takes module
   conditions); `list_exception_breakpoints` is the filtered deliberately-configured view of the same
   entries `list_exception_policies` reports raw, and `remove_exception_policy` removes entries created
-  by either setter.
+  by either setter. Both list tools take the same `category` and `name` filters, matched exactly, and
+  report `total` and `truncated`. That is what makes a removal confirmable: without a way to name one
+  entry, the only view was dnSpy's whole stock definition set, so a caller doing careful cleanup could
+  not prove it had cleaned up. The empty string selects the category default entry, the one
+  `set_exception_breakpoint` writes when `name` is omitted.
+- **Zero processes and several are opposite problems and no longer share one message.** Selecting a
+  process without `process_id` answers `no_active_process` when the session has none (the target exited
+  or was detached) and `ambiguous_target`, naming the live PIDs, when it has more than one. The single
+  old "More than one process is active; pass process_id" sent a caller hunting for a second process
+  when the real answer was that there was not even a first one.
 - **`search` is the discovery entry point.** It is dnSpy's Search window as a tool: it tests the same
   candidate strings the GUI does, so a qualified path resolves --- `GameState.ChatSystem` finds the
   `ChatSystem` field on type `GameState`, which `search_symbols` cannot, because that tool compares the

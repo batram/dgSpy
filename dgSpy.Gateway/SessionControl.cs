@@ -165,21 +165,30 @@ public sealed class GatewayToolExecutor {
 		var step=await ExecuteAsync(stepOperation,stepArgs,clientId,token); if(step.Error is not null) return step;
 		var stepNode=ProtocolJson.ToNode(step.Result)!.AsObject(); var cursor=(long?)stepNode["cursor_event_id"] ?? 0; var timeout=Math.Clamp((int?)arguments["timeout_ms"] ?? 5000,1,10000);
 		var wait=await RouteAsync("wait_for_stop",BaseArgs(arguments,new JsonObject { ["after_event_id"]=cursor,["timeout_ms"]=timeout }),token); if(wait.Error is not null) return wait;
-		var waitNode=ProtocolJson.ToNode(wait.Result)!.AsObject(); var events=waitNode["events"]?.AsArray(); var stop=events?.LastOrDefault(); if((bool?)waitNode["timed_out"]==true||stop is null) return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { step=step.Result,wait=wait.Result,inspection=(object?)null });
+		var waitNode=ProtocolJson.ToNode(wait.Result)!.AsObject(); var events=waitNode["events"]?.AsArray(); var stop=events?.LastOrDefault(); if((bool?)waitNode["timed_out"]==true||stop is null) return RpcResponse.Success(Guid.NewGuid().ToString("N"),Versioned(new JsonObject { ["step"]=ProtocolJson.ToNode(step.Result),["wait"]=waitNode.DeepClone(),["inspection"]=null },waitNode));
 		var threadId=(string?)stop["thread_id"] ?? (string?)arguments["thread_id"];
 		var maxFrames=Math.Clamp((int?)arguments["max_frames"] ?? 10,1,25); var inspectArgs=BaseArgs(arguments); if(threadId is not null) inspectArgs["thread_id"]=threadId;
 		var stack=await RouteAsync("get_callstack",BaseArgs(inspectArgs,new JsonObject{{"max_frames",maxFrames}}),token);
 		var frame=threadId is null ? null : await RouteAsync("get_frame",BaseArgs(inspectArgs,new JsonObject{{"frame_index",0},{"include",new JsonArray("locals","this")}}),token);
 		var watches=await RouteAsync("list_watches",BaseArgs(inspectArgs,new JsonObject{{"frame_index",0}}),token); var exception=await RouteAsync("get_exception",BaseArgs(inspectArgs,new JsonObject{{"frame_index",0}}),token);
-		return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { step=step.Result,stop=ProtocolJson.ToNode(stop),callstack=ResultOrError(stack),frame=frame is null?null:ResultOrError(frame),watches=ResultOrError(watches),exception=ResultOrError(exception),limitations=new[]{"optimized or inlined calls may be skipped","native and runtime calls are not traced","async continuations can change threads"} });
+		return RpcResponse.Success(Guid.NewGuid().ToString("N"),Versioned(new JsonObject { ["step"]=ProtocolJson.ToNode(step.Result),["stop"]=stop.DeepClone(),["callstack"]=ProtocolJson.ToNode(ResultOrError(stack)),["frame"]=frame is null?null:ProtocolJson.ToNode(ResultOrError(frame)),["watches"]=ProtocolJson.ToNode(ResultOrError(watches)),["exception"]=ProtocolJson.ToNode(ResultOrError(exception)),["limitations"]=new JsonArray("optimized or inlined calls may be skipped","native and runtime calls are not traced","async continuations can change threads") },waitNode));
 	}
+	/// <summary>Lift the inner call's `versions` vector to the top of a composed result. A composition is
+	/// exactly where the counters are hardest to guess — several guarded calls moved them and only the
+	/// gateway saw the intermediate responses — so a caller that had to re-read state after every
+	/// step_and_inspect got no benefit from the composite at all. The source is the call that observed
+	/// the final state: the wait for the stepping tools, the cleanup removal for run_to_*.</summary>
+	static JsonObject Versioned(JsonObject result,JsonObject? source) { if(source?["versions"] is JsonNode versions) result["versions"]=versions.DeepClone(); return result; }
 	async Task<RpcResponse> TraceCallsAsync(JsonObject arguments,string clientId,CancellationToken token) {
 		var maxSteps=Math.Clamp((int?)arguments["max_steps"] ?? 25,1,100); var duration=Math.Clamp((int?)arguments["duration_ms"] ?? 10000,1,30000); var maxDepth=Math.Clamp((int?)arguments["max_depth"] ?? 20,1,50); var started=DateTime.UtcNow; var entries=new JsonArray(); var current=(JsonObject)arguments.DeepClone();
 		for(var index=0;index<maxSteps && (DateTime.UtcNow-started).TotalMilliseconds<duration;index++) {
 			current["kind"]="into"; current["timeout_ms"]=Math.Min(5000,duration-(int)(DateTime.UtcNow-started).TotalMilliseconds); current["max_frames"]=maxDepth;
 			var result=await StepAndInspectAsync(current,clientId,token); if(result.Error is not null) return result; var node=ProtocolJson.ToNode(result.Result)!.AsObject(); var stop=node["stop"]; if(stop is null) return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { entries,completed=false,reason="step_timeout",steps=index+1,limitations=TraceLimitations });
 			var stack=node["callstack"]; var text=stack?.ToJsonString() ?? ""; if(Matches(arguments,text)) entries.Add(new JsonObject { ["step"]=index+1,["stop"]=stop.DeepClone(),["callstack"]=stack?.DeepClone() });
-			var state=await GetStateAsync(current,token); var stateNode=ProtocolJson.ToNode(state)!.AsObject(); current["expected_execution_version"]=stateNode["execution_version"]?.DeepClone(); current["expected_stop_id"]=stateNode["stop_id"]?.DeepClone();
+			// The step's own response now carries the vector the next iteration must guard with, so the
+			// trace no longer spends a get_session_state per step to re-read what it was just told.
+			var versions=node["versions"]?.AsObject() ?? ProtocolJson.ToNode(await GetStateAsync(current,token))!.AsObject();
+			current["expected_execution_version"]=versions["execution_version"]?.DeepClone(); current["expected_stop_id"]=versions["stop_id"]?.DeepClone();
 		}
 		return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { entries,completed=true,reason="bound_reached",steps=entries.Count,limitations=TraceLimitations });
 	}
@@ -193,6 +202,10 @@ public sealed class GatewayToolExecutor {
 		// ever ran, which read as a caller mistake because the caller had in fact passed module.
 		var setOperation=operation=="run_to_method"?"set_breakpoint":"set_il_breakpoint"; var breakpointArgs=BaseArgs(arguments); foreach(var name in new[]{"module","type","method","signature","method_token","il_offset","expected_breakpoints_version"}) if(arguments[name] is not null) breakpointArgs[name]=arguments[name]!.DeepClone();
 		var created=await RouteAsync(setOperation,breakpointArgs,token); if(created.Error is not null) return created; var createdNode=ProtocolJson.ToNode(created.Result)!.AsObject(); var breakpointId=(int?)createdNode["breakpoint_id"] ?? throw new GatewayControlException("invalid_state","Host returned no temporary breakpoint id."); var cursor=(long?)createdNode["cursor_event_id"] ?? 0;
+		// Filled by the cleanup below. The vector the caller needs is the one after the temporary
+		// breakpoint came back out, not the one the wait saw: removing it moves breakpoints_version
+		// again, so stamping from the wait would hand back a guard that is stale on arrival.
+		RpcResponse? completed=null;
 		try {
 			// Scoped guard, not the deprecated alias: expected_state_version is compared against state_version,
 			// which counts every state change in the session, while the caller's guard is an execution_version.
@@ -200,7 +213,8 @@ public sealed class GatewayToolExecutor {
 			// a stale_state whose numbers ("expected 2, current 14") described a guard the caller never passed.
 			var continueArgs=BaseArgs(arguments,new JsonObject { ["expected_execution_version"]=arguments["expected_execution_version"]?.DeepClone() }); var continued=await RouteAsync("continue",continueArgs,token); if(continued.Error is not null) return continued;
 			var timeout=Math.Clamp((int?)arguments["timeout_ms"] ?? 10000,1,10000); var wait=await RouteAsync("wait_for_stop",BaseArgs(arguments,new JsonObject{{"after_event_id",cursor},{"timeout_ms",timeout}}),token);
-			return wait.Error is null ? RpcResponse.Success(Guid.NewGuid().ToString("N"),new { temporary_breakpoint=created.Result,wait=wait.Result }) : wait;
+			completed=wait.Error is null ? RpcResponse.Success(Guid.NewGuid().ToString("N"),new JsonObject { ["temporary_breakpoint"]=ProtocolJson.ToNode(created.Result),["wait"]=ProtocolJson.ToNode(wait.Result) }) : wait;
+			return completed;
 		} finally {
 			// remove_breakpoint carries its own guard, and creating the temporary breakpoint already moved
 			// breakpoints_version past whatever the caller passed in, so the cleanup has to re-read state
@@ -208,7 +222,10 @@ public sealed class GatewayToolExecutor {
 			// breakpoint nobody set outlives the session and rebinds on the next attach.
 			var cleanup=BaseArgs(arguments,new JsonObject{{"breakpoint_id",breakpointId}});
 			try { cleanup["expected_breakpoints_version"]=ProtocolJson.ToNode(await GetStateAsync(arguments,CancellationToken.None))!["breakpoints_version"]?.DeepClone(); } catch (Exception) { }
-			await RouteAsync("remove_breakpoint",cleanup,CancellationToken.None);
+			var removed=await RouteAsync("remove_breakpoint",cleanup,CancellationToken.None);
+			// Mutating the object the response already holds: the returned RpcResponse is the same
+			// reference either way, so this reaches the caller even though the return ran first.
+			if(completed?.Result is JsonObject body && removed.Error is null) Versioned(body,ProtocolJson.ToNode(removed.Result) as JsonObject);
 		}
 	}
 	async Task<RpcResponse> RouteAsync(string operation,JsonObject args,CancellationToken token) => await router.CallAsync(new RpcRequest { Operation=operation,Arguments=args,DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds(operation)) },token);

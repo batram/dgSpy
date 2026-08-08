@@ -88,7 +88,22 @@ namespace dgSpy.Extension {
 		static ModuleBreakpointInfo Describe(DbgModuleBreakpoint b)=>new ModuleBreakpointInfo { BreakpointId=b.Id,Enabled=b.IsEnabled,ModuleName=b.ModuleName,IsDynamic=b.IsDynamic,IsInMemory=b.IsInMemory,IsLoaded=b.IsLoaded,Order=b.Order,ProcessName=b.ProcessName,AppDomainName=b.AppDomainName };
 
 		async Task<ExceptionCategoryInfo[]> ListExceptionCategoriesAsync(CancellationToken token)=>await OnDebuggerAsync(()=>exceptions.CategoryDefinitions.Select(c=>new ExceptionCategoryInfo { Category=c.Name,DisplayName=c.DisplayName }).ToArray(),token).ConfigureAwait(false);
-		async Task<ExceptionPolicyInfo[]> ListExceptionPoliciesAsync(RpcRequest req,CancellationToken token) { var max=Math.Min(2000,Math.Max(1,(int?)req.Arguments["count"]??200)); return await OnDebuggerAsync(()=>exceptions.Exceptions.Take(max).Select(e=>Policy(e.Definition,e.Settings)).ToArray(),token).ConfigureAwait(false); }
+		// Filters, because the unfiltered answer is dnSpy's whole stock definition set. Without a way to
+		// name one entry, confirming that a single remove_exception_policy took effect meant paging
+		// thousands of framework defaults, so careful cleanup could not be verified at all.
+		async Task<ExceptionPolicyList> ListExceptionPoliciesAsync(RpcRequest req,CancellationToken token) {
+			var max=Math.Min(2000,Math.Max(1,(int?)req.Arguments["count"]??200));
+			var category=(string?)req.Arguments["category"]; var name=(string?)req.Arguments["name"];
+			return await OnDebuggerAsync(()=>{
+				var matching=exceptions.Exceptions.Select(e=>Policy(e.Definition,e.Settings))
+					.Where(p=>category is null||string.Equals(p.Category,category,StringComparison.OrdinalIgnoreCase))
+					// Exact, not substring: this exists to answer "is THIS entry gone", and a substring
+					// match would answer it with a neighbour whose name merely contains the one asked for.
+					.Where(p=>name is null||string.Equals(p.Name??"",name,StringComparison.Ordinal))
+					.ToArray();
+				return new ExceptionPolicyList { Entries=matching.Take(max).ToArray(),Total=matching.Length,Truncated=matching.Length>max };
+			},token).ConfigureAwait(false);
+		}
 		async Task<ExceptionPolicyInfo> SetExceptionPolicyAsync(RpcRequest req,CancellationToken token) { var id=ExceptionId(req); return await OnDebuggerAsync(()=>{ var flags=((bool?)req.Arguments["stop_thrown"]??false?DbgExceptionDefinitionFlags.StopFirstChance:0)|((bool?)req.Arguments["stop_unhandled"]??false?DbgExceptionDefinitionFlags.StopSecondChance:0); var conditions=(ProtocolJson.FromNode<ExceptionConditionInfo[]>(req.Arguments["conditions"])??Array.Empty<ExceptionConditionInfo>()).Select(c=>new DbgExceptionConditionSettings(c.Kind=="module_not_equals"?DbgExceptionConditionType.ModuleNameNotEquals:DbgExceptionConditionType.ModuleNameEquals,c.Module)).ToList().AsReadOnly(); var settings=new DbgExceptionSettings(flags,conditions); if(exceptions.TryGetDefinition(id,out var definition)) exceptions.Modify(id,settings); else { definition=new DbgExceptionDefinition(id,DbgExceptionDefinitionFlags.None); exceptions.Add(new DbgExceptionSettingsInfo(definition,settings)); } return Policy(definition,settings); },token).ConfigureAwait(false); }
 		async Task<ExceptionPolicyRemovalResult> RemoveExceptionPolicyAsync(RpcRequest req,CancellationToken token) { var id=ExceptionId(req); return await OnDebuggerAsync(()=>{ if(!exceptions.TryGetDefinition(id,out var definition)||!exceptions.TryGetSettings(id,out var settings)) throw new RpcException("exception_policy_not_found",id.ToString()); var info=Policy(definition,settings); exceptions.Remove(new[]{id}); return new ExceptionPolicyRemovalResult { Removed=true,FormerPolicy=info }; },token).ConfigureAwait(false); }
 		async Task<bool> RestoreExceptionDefaultsAsync(CancellationToken token) { await OnDebuggerAsync(()=>{ exceptions.Reset(); return true; },token).ConfigureAwait(false); return await OnDebuggerAsync(()=>true,token).ConfigureAwait(false); }

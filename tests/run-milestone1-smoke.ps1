@@ -1056,6 +1056,14 @@ try {
 
 	# Evaluation runs off the dispatcher now, so a running target must be refused explicitly rather
 	# than racing against a stack that is being torn down.
+	#
+	# Disable the Tick breakpoint first, so "running" lasts until the explicit pause below instead of
+	# ending at the next hit. This used to lean on Tick's 100ms body being longer than the round trip,
+	# which made the check a race against how quickly `continue` returns -- and `continue` now returns
+	# only once the Continued event has been recorded, so it returns later and the window closed. The
+	# assertion is about a running target, not about resume latency, so it should not depend on either.
+	# clear_breakpoints below still finds this breakpoint: disabled is not removed.
+	$null = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
 	Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
 	$running = Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId } -ExpectError
 	Assert-That 'get_callstack on a running target is refused' ($running -match 'not_paused|Pause the session')
