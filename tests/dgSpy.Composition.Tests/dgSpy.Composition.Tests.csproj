@@ -20,6 +20,8 @@
     <PackageReference Include="xunit" Version="2.5.0" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.5.0" />
     <PackageReference Include="Microsoft.VisualStudio.Composition" Version="17.13.41" />
+    <!-- Override VS-MEF's older transitive version and match the shipping host. -->
+    <PackageReference Include="MessagePack" Version="2.5.302" />
     <!-- Must be loadable by the test host itself so [Export] attribute types are
          shared with the assemblies under test; see HostLoadContext. -->
     <PackageReference Include="System.ComponentModel.Composition" Version="8.0.0" />
