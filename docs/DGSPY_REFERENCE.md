@@ -237,11 +237,13 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   cannot renew or claim until the lease lapses, so the deadline turns a blind poll into a known wait.
 - Frame identity is `thread_id` + `frame_index` for paused selection, and `module` + `method_token` +
   `il_offset` for code identity and `set_il_breakpoint`. `name` is display-only and must not be parsed.
-- **On Mono/Unity, `il_offset` must be a sequence point** or the engine refuses the breakpoint. Many
+- **On Mono/Unity, `il_offset` must be a sequence point** or the engine refuses the breakpoint. CorDebug
+  also refuses some instruction boundaries despite normally supporting arbitrary IL offsets. Many
   offsets qualify, but a frame's own `il_offset` often does not — so round-tripping it from
   `get_callstack` into `set_il_breakpoint`, which works on CorDebug, is refused on Mono. Check `bound`:
   `false` with `severity: "error"` will never be hit, `false` with no error is pending a module load.
-  By default a refused offset is retried at method entry, which sets `snapped` and a `warning`; pass
+  By default a refused offset is retried at the next sequence point (or the final preceding one when
+  no later point exists), which sets `snapped` and a `warning`; pass
   `snap_to_sequence_point=false` to get the failure instead. `bound` claims the engine installed the
   breakpoint, not that it will be reached.
 - **`run_to_method` and `run_to_location` are Gateway compositions, not host calls.** The Gateway sets a

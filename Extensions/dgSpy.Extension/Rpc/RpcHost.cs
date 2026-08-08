@@ -502,13 +502,10 @@ namespace dgSpy.Extension {
 				await Task.Delay(25,cancellationToken).ConfigureAwait(false);
 			}
 		}
-		// Setting a breakpoint is not the same as binding one. The engine binds asynchronously on its own
-		// thread, and Mono refuses any offset that is not a sequence point (NO_SEQ_POINT_AT_IL_OFFSET,
-		// reported as "Could not create the breakpoint"). Returning an id the moment the breakpoint is
-		// registered therefore reports success for a breakpoint that can never be hit, and the caller's
-		// only symptom is a wait_for_stop that never fires. So: wait for the engine's verdict and report
-		// it, and when the offset was refused, optionally retry at method entry, which Mono always
-		// accepts. CorDebug takes any offset, so none of this changes .NET Framework behavior.
+		// Setting a breakpoint is not the same as binding one. Engines publish the bound object and its
+		// refusal message in separate dispatcher turns, so the first apparently clean bound snapshot can
+		// still become an error. Wait for a stable verdict, then retry a refused offset at a real sequence
+		// point. CorDebug normally accepts arbitrary offsets, but can refuse an instruction boundary too.
 		async Task<BreakpointInfo> SetBreakpointAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
 			var module=(string?)req.Arguments["module"] ?? throw new RpcException("invalid_arguments","module is required");
@@ -526,14 +523,16 @@ namespace dgSpy.Extension {
 			info.CursorEventId=cursor;
 			// Only an outright Error means refused. No bound breakpoints with no error is a pending
 			// breakpoint whose module has not loaded yet, which is legitimate and must not be retried.
-			if (info.Bound || info.Severity!="error" || !snap || requested==0) return info;
+			if (info.Bound || info.Severity!="error" || !snap) return info;
+			var snappedOffset=await GetBreakpointSnapOffsetAsync(req,requested,cancellationToken).ConfigureAwait(false);
+			if (snappedOffset is null || snappedOffset.Value==requested) return info;
 			await RemoveBreakpointAsync(info.BreakpointId,cancellationToken).ConfigureAwait(false);
-			var entry=await AddBreakpointAsync(moduleId,token,0,requested,cancellationToken).ConfigureAwait(false);
+			var entry=await AddBreakpointAsync(moduleId,token,snappedOffset.Value,requested,cancellationToken).ConfigureAwait(false);
 			// Remembered so list_breakpoints keeps reporting that this breakpoint is not where it was asked
 			// to be; the location itself no longer carries that.
 			lock(sync) requestedOffsets[entry.BreakpointId]=requested;
 			entry.CursorEventId=cursor;
-			entry.Warning=$"The engine refused IL offset 0x{requested:X} ({info.Message}); on Mono a breakpoint can only sit on a sequence point. This one is at method entry (offset 0) instead, so it stops earlier than requested — and if the method is only entered once, possibly not at all. Pass snap_to_sequence_point=false to get the failure instead.";
+			entry.Warning=$"The engine refused IL offset 0x{requested:X} ({info.Message}); the breakpoint was moved to sequence point 0x{snappedOffset.Value:X}. Pass snap_to_sequence_point=false to get the failure instead.";
 			return entry;
 		}
 		async Task<BreakpointInfo> AddBreakpointAsync(ModuleId module,uint token,uint offset,uint requested,CancellationToken cancellationToken) {
@@ -547,8 +546,21 @@ namespace dgSpy.Extension {
 			},cancellationToken).ConfigureAwait(false);
 			// The verdict arrives on the engine thread. Without a live session there is nothing to bind
 			// against, so do not spend the wait.
-			await WaitForDebuggerAsync(()=>!manager.IsDebugging || bp.BoundBreakpoints.Length!=0,cancellationToken,TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+			await WaitForStableBreakpointVerdictAsync(bp,cancellationToken).ConfigureAwait(false);
 			return await OnDebuggerAsync(()=>Describe(bp,requested),cancellationToken).ConfigureAwait(false);
+		}
+		async Task WaitForStableBreakpointVerdictAsync(DbgCodeBreakpoint bp,CancellationToken cancellationToken) {
+			var deadline=DateTime.UtcNow.AddSeconds(3);
+			string? last=null;
+			var unchangedSince=DateTime.UtcNow;
+			while (DateTime.UtcNow<deadline) {
+				var snapshot=await OnDebuggerAsync(()=>!manager.IsDebugging ? "inactive" :
+					$"{bp.BoundBreakpoints.Length}:{(int)bp.BoundBreakpointsMessage.Severity}:{bp.BoundBreakpointsMessage.Message}",cancellationToken).ConfigureAwait(false);
+				if (snapshot!=last) { last=snapshot; unchangedSince=DateTime.UtcNow; }
+				var hasVerdict=snapshot=="inactive" || !snapshot.StartsWith("0:0:",StringComparison.Ordinal);
+				if (hasVerdict && DateTime.UtcNow-unchangedSince>=TimeSpan.FromMilliseconds(250)) return;
+				await Task.Delay(25,cancellationToken).ConfigureAwait(false);
+			}
 		}
 		async Task RemoveBreakpointAsync(int id,CancellationToken cancellationToken) {
 			await OnDebuggerAsync(()=>{

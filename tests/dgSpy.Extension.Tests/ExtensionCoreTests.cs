@@ -5,6 +5,18 @@ using Xunit;
 namespace dgSpy.Extension.Tests;
 
 public sealed class ExtensionCoreTests {
+	[Theory]
+	[InlineData(6u,7u)]
+	[InlineData(7u,7u)]
+	[InlineData(99u,12u)]
+	public void Breakpoint_snap_selects_next_sequence_point_then_last(uint requested,uint expected) {
+		Assert.Equal(expected,BreakpointSnapPolicy.Select(requested,new uint[]{0,7,12}));
+	}
+
+	[Fact]
+	public void Breakpoint_snap_has_no_candidate_without_sequence_points() =>
+		Assert.Null(BreakpointSnapPolicy.Select(6,Array.Empty<uint>()));
+
 	[Fact]
 	public void Dispatcher_contains_async_fault_and_runs_the_next_callback() {
 		dnSpy.Debugger.Shared.Dispatcher? dispatcher=null; Exception? recorded=null;

@@ -196,6 +196,18 @@ try {
 		$paused = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId; expected_execution_version = $state.execution_version }
 		$state = $paused.versions
 	}
+	Write-Section 'a refused CorDebug offset snaps only after its stable verdict'
+	$verdictIl = Invoke-Tool -Name 'get_il' -Arguments @{ session_id = $sessionId; module = 'PuzzleBox'; type = 'PuzzleBox.Gate'; method = 'Verdict' }
+	$refused = @($verdictIl.instructions | Where-Object { $_.offset -eq 6 -and -not $_.is_sequence_point })[0]
+	$nextPoint = @($verdictIl.instructions | Where-Object { $_.is_sequence_point -and $_.offset -gt 6 } | Sort-Object offset | Select-Object -First 1)[0]
+	Assert-That 'Verdict offset 0x6 is non-sequence IL before a legal point' ($null -ne $refused -and $null -ne $nextPoint) "(refused=$($refused.offset), next=$($nextPoint.offset))"
+	$snapped = Invoke-Tool -Name 'set_breakpoint' -Arguments @{ session_id = $sessionId; module = 'PuzzleBox'; type = 'PuzzleBox.Gate'; method = 'Verdict'
+		il_offset = $refused.offset; expected_breakpoints_version = $state.breakpoints_version }
+	Assert-That 'set_breakpoint reports the stable snapped CorDebug verdict' ($snapped.bound -and $snapped.severity -eq 'none' -and $snapped.snapped) "(bound=$($snapped.bound), severity=$($snapped.severity), message='$($snapped.message)')"
+	Assert-That 'the refused offset snaps forward to the next sequence point' ($snapped.requested_il_offset -eq $refused.offset -and $snapped.il_offset -eq $nextPoint.offset) "(requested=$($snapped.requested_il_offset), actual=$($snapped.il_offset), next=$($nextPoint.offset))"
+	$removedSnap = Invoke-Tool -Name 'remove_breakpoint' -Arguments @{ session_id = $sessionId; breakpoint_id = $snapped.breakpoint_id; expected_breakpoints_version = $snapped.versions.breakpoints_version }
+	Assert-That 'the snapped regression breakpoint is removed' $removedSnap.removed
+	$state = $removedSnap.versions
 	# Select the loop body by source line, not "the first sequence point past 0". That shortcut lands on
 	# `int marker = 0;`, which is ahead of the loop and where `i` is not in scope, so `i == 5` can never
 	# be true and the breakpoint silently never stops -- a harness bug that reads exactly like the

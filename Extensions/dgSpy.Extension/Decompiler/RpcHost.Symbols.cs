@@ -300,6 +300,13 @@ namespace dgSpy.Extension {
 			},cancellationToken).ConfigureAwait(false);
 		}
 
+		async Task<uint?> GetBreakpointSnapOffsetAsync(RpcRequest req,uint requested,CancellationToken cancellationToken) =>
+			await WithMetadataAsync(req,"module",metadata=>{
+				var body=FindMethod(metadata,req).Body;
+				return body is null ? null : BreakpointSnapPolicy.Select(requested,
+					body.Instructions.Where(instruction=>instruction.SequencePoint is not null).Select(instruction=>instruction.Offset));
+			},cancellationToken).ConfigureAwait(false);
+
 		async Task<DecompiledCode> GetCSharpAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
 			var wholeType=(bool?)req.Arguments["whole_type"] ?? false;
