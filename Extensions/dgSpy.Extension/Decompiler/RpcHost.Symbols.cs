@@ -21,10 +21,16 @@ namespace dgSpy.Extension {
 		// worker is the cheap correct answer; it also keeps a large decompile off the dispatcher, where
 		// it would stall event delivery for the whole session.
 		const int MaxSymbolResults = 500;
+		// list_modules and list_documents used to take no arguments beyond session_id and answer with every
+		// module. On a Unity player that is a 60,131-character response that exceeds a caller's token
+		// budget outright -- and module_not_found used to point straight at it, so the recovery advice was
+		// "go and blow your context". Both are paged now, with the same defaults.
+		const int MaxModuleResults = 500;
+		const int DefaultModuleResults = 100;
+		/// <summary>search_text's per-call ceiling on decompiled methods. Unchanged; it is a work bound and
+		/// relaxing it is not what a caller needs. A cursor is.</summary>
+		const int MaxTextScan = 1000;
 
-		/// <summary>Resolves a caller-supplied module name or path to a live debugger module. Accepts a
-		/// full path, a filename, or the module's short name, because a caller holding a frame has a
-		/// path, one holding a search result has a name, and refusing either is just friction.</summary>
 		/// <summary>Gets the engine's stable identity for breakpoint binding. An in-memory module reports
 		/// a bare assembly name as its filename rather than nothing at all, but that display value omits
 		/// the engine's per-module discriminator and produces a breakpoint that never binds.
@@ -43,20 +49,48 @@ namespace dgSpy.Extension {
 				?? throw new RpcException("metadata_unavailable",$"dnSpy cannot construct a breakpoint identity for '{module}' because the runtime published no module identity."),cancellationToken).ConfigureAwait(false);
 		}
 
-		DbgModule FindModule(string module) {
-			var all=manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules).ToArray();
-			var matches=all.Where(m=>string.Equals(m.Filename,module,StringComparison.OrdinalIgnoreCase)||string.Equals(m.Name,module,StringComparison.OrdinalIgnoreCase)||m.Filename.EndsWith("\\"+module,StringComparison.OrdinalIgnoreCase)).ToArray();
-			if (matches.Length==0) throw new RpcException("module_not_found",$"No loaded module matches '{module}'. Use list_modules and pass an exact filename or name.");
-			if (matches.Length>1) throw new RpcException("ambiguous_target",$"Module '{module}' exists in more than one active runtime; pass process_id and runtime_id.");
-			return matches[0];
-		}
+		// Module names have one rule for the whole family, and it lives in ModuleNameMatch -- kept
+		// dnlib- and dnSpy-free so tests\dgSpy.Extension.Tests can exercise it against strings, the same
+		// way SymbolSearchQuery is. Rank() ranks a query against one module and Matches() is its filter
+		// form; the header comment there records why the rule is ranked rather than flat.
+
 		DbgModule FindModule(RpcRequest req,string module) {
 			var processId=(int?)req.Arguments["process_id"]; var runtimeId=(string?)req.Arguments["runtime_id"];
-			var matches=manager.Processes.Where(p=>!processId.HasValue||p.Id==processId.Value).SelectMany(p=>p.Runtimes).Where(r=>string.IsNullOrEmpty(runtimeId)||StringComparer.OrdinalIgnoreCase.Equals(r.Guid.ToString("D"),runtimeId)||StringComparer.OrdinalIgnoreCase.Equals(r.Name,runtimeId)).SelectMany(r=>r.Modules).Where(m=>string.Equals(m.Filename,module,StringComparison.OrdinalIgnoreCase)||string.Equals(m.Name,module,StringComparison.OrdinalIgnoreCase)||m.Filename.EndsWith("\\"+module,StringComparison.OrdinalIgnoreCase)).ToArray();
-			if(matches.Length==0) throw new RpcException("module_not_found",$"No loaded module matches '{module}' in the selected target. Use list_modules and pass an exact filename or name.");
-			if(matches.Length>1) throw new RpcException("ambiguous_target",$"Module '{module}' matches more than one active runtime; pass process_id and runtime_id.");
+			var scoped=manager.Processes.Where(p=>!processId.HasValue||p.Id==processId.Value).SelectMany(p=>p.Runtimes)
+				.Where(r=>string.IsNullOrEmpty(runtimeId)||StringComparer.OrdinalIgnoreCase.Equals(r.Guid.ToString("D"),runtimeId)||StringComparer.OrdinalIgnoreCase.Equals(r.Name,runtimeId))
+				.SelectMany(r=>r.Modules).ToArray();
+			var ranked=scoped.Select(m=>new { Module=m,Rank=ModuleNameMatch.Rank(m.Name,m.Filename,module) }).Where(x=>x.Rank<ModuleNameMatch.None).ToArray();
+			if (ranked.Length==0) throw new RpcException("module_not_found",DescribeMissingModule(scoped,module));
+			// Only the closest tier competes. A query that exactly names one module is never ambiguous
+			// merely because it is also a substring of another.
+			var best=ranked.Min(x=>x.Rank);
+			var matches=ranked.Where(x=>x.Rank==best).Select(x=>x.Module).ToArray();
+			if (matches.Length>1)
+				throw new RpcException("ambiguous_target",$"'{module}' matches {matches.Length} loaded modules: {string.Join(", ",matches.Take(10).Select(m=>m.Name))}. Pass one of those names, or process_id and runtime_id if the same module is loaded in more than one runtime.");
 			return matches[0];
 		}
+
+		/// <summary>Names the near misses instead of sending the caller to <c>list_modules</c>. The old
+		/// message did the latter, and against a Unity player that is 170 modules and 60,131 characters of
+		/// answer -- an error that tells a caller to go and blow its own context. Now <c>list_modules</c>
+		/// pages and filters, so naming a few candidates here is both cheap and usually the whole fix.</summary>
+		static string DescribeMissingModule(DbgModule[] loaded,string query) {
+			var candidates=ModuleNameMatch.NearMisses(loaded.Select(m=>((string?)m.Name,(string?)m.Filename)),query);
+			var directory=$"{loaded.Length} module(s) are loaded; list_modules takes name_pattern, count and offset, so it can be searched without returning all of them.";
+			return candidates.Length==0
+				? $"No loaded module matches '{query}'. {directory}"
+				: $"No loaded module matches '{query}'. Closest loaded names: {string.Join(", ",candidates)}. {directory}";
+		}
+
+		/// <summary>The session's modules, filtered by the one module rule and returned in a deterministic
+		/// order. The order is not tidiness: a resume cursor counts slots in traversal order, so two calls
+		/// carrying the same arguments have to walk the same modules in the same sequence, and the
+		/// debugger's own enumeration order guarantees nothing of the kind. Must run on the debugger
+		/// thread.</summary>
+		DbgModule[] ScanModules(string? moduleFilter) =>
+			manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules)
+				.Where(m=>ModuleNameMatch.Matches(m.Name,m.Filename,moduleFilter))
+				.OrderBy(m=>m.Process.Id).ThenBy(m=>m.Order).ThenBy(m=>m.Name,StringComparer.OrdinalIgnoreCase).ToArray();
 
 		async Task<T> WithMetadataAsync<T>(RpcRequest req,string moduleArgument,Func<ModuleDef,T> callback,CancellationToken cancellationToken) {
 			var module=(string?)req.Arguments[moduleArgument];
@@ -86,22 +120,31 @@ namespace dgSpy.Extension {
 			Namespace=declaringType?.Namespace ?? (member as TypeDef)?.Namespace,
 		};
 
-		async Task<DocumentInfo[]> ListDocumentsAsync(RpcRequest req,CancellationToken cancellationToken) {
+		// Paged and filtered for the same reason list_modules is: this walks the same module set, and
+		// against a Unity player that is 170 entries. It also costs more per entry -- every row loads
+		// metadata to answer has_metadata and type_count -- so paging here saves work, not just output.
+		async Task<DocumentList> ListDocumentsAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
-			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules)
+			var namePattern=(string?)req.Arguments["name_pattern"];
+			var offset=Math.Max(0,(int?)req.Arguments["offset"] ?? 0);
+			var count=Math.Min(MaxModuleResults,Math.Max(1,(int?)req.Arguments["count"] ?? DefaultModuleResults));
+			var modules=await OnDebuggerAsync(()=>ScanModules(namePattern)
 				.Select(m=>(Module:m,m.Name,m.Filename,m.IsDynamic,m.IsInMemory,Pid:m.Process.Id)).ToArray(),cancellationToken).ConfigureAwait(false);
-			return await evaluations.RunAsync(()=>modules.Select(m=>{
-				ModuleDef? metadata=null;
-				// A module whose metadata will not load is reported as such rather than omitted. Silently
-				// dropping it would make a type that genuinely exists look like it does not.
-				try { metadata=metadataService.TryGetMetadata(m.Module); } catch (Exception) { }
-				return new DocumentInfo {
-					Name=m.Name,Filename=m.Filename,ProcessId=m.Pid,IsDynamic=m.IsDynamic,IsInMemory=m.IsInMemory,
-					HasMetadata=metadata is not null,
-					AssemblyFullName=metadata?.Assembly?.FullName,
-					TypeCount=metadata is null ? null : metadata.Types.Count,
-				};
-			}).ToArray(),cancellationToken).ConfigureAwait(false);
+			return await evaluations.RunAsync(()=>new DocumentList {
+				Documents=modules.Skip(offset).Take(count).Select(m=>{
+					ModuleDef? metadata=null;
+					// A module whose metadata will not load is reported as such rather than omitted. Silently
+					// dropping it would make a type that genuinely exists look like it does not.
+					try { metadata=metadataService.TryGetMetadata(m.Module); } catch (Exception) { }
+					return new DocumentInfo {
+						Name=m.Name,Filename=m.Filename,ProcessId=m.Pid,IsDynamic=m.IsDynamic,IsInMemory=m.IsInMemory,
+						HasMetadata=metadata is not null,
+						AssemblyFullName=metadata?.Assembly?.FullName,
+						TypeCount=metadata is null ? null : metadata.Types.Count,
+					};
+				}).ToArray(),
+				Total=modules.Length,Offset=offset,Truncated=offset+count<modules.Length,
+			},cancellationToken).ConfigureAwait(false);
 		}
 
 		async Task<SymbolList> ListTypesAsync(RpcRequest req,CancellationToken cancellationToken) {
@@ -184,9 +227,7 @@ namespace dgSpy.Extension {
 			var kinds=ProtocolJson.FromNode<string[]>(req.Arguments["kinds"]) ?? new[]{"type","method"};
 			var moduleFilter=(string?)req.Arguments["module"];
 			var count=Math.Min(MaxSymbolResults,Math.Max(1,(int?)req.Arguments["count"] ?? 100));
-			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules)
-				.Where(m=>string.IsNullOrEmpty(moduleFilter) || m.Name.IndexOf(moduleFilter,StringComparison.OrdinalIgnoreCase)>=0 || m.Filename.IndexOf(moduleFilter,StringComparison.OrdinalIgnoreCase)>=0)
-				.ToArray(),cancellationToken).ConfigureAwait(false);
+			var modules=await OnDebuggerAsync(()=>ScanModules(moduleFilter),cancellationToken).ConfigureAwait(false);
 			return await evaluations.RunAsync(()=>{
 				var results=new List<SymbolInfo>(); var total=0;
 				foreach (var dbgModule in modules) {
@@ -287,19 +328,28 @@ namespace dgSpy.Extension {
 			var moduleFilter=(string?)req.Arguments["module"];
 			var typeFilter=(string?)req.Arguments["type"];
 			var count=Math.Min(200,Math.Max(1,(int?)req.Arguments["count"] ?? 100));
-			var maxMethods=Math.Min(1000,Math.Max(1,(int?)req.Arguments["max_methods"] ?? 200));
-			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules)
-				.Where(m=>string.IsNullOrEmpty(moduleFilter) || Matches(m.Name,moduleFilter) || Matches(m.Filename,moduleFilter)).ToArray(),cancellationToken).ConfigureAwait(false);
+			// The bound is unchanged and deliberately still small -- this decompiles every method it looks
+			// at. What is new is that a spent bound is no longer the end of the road: the walk counts method
+			// slots in a deterministic order, so next_scan_offset resumes exactly where it stopped and a
+			// caller can cover a 20311-method Assembly-CSharp a page at a time. Without it, an agent
+			// sweeping a plugin for hotkey definitions hit the cap, was told scan_truncated, and reported
+			// the sweep complete; the user's own UI then showed three keybinds it had never reached.
+			var walk=new ScanCursor {
+				Skip=Math.Max(0,(int?)req.Arguments["scan_offset"] ?? 0),
+				Max=Math.Min(MaxTextScan,Math.Max(1,(int?)req.Arguments["max_methods"] ?? 200)),
+			};
+			var modules=await OnDebuggerAsync(()=>ScanModules(moduleFilter),cancellationToken).ConfigureAwait(false);
 			return await evaluations.RunAsync(()=>{
 				var decompiler=decompilers.AllDecompilers.FirstOrDefault(d=>d.GenericNameUI=="C#") ?? decompilers.Decompiler;
-				var hits=new List<TextSearchHit>(); var total=0; var scanned=0; var scanTruncated=false;
+				var hits=new List<TextSearchHit>(); var total=0;
 				foreach (var dbgModule in modules) {
 					cancellationToken.ThrowIfCancellationRequested();
 					ModuleDef? metadata=null; try { metadata=metadataService.TryGetMetadata(dbgModule); } catch (Exception) { }
+					// A module with no metadata claims no slots, so it cannot shift the cursor. Nothing here
+					// may depend on state that varies between two calls with the same arguments.
 					if (metadata is null) continue;
 					foreach (var method in metadata.GetTypes().Where(t=>string.IsNullOrEmpty(typeFilter) || Matches(t.FullName,typeFilter)).SelectMany(t=>t.Methods).Where(m=>m.HasBody)) {
-						if (scanned>=maxMethods) { scanTruncated=true; break; }
-						scanned++;
+						if (!walk.Claim()) { if (walk.Truncated) break; continue; }
 						cancellationToken.ThrowIfCancellationRequested();
 						var output=new StringBuilderDecompilerOutput();
 						try { decompiler.Decompile(method,output,new DecompilationContext { CancellationToken=cancellationToken }); } catch (Exception) { continue; }
@@ -308,9 +358,12 @@ namespace dgSpy.Extension {
 							total++; if (hits.Count<count) hits.Add(new TextSearchHit { Module=metadata.Name?.ToString() ?? dbgModule.Name,Type=method.DeclaringType?.FullName ?? "",MethodToken=method.MDToken.ToUInt32(),Method=method.FullName,Line=i+1,Text=lines[i].Trim() });
 						}
 					}
-					if (scanTruncated) break;
+					if (walk.Truncated) break;
 				}
-				return new TextSearchResult { Hits=hits.ToArray(),Total=total,Truncated=total>hits.Count,ScannedMethods=scanned,ScanTruncated=scanTruncated };
+				return new TextSearchResult {
+					Hits=hits.ToArray(),Total=total,Truncated=total>hits.Count,
+					ScannedMethods=walk.Worked,ScanTruncated=walk.Truncated,NextScanOffset=walk.Inspected,
+				};
 			},cancellationToken).ConfigureAwait(false);
 		}
 
@@ -323,8 +376,7 @@ namespace dgSpy.Extension {
 			},cancellationToken).ConfigureAwait(false);
 			var moduleFilter=(string?)req.Arguments["search_module"];
 			var count=Math.Min(MaxSymbolResults,Math.Max(1,(int?)req.Arguments["count"] ?? 100));
-			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules)
-				.Where(m=>string.IsNullOrEmpty(moduleFilter) || Matches(m.Name,moduleFilter) || Matches(m.Filename,moduleFilter)).ToArray(),cancellationToken).ConfigureAwait(false);
+			var modules=await OnDebuggerAsync(()=>ScanModules(moduleFilter),cancellationToken).ConfigureAwait(false);
 			return await evaluations.RunAsync(()=>{
 				var results=new List<SymbolInfo>(); var total=0;
 				foreach (var dbgModule in modules) {
@@ -351,8 +403,7 @@ namespace dgSpy.Extension {
 			},cancellationToken).ConfigureAwait(false);
 			var count=Math.Min(MaxSymbolResults,Math.Max(1,(int?)req.Arguments["count"] ?? 100));
 			var moduleFilter=(string?)req.Arguments["search_module"];
-			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules)
-				.Where(m=>string.IsNullOrEmpty(moduleFilter) || Matches(m.Name,moduleFilter) || Matches(m.Filename,moduleFilter)).ToArray(),cancellationToken).ConfigureAwait(false);
+			var modules=await OnDebuggerAsync(()=>ScanModules(moduleFilter),cancellationToken).ConfigureAwait(false);
 			return await evaluations.RunAsync(()=>{
 				var results=new List<SymbolInfo>(); var total=0;
 				foreach (var dbgModule in modules) {

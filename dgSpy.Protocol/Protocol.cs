@@ -341,6 +341,16 @@ namespace dgSpy.Protocol {
 		/// breakpoint that never binds. Phase 6 owns in-memory module identity.</summary>
 		[JsonPropertyName("can_set_breakpoint")] public bool CanSetBreakpoint { get; set; }
 	}
+	/// <summary>A page of <see cref="ModuleInfo"/>. <c>list_modules</c> used to answer with a bare array of
+	/// every loaded module, which on a Unity player is 170 entries and 60,131 characters --- more than a
+	/// caller's whole token budget, and the very thing <c>module_not_found</c> told it to go and do.</summary>
+	public sealed class ModuleList {
+		[JsonPropertyName("modules")] public ModuleInfo[] Modules { get; set; }=Array.Empty<ModuleInfo>();
+		/// <summary>Modules matching <c>name_pattern</c>, before paging.</summary>
+		[JsonPropertyName("total")] public int Total { get; set; }
+		[JsonPropertyName("offset")] public int Offset { get; set; }
+		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
+	}
 	/// <summary>A type or member, identified the way a breakpoint takes it. Display text is never the
 	/// identity: module plus token is, so a caller never has to parse a name back into one.</summary>
 	public sealed class SymbolInfo {
@@ -371,6 +381,14 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("has_metadata")] public bool HasMetadata { get; set; }
 		[JsonPropertyName("assembly_full_name"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? AssemblyFullName { get; set; }
 		[JsonPropertyName("type_count"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? TypeCount { get; set; }
+	}
+	/// <summary>A page of <see cref="DocumentInfo"/>, paged for the same reason <see cref="ModuleList"/>
+	/// is: it walks the same modules, and it loads metadata for every row it returns.</summary>
+	public sealed class DocumentList {
+		[JsonPropertyName("documents")] public DocumentInfo[] Documents { get; set; }=Array.Empty<DocumentInfo>();
+		[JsonPropertyName("total")] public int Total { get; set; }
+		[JsonPropertyName("offset")] public int Offset { get; set; }
+		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
 	}
 	public sealed class IlInstruction {
 		[JsonPropertyName("offset")] public uint Offset { get; set; }
@@ -414,8 +432,15 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("hits")] public TextSearchHit[] Hits { get; set; }=Array.Empty<TextSearchHit>();
 		[JsonPropertyName("total")] public int Total { get; set; }
 		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
+		/// <summary>Methods decompiled by this call, past the resume cursor.</summary>
 		[JsonPropertyName("scanned_methods")] public int ScannedMethods { get; set; }
+		/// <summary>True when <c>max_methods</c> stopped the walk before the selected scope was exhausted.
+		/// Resume by passing <c>next_scan_offset</c> back as <c>scan_offset</c>; false means there is
+		/// nothing left, and only then is a sweep actually complete.</summary>
 		[JsonPropertyName("scan_truncated")] public bool ScanTruncated { get; set; }
+		/// <summary>Method slots reached, counted from the start of the traversal. Valid only for a repeat
+		/// call carrying the same <c>module</c> and <c>type</c> filters, which is what fixes the traversal.</summary>
+		[JsonPropertyName("next_scan_offset")] public int NextScanOffset { get; set; }
 	}
 	/// <summary>One <c>search</c> hit. Every identifier here is round-trippable by design: <c>full_name</c>
 	/// is one of the strings the matcher itself tests, so passing it back as <c>pattern</c> re-finds this

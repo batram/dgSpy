@@ -75,8 +75,18 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("edges")] public AnalysisEdge[] Edges { get; set; }=Array.Empty<AnalysisEdge>();
 		[JsonPropertyName("total")] public int Total { get; set; }
 		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
+		/// <summary>Method slots examined by this call, past the resume cursor.</summary>
 		[JsonPropertyName("scanned_methods")] public int ScannedMethods { get; set; }
+		/// <summary>All slots examined by this call, types included. This is the unit <c>max_scan</c> and
+		/// <c>next_scan_offset</c> are counted in.</summary>
+		[JsonPropertyName("scanned")] public int Scanned { get; set; }
+		/// <summary>True when the work bound stopped the walk before the scope was exhausted. Resume by
+		/// passing <c>next_scan_offset</c> back as <c>scan_offset</c>. Before there was a cursor, a module
+		/// larger than <c>max_methods</c> could allow had regions no call could reach at any setting.</summary>
 		[JsonPropertyName("scan_truncated")] public bool ScanTruncated { get; set; }
+		/// <summary>Slots reached, counted from the start of the traversal. Valid only for a repeat call
+		/// carrying the same <c>search_module</c>, which is what fixes the traversal.</summary>
+		[JsonPropertyName("next_scan_offset")] public int NextScanOffset { get; set; }
 	}
 	public sealed class BreakpointDocument {
 		[JsonPropertyName("format")] public string Format { get; set; }="dgspy.breakpoints";

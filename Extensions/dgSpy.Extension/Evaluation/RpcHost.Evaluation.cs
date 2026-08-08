@@ -323,17 +323,28 @@ namespace dgSpy.Extension {
 		// Modules of every runtime in the session. This is also the answer to "what module path do I pass
 		// to set_il_breakpoint": a frame reports one, but a caller that has not stopped anywhere yet has
 		// no other way to find one.
-		async Task<ModuleInfo[]> ListModulesAsync(RpcRequest req,CancellationToken cancellationToken) {
+		//
+		// Filtered and paged, because every sibling in this family is and this one carries the most rows.
+		// Against a Unity player it returned 170 modules and 60,131 characters, which exceeded the caller's
+		// token budget outright -- and the tool that sent it there was module_not_found, whose advice used
+		// to be "use list_modules". An error should not cost a caller its context to act on.
+		async Task<ModuleList> ListModulesAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
-			var modules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules).ToArray(),cancellationToken).ConfigureAwait(false);
-			return await evaluations.RunAsync(()=>modules.Select(m=>new ModuleInfo {
-				Name=m.Name,Filename=m.Filename,ProcessId=m.Process.Id,RuntimeGuid=m.Runtime.Guid.ToString("D"),
-				IsDynamic=m.IsDynamic,IsInMemory=m.IsInMemory,IsOptimized=m.IsOptimized,Order=m.Order,
-				Address=m.Address,Size=m.Size,Version=m.Version,
-				// The engine-provided ModuleId includes the runtime discriminator needed by dynamic and
-				// in-memory modules; modules for which no provider supplies one remain explicitly false.
-				CanSetBreakpoint=CanCarryBreakpoint(m),
-			}).OrderBy(m=>m.ProcessId).ThenBy(m=>m.Order).ToArray(),cancellationToken).ConfigureAwait(false);
+			var namePattern=(string?)req.Arguments["name_pattern"];
+			var offset=Math.Max(0,(int?)req.Arguments["offset"] ?? 0);
+			var count=Math.Min(MaxModuleResults,Math.Max(1,(int?)req.Arguments["count"] ?? DefaultModuleResults));
+			var modules=await OnDebuggerAsync(()=>ScanModules(namePattern),cancellationToken).ConfigureAwait(false);
+			return await evaluations.RunAsync(()=>new ModuleList {
+				Modules=modules.Skip(offset).Take(count).Select(m=>new ModuleInfo {
+					Name=m.Name,Filename=m.Filename,ProcessId=m.Process.Id,RuntimeGuid=m.Runtime.Guid.ToString("D"),
+					IsDynamic=m.IsDynamic,IsInMemory=m.IsInMemory,IsOptimized=m.IsOptimized,Order=m.Order,
+					Address=m.Address,Size=m.Size,Version=m.Version,
+					// The engine-provided ModuleId includes the runtime discriminator needed by dynamic and
+					// in-memory modules; modules for which no provider supplies one remain explicitly false.
+					CanSetBreakpoint=CanCarryBreakpoint(m),
+				}).ToArray(),
+				Total=modules.Length,Offset=offset,Truncated=offset+count<modules.Length,
+			},cancellationToken).ConfigureAwait(false);
 		}
 	}
 }

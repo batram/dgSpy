@@ -274,11 +274,38 @@ ship without being filterable and advertised in the same edit.
   the case where an assembly is open in dnSpy but not loaded in the target and every other tool reports
   `module_not_found`. `scope: "all"` searches both. Every hit carries `in_session`, so a caller knows
   before it tries whether the session-scoped tools will accept that module.
-- **`search` is resumable, which nothing else on this surface is.** `max_scan` bounds inspected symbols
-  rather than the clock, traversal order is deterministic, and `next_scan_offset` fed back as
-  `scan_offset` continues exactly where the previous call stopped. `scan_truncated: false` means the
-  scope was exhausted. The other bounded scans (`search_text.max_methods`,
-  `analyze_symbol.max_methods`) still have no cursor, so a large module has regions they cannot reach.
+- **Every bounded scan is resumable.** `search.max_scan`, `search_text.max_methods` and
+  `analyze_symbol.max_scan` bound inspected symbols rather than the clock, traversal order is
+  deterministic, and `next_scan_offset` fed back as `scan_offset` continues exactly where the previous
+  call stopped. **`scan_truncated: false` is the only thing that means a sweep is complete.** A bound
+  without a cursor does not return a partial answer, it returns an unreachable region, and both failures
+  were measured: an agent swept a plugin for hotkey definitions with `search_text`, hit `max_methods`,
+  reported the sweep complete, and the user's own UI then showed three keybinds it had never reached;
+  `analyze_symbol` could not find the callers of a method in a 7227-method module at *any* setting,
+  because its bound capped at 5000. The bounds themselves are unchanged and deliberately still small ---
+  `search_text` decompiles every method it looks at. A cursor is what a caller needed, not a bigger cap.
+  A cursor is only valid for a repeat call carrying the same filter arguments, since those are what fix
+  the traversal.
+- **One module-name rule, for the whole family.** Every `module` and `search_module` argument accepts a
+  module name, a filename, or a full path, case-insensitively and with the extension optional, so
+  `Assembly-CSharp` reaches `Assembly-CSharp.dll`. A substring matches too, but an exact name always beats
+  one, so a stem is never reported ambiguous against a longer neighbour like `Assembly-CSharp-firstpass.dll`.
+  This used to be two rules: `get_csharp`, `list_types` and `list_members` compared for equality while
+  `search`, `search_symbols` and `search_text` took a substring, and nothing in either schema said which,
+  so `get_csharp(module: "Assembly-CSharp")` answered `module_not_found` for a module `search` was happily
+  searching. Equality missed because both `name` and `filename` carry the `.dll`. Case was never the
+  defect --- every arm was already case-insensitive --- and the rule lives in one place,
+  `Extensions/dgSpy.Extension/Decompiler/ModuleNameMatch.cs`, rather than inline in two.
+- **`module_not_found` names the near misses.** It used to say "use `list_modules`", which against a Unity
+  player meant 170 modules and 60,131 characters: an error telling a caller to go and blow its own
+  context. It now lists the closest loaded module names, including ones that differ only in separators
+  (`AssemblyCSharp` suggests `Assembly-CSharp.dll`). Ambiguity is still reported with its candidates
+  rather than resolved by guessing.
+- **`list_modules` and `list_documents` filter and page.** Both take `name_pattern`, `offset` and `count`
+  (default 100, max 500) and report `total` and `truncated`, like every sibling in the family. `name_pattern`
+  follows the same module-name rule as `module`. Both answer with an object --- `{ modules | documents,
+  total, offset, truncated }` --- not a bare array. On `list_documents` the filter saves real work, not
+  just output: every row it returns loads that module's metadata.
 - **`search_symbols` remains, narrower.** It returns module plus metadata token, which is exactly what
   `set_il_breakpoint` takes, so an agent never has to parse display text into an identity.
   `set_breakpoint` does the same resolution server-side and then follows the identical
@@ -306,8 +333,8 @@ ship without being filterable and advertised in the same edit.
   `find_implementations` returns loaded direct subclasses or interface implementers. All are bounded;
   module filters avoid scanning every Unity framework assembly when the caller already knows the scope.
   `search_text` also caps the number of methods it decompiles (`max_methods`, default 200) and reports
-  `scanned_methods` / `scan_truncated`; `find_implementations.search_module` provides the equivalent
-  Unity-safe scope. These are work bounds, not merely output caps. Reach for `search_text` last: it
+  `scanned_methods` / `scan_truncated` / `next_scan_offset`; `find_implementations.search_module` provides
+  the equivalent Unity-safe scope. These are work bounds, not merely output caps. Reach for `search_text` last: it
   decompiles, so it costs orders of magnitude more than `search`, and for string or number constants
   `search` with `kinds: ["literal"]` answers the same question out of IL.
 - **`value` and `display` are separate on purpose.** `value` is the raw scalar, `display` is dnSpy's

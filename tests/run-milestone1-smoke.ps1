@@ -521,8 +521,12 @@ try {
 	Assert-That 'release_object_id releases exactly the selected id' ($releasedId.object_id -eq $objectId.object_id)
 	$releasedRead = Invoke-Tool -Name 'evaluate_object_id' -Arguments @{ session_id = $sessionId; object_id = $objectId.object_id; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 1 } -ExpectError
 	Assert-That 'a released object ID cannot be evaluated' ($releasedRead -match 'not active')
-	$autos = @(Invoke-Tool -Name 'get_autos' -Arguments @{ session_id = $sessionId; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } | ForEach-Object { $_ })
-	Assert-That 'get_autos returns structured C# Autos entries' ($autos.Count -gt 0 -and @($autos | Where-Object { $null -eq $_.expression -or $null -eq $_.display }).Count -eq 0) "(count=$($autos.Count); entries=$(($autos | ConvertTo-Json -Compress -Depth 5)))"
+	# dnSpy implements no Autos provider for any .NET engine: it answers with a single "NYI" placeholder,
+	# and the extension refuses that explicitly rather than handing back a row that looks like data. This
+	# check asserts the refusal, which is the tool's documented and shipped behaviour; asserting entries
+	# instead made the whole smoke abort here on a contract that has not been true for some time.
+	$autos = Invoke-Tool -Name 'get_autos' -Arguments @{ session_id = $sessionId; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 } -ExpectError
+	Assert-That 'get_autos reports the missing provider instead of a placeholder row' ($autos -match 'capability_unsupported' -and $autos -match 'get_frame') "(was '$autos')"
 	$valueExport = Invoke-Tool -Name 'get_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 }
 	Assert-That 'get_value_export returns hashed bounded bytes' ($valueExport.total_size -eq 4 -and $valueExport.sha256.Length -eq 64 -and [Convert]::FromBase64String($valueExport.data_base64).Length -eq 4)
 	$hostExport = Invoke-MutatingTool -Name 'write_value_export' -Arguments @{ session_id = $sessionId; expression = 'input'; path = 'input.bin'; process_id = $targetId; runtime_id = $objectId.runtime_id; thread_id = $stepThread; frame_index = 0 }
@@ -673,7 +677,7 @@ try {
 	# holding the whole collection, and every filter below then matches that one item and passes on the
 	# strength of some other module's flags. These two checks were green that way until the fixture
 	# grew a module whose can_set_breakpoint is legitimately false.
-	$modules = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
+	$modules = @((Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId; count = 500 }).modules)
 	Assert-That 'list_modules finds the target module' (@($modules | Where-Object { $_.filename -like '*Milestone1Target.exe' }).Count -eq 1) "(got $($modules.Count) modules)"
 	Assert-That 'a file-backed module reports that it can carry a breakpoint' (@($modules | Where-Object { $_.filename -like '*Milestone1Target.exe' }).can_set_breakpoint)
 	# Not "has no filename": an in-memory module reports a bare assembly name there, while the engine
@@ -714,7 +718,7 @@ try {
 	$moduleStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $moduleCursor; timeout_ms = 8000 }
 	Assert-That 'a module-load breakpoint stops on an actual deferred Assembly.Load' (-not $moduleStop.timed_out -and @($moduleStop.events).Count -gt 0)
 	$stepThread = @($moduleStop.events)[0].thread_id
-	$loadedModules = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
+	$loadedModules = @((Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId; count = 500 }).modules)
 	Assert-That 'the deferred in-memory module is visible after the module breakpoint' (@($loadedModules | Where-Object { $_.name -like 'DeferredPayload*' }).Count -eq 1)
 	$null = Invoke-MutatingTool -Name 'remove_module_breakpoint' -Arguments @{ session_id = $sessionId; breakpoint_id = $moduleBreak.breakpoint_id }
 	$breakpointDocument = Invoke-Tool -Name 'export_breakpoints' -Arguments @{ session_id = $sessionId }
@@ -745,7 +749,7 @@ try {
 	Assert-That 'restore_exception_defaults removes custom policies' ($removedAfterReset -match 'Phase8FixtureException') "(error='$removedAfterReset')"
 
 	Write-Section 'symbols, IL and decompilation'
-	$documents = @(Invoke-Tool -Name 'list_documents' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
+	$documents = @((Invoke-Tool -Name 'list_documents' -Arguments @{ session_id = $sessionId; count = 500 }).documents)
 	$targetDoc = $documents | Where-Object { $_.filename -like '*Milestone1Target.exe' } | Select-Object -First 1
 	Assert-That 'list_documents finds the target and loads its metadata' ($null -ne $targetDoc -and $targetDoc.has_metadata) "(has_metadata=$($targetDoc.has_metadata))"
 	Assert-That 'list_documents reports assembly identity and a type count' (-not [string]::IsNullOrWhiteSpace($targetDoc.assembly_full_name) -and $targetDoc.type_count -ge 1)
@@ -790,6 +794,22 @@ try {
 	Assert-That 'search_text finds decompiled method text with token identity' (@($text.hits | Where-Object { $_.method -match 'UseWorker' -and $_.method_token -gt 0 }).Count -eq 1) "(total=$($text.total))"
 	$boundedText = Invoke-Tool -Name 'search_text' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target'; pattern = 'not-present'; max_methods = 1 }
 	Assert-That 'search_text bounds work as well as output' ($boundedText.scanned_methods -eq 1 -and $boundedText.scan_truncated)
+	# And a spent bound is somewhere to continue from, not the end. Without this an agent that swept a
+	# module, hit the cap, and read scan_truncated still reported the sweep complete.
+	Assert-That 'search_text hands back a resume cursor' ($boundedText.next_scan_offset -eq 1) "(next=$($boundedText.next_scan_offset))"
+	$resumedText = Invoke-Tool -Name 'search_text' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target'; pattern = 'not-present'; max_methods = 1; scan_offset = $boundedText.next_scan_offset }
+	Assert-That 'a resumed search_text page starts past the cursor' ($resumedText.next_scan_offset -eq 2 -and $resumedText.scanned_methods -eq 1) "(next=$($resumedText.next_scan_offset))"
+	# Paged coverage must equal unpaged coverage over the same window: no gap, and no repeat.
+	$wholeWindow = Invoke-Tool -Name 'search_text' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target'; type = 'Milestone1Target.Program'; pattern = 'phase-six-text-search-fixture'; count = 10; max_methods = 20 }
+	$pagedWindow = @(); $textOffset = 0
+	for ($textPage = 0; $textPage -lt 4; $textPage++) {
+		$slice = Invoke-Tool -Name 'search_text' -Arguments @{ session_id = $sessionId; module = 'Milestone1Target'; type = 'Milestone1Target.Program'; pattern = 'phase-six-text-search-fixture'; count = 10; max_methods = 5; scan_offset = $textOffset }
+		$pagedWindow += @($slice.hits); $textOffset = $slice.next_scan_offset
+		if (-not $slice.scan_truncated) { break }
+	}
+	$wholeKeys = (@(@($wholeWindow.hits) | ForEach-Object { "$($_.method_token):$($_.line)" }) | Sort-Object) -join '|'
+	$pagedKeys = (@(@($pagedWindow) | ForEach-Object { "$($_.method_token):$($_.line)" }) | Sort-Object) -join '|'
+	Assert-That 'four paged search_text calls reproduce one twenty-method call exactly' ($pagedKeys -eq $wholeKeys) "(paged='$pagedKeys' whole='$wholeKeys')"
 
 	$workerMembers = Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.IWorker'; name_pattern = 'Run' }
 	$runToken = @($workerMembers.symbols | Where-Object { $_.kind -eq 'method' })[0].method_token
@@ -800,8 +820,20 @@ try {
 	$useWorker = @(Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.Program'; name_pattern = 'UseWorker' }).symbols | Select-Object -First 1
 	$calleeAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $useWorker.method_token; search_module = 'Milestone1Target'; count = 20 }
 	Assert-That 'analyze_symbol returns typed callee edges' (@($calleeAnalysis.edges | Where-Object { $_.kind -eq 'callee' -and $_.target.name -eq 'Run' }).Count -ge 1)
-	$boundedAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $runToken; search_module = 'Milestone1Target'; count = 20; max_methods = 1 }
-	Assert-That 'analyze_symbol enforces its hard method scan budget' ($boundedAnalysis.scanned_methods -eq 1 -and $boundedAnalysis.scan_truncated -and $boundedAnalysis.truncated)
+	# The bound is counted in inspected slots now, types included, and is spelled max_scan. It has to be:
+	# the type-level edges come out of the same traversal as the method edges, so a cursor that counted
+	# only method bodies would re-emit every one of them on each resumed page. scanned is that unit;
+	# scanned_methods still reports the method bodies alone.
+	$boundedAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $runToken; search_module = 'Milestone1Target'; count = 20; max_scan = 1 }
+	Assert-That 'analyze_symbol enforces its hard scan budget' ($boundedAnalysis.scanned -eq 1 -and $boundedAnalysis.scan_truncated -and $boundedAnalysis.truncated) "(scanned=$($boundedAnalysis.scanned))"
+	# A spent bound is no longer the end of the road, which is the whole point: before this, the callers
+	# of a method in a module bigger than the bound allowed could not be found at any setting.
+	Assert-That 'and hands back a cursor to continue from' ($boundedAnalysis.next_scan_offset -eq 1) "(next=$($boundedAnalysis.next_scan_offset))"
+	$resumedAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $runToken; search_module = 'Milestone1Target'; count = 20; max_scan = 1; scan_offset = $boundedAnalysis.next_scan_offset }
+	Assert-That 'a resumed page starts past the cursor' ($resumedAnalysis.next_scan_offset -eq 2) "(next=$($resumedAnalysis.next_scan_offset))"
+	# max_methods is the older spelling of the same bound; a caller that learned it must keep working.
+	$legacyBounded = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $runToken; search_module = 'Milestone1Target'; count = 20; max_methods = 1 }
+	Assert-That 'the older max_methods spelling still bounds the walk' ($legacyBounded.scanned -eq 1 -and $legacyBounded.scan_truncated)
 	$constructors = @(Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.Worker'; name_pattern = '.ctor' }).symbols
 	$constructorAnalysis = Invoke-Tool -Name 'analyze_symbol' -Arguments @{ session_id = $sessionId; module = $targetExe; token = $constructors[0].method_token; search_module = 'Milestone1Target'; count = 20 }
 	Assert-That 'analyze_symbol identifies construction sites' (@($constructorAnalysis.edges | Where-Object { $_.kind -eq 'constructs' -and $_.source.name -eq 'ExercisePhase8Relationships' }).Count -eq 1)
@@ -854,8 +886,8 @@ try {
 	# path is still navigable to its IL. This covers CorDebug only; Mono is a different engine and still
 	# needs the manual UCH pass.
 	Write-Section 'dynamic and in-memory modules'
-	$flDocs = @(Invoke-Tool -Name 'list_documents' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
-	$flModules = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId } | ForEach-Object { $_ })
+	$flDocs = @((Invoke-Tool -Name 'list_documents' -Arguments @{ session_id = $sessionId; count = 500 }).documents)
+	$flModules = @((Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $sessionId; count = 500 }).modules)
 	$flSeen = ($flDocs | Where-Object { $_.is_dynamic -or $_.is_in_memory } |
 		ForEach-Object { "$($_.name)/'$($_.filename)'/'$($_.assembly_full_name)'/meta=$($_.has_metadata)" }) -join ', '
 	Assert-That 'the fixture produces file-less modules at all' (@($flModules | Where-Object { $_.is_dynamic -or $_.is_in_memory }).Count -ge 2) "(file-less documents: $flSeen)"

@@ -113,6 +113,10 @@ try {
 		# metadata. A string-level unit test cannot reach that, and a naive module dedup here walked every
 		# module twice while every offline suite stayed green.
 		Invoke-Checked 'Search live smoke' { .\tests\run-search-smoke.ps1 -TargetFramework $TargetFramework }
+		# Also the same listening player, and also a claim no offline suite can reach: that a bounded scan
+		# resumed from its own next_scan_offset covers exactly what one unbounded call covers. Both halves
+		# of that -- the gap and the repeat -- only show up over a real dnlib traversal.
+		Invoke-Checked 'Scan cursor and module paging live smoke' { .\tests\run-scan-cursor-smoke.ps1 -TargetFramework $TargetFramework }
 	}
 	if ($Stage -in @('Unity','Full')) {
 		Write-Host '== start isolated Unity debugger host ==' -ForegroundColor Cyan

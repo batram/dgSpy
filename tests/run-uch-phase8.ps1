@@ -29,7 +29,7 @@ try {
 	$mono=@($capabilities.engines|Where-Object{$_.engine -eq 'unity'})[0]
 	Assert-That 'Mono capabilities advertise Phase 8 object IDs and exception modes' ($mono.object_ids -and @($mono.exception_modes).Count -gt 0)
 
-	$modules=@(Invoke-DgSpyRpc -OperationName 'list_modules' -OperationArguments @{session_id=$sessionId}|ForEach-Object{$_})
+	$modules=@((Invoke-DgSpyRpc -OperationName 'list_modules' -OperationArguments @{session_id=$sessionId;name_pattern='UltimateGlorpExplorer'}).modules)
 	$plugin=$modules|Where-Object{$_.filename -like '*UltimateGlorpExplorer*'}|Select-Object -First 1
 	Assert-That 'UCH exposes a file-backed plugin module for analysis and breakpoints' ($null -ne $plugin -and $plugin.can_set_breakpoint)
 	$search=Invoke-DgSpyRpc -OperationName 'search_symbols' -OperationArguments @{session_id=$sessionId;pattern='Update';module=$plugin.filename;kinds=@('method');count=40} -DeadlineSeconds 60
@@ -221,7 +221,7 @@ try {
 		$sessionId=$null
 		$reattached=Invoke-DgSpyRpc -OperationName 'attach_endpoint' -OperationArguments @{address='127.0.0.1';port=55555;engine='unity';process_is_suspended=$false;connection_timeout_ms=10000} -DeadlineSeconds 30
 		$sessionId=$reattached.session_id
-		$reattachModules=@(Invoke-DgSpyRpc -OperationName 'list_modules' -OperationArguments @{session_id=$sessionId}|ForEach-Object{$_})
+		$reattachModules=@((Invoke-DgSpyRpc -OperationName 'list_modules' -OperationArguments @{session_id=$sessionId;name_pattern='UltimateGlorpExplorer'}).modules)
 		$reattachPlugin=$reattachModules|Where-Object{$_.filename -like '*UltimateGlorpExplorer*'}|Select-Object -First 1
 		$idsAfterDetach=@(Invoke-DgSpyRpc -OperationName 'list_object_ids' -OperationArguments @{session_id=$sessionId;process_id=$reattachPlugin.process_id;runtime_id=$reattachPlugin.runtime_guid}|ForEach-Object{$_})
 		Assert-That 'detach disposes Mono runtime-scoped object IDs before reattach' (@($idsAfterDetach|Where-Object{$_.object_id -eq $cleanupId}).Count -eq 0)

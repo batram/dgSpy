@@ -91,7 +91,9 @@ resume cursor the surface is currently missing:
   nothing left to resume.
 
 That makes the whole of a 7227-method module reachable in bounded steps, which `analyze_symbol`'s
-`max_methods=5000` cap currently does not allow.
+`max_methods=5000` cap did not allow. The cursor here became the reference implementation: `search_text`
+and `analyze_symbol` now share it through `ScanCursor`, and `analyze_symbol`'s bound is `max_scan` in the
+same units.
 
 ## 4. Tool schema
 

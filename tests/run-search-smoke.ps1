@@ -134,8 +134,7 @@ try {
 	# and searching would prove nothing.
 	Invoke-MutatingTool -Name 'continue' -Arguments @{} | Out-Null
 	$harnessLoaded = Wait-Until {
-		@(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $script:activeSessionId } |
-			Where-Object { $_.name -like 'Assembly-CSharp*' }).Count -gt 0
+		(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $script:activeSessionId; name_pattern = 'Assembly-CSharp' }).total -gt 0
 	} 60
 	Assert-That 'the harness assembly loads once the target runs' $harnessLoaded
 	$moduleFilter = 'Assembly-CSharp'
@@ -360,7 +359,7 @@ try {
 	Assert-That 'a module held by both views reports in_session true in documents scope' ($documentsHit.in_session -eq $true)
 	# And the flag must still be false for something only the Assembly Explorer has, or it has stopped
 	# discriminating and merely says true everywhere.
-	$sessionModuleNames = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $session_id } | ForEach-Object { $_.name })
+	$sessionModuleNames = @((Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $session_id; count = 500 }).modules | ForEach-Object { $_.name })
 	$explorerOnly = Invoke-Tool -Name 'search' -Arguments @{ pattern = '/./'; kinds = @('module'); scope = 'documents'; count = 500 }
 	$outside = @(@($explorerOnly.hits) | Where-Object { $_.module -notin $sessionModuleNames })
 	if ($outside.Count -gt 0) {

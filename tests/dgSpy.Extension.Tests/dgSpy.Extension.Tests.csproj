@@ -18,6 +18,8 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcException.cs" Link="Rpc\RpcException.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcSecurity.cs" Link="Rpc\RpcSecurity.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\SymbolSearchQuery.cs" Link="Decompiler\SymbolSearchQuery.cs" />
+	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\ModuleNameMatch.cs" Link="Decompiler\ModuleNameMatch.cs" />
+	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\ScanCursor.cs" Link="Decompiler\ScanCursor.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Evaluation\MemberPagination.cs" Link="Evaluation\MemberPagination.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Evaluation\ChildExpansionFailure.cs" Link="Evaluation\ChildExpansionFailure.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Evaluation\ExpressionAddressability.cs" Link="Evaluation\ExpressionAddressability.cs" />

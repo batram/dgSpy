@@ -26,7 +26,7 @@ try {
 	$sessionId = $attached.session_id
 	Assert-That 'attach_endpoint reaches UCH' ($attached.state -in @('running','paused'))
 
-	$modules = @(Invoke-DgSpyRpc -OperationName 'list_modules' -OperationArguments @{ session_id = $sessionId } | ForEach-Object { $_ })
+	$modules = @((Invoke-DgSpyRpc -OperationName 'list_modules' -OperationArguments @{ session_id = $sessionId; name_pattern = 'UltimateGlorpExplorer' }).modules)
 	$plugin = $modules | Where-Object { $_.filename -like '*UltimateGlorpExplorer*' } | Select-Object -First 1
 	Assert-That 'the file-backed UGE module is present' ($null -ne $plugin -and $plugin.can_set_breakpoint -and -not [string]::IsNullOrWhiteSpace($plugin.filename))
 	Assert-That 'the selected module retains Unity engine identity' ($plugin.runtime_guid -eq 'ce8a11ee-73ef-4a51-b5d0-bda2e665a2b4') "(was '$($plugin.runtime_guid)')"

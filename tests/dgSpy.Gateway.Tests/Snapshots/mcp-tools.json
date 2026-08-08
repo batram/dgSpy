@@ -328,7 +328,8 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "type": {
             "type": "string"
@@ -384,7 +385,8 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "method_token": {
             "type": "integer"
@@ -950,7 +952,8 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "method_token": {
             "type": "integer"
@@ -1979,7 +1982,8 @@
             "minimum": 0
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "method_token": {
             "type": "integer"
@@ -2251,7 +2255,7 @@
     },
     {
       "name": "list_modules",
-      "description": "List loaded modules for every runtime in the session. can_set_breakpoint reflects whether the engine publishes a stable ModuleId; metadata-backed in-memory and dynamic modules are supported even without a file path.",
+      "description": "List loaded modules for every runtime in the session, filtered and paged. Pass name_pattern rather than fetching everything: a Unity player loads 170 modules and the unfiltered answer runs to tens of thousands of characters. Reports total and truncated. can_set_breakpoint reflects whether the engine publishes a stable ModuleId; metadata-backed in-memory and dynamic modules are supported even without a file path.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2261,6 +2265,20 @@
           },
           "session_id": {
             "type": "string"
+          },
+          "name_pattern": {
+            "type": "string",
+            "description": "Case-insensitive filter on module name or path."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Default 100."
           }
         },
         "required": [
@@ -2275,7 +2293,7 @@
     },
     {
       "name": "list_documents",
-      "description": "List loaded modules with their metadata state: assembly full name, type count, and whether dnSpy could load metadata at all. A module whose metadata fails to load is reported with has_metadata=false rather than omitted, because a silently missing module makes a type that exists look like it does not.",
+      "description": "List loaded modules with their metadata state: assembly full name, type count, and whether dnSpy could load metadata at all, filtered and paged like list_modules. Each row loads metadata, so name_pattern saves work and not only output. A module whose metadata fails to load is reported with has_metadata=false rather than omitted, because a silently missing module makes a type that exists look like it does not.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2285,6 +2303,20 @@
           },
           "session_id": {
             "type": "string"
+          },
+          "name_pattern": {
+            "type": "string",
+            "description": "Case-insensitive filter on module name or path."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Default 100."
           }
         },
         "required": [
@@ -2354,7 +2386,8 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "type": {
             "type": "string",
@@ -2559,7 +2592,8 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "method_token": {
             "type": "integer"
@@ -2600,7 +2634,8 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "method_token": {
             "type": "integer"
@@ -2644,7 +2679,8 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "type": {
             "type": "string"
@@ -2689,7 +2725,7 @@
     },
     {
       "name": "search_text",
-      "description": "Heavier than \u0060search\u0060, and the last resort: it decompiles method bodies one at a time. For string and number constants use \u0060search\u0060 with kinds:[\u0022literal\u0022], which reads IL and costs a fraction of this. Use this only when the thing you are looking for exists solely in decompiled C# \u2014 a language construct rather than a name or a constant. Search decompiled C# text in loaded modules. Output and work are bounded; scan_truncated means max_methods stopped the scan before the selected scope was exhausted. Pass module and type on Unity.",
+      "description": "Heavier than \u0060search\u0060, and the last resort: it decompiles method bodies one at a time. For string and number constants use \u0060search\u0060 with kinds:[\u0022literal\u0022], which reads IL and costs a fraction of this. Use this only when the thing you are looking for exists solely in decompiled C# \u2014 a language construct rather than a name or a constant. Search decompiled C# text in loaded modules. Output and work are bounded; scan_truncated means max_methods stopped the scan before the selected scope was exhausted, and next_scan_offset fed back as scan_offset continues exactly where it stopped. Only scan_truncated=false means the scope really was swept \u2014 an agent that took a truncated result for a finished one reported a plugin had no hotkeys when it had three. Pass module and type on Unity.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2704,7 +2740,8 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "type": {
             "type": "string",
@@ -2719,7 +2756,12 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 1000,
-            "description": "Hard work bound; default 200."
+            "description": "Hard work bound in methods decompiled; default 200. Deliberately small: this tool decompiles. To cover more, keep it and page with scan_offset."
+          },
+          "scan_offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Resume cursor: pass a previous response\u0027s next_scan_offset, with the same module and type arguments."
           }
         },
         "required": [
@@ -2747,13 +2789,15 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "token": {
             "type": "integer"
           },
           "search_module": {
-            "type": "string"
+            "type": "string",
+            "description": "Filter on module name or path, by the same rule the module argument uses: exact name, name without its extension, or substring. Case-insensitive."
           },
           "count": {
             "type": "integer",
@@ -2787,7 +2831,8 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "token": {
             "type": "integer"
@@ -2796,7 +2841,8 @@
             "type": "string"
           },
           "search_module": {
-            "type": "string"
+            "type": "string",
+            "description": "Filter on module name or path, by the same rule the module argument uses: exact name, name without its extension, or substring. Case-insensitive."
           },
           "count": {
             "type": "integer",
@@ -2829,7 +2875,8 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "token": {
             "type": "integer"
@@ -3674,7 +3721,7 @@
     },
     {
       "name": "analyze_symbol",
-      "description": "Drill-in tool for a symbol \u0060search\u0060 already found; it takes the module and token search returns. Return bounded typed caller, callee, construction, field, override, implementation, and attribute edges.",
+      "description": "Drill-in tool for a symbol \u0060search\u0060 already found; it takes the module and token search returns. Return bounded typed caller, callee, construction, field, override, implementation, and attribute edges. Bounded by max_scan over inspected symbols and resumable: scan_truncated=true means work stopped early, and next_scan_offset fed back as scan_offset continues exactly there, so a module bigger than one call\u0027s bound is still coverable. Before the cursor existed, the callers of a method in a 7227-method module could not be found at any setting. Pass search_module on Unity, where an unfiltered scan means every framework assembly.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3686,23 +3733,37 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "token": {
             "type": "integer"
           },
           "search_module": {
-            "type": "string"
+            "type": "string",
+            "description": "Filter on module name or path, by the same rule the module argument uses: exact name, name without its extension, or substring. Case-insensitive."
           },
           "count": {
             "type": "integer",
             "minimum": 1,
             "maximum": 500
           },
+          "max_scan": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000000,
+            "description": "Hard work bound in inspected symbols, types and methods alike; default 20000."
+          },
+          "scan_offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Resume cursor: pass a previous response\u0027s next_scan_offset, with the same search_module."
+          },
           "max_methods": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 5000
+            "maximum": 2000000,
+            "description": "The older name for max_scan, still honoured. Its old 5000 ceiling is gone; it was low enough to make large modules unreachable."
           }
         },
         "required": [
@@ -3731,7 +3792,8 @@
             "type": "string"
           },
           "module": {
-            "type": "string"
+            "type": "string",
+            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
           },
           "offset": {
             "type": "integer",

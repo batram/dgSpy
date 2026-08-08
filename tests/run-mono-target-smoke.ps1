@@ -105,15 +105,14 @@ try {
 	Assert-That 'the target starts running managed code' ($resumedToRun.state -eq 'running') "state=$($resumedToRun.state)"
 
 	$harnessLoaded = Wait-Until {
-		@(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $script:activeSessionId } |
-			Where-Object { $_.name -like 'Assembly-CSharp*' }).Count -gt 0
+		(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $script:activeSessionId; name_pattern = 'Assembly-CSharp' }).total -gt 0
 	} 60
 	Assert-That 'the harness assembly loads once the target runs' $harnessLoaded
 
 	Write-Section 'modules'
 	# ModuleCreator plus AssemblyMirror.GetMetadataBlob and .IsDynamic, which only exist in dnSpyEx's
 	# Mono.Debugger.Soft fork. On the fork this repo used to pin, this section could not even compile.
-	$modules = @(Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $script:activeSessionId })
+	$modules = @((Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $script:activeSessionId; count = 500 }).modules)
 	Assert-That 'the target reports loaded modules' ($modules.Count -gt 0) "count=$($modules.Count)"
 	Assert-That 'the harness assembly is loaded' (@($modules | Where-Object { $_.name -like 'Assembly-CSharp*' }).Count -gt 0)
 	Assert-That 'mscorlib is loaded' (@($modules | Where-Object { $_.name -like 'mscorlib*' }).Count -gt 0)

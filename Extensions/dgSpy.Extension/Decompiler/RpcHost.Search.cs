@@ -31,26 +31,14 @@ namespace dgSpy.Extension {
 			public bool InSession;
 		}
 
-		/// <summary>Bounded, resumable walk state. The counter is over inspected symbol slots in a
+		/// <summary>Bounded, resumable walk state. The counter lives in <see cref="ScanCursor"/>, which
+		/// <c>search_text</c> and <c>analyze_symbol</c> now share: it is over inspected symbol slots in a
 		/// deterministic traversal order, which is what lets <c>next_scan_offset</c> mean "resume exactly
 		/// here" rather than "roughly there".</summary>
-		sealed class SearchWalk {
-			public int Inspected;
-			public int Skip;
-			public int Max;
+		sealed class SearchWalk : ScanCursor {
 			public int Total;
-			public bool Truncated;
 			public readonly List<SearchHit> Hits=new List<SearchHit>();
 			public int Count;
-
-			/// <summary>Claims one slot. False means either this slot precedes the resume cursor or the work
-			/// bound is spent; the caller must not evaluate the symbol in that case.</summary>
-			public bool Claim() {
-				if (Truncated) return false;
-				if (Inspected>=Skip+Max) { Truncated=true; return false; }
-				Inspected++;
-				return Inspected>Skip;
-			}
 
 			public void Add(SearchHit hit) { Total++; if (Hits.Count<Count) Hits.Add(hit); }
 		}
@@ -104,7 +92,7 @@ namespace dgSpy.Extension {
 					Hits=walk.Hits.ToArray(),
 					Total=walk.Total,
 					Truncated=walk.Total>walk.Hits.Count,
-					Scanned=Math.Max(0,walk.Inspected-walk.Skip),
+					Scanned=walk.Worked,
 					ScanTruncated=walk.Truncated,
 					NextScanOffset=walk.Inspected,
 					ModulesSearched=modules.Select(m=>m.Name).ToArray(),
@@ -193,8 +181,9 @@ namespace dgSpy.Extension {
 			return result;
 		}
 
-		static bool MatchesModuleFilter(string name,string? path,string? filter) =>
-			string.IsNullOrEmpty(filter) || Matches(name,filter) || Matches(path ?? "",filter);
+		// The same module-name rule the resolving tools use, so a name that get_csharp accepts also filters
+		// here and vice versa. Half this family used to be exact and half substring, with no way to tell.
+		static bool MatchesModuleFilter(string name,string? path,string? filter) => ModuleNameMatch.Matches(name,path,filter);
 
 		void SearchOneModule(SearchModule module,SymbolSearchQuery query,SearchWalk walk,bool compilerGenerated,CancellationToken cancellationToken) {
 			var targets=query.Targets;
