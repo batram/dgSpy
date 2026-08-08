@@ -192,20 +192,29 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 			FreeBuffers();
 		}
 
-		// Called on runtime teardown. It must mark the object disposed so no new reader can obtain the
+		// Called on runtime teardown. It marks the object disposed so no new reader can obtain the
 		// addresses -- every reader above guards on `disposed`, and freeing without setting it left
 		// those guards passing while the addresses were gone. Readers then dereferenced freed memory
 		// through Roslyn MetadataBlock pointers and the process died of an AccessViolationException on
-		// the engine thread -- TypeDefTableReader.GetName under CompileGetLocals, with no managed
-		// exception anywhere to explain it. That is not catchable and takes the whole host down, which
-		// is why a host would simply vanish a minute or so after a detach with nothing in any log.
+		// the engine thread, under CompileGetLocals, with no managed exception to explain it. That is
+		// not catchable and takes the whole host down -- and since a host holding an ICorDebug
+		// attachment kills its debuggee when it dies, it destroys the target too.
 		//
-		// So the buffers are freed here only when nothing holds a reference any more. While references
-		// are outstanding the free is deferred to the last Release, and the finalizer is deliberately
-		// left armed as the backstop for a holder that never releases: the cost of deferring is at
-		// worst a module-sized buffer living until the next GC, and the cost of not deferring is the
-		// process. A racing reader that is already past its guard now reads memory that is still
-		// mapped instead of memory that was handed back to the OS.
+		// The buffers are freed here only when nothing holds a reference; otherwise the free is
+		// deferred to the last Release, with the finalizer left armed as the backstop.
+		//
+		// BE CLEAR ABOUT WHAT THIS BUYS: it does NOT close the race, and it has been measured not to.
+		// A gate run carrying exactly this code still died with the same AccessViolation. Deferring to
+		// the last Release only moves the free from DbgRuntimeImpl.CloseCore to
+		// DbgManagerImpl.CloseObjects_DbgThread -- both on the dispatcher thread, microseconds apart,
+		// inside the same teardown -- because the reference holders are destroyed by the very event
+		// that frees. And the racing reader holds no reference at all: Roslyn reads through raw
+		// MetadataBlock pointers captured earlier. Reference counting therefore cannot fix this, in
+		// any arrangement. Closing it means either never freeing eagerly (leak to the finalizer) or
+		// quiescing engine-thread evaluation before the runtime closes.
+		//
+		// What deferral does earn is the cheap half: Release() below no longer throws on this path,
+		// which used to abort the whole close batch. See docs/local/dnspy-raw-metadata-use-after-free.md.
 		internal void ForceDispose() {
 			bool free;
 			lock (lockObj) {

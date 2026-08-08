@@ -65,10 +65,14 @@ Extensions/dnSpy.Debugger/dnSpy.Debugger/Attach/AttachableProcessImpl.cs  stable
 # Carried here because it kills our own gate; offer it to dnSpyEx and drop this
 # entry when they take it. Setting `disposed` was a mitigation, not a cure, and
 # the crash recurred at roughly one run in 25 -- a host would vanish a minute or
-# so after a detach with nothing in any log. The free is now deferred while any
-# reference is outstanding, with the finalizer as the backstop, so a reference
-# holder can no longer read memory that was handed back to the OS. Release() was
-# throwing ObjectDisposedException on the teardown path in the same file, which
+# so after a detach with nothing in any log. Deferring the free until the last
+# reference is released was tried next and MEASURED NOT TO WORK: a gate run
+# carrying it crashed with the same AccessViolation. The reference holders are
+# destroyed by the same teardown that frees, and the racing reader holds no
+# reference at all, so refcounting cannot close this window. The AccessViolation
+# is still open; see docs/local/dnspy-raw-metadata-use-after-free.md for the two
+# approaches that can close it. What the change did fix is the other half:
+# Release() was throwing ObjectDisposedException on the teardown path, which
 # aborted DbgManagerImpl's close batch and faulted the dispatcher; releasing
 # something already disposed is now a no-op.
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet/Metadata/Internal/DbgRawMetadataImpl.cs  upstream use-after-free on runtime teardown, fix carried pending an upstream PR
