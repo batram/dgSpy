@@ -24,6 +24,13 @@ namespace dgSpy.Extension {
 			if (!string.IsNullOrEmpty(workingDirectory) && !Directory.Exists(workingDirectory)) throw new RpcException("directory_not_found","The working directory does not exist: "+workingDirectory);
 			var breakKind=BreakKind((string?)req.Arguments["break_at"]);
 			var engine=((string?)req.Arguments["engine"] ?? "cordebug").ToLowerInvariant();
+			var redirectOutput=(bool?)req.Arguments["redirect_output"] ?? true;
+			var programId="launch:"+engine+":"+filename;
+			// launch is long-running and its side effect outlives a cancelled call: the process is created,
+			// attached and possibly parked at its entry point well before the reply is written. A caller that
+			// reads the lost reply as failure and retries would get a second debuggee. Adopt the live session
+			// that already owns this image instead.
+			if (((bool?)req.Arguments["adopt_existing"] ?? true) && await AdoptableSessionAsync(programId,cancellationToken).ConfigureAwait(false) is SessionState adopted) return adopted;
 			StartDebuggingOptions options;
 			TimeSpan connectWait=default;
 			switch(engine) {
@@ -39,8 +46,24 @@ namespace dgSpy.Extension {
 				break;
 			default: throw new RpcException("invalid_arguments","engine must be \"cordebug\" or \"unity\".");
 			}
+			options.RedirectConsoleOutput=redirectOutput;
 			ApplyEnvironment(options,req.Arguments["environment"] as JsonObject);
-			return await StartSessionAsync("launch:"+engine+":"+filename,"launch",()=>manager.Start(options),connectWait,cancellationToken).ConfigureAwait(false);
+			return await StartSessionAsync(programId,"launch",()=>manager.Start(options),connectWait,cancellationToken).ConfigureAwait(false);
+		}
+
+		// A launch session is adoptable when it is live, not faulted, and already owns this exact image. Only
+		// a launch qualifies: dgSpy owns those processes, so returning one is the same target the caller asked
+		// for. A faulted or exited session is not adopted — the caller wants a running program, not a corpse.
+		async Task<SessionState?> AdoptableSessionAsync(string programId,CancellationToken cancellationToken) {
+			lock(sync) {
+				// Deliberately not gated on `attaching`: a launch whose caller cancelled mid-wait leaves the
+				// flag set even though the process is up, and that is the case this exists for. The live-process
+				// check below is the real test. State() clears the stale flag.
+				if (sessionId is null || faulted) return null;
+				var owned=attachedProgramId?.Split(';') ?? Array.Empty<string>();
+				if (!owned.Contains(programId,StringComparer.OrdinalIgnoreCase)) return null;
+			}
+			return await OnDebuggerAsync(()=>manager.IsDebugging && manager.Processes.Length!=0 ? State() : null,cancellationToken).ConfigureAwait(false);
 		}
 
 		static string BreakKind(string? value) {
@@ -106,6 +129,9 @@ namespace dgSpy.Extension {
 		}
 
 		void OnProcessExited(DbgMessageProcessExitedEventArgs e) {
+			// A last line written without a trailing newline is still sitting in the line assembler. Publish
+			// it now: the pipe is closed, so nothing will ever complete it.
+			programOutput.Flush();
 			string? action;
 			lock(sync) {
 				if (sessionId is null) return;

@@ -35,7 +35,8 @@ namespace dgSpy.Extension {
 	sealed partial class RpcHost : IDisposable {
 		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DebuggerSettings debuggerSettings; readonly DbgCodeBreakpointsService breakpoints; readonly DbgModuleBreakpointsService moduleBreakpoints; readonly DbgObjectIdService objectIds; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions; readonly DbgMetadataService metadataService; readonly IDsDocumentService documentService; readonly Lazy<DbgModuleIdProvider>[] moduleIdProviders; readonly IDecompilerService decompilers;
 		readonly EvaluationQueue evaluations=new EvaluationQueue(); readonly SemaphoreSlim targetControl=new SemaphoreSlim(1,1);
-		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>(); readonly Dictionary<int,long> engineHitCounts=new Dictionary<int,long>();
+		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer();
+		readonly ProgramOutputAssembler programOutput; readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>(); readonly Dictionary<int,long> engineHitCounts=new Dictionary<int,long>();
 		long lifecycleVersion,executionVersion,breakpointsVersion; string? stopId; string? connectionState; DateTime lastGatewayHeartbeatUtc;
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		readonly RpcSecuritySettings rpcSecurity=RpcSecuritySettings.Load();
@@ -58,6 +59,7 @@ namespace dgSpy.Extension {
 		}
 		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDsDocumentService documentService, IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers) {
 			this.programs=programs; this.manager=manager; this.debuggerSettings=debuggerSettings; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.documentService=documentService; this.moduleIdProviders=moduleIdProviders.ToArray(); this.decompilers=decompilers;
+			programOutput=new ProgramOutputAssembler((origin,line) => output.Add(origin.Category,line,origin.ProcessId,origin.RuntimeId));
 			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e);
 			// MessageBoundBreakpoint fires on every engine hit, BEFORE dnSpy's condition/hit-count/filter
 			// pipeline decides whether to pause. Counting here is what makes a false-but-working condition
@@ -76,6 +78,10 @@ namespace dgSpy.Extension {
 			// RPC, but it does leave a dialog nobody headless will dismiss.
 			manager.MessageUserMessage += (_,e) => { lock(sync) lastUserMessage=e.Message; };
 			manager.DbgManagerMessage += (_,e) => output.Add(e.MessageKind,e.Message);
+			// The debuggee's own stdout/stderr. dnSpy raises these only when the engine was asked to redirect
+			// the streams, which launch now does by default; an attached target's console was never ours to
+			// capture, so nothing arrives for those.
+			manager.MessageAsyncProgramMessage += (_,e) => { try { var category=e.Source==AsyncProgramMessageSource.StandardError ? OutputCategories.StandardError : OutputCategories.StandardOutput; programOutput.Append(new ProgramOutputOrigin(category,e.Runtime.Process.Id,e.Runtime.Guid.ToString("D")),e.Message); } catch (Exception) { } };
 			NotifyConnectionStateChanged();
 		}
 		public string ConnectionState => GetConnectionState();
@@ -341,9 +347,14 @@ namespace dgSpy.Extension {
 			var adding=sessionId is not null && await OnDebuggerAsync(()=>manager.IsDebugging).ConfigureAwait(false);
 			var oldProcessIds=adding ? await OnDebuggerAsync(()=>manager.Processes.Select(p=>p.Id).ToArray(),cancellationToken).ConfigureAwait(false) : Array.Empty<int>();
 			var rejected=await OnDebuggerAsync(()=>{
+				if(!adding) programOutput.Reset();
 				lock(sync) { if(!adding) { events.Reset(); output.Reset(); stateVersion=0; lifecycleVersion=0; executionVersion=0; stopId=null; attaching=true; faulted=false; faultMessage=null; terminalExitCode=null; terminalReason=null; sessionKind=kind; lifecycleAction=null; processLifecycleActions.Clear(); engineHitCounts.Clear(); } lastUserMessage=null; }
 				var failure=start();
-				if (failure is null) { if(!adding) sessionId=Guid.NewGuid().ToString("N"); stateVersion++; }
+				// Record what was started before waiting for it, not after. The wait is where a client
+				// cancellation lands, and a session whose program_id only appears on the success path is
+				// invisible to list_sessions and to launch's own adoption check exactly when a caller most
+				// needs to find it.
+				if (failure is null) { if(!adding) sessionId=Guid.NewGuid().ToString("N"); lock(sync) attachedProgramId=adding ? (attachedProgramId+";"+programId) : programId; stateVersion++; }
 				else if(!adding) lock(sync) attaching=false;
 				return failure;
 			}).ConfigureAwait(false);
@@ -364,8 +375,14 @@ namespace dgSpy.Extension {
 				lock(sync) { faulted=true; attaching=false; faultMessage=lastUserMessage ?? "The debug engine did not connect before the attach deadline."; }
 				Record(EventKinds.AttachFailed);
 			}
-			else if(!connected) throw new RpcException("attach_failed",lastUserMessage ?? "The additional debug target did not connect before the attach deadline.");
-			else lock(sync) { attachedProgramId=adding ? (attachedProgramId+";"+programId) : programId; faultMessage=null; }
+			else if(!connected) {
+				// Take back only the entry this call added. Two entries can name the same image — a second
+				// copy started with adopt_existing=false, or the same path under a different engine — and
+				// removing every match would forget the target that is still running.
+				lock(sync) { var owned=(attachedProgramId?.Split(';') ?? Array.Empty<string>()).ToList(); owned.Remove(programId); attachedProgramId=string.Join(";",owned); }
+				throw new RpcException("attach_failed",lastUserMessage ?? "The additional debug target did not connect before the attach deadline.");
+			}
+			else lock(sync) faultMessage=null;
 			NotifyConnectionStateChanged();
 			return await OnDebuggerAsync(State,cancellationToken).ConfigureAwait(false);
 		}
@@ -745,7 +762,7 @@ namespace dgSpy.Extension {
 			}
 			catch { }
 		}
-		public void Dispose() { shutdown.Cancel(); tcpListener?.Stop(); connectionStateTimer?.Dispose(); evaluations.Dispose(); targetControl.Dispose(); shutdown.Dispose(); }
+		public void Dispose() { shutdown.Cancel(); tcpListener?.Stop(); connectionStateTimer?.Dispose(); programOutput.Dispose(); evaluations.Dispose(); targetControl.Dispose(); shutdown.Dispose(); }
 	}
 
 	/// <summary>

@@ -6,10 +6,18 @@ using System.Threading.Tasks;
 using dgSpy.Protocol;
 
 namespace dgSpy.Extension {
+	// OutputMessage.Category values. The first three are dnSpy's own PredefinedDbgManagerMessageKinds, ie.
+	// host-side commentary; the last two are the debugged program's own console streams.
+	static class OutputCategories {
+		public const string StandardOutput="StandardOutput";
+		public const string StandardError="StandardError";
+	}
 	sealed class OutputBuffer {
 		readonly int capacity; readonly List<OutputMessage> values=new List<OutputMessage>(); readonly object sync=new object();
 		TaskCompletionSource<bool> changed=NewSignal(); long lastId;
-		public OutputBuffer(int capacity=256) { this.capacity=capacity; }
+		// Roomier than the host's own commentary needs, because the debuggee's console lines share the ring:
+		// a chatty target must not silently evict the audit records a caller is reading alongside them.
+		public OutputBuffer(int capacity=1024) { this.capacity=capacity; }
 		public void Add(string category,string message,int? processId=null,string? runtimeId=null) { TaskCompletionSource<bool> wake; lock(sync) { values.Add(new OutputMessage { OutputId=++lastId,TimestampUtc=DateTime.UtcNow,Category=category,Message=message,ProcessId=processId,RuntimeId=runtimeId }); if(values.Count>capacity) values.RemoveAt(0); wake=changed; changed=NewSignal(); } wake.TrySetResult(true); }
 		public void Reset() { TaskCompletionSource<bool> wake; lock(sync) { values.Clear(); lastId=0; wake=changed; changed=NewSignal(); } wake.TrySetResult(true); }
 		public OutputSnapshot Snapshot(long after) { lock(sync) { var oldest=values.Count==0 ? lastId+1 : values[0].OutputId; var cursor=Math.Max(0,oldest-1); return new OutputSnapshot { Messages=values.Where(v=>v.OutputId>after).ToArray(),Oldest=oldest,Cursor=cursor,Last=lastId,Truncated=after<cursor }; } }

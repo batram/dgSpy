@@ -598,7 +598,7 @@
     },
     {
       "name": "launch",
-      "description": "Launch a target through dnSpy\u0027s debugger engine. Unlike attach, dnSpy owns the process, so terminate and restart have deterministic semantics.",
+      "description": "Launch a target through dnSpy\u0027s debugger engine. Unlike attach, dnSpy owns the process, so terminate and restart have deterministic semantics, and the target\u0027s stdout/stderr can be captured \u2014 get_output carries them. This call creates the process and then waits for the engine, so its side effect outlives a cancelled call: if it is interrupted (\u0022Tool execution was interrupted\u0022), assume the process EXISTS and do not treat that as failure. Retrying is safe \u2014 a repeat launch of the same image adopts the live session it already started instead of creating a second debuggee, and returns that session \u2014 but list_sessions shows it too, under a program_id of \u0022launch:\u003Cengine\u003E:\u003Cpath\u003E\u0022.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -630,6 +630,14 @@
               "create_process",
               "entry_point"
             ]
+          },
+          "redirect_output": {
+            "type": "boolean",
+            "description": "Default true: capture the target\u0027s stdout/stderr and publish them to get_output and wait_for_output. False gives the target its own console, whose output nothing can read back."
+          },
+          "adopt_existing": {
+            "type": "boolean",
+            "description": "Default true: when a live launch session already owns this image, return it instead of starting a second process. This is what makes an interrupted launch safe to retry. Pass false only to run a second copy of the same program deliberately."
           },
           "environment": {
             "type": "object",
@@ -1159,7 +1167,7 @@
     },
     {
       "name": "get_events",
-      "description": "Read normalized lifecycle and debugger events without consuming them. Optional kinds filter the bounded per-session stream; truncated reports when the requested cursor is older than retained history, and a cursor beyond the newest event is rejected with cursor_ahead_of_stream rather than returning a clean empty result.",
+      "description": "Read the STRUCTURED stream: normalized lifecycle and debugger events, without consuming them. Nothing the target printed appears here \u2014 console text is get_output. Optional kinds filter the bounded per-session stream; truncated reports when the requested cursor is older than retained history, and a cursor beyond the newest event is rejected with cursor_ahead_of_stream rather than returning a clean empty result.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3046,7 +3054,7 @@
     },
     {
       "name": "get_output",
-      "description": "Read the bounded non-destructive debugger output stream after a cursor.",
+      "description": "Read the bounded non-destructive TEXT stream after a cursor: the debugged program\u0027s own console output plus the host\u0027s commentary, interleaved in one ring and told apart by each message\u0027s category. StandardOutput and StandardError are the program\u0027s stdout/stderr, reassembled into whole lines. Output, ErrorUser and StepFilter are host records, including the audit line every side-effecting call writes. Program output exists only for a target this dgSpy launched with redirect_output (the default): an attached process\u0027s console handles were never ours, so nothing can be captured from one, and get_output then carries host records alone. Structured events \u2014 breakpoint hits, steps, exceptions, process exit \u2014 are not here; they are get_events.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3074,7 +3082,7 @@
     },
     {
       "name": "wait_for_output",
-      "description": "Wait for debugger output after a cursor without consuming it.",
+      "description": "Wait, without consuming, for new text on exactly the stream get_output returns \u2014 program stdout/stderr and host commentary. Use it to wait for something the program prints; use wait_for_stop or wait_for_event to wait for a debugger event. A trailing line the program wrote without a newline is published after a short quiet period rather than held until its next write, so a prompt still arrives.",
       "inputSchema": {
         "type": "object",
         "properties": {

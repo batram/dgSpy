@@ -258,6 +258,46 @@ Note the pairing: `breakpoint_hit` is the raw debugger message, `stopped` with
 an event for a process that is still being suspended. The vocabulary lives in
 `dgSpy.Protocol.EventKinds`, and every emitting call site names a constant from it, so a kind cannot
 ship without being filterable and advertised in the same edit.
+
+### Two streams, not three
+
+`get_events`/`wait_for_event`/`wait_for_stop` carry the **structured** stream: normalized lifecycle and
+stop events. `get_output`/`wait_for_output` carry the **text** stream. Nothing the target printed
+appears in the event stream, and no debugger event appears in the text stream. `get_stop_reason` is not
+a third stream; it reads one retained `stopped` event out of the structured one.
+
+The text stream interleaves two sources, told apart by each message's `category`:
+
+| Category | Source |
+|---|---|
+| `StandardOutput`, `StandardError` | The debugged program's own console streams, reassembled into whole lines |
+| `Output`, `ErrorUser`, `StepFilter` | Host commentary from dnSpy and dgSpy, including the `dgSpy audit <id>:` line every side-effecting call writes |
+
+Program output only exists for a target dgSpy **launched**, and only while `redirect_output` is on
+(the default). The engine then creates the process with its stdout/stderr on pipes it owns. An attached
+process's console handles were never dgSpy's, so nothing can be captured from one after the fact, and
+for those sessions `get_output` carries host commentary alone. That is a property of process creation
+on Windows, not a gap in the tool: retro-fitting handles onto a running process is not possible.
+
+### An interrupted `launch` is not a failed one
+
+`launch` creates the process and then waits for the engine to bring it up, so a client cancellation
+lands *after* the side effect: the process exists, is attached, and may be parked at its entry point,
+while the caller sees only "interrupted". Two things make that recoverable:
+
+- The session records its `program_id` (`launch:<engine>:<path>`) as soon as the process exists, not
+  once the call returns, so `list_sessions` shows an interrupted launch.
+- A repeat `launch` of the same image adopts that live session and returns it rather than starting a
+  second debuggee. Pass `adopt_existing=false` to run a second copy on purpose. A faulted or exited
+  session is never adopted, because the caller asked for a running program.
+
+`launch` does not wait for the `break_at` stop before replying — it returns once the engine has the
+process and its threads. Wait on the event stream for the stop.
+
+Lines, not chunks: the engines deliver these streams as raw pipe reads, so one read can carry three
+lines or half of one. dgSpy reassembles them, and flushes a still-incomplete line after a short quiet
+period and again when the process exits, so a program that writes a prompt without a newline is
+delayed rather than withheld.
 - Primitive locals are limited to values with a raw scalar; object expansion is outside milestone 1.
 - **`update_breakpoint` distinguishes "clear" from "leave alone".** An omitted field keeps its current
   value; an empty string for `condition` or `trace_message` removes it. Without that distinction the
@@ -427,6 +467,16 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj
 ```powershell
 .\tests\run-milestone1-smoke.ps1
 ```
+
+```powershell
+.\tests\run-launch-output-smoke.ps1
+```
+
+`run-launch-output-smoke.ps1` is the launch-side smoke: it drives a console target through `launch`,
+asserts that every line the program printed reaches `get_output` under a `StandardOutput` category with
+the target's process id, and compares that against the log the target keeps itself. It then repeats the
+`launch` call and asserts that the session is adopted rather than a second debuggee created. It needs a
+target that mirrors its own stdout to a log; `-TargetExe` points it at one.
 
 The unit tests cover the wire contract and capability catalog, the gateway's access control and its
 Streamable HTTP version policy and deadline-versus-bound invariant, and the extension's pure

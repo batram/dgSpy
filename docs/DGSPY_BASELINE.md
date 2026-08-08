@@ -263,7 +263,8 @@ targets before the process dies — so leaving the prompt in place strands the t
 protecting it.
 
 Every dgSpy launcher passes the switch: the gateway's `LaunchLocalAsync`, the remote-host launcher,
-`run-milestone1-smoke.ps1`, `run-remote-registration-smoke.ps1` and `Start-DgSpyHost.ps1`. The gateway
+`run-milestone1-smoke.ps1`, `run-launch-output-smoke.ps1`, `run-remote-registration-smoke.ps1` and
+`Start-DgSpyHost.ps1`. The gateway
 was the one that did not, so the host an agent actually uses was the only one still grabbing focus.
 
 Nothing outside the process can substitute for this. `-WindowStyle Hidden` sets only the initial show

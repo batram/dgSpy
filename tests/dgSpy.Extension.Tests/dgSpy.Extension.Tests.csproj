@@ -27,6 +27,7 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\DebugEventBuffer.cs" Link="Events\DebugEventBuffer.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\StateRevisionKinds.cs" Link="Events\StateRevisionKinds.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\OutputBuffer.cs" Link="Events\OutputBuffer.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Events\ProgramOutputAssembler.cs" Link="Events\ProgramOutputAssembler.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\ToolWindows\McpActivityLog.cs" Link="ToolWindows\McpActivityLog.cs" />
     <ProjectReference Include="..\..\dgSpy.Protocol\dgSpy.Protocol.csproj" />
   </ItemGroup>
