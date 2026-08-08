@@ -469,6 +469,7 @@ try {
 	Assert-That 'step_over returns a cursor taken before the step' ($stepped.cursor_event_id -ge $stepCursor)
 	Assert-That 'step_over reports no engine error' ($null -eq $stepped.error) "(was $($stepped.error))"
 	Assert-That 'step_over echoes the version vector' ($null -ne $stepped.versions -and $null -ne $stepped.versions.execution_version -and $null -ne $stepped.versions.last_event_id) "(versions=$($stepped.versions | ConvertTo-Json -Compress))"
+	Assert-That 'step_over reports a status matching its completed flag' (($stepped.completed -and $stepped.status -eq 'completed') -or (-not $stepped.completed -and $stepped.status -eq 'in_flight' -and -not [string]::IsNullOrWhiteSpace($stepped.hint))) "(completed=$($stepped.completed) status=$($stepped.status))"
 	# Completion arrives on the event stream exactly like a breakpoint hit: same tool, same cursor
 	# discipline, different stop_reason. That is the Phase 4 exit criterion.
 	$stepStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $stepped.cursor_event_id; timeout_ms = 8000 }
@@ -787,7 +788,8 @@ try {
 	$policy = Invoke-MutatingTool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true; stop_unhandled = $false; conditions = @(@{ kind = 'module_equals'; module = 'Milestone1Target.exe' }) }
 	Assert-That 'exception policy mutation preserves flags and module conditions' ($policy.stop_thrown -and -not $policy.stop_unhandled -and @($policy.conditions).Count -eq 1 -and $policy.conditions[0].module -eq 'Milestone1Target.exe')
 	$removedPolicy = Invoke-MutatingTool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' }
-	Assert-That 'remove_exception_policy returns the policy it removed' ($removedPolicy.name -eq 'Milestone1Target.Phase8FixtureException')
+	Assert-That 'remove_exception_policy confirms the removal' ($removedPolicy.removed -eq $true)
+	Assert-That 'remove_exception_policy reports the former policy under former_policy' ($removedPolicy.former_policy.name -eq 'Milestone1Target.Phase8FixtureException')
 	$null = Invoke-MutatingTool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true }
 	$null = Invoke-MutatingTool -Name 'restore_exception_defaults' -Arguments @{ session_id = $sessionId }
 	$removedAfterReset = Invoke-MutatingTool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' } -ExpectError

@@ -265,7 +265,11 @@ ship without being filterable and advertised in the same edit.
   return `cursor_event_id`; wait from it with `wait_for_stop` and the stop arrives with
   `stop_reason: "step"`. `completed: false` means still running, not failed. The cursor matters for the
   same reason it does for breakpoints: a step over a fast call lands before a follow-up state read
-  returns.
+  returns. The result's `status` makes the outcome explicit — `completed`, `step_error` (see `error`),
+  or `in_flight` with a `hint`: the target is running again, and a step across interop, optimized, or
+  interpreted code may never land, in which case pause or set a breakpoint instead of waiting.
+- `remove_exception_policy` returns `removed: true` with the entry's former flags under
+  `former_policy`; the flags are what the policy *was*, not a still-active setting.
 - **`search` is the discovery entry point.** It is dnSpy's Search window as a tool: it tests the same
   candidate strings the GUI does, so a qualified path resolves --- `GameState.ChatSystem` finds the
   `ChatSystem` field on type `GameState`, which `search_symbols` cannot, because that tool compares the

@@ -172,7 +172,7 @@ try {
 	$policy=Invoke-DgSpyRpc -OperationName 'set_exception_policy' -OperationArguments @{session_id=$sessionId;category='DotNet';name='UCH.Phase8FixtureException';stop_thrown=$true;conditions=@(@{kind='module_equals';module='Assembly-CSharp.dll'})}
 	Assert-That 'exception flags and conditions round-trip on Mono' ($policy.stop_thrown -and @($policy.conditions).Count -eq 1)
 	$removed=Invoke-DgSpyRpc -OperationName 'remove_exception_policy' -OperationArguments @{session_id=$sessionId;category='DotNet';name='UCH.Phase8FixtureException'}
-	Assert-That 'custom Mono exception policy can be removed' ($removed.name -eq 'UCH.Phase8FixtureException')
+	Assert-That 'custom Mono exception policy can be removed' ($removed.removed -and $removed.former_policy.name -eq 'UCH.Phase8FixtureException')
 	$output=Invoke-DgSpyRpc -OperationName 'get_output' -OperationArguments @{session_id=$sessionId;after_output_id=0}
 	Assert-That 'debugger output is available separately from stop events on Mono' ($output.last_output_id -ge @($output.messages).Count)
 

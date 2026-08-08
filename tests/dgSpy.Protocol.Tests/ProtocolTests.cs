@@ -351,13 +351,31 @@ public class CapabilityContractTests {
 	public void A_step_result_round_trips_with_snake_case_wire_names() {
 		var step = ProtocolJson.ParseObject(ProtocolJson.Serialize(new StepResult {
 			SessionId = "s", ThreadId = "100:200", StepKind = StepKinds.Over, CursorEventId = 42, Completed = false,
+			Status = "in_flight", Hint = "wait on wait_for_stop from cursor_event_id",
 		}));
 
 		Assert.Equal("over", (string?)step["step_kind"]);
 		Assert.Equal(42, (long?)step["cursor_event_id"]);
-		// An unfinished step must not look like a failed one: completed is present and false, error absent.
+		// An unfinished step must not look like a failed one: completed is present and false, error absent,
+		// and status plus hint say what the caller should do instead of leaving completed=false unexplained.
 		Assert.False((bool?)step["completed"]);
 		Assert.Null(step["error"]);
+		Assert.Equal("in_flight", (string?)step["status"]);
+		Assert.NotNull(step["hint"]);
+	}
+
+	[Fact]
+	public void An_exception_policy_removal_confirms_and_nests_the_former_flags() {
+		var removal = ProtocolJson.ParseObject(ProtocolJson.Serialize(new ExceptionPolicyRemovalResult {
+			Removed = true, FormerPolicy = new ExceptionPolicyInfo { Category = "DotNet", Name = "X", StopThrown = true },
+		}));
+
+		// The former flags must sit under former_policy: at the top level a still-set stop_thrown
+		// reads as "the policy is still active", which is the ambiguity this shape removes.
+		Assert.True((bool?)removal["removed"]);
+		Assert.Null(removal["stop_thrown"]);
+		Assert.True((bool?)removal["former_policy"]?["stop_thrown"]);
+		Assert.Equal("X", (string?)removal["former_policy"]?["name"]);
 	}
 
 	[Fact]

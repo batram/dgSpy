@@ -51,6 +51,13 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("stop_unhandled")] public bool StopUnhandled { get; set; }
 		[JsonPropertyName("conditions")] public ExceptionConditionInfo[] Conditions { get; set; }=Array.Empty<ExceptionConditionInfo>();
 	}
+	/// <summary>Result of <c>remove_exception_policy</c>. The removed entry's former flags come back
+	/// under <c>former_policy</c> rather than at the top level, where a still-set <c>stop_thrown</c>
+	/// used to read as "the policy is still active".</summary>
+	public sealed class ExceptionPolicyRemovalResult {
+		[JsonPropertyName("removed")] public bool Removed { get; set; }
+		[JsonPropertyName("former_policy")] public ExceptionPolicyInfo FormerPolicy { get; set; }=new ExceptionPolicyInfo();
+	}
 	public sealed class ValueExportChunk {
 		[JsonPropertyName("expression")] public string Expression { get; set; }="";
 		[JsonPropertyName("offset")] public int Offset { get; set; }

@@ -1529,7 +1529,7 @@
     },
     {
       "name": "step_into",
-      "description": "Step into the call at the current instruction. The stop arrives on the event stream like any other, with stop_reason \u0022step\u0022: pass the returned cursor_event_id to wait_for_stop. completed=false means the step is still running, not that it failed.",
+      "description": "Step into the call at the current instruction. The stop arrives on the event stream like any other, with stop_reason \u0022step\u0022: pass the returned cursor_event_id to wait_for_stop. The result\u0027s status says what happened: \u0022completed\u0022, \u0022step_error\u0022, or \u0022in_flight\u0022 with a hint \u2014 in_flight means the target is running again and a step across interop, optimized, or interpreted code may never land. See step_and_inspect to combine a step with evaluation in one call.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3541,7 +3541,7 @@
     },
     {
       "name": "remove_exception_policy",
-      "description": "Remove one exception policy.",
+      "description": "Remove one exception policy (the same entries set_exception_breakpoint and set_exception_policy create). Returns removed=true with the entry\u0027s former flags under former_policy.",
       "inputSchema": {
         "type": "object",
         "properties": {
