@@ -149,12 +149,12 @@ try {
 	$launchedPid = @($launched.process_ids)[0]
 	$launchedPids = @($launched.process_ids)
 
-	# launch returns once the engine has the process and its threads, which is before the entry-point
-	# stop lands, so the state here is whatever the engine happens to be doing. Resume only if parked.
-	$null = Wait-Until { (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).state -ne 'attaching' } 20
-	if ((Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).state -ne 'running') {
-		$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId }
-	}
+	Assert-That 'launch waits for its requested entry-point stop' ($launched.state -eq 'paused' -and -not [string]::IsNullOrWhiteSpace($launched.stop_id)) `
+		"(state=$($launched.state) stop_id=$($launched.stop_id))"
+	$initialStop = Invoke-Tool -Name 'get_stop_reason' -Arguments @{ session_id = $sessionId }
+	Assert-That 'the initial launch stop is the entry point' ($initialStop.stop_reason -eq 'entry_point' -and $initialStop.process_id -eq $launchedPid) `
+		"(reason=$($initialStop.stop_reason) process_id=$($initialStop.process_id))"
+	$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId }
 	if ($NoRedirect) {
 		Assert-That 'the control target started' (Wait-ForLoggedLine -Path $auditLog -Pattern 'READY pid=*')
 		Assert-That 'redirect_output=false really carries no program output' (@(Get-ProgramLines -SessionId $sessionId).Count -eq 0) `

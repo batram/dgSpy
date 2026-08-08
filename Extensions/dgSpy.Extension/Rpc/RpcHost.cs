@@ -385,7 +385,7 @@ namespace dgSpy.Extension {
 			var connect=(options.ConnectionTimeout==TimeSpan.Zero ? TimeSpan.FromSeconds(10) : options.ConnectionTimeout)+TimeSpan.FromSeconds(5);
 			return await StartSessionAsync($"endpoint:{engine}:{address}:{port}","attach",()=>manager.Start(options),connect,cancellationToken).ConfigureAwait(false);
 		}
-		async Task<SessionState> StartSessionAsync(string programId,string kind,Func<string?> start,TimeSpan connectWait,CancellationToken cancellationToken) {
+		async Task<SessionState> StartSessionAsync(string programId,string kind,Func<string?> start,TimeSpan connectWait,CancellationToken cancellationToken,bool waitForInitialStop=false) {
 			var adding=sessionId is not null && await OnDebuggerAsync(()=>manager.IsDebugging).ConfigureAwait(false);
 			var oldProcessIds=adding ? await OnDebuggerAsync(()=>manager.Processes.Select(p=>p.Id).ToArray(),cancellationToken).ConfigureAwait(false) : Array.Empty<int>();
 			var rejected=await OnDebuggerAsync(()=>{
@@ -425,6 +425,21 @@ namespace dgSpy.Extension {
 				throw new RpcException("attach_failed",lastUserMessage ?? "The additional debug target did not connect before the attach deadline.");
 			}
 			else lock(sync) faultMessage=null;
+			if (connected && waitForInitialStop) {
+				// BreakKind is implemented asynchronously by the engine. Returning after thread discovery races
+				// the requested create-process/entry-point stop and hands the caller a running target despite an
+				// explicit break_at contract. Wait for this call's new process, not an older process in a
+				// multi-target session, to report itself stopped.
+				await WaitForDebuggerAsync(()=>{
+					var created=manager.Processes.Where(process=>!oldProcessIds.Contains(process.Id)).ToArray();
+					return created.Length!=0 && created.All(process=>!process.IsRunning);
+				},cancellationToken).ConfigureAwait(false);
+				var stopped=await OnDebuggerAsync(()=>{
+					var created=manager.Processes.Where(process=>!oldProcessIds.Contains(process.Id)).ToArray();
+					return created.Length!=0 && created.All(process=>!process.IsRunning);
+				},cancellationToken).ConfigureAwait(false);
+				if (!stopped) throw new RpcException("break_at_timed_out","The process started, but dnSpy did not reach the requested initial stop before the launch deadline. The live session remains available through list_sessions.");
+			}
 			NotifyConnectionStateChanged();
 			return await OnDebuggerAsync(State,cancellationToken).ConfigureAwait(false);
 		}

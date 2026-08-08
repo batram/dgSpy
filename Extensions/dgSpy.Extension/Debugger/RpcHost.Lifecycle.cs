@@ -48,7 +48,7 @@ namespace dgSpy.Extension {
 			}
 			options.RedirectConsoleOutput=redirectOutput;
 			ApplyEnvironment(options,req.Arguments["environment"] as JsonObject);
-			return await StartSessionAsync(programId,"launch",()=>manager.Start(options),connectWait,cancellationToken).ConfigureAwait(false);
+			return await StartSessionAsync(programId,"launch",()=>manager.Start(options),connectWait,cancellationToken,breakKind!=PredefinedBreakKinds.DontBreak).ConfigureAwait(false);
 		}
 
 		// A launch session is adoptable when it is live, not faulted, and already owns this exact image. Only

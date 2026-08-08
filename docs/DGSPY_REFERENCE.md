@@ -329,8 +329,9 @@ while the caller sees only "interrupted". Two things make that recoverable:
   second debuggee. Pass `adopt_existing=false` to run a second copy on purpose. A faulted or exited
   session is never adopted, because the caller asked for a running program.
 
-`launch` does not wait for the `break_at` stop before replying — it returns once the engine has the
-process and its threads. Wait on the event stream for the stop.
+When `break_at` is `create_process` or `entry_point`, `launch` waits until the newly created process is
+stopped before replying. The returned state and version vector therefore describe that stop. A caller
+still uses the event stream for later stops.
 
 Lines, not chunks: the engines deliver these streams as raw pipe reads, so one read can carry three
 lines or half of one. dgSpy reassembles them, and flushes a still-incomplete line after a short quiet
