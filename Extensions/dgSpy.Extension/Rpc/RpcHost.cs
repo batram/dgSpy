@@ -147,11 +147,33 @@ namespace dgSpy.Extension {
 		async Task<RpcResponse> DispatchAsync(RpcRequest req) {
 			// Fully qualified: a `using System.Diagnostics` here would collide with dnSpy.Contracts.Debugger.
 			var started=System.Diagnostics.Stopwatch.StartNew();
-			var response=await DispatchCoreAsync(req).ConfigureAwait(false);
+			var response=StampVersions(req,await DispatchCoreAsync(req).ConfigureAwait(false));
 			started.Stop();
 			try { McpActivityLog.Instance.Record(req,response,started.Elapsed); }
 			// The activity window is a diagnostic. It must never be able to fail an RPC call.
 			catch (Exception) { }
+			return response;
+		}
+		// Every operation that takes a version guard echoes the full current vector back, so the caller
+		// never needs a follow-up get_session_state just to learn the counter its next call must carry.
+		// The set is exactly the guarded set in CheckOperationVersion: read-only operations stay
+		// unstamped because nothing they enable depends on a counter.
+		static readonly HashSet<string> versionStampedOperations=new HashSet<string>(StringComparer.Ordinal) {
+			"detach","terminate","restart",
+			"pause","continue","step_into","step_over","step_out","set_value","invoke_method","create_object","write_memory","set_instruction_pointer","create_object_id","release_object_id","write_value_export",
+			"set_il_breakpoint","set_breakpoint","remove_breakpoint","clear_breakpoints","update_breakpoint","set_exception_breakpoint","set_module_breakpoint","update_module_breakpoint","remove_module_breakpoint","import_breakpoints","set_exception_policy","remove_exception_policy","restore_exception_defaults",
+		};
+		RpcResponse StampVersions(RpcRequest req,RpcResponse response) {
+			if (response.Error is not null || !versionStampedOperations.Contains(req.Operation)) return response;
+			// restore_exception_defaults returns a bare bool; everything else in the set is an object.
+			if (ProtocolJson.ToNode(response.Result) is not JsonObject node) return response;
+			long lifecycle,execution,breakpointsRevision; string? stop;
+			lock(sync) { lifecycle=lifecycleVersion; execution=executionVersion; breakpointsRevision=breakpointsVersion; stop=stopId; }
+			node["versions"]=new JsonObject {
+				["lifecycle_version"]=lifecycle,["execution_version"]=execution,["breakpoints_version"]=breakpointsRevision,
+				["stop_id"]=stop,["last_event_id"]=events.LastEventId,
+			};
+			response.Result=node;
 			return response;
 		}
 		async Task<RpcResponse> DispatchCoreAsync(RpcRequest req) { try {

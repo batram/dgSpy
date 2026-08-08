@@ -383,6 +383,10 @@ try {
 	Assert-That 'remove_breakpoint refuses an unknown id' ($missingBreakpoint -match 'does not exist|list_breakpoints')
 	$removed = Invoke-MutatingTool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id }
 	Assert-That 'remove_breakpoint reports the exact removed id' ($removed.removed -and $removed.breakpoint_id -eq $breakpoint.breakpoint_id)
+	# Guarded operations echo the full version vector so the caller's next guard and event cursor come
+	# from the response, not an interposed get_session_state.
+	Assert-That 'remove_breakpoint echoes the version vector' ($null -ne $removed.versions -and $removed.versions.breakpoints_version -ge 1 -and $null -ne $removed.versions.execution_version -and $null -ne $removed.versions.lifecycle_version) "(versions=$($removed.versions | ConvertTo-Json -Compress))"
+	Assert-That 'the echoed vector carries a usable event cursor' ($removed.versions.last_event_id -ge 1) "(was $($removed.versions.last_event_id))"
 	$afterRemove = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{})
 	Assert-That 'remove_breakpoint leaves the removed breakpoint absent' (@($afterRemove | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id }).Count -eq 0)
 	$breakpoint = Invoke-MutatingTool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
@@ -464,6 +468,7 @@ try {
 	Assert-That 'step_over reports its own kind' ($stepped.step_kind -eq 'over')
 	Assert-That 'step_over returns a cursor taken before the step' ($stepped.cursor_event_id -ge $stepCursor)
 	Assert-That 'step_over reports no engine error' ($null -eq $stepped.error) "(was $($stepped.error))"
+	Assert-That 'step_over echoes the version vector' ($null -ne $stepped.versions -and $null -ne $stepped.versions.execution_version -and $null -ne $stepped.versions.last_event_id) "(versions=$($stepped.versions | ConvertTo-Json -Compress))"
 	# Completion arrives on the event stream exactly like a breakpoint hit: same tool, same cursor
 	# discipline, different stop_reason. That is the Phase 4 exit criterion.
 	$stepStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $stepped.cursor_event_id; timeout_ms = 8000 }

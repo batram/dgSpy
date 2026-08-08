@@ -139,6 +139,13 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   revisions report relevant change domains and return `stale_lifecycle`, `stale_execution`,
   `stale_breakpoints`, or `stale_stop` on mismatch. `stop_id` changes only when the target reaches a new
   stop and is cleared on resume.
+- Every operation that takes a version guard echoes the full current vector back in a `versions`
+  object: `{lifecycle_version, execution_version, breakpoints_version, stop_id, last_event_id}`,
+  read after the operation applied. Feed the next mutation's `expected_*` guards and the next
+  `wait_for_stop` cursor from there instead of an interposed `get_session_state`. `stop_id` is `null`
+  while the target runs. The one exception is `restore_exception_defaults`, whose result is a bare
+  boolean. For a step that returns `completed: false`, the vector describes the state at response
+  time — the in-flight step's stop, when it lands, arrives on the event stream with its own versions.
 - `list_threads` requires a paused session and returns stable `thread_id` values as
   `process_id:os_thread_id`, including managed ID, name and state. It deliberately does not fetch every
   stack: Unity threads can exit during frame retrieval, and some Mono runtimes never answer that raced
