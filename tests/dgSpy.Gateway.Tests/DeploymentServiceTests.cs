@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Text.Json.Nodes;
 using dgSpy.Protocol;
@@ -41,6 +42,27 @@ public sealed class DeploymentServiceTests : IDisposable {
 		var current=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"install","current.json")))!; var version=(string)current["active_version"]!;
 		Assert.True(File.Exists(Path.Combine(root,"install","versions",version,"dnSpy.exe"))); Assert.True(File.Exists(Path.Combine(root,"install","current","Start-dgSpy.cmd")));
 	}
+	// The comparison functions are unit-tested on their own, but nothing else drives the composition:
+	// the live smoke never calls get_started or doctor, so a serialization slip in the field that carries
+	// the whole point would have surfaced only in front of an agent.
+	[Fact]
+	public async Task Get_started_names_the_gateway_build_and_carries_a_skew_verdict() {
+		var result=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("get_started",new JsonObject(),new HostRouter(),default)))!;
+		Assert.False(string.IsNullOrWhiteSpace((string?)result["gateway_build"]?["build_label"]));
+		Assert.Contains((string?)result["gateway_build"]?["provenance"],new[]{"unpackaged","package_manifest"});
+		Assert.NotNull(result["build_skew"]?["gateway_vs_hosts"]); Assert.NotNull(result["build_skew"]?["gateway_process_vs_disk"]);
+		// The test assembly is a repository build with no host registered, so there is nothing to be
+		// skewed against. A verdict of "skewed" here would mean the check fires on every dev tree.
+		Assert.False((bool?)result["build_skew"]?["skewed"]);
+	}
+	[Fact]
+	public async Task Doctor_checks_build_skew_and_passes_it_when_there_is_nothing_to_compare() {
+		var result=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("doctor",new JsonObject(),new HostRouter(),default)))!;
+		var check=result["checks"]!.AsArray().Single(item=>(string?)item?["name"]=="build_skew")!;
+		Assert.True((bool?)check["ok"]); Assert.Contains("gateway ",(string?)check["detail"]!);
+		Assert.False(string.IsNullOrWhiteSpace((string?)result["gateway_build"]?["version"]));
+	}
+
 	// The regression. The deployment fingerprint was the hash of dnSpy.exe alone - an apphost stub generated
 	// from the project name, byte-identical across every rebuild - so rebuilding the managed assemblies
 	// produced the same version name, "already installed" short-circuited, and the gateway kept serving a

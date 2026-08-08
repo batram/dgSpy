@@ -40,7 +40,12 @@ public sealed class DeploymentService {
 		// Staleness outranks "you are connected": a connected host running superseded code is the case that
 		// wastes the most time, because everything else looks healthy.
 		var stale=(bool?)System.Text.Json.JsonSerializer.SerializeToNode(local)!["payload"]?["stale"]==true;
-		return new { gateway="ready",access_mode=Environment.GetEnvironmentVariable("DGSPY_ACCESS_MODE") ?? "full-control",local_deployment=local,hosts,recommended_next_action=stale ? "the installed payload is newer than the running deployment: call launch_local_host with replace=true before trusting any result, and finish or hand off any live session first because replacing ends it" : connected ? "select a connected host, then attach or launch; once attached, find symbols with search" : degraded ? "inspect dispatcher and evaluation queue faults before issuing debugger control" : "call launch_local_host, or create one remote host package" };
+		// Build identity belongs in the first call an agent makes, not only in doctor: by the time
+		// anything looks wrong enough to run diagnostics, the wrong conclusions have already been drawn
+		// from tool descriptions that were never questioned. A transcript that opens with both commits
+		// makes a later report either reproducible against a known tree or visibly not.
+		var skew=GatewayBuild.Skew(hosts); var skewed=(bool?)System.Text.Json.JsonSerializer.SerializeToNode(skew)!["skewed"]==true;
+		return new { gateway="ready",gateway_build=GatewayBuild.Describe(),build_skew=skew,access_mode=Environment.GetEnvironmentVariable("DGSPY_ACCESS_MODE") ?? "full-control",local_deployment=local,hosts,recommended_next_action=stale ? "the installed payload is newer than the running deployment: call launch_local_host with replace=true before trusting any result, and finish or hand off any live session first because replacing ends it" : skewed ? "the Gateway and the debugger host are not the same build: read build_skew before trusting any tool description or response shape, and quote both commits in anything you report" : connected ? "select a connected host, then attach or launch; once attached, find symbols with search" : degraded ? "inspect dispatcher and evaluation queue faults before issuing debugger control" : "call launch_local_host, or create one remote host package" };
 	}
 	async Task<object> DoctorAsync(HostRouter router,CancellationToken token) {
 		var checks=new List<object>();
@@ -59,7 +64,14 @@ public sealed class DeploymentService {
 			var faulted=serialized.Count(item=>item.Contains("\"dispatcher_state\":\"faulted\"",StringComparison.Ordinal));
 			var unavailable=serialized.Count(item=>item.Contains("\"dispatcher_state\":\"unavailable\"",StringComparison.Ordinal));
 			var ok=connected>0 && degraded==0; checks.Add(Check("hosts",ok,$"{hosts.Length} registered, {connected} connected, {degraded} degraded, {faulted} with contained dispatcher faults, {unavailable} with a dead dispatcher",ok?(faulted>0?"A host recorded a contained dispatcher fault; read last_dispatcher_fault and re-read session state before trusting anything from around that time.":null):unavailable>0?"A host's debugger thread is gone: it cannot run any control operation and its sessions are dead. Read dispatcher_recovery on that host.":available>0?"Inspect the host dispatcher/evaluation fault fields before retrying control operations.":"Start dnSpy locally or connect a provisioned remote host.")); } catch(Exception ex) { hosts=Array.Empty<object>(); checks.Add(Check("hosts",false,ex.GetType().Name,"Repair the host registry or credentials.")); }
-		return new { healthy=checks.All(c=>(bool)c.GetType().GetProperty("ok")!.GetValue(c)!),state_root=stateRoot,install_root=installRoot,checks,hosts };
+		// Skew fails the check rather than merely reporting it, for the same reason deployment freshness
+		// does: every other check passes while the answers come from two different trees, and a finding
+		// that leaves healthy=true is one an agent scanning for trouble sails straight past.
+		var skew=GatewayBuild.Skew(hosts); var skewJson=System.Text.Json.JsonSerializer.SerializeToNode(skew)!;
+		checks.Add(Check("build_skew",(bool?)skewJson["skewed"]!=true,
+			$"gateway {GatewayBuild.BuildLabel}; {(string?)skewJson["gateway_vs_hosts"]?["detail"]} {(string?)skewJson["gateway_process_vs_disk"]?["detail"]}".Trim(),
+			(string?)skewJson["gateway_vs_hosts"]?["recovery"] ?? (string?)skewJson["gateway_process_vs_disk"]?["recovery"]));
+		return new { healthy=checks.All(c=>(bool)c.GetType().GetProperty("ok")!.GetValue(c)!),gateway_build=GatewayBuild.Describe(),build_skew=skew,state_root=stateRoot,install_root=installRoot,checks,hosts };
 	}
 	static object Check(string name,bool ok,string detail,string? recovery) => new { name,ok,detail,recovery };
 	static object Workflow(string? topic) {

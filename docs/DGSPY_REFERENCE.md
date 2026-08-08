@@ -98,6 +98,18 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   per-engine behavior, and limits. Engine differences are advertised, not assumed — most importantly
   that Mono/Unity binds breakpoints only at sequence points and that a deadline cannot abort work that
   has already started (`limits.cancels_in_flight_work: false`).
+- `get_started` and `doctor` name the **Gateway's** own build in `gateway_build` and compare it in
+  `build_skew`. This is a different question from `get_host_info`, and confusing the two is expensive:
+  the host's build stands behind the debugger answers, while the Gateway's stands behind the tool
+  descriptions, argument schemas, and composed response shapes. They can skew in either direction.
+  `build_skew.gateway_vs_hosts` reports a differing commit; `build_skew.gateway_process_vs_disk`
+  reports a Gateway that was installed over while it kept running, which is the case where every tool
+  description an agent reads is older than the tree and nothing else says so. The Gateway has no git,
+  so it never claims one side is "behind" — it reports that the commits differ and, from the build
+  timestamps, which side is older. A side with no commit (an unpackaged build) is reported as unknown,
+  never as skew. Real skew fails `doctor`'s `build_skew` check and therefore its `healthy` flag. Quote
+  both commits in any report about tool behavior: without them a later reader cannot tell a defect
+  from a stale deployment.
 - `list_programs` unfiltered probes every process and takes seconds. Pass `process_ids` or
   `process_names` (wildcards allowed) when the target is known — that is ~50 ms instead of ~2500 ms.
   `provider_names` selects dnSpy attach providers (`DotNetFramework`, `DotNet`, `UnityEditor`,
