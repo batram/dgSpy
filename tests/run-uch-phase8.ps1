@@ -42,7 +42,15 @@ try {
 	foreach($candidate in $candidates|Select-Object -First 15){ $bp=Try-Rpc 'set_breakpoint' @{session_id=$sessionId;module=$plugin.filename;type=$candidate.declaring_type;method=$candidate.name}; if(-not $bp.dgspy_error -and $bp.bound){$bound++} }
 	if((Invoke-DgSpyRpc -OperationName 'get_session_state' -OperationArguments @{session_id=$sessionId}).state -eq 'paused'){ Invoke-DgSpyRpc -OperationName 'continue' -OperationArguments @{session_id=$sessionId} -DeadlineSeconds 30|Out-Null }
 	$wait=Invoke-DgSpyRpc -OperationName 'wait_for_stop' -OperationArguments @{session_id=$sessionId;after_event_id=$cursor;timeout_ms=12000} -DeadlineSeconds 30
-	$stop=if(-not $wait.timed_out){@($wait.events)[0]}else{$null}
+	# Hot Update breakpoints can pause the target during the set loop; the continue above resumes it,
+	# and the first stop after the pre-loop cursor is then that stale, already-resumed one. Take the
+	# newest stop, and if the session is not actually paused, wait once more from the stream's end -
+	# otherwise get_callstack races the next hit and fails with not_paused.
+	$stop=if(-not $wait.timed_out){@($wait.events)[-1]}else{$null}
+	if($stop -and (Invoke-DgSpyRpc -OperationName 'get_session_state' -OperationArguments @{session_id=$sessionId}).state -ne 'paused'){
+		$wait=Invoke-DgSpyRpc -OperationName 'wait_for_stop' -OperationArguments @{session_id=$sessionId;after_event_id=$wait.last_event_id;timeout_ms=12000} -DeadlineSeconds 30
+		$stop=if(-not $wait.timed_out){@($wait.events)[-1]}else{$null}
+	}
 	Assert-That 'a hot UCH method reaches a managed Mono stop' ($bound -gt 0 -and $null -ne $stop) "(bound=$bound timed_out=$($wait.timed_out))"
 
 	if($stop){
@@ -129,7 +137,10 @@ try {
 		Invoke-DgSpyRpc -OperationName 'update_breakpoint' -OperationArguments @{breakpoint_id=$liveBreakpoint.breakpoint_id;enabled=$true;condition='';hit_count=1;hit_count_kind='at_least'}|Out-Null
 
 		$autos=Try-Rpc 'get_autos' @{session_id=$sessionId;process_id=$plugin.process_id;runtime_id=$plugin.runtime_guid;thread_id=$thread;frame_index=0} 40
-		Assert-That 'get_autos reaches the Mono C# provider' ($null -eq $autos.dgspy_error -and @($autos).Count -gt 0) "($($autos.dgspy_error))"
+		# Zero autos is a legitimate answer: which hot method the stop lands in is arbitrary, and some
+		# frames genuinely have no auto expressions. The check is that the provider answered without
+		# error, not that this particular frame was interesting.
+		Assert-That 'get_autos reaches the Mono C# provider' ($null -eq $autos.dgspy_error) "(error=$($autos.dgspy_error) autos=$(@($autos).Count))"
 		$object=Try-Rpc 'create_object_id' @{session_id=$sessionId;expression='System.AppDomain.CurrentDomain';allow_func_eval=$true;process_id=$plugin.process_id;runtime_id=$plugin.runtime_guid;thread_id=$thread;frame_index=0} 40
 		Assert-That 'create_object_id works on a Mono object reference' ($null -eq $object.dgspy_error -and $object.object_id -gt 0) "($($object.dgspy_error))"
 		if($object.object_id){
