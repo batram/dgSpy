@@ -94,13 +94,13 @@ try {
 	$after=Invoke-Tool 'get_session_state' @{host_id=$HostId;session_id=$sessionId}
 	if ($after.session_id -ne $before.session_id -or $after.last_event_id -lt $before.last_event_id) { throw 'Session identity or event cursor was not preserved.' }
 	$null=Invoke-Tool 'claim_session' @{host_id=$HostId;session_id=$sessionId}
-	$null=Invoke-Tool 'terminate' @{host_id=$HostId;session_id=$sessionId;expected_state_version=$after.state_version}
+	$null=Invoke-Tool 'terminate' @{host_id=$HostId;session_id=$sessionId;expected_lifecycle_version=$after.lifecycle_version}
 	$sessionId=$null
 	Write-Host "PASS: packaged $($remoteConfiguration.transport) host registered, routed RPC, and preserved session/cursor across Gateway restart."
 	$succeeded=$true
 }
 finally {
-	if ($sessionId) { try { $state=Invoke-Tool 'get_session_state' @{host_id=$HostId;session_id=$sessionId}; try { $null=Invoke-Tool 'claim_session' @{host_id=$HostId;session_id=$sessionId} } catch {}; $null=Invoke-Tool 'terminate' @{host_id=$HostId;session_id=$sessionId;expected_state_version=$state.state_version} } catch {} }
+	if ($sessionId) { try { $state=Invoke-Tool 'get_session_state' @{host_id=$HostId;session_id=$sessionId}; try { $null=Invoke-Tool 'claim_session' @{host_id=$HostId;session_id=$sessionId} } catch {}; $null=Invoke-Tool 'terminate' @{host_id=$HostId;session_id=$sessionId;expected_lifecycle_version=$state.lifecycle_version} } catch {} }
 	if ($gatewayProcess -and -not $gatewayProcess.HasExited) { Stop-Process -Id $gatewayProcess.Id -Force -ErrorAction SilentlyContinue }
 	if ($dnSpyProcess -and -not $dnSpyProcess.HasExited) { Stop-Process -Id $dnSpyProcess.Id -Force -ErrorAction SilentlyContinue; $dnSpyProcess.WaitForExit(10000) | Out-Null }
 	if (-not $succeeded) { Get-Content (Join-Path $runRoot 'gateway.err') -ErrorAction SilentlyContinue; Get-Content (Join-Path $runRoot 'gateway.out') -Tail 40 -ErrorAction SilentlyContinue }

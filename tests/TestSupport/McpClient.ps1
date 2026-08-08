@@ -112,7 +112,7 @@ function Invoke-MutatingTool {
 	$guard = @($required | Where-Object { $_ -match '^expected_.+_version$' })[0]
 	if ([string]::IsNullOrWhiteSpace($guard)) { throw "Mutation $Name advertises no scoped version guard." }
 	$stateProperty = $guard.Substring('expected_'.Length)
-	if (-not $callArguments.ContainsKey($guard) -and -not $callArguments.ContainsKey('expected_state_version')) { $callArguments[$guard] = $state.$stateProperty }
+	if (-not $callArguments.ContainsKey($guard)) { $callArguments[$guard] = $state.$stateProperty }
 	if ($required -contains 'expected_stop_id' -and -not $callArguments.ContainsKey('expected_stop_id')) { $callArguments.expected_stop_id = $state.stop_id }
 	return Invoke-Tool -Name $Name -Arguments $callArguments -ExpectError:$ExpectError -AsText:$AsText
 }

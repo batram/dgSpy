@@ -19,11 +19,21 @@ namespace dgSpy.Extension {
 		HostInfo Host() {
 			string? session; lock(sync) session=sessionId;
 			var dispatcher=manager.Dispatcher as dnSpy.Contracts.Debugger.IDbgDispatcherDiagnostics;
-			var dispatcherState=dispatcher is null || dispatcher.FaultCount==0 ? "healthy" : "degraded";
+			// Three conditions, not two, because they need three different responses. A contained fault
+			// is history: the dispatcher caught it, kept running, and the host still works — reporting
+			// that as "degraded" forever after one recovered fault told callers to stop using a host
+			// that was fine. "unavailable" is the one that ends the host: the debugger thread is gone,
+			// every control operation now fails immediately, and no session it still names is real.
+			var dispatcherState=dispatcher is null ? "healthy" : dispatcher.IsShutdown ? "unavailable" : dispatcher.FaultCount==0 ? "healthy" : "faulted";
 			var evaluationState=evaluations.State;
-			var connectionState=dispatcherState=="healthy" && evaluationState!="degraded" ? "connected" : "degraded";
+			var connectionState=dispatcherState!="unavailable" && evaluationState!="degraded" ? "connected" : "degraded";
 			var lastFault=dispatcher?.LastFault;
 			if(lastFault?.Length>4096) lastFault=lastFault.Substring(0,4096);
+			var dispatcherRecovery=dispatcherState switch {
+				"unavailable" => DispatcherUnavailableRecovery,
+				"faulted" => "A debugger-thread callback failed and was contained; the host is still usable. last_dispatcher_fault names it. Re-read session state before trusting anything read around that time.",
+				_ => null,
+			};
 			return new HostInfo {
 				HostId=rpcSecurity.HostId,
 				DisplayName=$"dgSpy on {Environment.MachineName}",
@@ -44,6 +54,7 @@ namespace dgSpy.Extension {
 				DispatcherFaultCount=dispatcher?.FaultCount ?? 0,
 				LastDispatcherFaultUtc=dispatcher?.LastFaultUtc,
 				LastDispatcherFault=lastFault,
+				DispatcherRecovery=dispatcherRecovery,
 				EvaluationQueueState=evaluationState,
 				EvaluationActiveSinceUtc=evaluations.ActiveSinceUtc,
 				EvaluationPending=evaluations.Pending,

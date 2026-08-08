@@ -80,8 +80,9 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   `expected_lifecycle_version` for detach/terminate/restart, `expected_execution_version` for target and
   frame mutations, and `expected_breakpoints_version` for breakpoint/policy changes. Frame-bound
   mutations also require the opaque `expected_stop_id`. Missing or stale relevant guards fail before
-  acting; unrelated thread/module events do not invalidate them. `expected_state_version` remains an
-  optional compatibility alias but is no longer advertised as the required guard. `release_session` changes only
+  acting; unrelated thread/module events do not invalidate them. The deprecated `expected_state_version`
+  alias has been removed: only the scoped guards exist, and an `expected_state_version` argument is
+  ignored. `release_session` changes only
   ownership. An idle owner or Gateway restart leaves the target untouched and requires explicit
   `claim_session` before further mutations.
 - MCP disconnect, controller expiry, Gateway disconnect/restart, and remote-host disconnect never resume,
@@ -135,10 +136,50 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   `get_events`. The event carries PID, exit code, terminal reason, and a terminal flag. Call `detach` to
   clear the terminal session, or start the next session once the debugger has stopped.
 - `list_sessions` recovers a lost `session_id`.
+- `list_breakpoints` reports `engine_hit_count`: times the engine reached the breakpoint this
+  session, counted before conditions, hit counts, and filters run. A conditional breakpoint whose
+  condition keeps evaluating false still ticks it — that is how "working condition, not yet true" is
+  distinguished from "never reached" during an otherwise silent wait. Absent when no session is
+  active; reset when a new session starts.
+- `wait_for_stop`, `wait_for_event`, and `get_events` reject an `after_event_id` beyond the newest
+  event with `cursor_ahead_of_stream` instead of waiting forever or returning a clean empty result —
+  such a cursor would skip the very ids the next events take. The known way to produce one is feeding
+  a version counter where a cursor belongs.
 - `event_id` is only an event cursor. `state_version` remains as a legacy all-event counter. The scoped
   revisions report relevant change domains and return `stale_lifecycle`, `stale_execution`,
   `stale_breakpoints`, or `stale_stop` on mismatch. `stop_id` changes only when the target reaches a new
   stop and is cleared on resume.
+- Every operation that takes a version guard echoes the full current vector back in a `versions`
+  object: `{lifecycle_version, execution_version, breakpoints_version, stop_id, last_event_id}`,
+  read after the operation applied. Feed the next mutation's `expected_*` guards from there instead of
+  an interposed `get_session_state`. **`versions.last_event_id` is not a wait cursor for an event the
+  same call causes.** It is the newest event at response time, which is right for reading history with
+  `get_events` and wrong for `wait_for_stop` after a resume: a breakpoint on a hot path is hit before
+  `continue` returns, so the stamped cursor already includes that `stopped` event and waiting from it
+  waits for the next one. Measured, not theorised — a `Probe` breakpoint reported
+  `engine_hit_count: 1` while `wait_for_stop` reported `timed_out: true`. Capture the cursor before the
+  resume; `set_breakpoint` and `set_il_breakpoint` return one as `cursor_event_id`. `stop_id` is `null`
+  while the target runs. The one exception is `restore_exception_defaults`, whose result is a bare
+  boolean. For a step that returns `completed: false`, the vector describes the state at response
+  time — the in-flight step's stop, when it lands, arrives on the event stream with its own versions.
+- `attach`, `attach_endpoint`, `launch`, `wait_for_stop` and `wait_for_event` carry the vector too,
+  though none of them takes a guard. They are where a caller has no counters at all: a session opens
+  with a mutation whose guard could otherwise only come from an interposed `get_session_state`, and a
+  wait is where the caller learns the stop that moved `execution_version` and `stop_id` happened.
+- **The vector for an execution change is stamped after that change is recorded, not when the call
+  returns.** `execution_version` moves when the engine's `Continued`/`Stopped` event reaches the event
+  buffer, which happens after the RPC has composed its answer. Stamping without waiting made `continue`
+  hand back the value from *before* the resume, so the next guarded call died with
+  `stale_execution: expected 6, current 7` — quoting a number that same response had supplied.
+  `pause`, `continue` and the three steps therefore wait, bounded at 750 ms, for their own execution
+  change to land. The wait is best effort: a step that never lands must not fail the call, so a timeout
+  stamps what is known and leaves the caller no worse off than before the echo existed.
+- Gateway compositions (`step_and_inspect`, `run_to_method`, `run_to_location`, `trace_calls`) lift a
+  `versions` object to the top of their result. A composition is where the counters are hardest to
+  guess, because several guarded calls moved them and only the Gateway saw the intermediate responses.
+  The source is the call that observed the final state: the wait for the stepping tools, and the
+  temporary-breakpoint removal for `run_to_*` — removing it moves `breakpoints_version` again, so
+  stamping from the wait would return a guard that is stale on arrival.
 - `list_threads` requires a paused session and returns stable `thread_id` values as
   `process_id:os_thread_id`, including managed ID, name and state. It deliberately does not fetch every
   stack: Unity threads can exit during frame retrieval, and some Mono runtimes never answer that raced
@@ -241,6 +282,46 @@ Note the pairing: `breakpoint_hit` is the raw debugger message, `stopped` with
 an event for a process that is still being suspended. The vocabulary lives in
 `dgSpy.Protocol.EventKinds`, and every emitting call site names a constant from it, so a kind cannot
 ship without being filterable and advertised in the same edit.
+
+### Two streams, not three
+
+`get_events`/`wait_for_event`/`wait_for_stop` carry the **structured** stream: normalized lifecycle and
+stop events. `get_output`/`wait_for_output` carry the **text** stream. Nothing the target printed
+appears in the event stream, and no debugger event appears in the text stream. `get_stop_reason` is not
+a third stream; it reads one retained `stopped` event out of the structured one.
+
+The text stream interleaves two sources, told apart by each message's `category`:
+
+| Category | Source |
+|---|---|
+| `StandardOutput`, `StandardError` | The debugged program's own console streams, reassembled into whole lines |
+| `Output`, `ErrorUser`, `StepFilter` | Host commentary from dnSpy and dgSpy, including the `dgSpy audit <id>:` line every side-effecting call writes |
+
+Program output only exists for a target dgSpy **launched**, and only while `redirect_output` is on
+(the default). The engine then creates the process with its stdout/stderr on pipes it owns. An attached
+process's console handles were never dgSpy's, so nothing can be captured from one after the fact, and
+for those sessions `get_output` carries host commentary alone. That is a property of process creation
+on Windows, not a gap in the tool: retro-fitting handles onto a running process is not possible.
+
+### An interrupted `launch` is not a failed one
+
+`launch` creates the process and then waits for the engine to bring it up, so a client cancellation
+lands *after* the side effect: the process exists, is attached, and may be parked at its entry point,
+while the caller sees only "interrupted". Two things make that recoverable:
+
+- The session records its `program_id` (`launch:<engine>:<path>`) as soon as the process exists, not
+  once the call returns, so `list_sessions` shows an interrupted launch.
+- A repeat `launch` of the same image adopts that live session and returns it rather than starting a
+  second debuggee. Pass `adopt_existing=false` to run a second copy on purpose. A faulted or exited
+  session is never adopted, because the caller asked for a running program.
+
+`launch` does not wait for the `break_at` stop before replying — it returns once the engine has the
+process and its threads. Wait on the event stream for the stop.
+
+Lines, not chunks: the engines deliver these streams as raw pipe reads, so one read can carry three
+lines or half of one. dgSpy reassembles them, and flushes a still-incomplete line after a short quiet
+period and again when the process exits, so a program that writes a prompt without a newline is
+delayed rather than withheld.
 - Primitive locals are limited to values with a raw scalar; object expansion is outside milestone 1.
 - **`update_breakpoint` distinguishes "clear" from "leave alone".** An omitted field keeps its current
   value; an empty string for `condition` or `trace_message` removes it. Without that distinction the
@@ -258,7 +339,30 @@ ship without being filterable and advertised in the same edit.
   return `cursor_event_id`; wait from it with `wait_for_stop` and the stop arrives with
   `stop_reason: "step"`. `completed: false` means still running, not failed. The cursor matters for the
   same reason it does for breakpoints: a step over a fast call lands before a follow-up state read
-  returns.
+  returns. The result's `status` makes the outcome explicit — `completed`, `step_error` (see `error`),
+  or `in_flight` with a `hint`: the target is running again, and a step across interop, optimized, or
+  interpreted code may never land, in which case pause or set a breakpoint instead of waiting.
+- **A breakpoint outranks a step.** Stepping out of a method that still has an active breakpoint in
+  it — a loop body, say — hits that breakpoint first: the step reports `completed: false` and the
+  next stop is the breakpoint, in the same method you were trying to leave, not the caller. This is
+  correct debugger behaviour, not a failed step. Remove or disable the breakpoint first when the
+  point of the step is to reach the frame above.
+- `remove_exception_policy` returns `removed: true` with the entry's former flags under
+  `former_policy`; the flags are what the policy *was*, not a still-active setting.
+- **Exception breakpoints and exception policies are one thing.** `set_exception_breakpoint` and
+  `set_exception_policy` write the same dnSpy entry (the policy form additionally takes module
+  conditions); `list_exception_breakpoints` is the filtered deliberately-configured view of the same
+  entries `list_exception_policies` reports raw, and `remove_exception_policy` removes entries created
+  by either setter. Both list tools take the same `category` and `name` filters, matched exactly, and
+  report `total` and `truncated`. That is what makes a removal confirmable: without a way to name one
+  entry, the only view was dnSpy's whole stock definition set, so a caller doing careful cleanup could
+  not prove it had cleaned up. The empty string selects the category default entry, the one
+  `set_exception_breakpoint` writes when `name` is omitted.
+- **Zero processes and several are opposite problems and no longer share one message.** Selecting a
+  process without `process_id` answers `no_active_process` when the session has none (the target exited
+  or was detached) and `ambiguous_target`, naming the live PIDs, when it has more than one. The single
+  old "More than one process is active; pass process_id" sent a caller hunting for a second process
+  when the real answer was that there was not even a first one.
 - **`search` is the discovery entry point.** It is dnSpy's Search window as a tool: it tests the same
   candidate strings the GUI does, so a qualified path resolves --- `GameState.ChatSystem` finds the
   `ChatSystem` field on type `GameState`, which `search_symbols` cannot, because that tool compares the
@@ -396,6 +500,16 @@ dotnet test .\tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj
 ```powershell
 .\tests\run-milestone1-smoke.ps1
 ```
+
+```powershell
+.\tests\run-launch-output-smoke.ps1
+```
+
+`run-launch-output-smoke.ps1` is the launch-side smoke: it drives a console target through `launch`,
+asserts that every line the program printed reaches `get_output` under a `StandardOutput` category with
+the target's process id, and compares that against the log the target keeps itself. It then repeats the
+`launch` call and asserts that the session is adopted rather than a second debuggee created. It needs a
+target that mirrors its own stdout to a log; `-TargetExe` points it at one.
 
 The unit tests cover the wire contract and capability catalog, the gateway's access control and its
 Streamable HTTP version policy and deadline-versus-bound invariant, and the extension's pure

@@ -15,8 +15,13 @@
 	reports nothing: the menu entries are simply absent. This static costs one array scan at startup
 	and cannot break composition.
 
-	Only the foreground grab is suppressed. The window still opens, still shows source, and keeps
-	every command, so a user can take over an automated session by clicking on it.
+	The switch also suppresses the "stop debugging?" prompt on window close, for the same underlying
+	reason: it is a modal question, and a host nobody is watching cannot answer one. Left in place it
+	does not protect the target, it strands it -- the close never completes, so the extension's
+	detach-everything-on-AppExit never runs and the process stays up holding the attachment.
+
+	Otherwise the window still opens, still shows source, and keeps every command, so a user can take
+	over an automated session by clicking on it.
 */
 
 using System;

@@ -51,6 +51,23 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("stop_unhandled")] public bool StopUnhandled { get; set; }
 		[JsonPropertyName("conditions")] public ExceptionConditionInfo[] Conditions { get; set; }=Array.Empty<ExceptionConditionInfo>();
 	}
+	/// <summary>Bounded listing of exception policies, shaped like <c>ExceptionBreakpointList</c> because
+	/// it reports the same entries. It used to be a bare array with no total, which made a caller unable
+	/// to tell a complete answer from a capped one — and, with no way to name a single entry, unable to
+	/// confirm one removal without paging dnSpy's whole stock definition set.</summary>
+	public sealed class ExceptionPolicyList {
+		[JsonPropertyName("entries")] public ExceptionPolicyInfo[] Entries { get; set; }=Array.Empty<ExceptionPolicyInfo>();
+		/// <summary>How many matched the filters before <c>count</c> was applied.</summary>
+		[JsonPropertyName("total")] public int Total { get; set; }
+		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
+	}
+	/// <summary>Result of <c>remove_exception_policy</c>. The removed entry's former flags come back
+	/// under <c>former_policy</c> rather than at the top level, where a still-set <c>stop_thrown</c>
+	/// used to read as "the policy is still active".</summary>
+	public sealed class ExceptionPolicyRemovalResult {
+		[JsonPropertyName("removed")] public bool Removed { get; set; }
+		[JsonPropertyName("former_policy")] public ExceptionPolicyInfo FormerPolicy { get; set; }=new ExceptionPolicyInfo();
+	}
 	public sealed class ValueExportChunk {
 		[JsonPropertyName("expression")] public string Expression { get; set; }="";
 		[JsonPropertyName("offset")] public int Offset { get; set; }

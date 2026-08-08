@@ -31,6 +31,13 @@ namespace dnSpy.Contracts.Debugger {
 		public string? BreakKind { get; set; }
 
 		/// <summary>
+		/// Capture the debugged program's standard output and standard error and raise them as
+		/// <see cref="DbgMessageKind.AsyncProgramMessage"/> messages. null lets the engine decide from
+		/// the user's own settings, which only redirect GUI programs; true and false are explicit.
+		/// </summary>
+		public bool? RedirectConsoleOutput { get; set; }
+
+		/// <summary>
 		/// Copies this instance to <paramref name="other"/>
 		/// </summary>
 		/// <param name="other">Destination</param>
@@ -38,6 +45,7 @@ namespace dnSpy.Contracts.Debugger {
 			if (other is null)
 				throw new ArgumentNullException(nameof(other));
 			other.BreakKind = BreakKind;
+			other.RedirectConsoleOutput = RedirectConsoleOutput;
 		}
 	}
 

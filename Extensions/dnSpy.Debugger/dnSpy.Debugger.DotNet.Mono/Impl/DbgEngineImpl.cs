@@ -304,7 +304,7 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl {
 						WorkingDirectory = startMonoOptions.WorkingDirectory ?? string.Empty,
 						UseShellExecute = false,
 					};
-					if (debuggerSettings.RedirectGuiConsoleOutput && PortableExecutableFileHelpers.IsGuiApp(startMonoOptions.Filename)) {
+					if (ShouldRedirectConsoleOutput(startMonoOptions, startMonoOptions.Filename)) {
 						psi.RedirectStandardOutput = true;
 						psi.RedirectStandardError = true;
 					}
@@ -339,7 +339,7 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl {
 						WorkingDirectory = startUnityOptions.WorkingDirectory ?? string.Empty,
 						UseShellExecute = false,
 					};
-					if (debuggerSettings.RedirectGuiConsoleOutput && PortableExecutableFileHelpers.IsGuiApp(startUnityOptions.Filename)) {
+					if (ShouldRedirectConsoleOutput(startUnityOptions, startUnityOptions.Filename)) {
 						psi.RedirectStandardOutput = true;
 						psi.RedirectStandardError = true;
 					}
@@ -503,6 +503,11 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl {
 
 			public void Dispose() => streamReader.Dispose();
 		}
+
+		// An explicit request wins over the user's GUI-only setting. Without it a console program's output
+		// is invisible to a programmatic caller: the inherited console owns the std handles.
+		bool ShouldRedirectConsoleOutput(StartDebuggingOptions options, string? filename) =>
+			options.RedirectConsoleOutput ?? (debuggerSettings.RedirectGuiConsoleOutput && PortableExecutableFileHelpers.IsGuiApp(filename));
 
 		void ReadConsoleOutput(ProcessStartInfo psi, Process process) {
 			if (!psi.RedirectStandardOutput && !psi.RedirectStandardError)

@@ -81,6 +81,7 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 		volatile int referenceCounter;
 		volatile bool disposed;
 		volatile int freedAddress;
+		volatile int freedHandle;
 
 		public DbgRawMetadataImpl(byte[] moduleBytes, bool isFileLayout) {
 			lockObj = new object();
@@ -134,10 +135,10 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 			return (IntPtr.Zero, 0);
 		}
 
-		~DbgRawMetadataImpl() {
-			Debug.Assert(Environment.HasShutdownStarted, nameof(DbgRawMetadataImpl) + " dtor called!");
-			Dispose();
-		}
+		// A teardown object suppresses this finalizer in ForceDispose: if its engine-thread free is
+		// dropped during dispatcher shutdown, freeing here could race the engine thread's last read.
+		// That rare allocation is deliberately left for process exit instead.
+		~DbgRawMetadataImpl() => Dispose();
 
 		public unsafe override void UpdateMemory() {
 			if (disposed)
@@ -162,46 +163,75 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 			return this;
 		}
 
+		// Release is the cleanup half of AddRef and must never throw. It used to reject an already
+		// disposed object, which made routine teardown fatal: ForceDispose below marks every raw
+		// metadata disposed when the runtime goes away, and only afterwards does the dispatcher close
+		// the DbgModuleReferenceImpl objects that still hold references. Each of those Release calls
+		// threw ObjectDisposedException out of DbgManagerImpl.CloseObjects_DbgThread, which abandoned
+		// the remaining objects in that batch and recorded a dispatcher fault, leaving the host
+		// registered but unable to serve execution control. Releasing something that is already gone is
+		// exactly what the caller intends, so it is a no-op.
 		public override void Release() {
-			if (disposed)
-				throw new ObjectDisposedException(nameof(DbgRawMetadataImpl));
 			bool dispose;
-			lock (lockObj)
+			lock (lockObj) {
+				if (referenceCounter <= 0)
+					return;
 				dispose = --referenceCounter == 0;
+			}
 			if (dispose)
 				Dispose();
 		}
 
 		void Dispose() {
 			lock (lockObj) {
-				if (disposed)
-					return;
 				disposed = true;
+				referenceCounter = 0;
 			}
-			ForceDispose();
+			GC.SuppressFinalize(this);
+			FreeBuffers();
 		}
 
-		// Called on runtime teardown, which must release the native buffers even while readers still
-		// hold references, so it deliberately ignores referenceCounter. It must still mark the object
-		// disposed first: every reader above guards on `disposed`, and freeing without setting it left
-		// those guards passing while the addresses were gone. Readers then dereferenced freed memory
-		// through Roslyn MetadataBlock pointers and the process died of an AccessViolationException on
-		// the engine thread -- TypeDefTableReader.GetName under CompileGetLocals, with no managed
-		// exception anywhere to explain it. Marking it disposed turns that into an
-		// ObjectDisposedException, which callers can handle.
+		// Called on runtime teardown, on the DbgManager dispatcher thread. It only marks the object
+		// disposed -- it must never free, because the Roslyn expression compiler may at this moment be
+		// reading these buffers on the engine thread through MetadataBlock raw pointers captured
+		// earlier. Freeing here dereferences freed memory under CompileGetLocals and kills the process
+		// with an uncatchable AccessViolationException -- and a host holding an ICorDebug attachment
+		// kills its debuggee when it dies, so it destroys the target too. Both freeing eagerly here
+		// and deferring the free to the last Release() were measured to still crash: the reference
+		// holders die in the same teardown microseconds later, and the racing reader holds no
+		// reference at all, so no refcount arrangement can close the window.
 		//
-		// This narrows the window rather than closing it: a reader already past its guard still holds
-		// a raw pointer. Closing it fully means holding a reference across the read, which is a larger
-		// change to every consumer.
+		// The free happens in FreeAfterQuiesce below, which DbgRawMetadataServiceImpl posts to the
+		// engine's DbgDotNetDispatcher -- the one thread every metadata reader runs on -- so a free
+		// cannot overlap an in-flight read, and a read that starts after it hits the `disposed`
+		// guards set here. Zeroing the reference count makes every later Release() a no-op, so the
+		// module references closed later in this same teardown can neither throw (which used to
+		// abort DbgManagerImpl's close batch) nor trigger a free on the wrong thread. If the posted
+		// callback is dropped because the engine dispatcher already shut down, ForceDispose suppresses
+		// the finalizer and deliberately leaves the allocation for process exit. A finalizer-thread free
+		// cannot prove the engine's last read has quiesced and would recreate the original race. See
+		// docs/local/dnspy-raw-metadata-use-after-free.md.
 		internal void ForceDispose() {
-			lock (lockObj)
+			lock (lockObj) {
 				disposed = true;
+				referenceCounter = 0;
+			}
 			GC.SuppressFinalize(this);
+		}
+
+		// Runs on the engine's DbgDotNetDispatcher thread, after ForceDispose, behind any in-flight
+		// evaluation. This is the only place the teardown path frees.
+		internal void FreeAfterQuiesce() {
+			GC.SuppressFinalize(this);
+			FreeBuffers();
+		}
+
+		void FreeBuffers() {
 			if (process is not null && address != IntPtr.Zero && Interlocked.Exchange(ref freedAddress, 1) == 0) {
 				bool b = NativeMethods.VirtualFree(address, IntPtr.Zero, NativeMethods.MEM_RELEASE);
 				Debug.Assert(b);
 			}
-			if (process is null) {
+			if (process is null && Interlocked.Exchange(ref freedHandle, 1) == 0) {
 				try {
 					if (moduleBytesHandle.IsAllocated)
 						moduleBytesHandle.Free();

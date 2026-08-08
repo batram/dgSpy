@@ -207,35 +207,62 @@ jobs:
           .\build.ps1 net-x64 -NoMsbuild
           .\build-dgspy.ps1
 
-      # Launching is the target repo's job, but its tooling is not in this repo, so the agent option
-      # is built here the one way that works. Unity SILENTLY ignores a malformed --debugger-agent:
-      # no warning, no log line, the port simply never opens, and the usual cause is PowerShell
-      # splitting the comma-separated list. Hence one single-quoted string passed as one argument.
+      # Launching is the target repo's job (tools\Launch-Target.ps1), but its tooling is not in this
+      # repo, so the two routes it uses are reproduced here. A Unity player does NOT read
+      # --debugger-agent from its command line: passing it there is silently ignored, the port never
+      # opens, and the player runs to completion as if no debugger had ever been asked for. The agent
+      # options reach the runtime either through the environment variables dnSpy's Unity mono patch
+      # reads, or through mono-debugger-agent in boot.config. Env first, boot.config as the fallback.
       - name: Launch the target
         shell: pwsh
         run: |
-          $player = Join-Path "${{ runner.temp }}/uch-target/player" 'UchDebugTarget.exe'
-          $playerLog = Join-Path "${{ runner.temp }}/uch-target/player" 'ci-player.log'
+          $root = "${{ runner.temp }}/uch-target/player"
+          $player = Join-Path $root 'UchDebugTarget.exe'
+          $bootConfig = Join-Path $root 'UchDebugTarget_Data/boot.config'
           $agent = '--debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:56000,suspend=y'
-          $process = Start-Process -FilePath $player -ArgumentList $agent,'-batchmode','-nographics','-logFile',$playerLog -PassThru
-          # Readiness is observed, never connected to. A connect-close without completing the DWP
-          # handshake wedges the agent, and a bare connect while the runtime is still suspended
-          # awaiting its first debugger kills the player outright. Both look like debugger bugs.
-          $deadline = (Get-Date).AddSeconds(90)
-          do {
-            Start-Sleep -Seconds 2
-            if ($process.HasExited) {
-              if (Test-Path $playerLog) { Get-Content $playerLog }
-              throw "Unity player exited before the debugger agent listened (exit code $($process.ExitCode))."
+          # Assigned, never splatted into an argument array: the parser cannot comma-split a variable
+          # assignment, which is what makes this route immune to the malformed-option trap.
+          $env:DNSPY_UNITY_DBG = $agent
+          $env:DNSPY_UNITY_DBG2 = $agent
+          $up = $null
+          foreach ($route in 'env','bootconfig') {
+            if ($route -eq 'bootconfig') {
+              $lines = @()
+              if (Test-Path $bootConfig) {
+                $lines = @(Get-Content $bootConfig | Where-Object { $_ -notlike 'mono-debugger-agent*' -and $_ -notlike 'wait-for-managed-debugger*' })
+              }
+              Set-Content -Path $bootConfig -Value ($lines + "mono-debugger-agent=$agent") -Encoding ascii
             }
-            $up = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
-              Where-Object { $_.Port -eq 56000 }
-          } until ($up -or (Get-Date) -gt $deadline)
-          if (-not $up) {
-            if (Test-Path $playerLog) { Get-Content $playerLog }
-            throw 'The Unity debugger agent never listened on 56000.'
+            # One log per route: -logFile truncates, so a shared name would leave only the last
+            # attempt's log for a failure that needs both.
+            $playerLog = Join-Path $root "ci-player-$route.log"
+            Write-Host "launching via $route"
+            $process = Start-Process -FilePath $player -ArgumentList '-batchmode','-nographics','-logFile',$playerLog -PassThru
+            # Readiness is observed, never connected to. A connect-close without completing the DWP
+            # handshake wedges the agent, and a bare connect while the runtime is still suspended
+            # awaiting its first debugger kills the player outright. Both look like debugger bugs.
+            $up = $null
+            $deadline = (Get-Date).AddSeconds(60)
+            do {
+              Start-Sleep -Seconds 2
+              if ($process.HasExited) { break }
+              $up = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
+                Where-Object { $_.Port -eq 56000 }
+            } until ($up -or (Get-Date) -gt $deadline)
+            if ($up) { Write-Host "agent listening on 127.0.0.1:56000 (route: $route)"; break }
+            if ($process.HasExited) { Write-Host "player exited with code $($process.ExitCode) via $route" }
+            else { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+            Write-Host "no agent on 56000 via $route"
           }
-          Write-Host 'agent listening on 127.0.0.1:56000'
+          if (-not $up) {
+            foreach ($log in Get-ChildItem $root -Filter 'ci-player-*.log' -ErrorAction SilentlyContinue) {
+              Write-Host "---- $($log.Name) ----"
+              Get-Content $log.FullName -Tail 40
+            }
+            # A stock (unpatched) release runtime has no agent to enable by any route, so this is the
+            # other thing to check when both routes come up empty.
+            throw 'The Unity debugger agent never listened on 56000 via the environment or boot.config. Confirm MonoBleedingEdge\EmbedRuntime\mono-2.0-bdwgc.dll in the published player is the patched runtime.'
+          }
 
       - name: Run the Mono/Unity live smoke
         shell: pwsh
@@ -250,6 +277,6 @@ jobs:
           name: mono-target-smoke-diagnostics-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/dgspy-mono-smoke-*
-            ${{ runner.temp }}/uch-target/player/ci-player.log
+            ${{ runner.temp }}/uch-target/player/ci-player-*.log
           if-no-files-found: warn
           retention-days: 7

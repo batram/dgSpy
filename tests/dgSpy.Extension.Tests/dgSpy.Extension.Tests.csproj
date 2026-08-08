@@ -15,6 +15,7 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\SessionStateCalculator.cs" Link="Debugger\SessionStateCalculator.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\FrameSnapshotGuard.cs" Link="Debugger\FrameSnapshotGuard.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\DetachCompletionGuard.cs" Link="Debugger\DetachCompletionGuard.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\LaunchSessionOwnership.cs" Link="Debugger\LaunchSessionOwnership.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcException.cs" Link="Rpc\RpcException.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcSecurity.cs" Link="Rpc\RpcSecurity.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\SymbolSearchQuery.cs" Link="Decompiler\SymbolSearchQuery.cs" />
@@ -29,6 +30,7 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\EventCursorGuard.cs" Link="Events\EventCursorGuard.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\StateRevisionKinds.cs" Link="Events\StateRevisionKinds.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\OutputBuffer.cs" Link="Events\OutputBuffer.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Events\ProgramOutputAssembler.cs" Link="Events\ProgramOutputAssembler.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\ToolWindows\McpActivityLog.cs" Link="ToolWindows\McpActivityLog.cs" />
     <ProjectReference Include="..\..\dgSpy.Protocol\dgSpy.Protocol.csproj" />
   </ItemGroup>

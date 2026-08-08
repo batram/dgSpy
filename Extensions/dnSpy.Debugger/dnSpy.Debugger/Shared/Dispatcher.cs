@@ -66,6 +66,21 @@ namespace dnSpy.Debugger.Shared {
 
 		public void BeginInvoke(Action callback) => BeginInvoke(callback, throwIfShutdownStarted: false);
 
+		/// <summary>Enqueues <paramref name="callback"/>, returning false when the dispatcher is shutting
+		/// down and the callback will therefore never run. The void overload cannot report that, so a
+		/// caller awaiting the callback's result waits for a completion that can never arrive.</summary>
+		public bool TryBeginInvoke(Action callback) {
+			if (callback is null)
+				throw new ArgumentNullException(nameof(callback));
+			lock (lockObj) {
+				if (hasShutdownStarted)
+					return false;
+				queue.Enqueue(callback);
+			}
+			queueEvent.Set();
+			return true;
+		}
+
 		void BeginInvoke(Action callback, bool throwIfShutdownStarted) {
 			if (callback is null)
 				throw new ArgumentNullException(nameof(callback));

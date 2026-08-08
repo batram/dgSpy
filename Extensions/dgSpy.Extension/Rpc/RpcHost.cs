@@ -35,7 +35,8 @@ namespace dgSpy.Extension {
 	sealed partial class RpcHost : IDisposable {
 		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DebuggerSettings debuggerSettings; readonly DbgCodeBreakpointsService breakpoints; readonly DbgModuleBreakpointsService moduleBreakpoints; readonly DbgObjectIdService objectIds; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions; readonly DbgMetadataService metadataService; readonly IDsDocumentService documentService; readonly Lazy<DbgModuleIdProvider>[] moduleIdProviders; readonly IDecompilerService decompilers;
 		readonly EvaluationQueue evaluations=new EvaluationQueue(); readonly SemaphoreSlim targetControl=new SemaphoreSlim(1,1);
-		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer(); readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>();
+		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer();
+		readonly ProgramOutputAssembler programOutput; readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>(); readonly Dictionary<int,long> engineHitCounts=new Dictionary<int,long>();
 		long lifecycleVersion,executionVersion,breakpointsVersion; string? stopId; string? connectionState; DateTime lastGatewayHeartbeatUtc;
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		readonly RpcSecuritySettings rpcSecurity=RpcSecuritySettings.Load();
@@ -58,7 +59,15 @@ namespace dgSpy.Extension {
 		}
 		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDsDocumentService documentService, IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers) {
 			this.programs=programs; this.manager=manager; this.debuggerSettings=debuggerSettings; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.documentService=documentService; this.moduleIdProviders=moduleIdProviders.ToArray(); this.decompilers=decompilers;
-			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e); manager.IsRunningChanged += (_,__) => { NotifyConnectionStateChanged(); if (IsTargetRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => { NotifyConnectionStateChanged(); Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded); };
+			programOutput=new ProgramOutputAssembler((origin,line) => output.Add(origin.Category,line,origin.ProcessId,origin.RuntimeId));
+			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e);
+			// MessageBoundBreakpoint fires on every engine hit, BEFORE dnSpy's condition/hit-count/filter
+			// pipeline decides whether to pause. Counting here is what makes a false-but-working condition
+			// observable: dnSpy's own hit-count service only increments after the condition passes.
+			// Never let counting break the host: at detach the bound breakpoint being reported is already
+			// being torn down, and a throw here runs unhandled on the debugger thread. A missed tick
+			// degrades a diagnostic counter; an exception would take dnSpy down.
+			manager.MessageBoundBreakpoint += (_,e) => { try { var id=e.BoundBreakpoint.Breakpoint.Id; lock(sync) { engineHitCounts.TryGetValue(id,out var hits); engineHitCounts[id]=hits+1; } } catch (Exception) { } }; manager.IsRunningChanged += (_,__) => { NotifyConnectionStateChanged(); if (IsTargetRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => { NotifyConnectionStateChanged(); Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded); };
 			breakpoints.BreakpointsChanged += (_,__) => IncrementBreakpointsVersion(); breakpoints.BreakpointsModified += (_,__) => IncrementBreakpointsVersion();
 			moduleBreakpoints.BreakpointsChanged += (_,__) => IncrementBreakpointsVersion(); moduleBreakpoints.BreakpointsModified += (_,__) => IncrementBreakpointsVersion();
 			exceptions.ExceptionsChanged += (_,__) => IncrementBreakpointsVersion(); exceptions.ExceptionSettingsModified += (_,__) => IncrementBreakpointsVersion();
@@ -69,6 +78,10 @@ namespace dgSpy.Extension {
 			// RPC, but it does leave a dialog nobody headless will dismiss.
 			manager.MessageUserMessage += (_,e) => { lock(sync) lastUserMessage=e.Message; };
 			manager.DbgManagerMessage += (_,e) => output.Add(e.MessageKind,e.Message);
+			// The debuggee's own stdout/stderr. dnSpy raises these only when the engine was asked to redirect
+			// the streams, which launch now does by default; an attached target's console was never ours to
+			// capture, so nothing arrives for those.
+			manager.MessageAsyncProgramMessage += (_,e) => { try { var category=e.Source==AsyncProgramMessageSource.StandardError ? OutputCategories.StandardError : OutputCategories.StandardOutput; programOutput.Append(new ProgramOutputOrigin(category,e.Runtime.Process.Id,e.Runtime.Guid.ToString("D")),e.Message); } catch (Exception) { } };
 			NotifyConnectionStateChanged();
 		}
 		public string ConnectionState => GetConnectionState();
@@ -147,11 +160,72 @@ namespace dgSpy.Extension {
 		async Task<RpcResponse> DispatchAsync(RpcRequest req) {
 			// Fully qualified: a `using System.Diagnostics` here would collide with dnSpy.Contracts.Debugger.
 			var started=System.Diagnostics.Stopwatch.StartNew();
+			long executionBefore; lock(sync) executionBefore=executionVersion;
 			var response=await DispatchCoreAsync(req).ConfigureAwait(false);
+			await SettleExecutionChangeAsync(req,response,executionBefore).ConfigureAwait(false);
+			response=StampVersions(req,response);
 			started.Stop();
 			try { McpActivityLog.Instance.Record(req,response,started.Elapsed); }
 			// The activity window is a diagnostic. It must never be able to fail an RPC call.
 			catch (Exception) { }
+			return response;
+		}
+		// Every operation that takes a version guard echoes the full current vector back, so the caller
+		// never needs a follow-up get_session_state just to learn the counter its next call must carry.
+		// Read-only operations stay unstamped because nothing they enable depends on a counter, with one
+		// deliberate exception: the waits. A stop is what moves execution_version and stop_id, and
+		// wait_for_stop is where a caller learns the stop happened, so leaving it unstamped forced a
+		// get_session_state between every wait and the call that acts on what it found.
+		//
+		// attach, attach_endpoint and launch carry no guard of their own — there is no session yet to
+		// guard against — but they are stamped anyway, because they are precisely where a caller has no
+		// counters at all. Every session opens with a mutation (a breakpoint, a resume) whose guard the
+		// caller could otherwise only get from an interposed get_session_state, which made the read
+		// mandatory on the one call that had just created the state it would report.
+		static readonly HashSet<string> versionStampedOperations=new HashSet<string>(StringComparer.Ordinal) {
+			"attach","attach_endpoint","launch",
+			"wait_for_stop","wait_for_event",
+			"detach","terminate","restart",
+			"pause","continue","step_into","step_over","step_out","set_value","invoke_method","create_object","write_memory","set_instruction_pointer","create_object_id","release_object_id","write_value_export",
+			"set_il_breakpoint","set_breakpoint","remove_breakpoint","clear_breakpoints","update_breakpoint","set_exception_breakpoint","set_module_breakpoint","update_module_breakpoint","remove_module_breakpoint","import_breakpoints","set_exception_policy","remove_exception_policy","restore_exception_defaults",
+		};
+		// The operations whose whole purpose is to move execution. Their state change is not applied by
+		// the call itself: executionVersion moves when the engine's Continued or Stopped event is
+		// recorded on the debugger thread, which happens after the RPC has already composed its answer.
+		// Stamping without waiting therefore echoed the value from *before* the resume, and the very
+		// next guarded call died with "expected 6, current 7" quoting a number this response had just
+		// handed the caller. That is worse than returning nothing: it looks authoritative and is wrong.
+		static readonly HashSet<string> executionChangingOperations=new HashSet<string>(StringComparer.Ordinal) {
+			"pause","continue","step_into","step_over","step_out",
+		};
+		/// <summary>Wait, boundedly, for the execution change this operation asked for to be recorded, so
+		/// the vector stamped onto the response is the one after it applied. Best effort by design: a step
+		/// that never lands, or a resume the engine declines, must not turn into a failed call, so a
+		/// timeout stamps what is known and leaves the caller no worse off than before the echo existed.</summary>
+		async Task SettleExecutionChangeAsync(RpcRequest req,RpcResponse response,long executionBefore) {
+			if (response.Error is not null || !executionChangingOperations.Contains(req.Operation)) return;
+			using var bound=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
+			bound.CancelAfter(TimeSpan.FromMilliseconds(750));
+			while (true) {
+				// Read the cursor before re-testing the version, never after: an event recorded between
+				// the two reads would otherwise be waited past and the wait would hang out its bound.
+				var observed=events.LastEventId;
+				lock(sync) { if (executionVersion!=executionBefore) return; }
+				try { await events.WaitForChangeAsync(observed,bound.Token).ConfigureAwait(false); }
+				catch (OperationCanceledException) { return; }
+			}
+		}
+		RpcResponse StampVersions(RpcRequest req,RpcResponse response) {
+			if (response.Error is not null || !versionStampedOperations.Contains(req.Operation)) return response;
+			// restore_exception_defaults returns a bare bool; everything else in the set is an object.
+			if (ProtocolJson.ToNode(response.Result) is not JsonObject node) return response;
+			long lifecycle,execution,breakpointsRevision; string? stop;
+			lock(sync) { lifecycle=lifecycleVersion; execution=executionVersion; breakpointsRevision=breakpointsVersion; stop=stopId; }
+			node["versions"]=new JsonObject {
+				["lifecycle_version"]=lifecycle,["execution_version"]=execution,["breakpoints_version"]=breakpointsRevision,
+				["stop_id"]=stop,["last_event_id"]=events.LastEventId,
+			};
+			response.Result=node;
 			return response;
 		}
 		async Task<RpcResponse> DispatchCoreAsync(RpcRequest req) { try {
@@ -312,9 +386,14 @@ namespace dgSpy.Extension {
 			var adding=sessionId is not null && await OnDebuggerAsync(()=>manager.IsDebugging).ConfigureAwait(false);
 			var oldProcessIds=adding ? await OnDebuggerAsync(()=>manager.Processes.Select(p=>p.Id).ToArray(),cancellationToken).ConfigureAwait(false) : Array.Empty<int>();
 			var rejected=await OnDebuggerAsync(()=>{
-				lock(sync) { if(!adding) { events.Reset(); output.Reset(); stateVersion=0; lifecycleVersion=0; executionVersion=0; stopId=null; attaching=true; faulted=false; faultMessage=null; terminalExitCode=null; terminalReason=null; sessionKind=kind; lifecycleAction=null; processLifecycleActions.Clear(); } lastUserMessage=null; }
+				if(!adding) programOutput.Reset();
+				lock(sync) { if(!adding) { events.Reset(); output.Reset(); stateVersion=0; lifecycleVersion=0; executionVersion=0; stopId=null; attaching=true; faulted=false; faultMessage=null; terminalExitCode=null; terminalReason=null; sessionKind=kind; lifecycleAction=null; processLifecycleActions.Clear(); engineHitCounts.Clear(); } lastUserMessage=null; }
 				var failure=start();
-				if (failure is null) { if(!adding) sessionId=Guid.NewGuid().ToString("N"); stateVersion++; }
+				// Record what was started before waiting for it, not after. The wait is where a client
+				// cancellation lands, and a session whose program_id only appears on the success path is
+				// invisible to list_sessions and to launch's own adoption check exactly when a caller most
+				// needs to find it.
+				if (failure is null) { if(!adding) sessionId=Guid.NewGuid().ToString("N"); lock(sync) attachedProgramId=adding ? (attachedProgramId+";"+programId) : programId; stateVersion++; }
 				else if(!adding) lock(sync) attaching=false;
 				return failure;
 			}).ConfigureAwait(false);
@@ -335,8 +414,14 @@ namespace dgSpy.Extension {
 				lock(sync) { faulted=true; attaching=false; faultMessage=lastUserMessage ?? "The debug engine did not connect before the attach deadline."; }
 				Record(EventKinds.AttachFailed);
 			}
-			else if(!connected) throw new RpcException("attach_failed",lastUserMessage ?? "The additional debug target did not connect before the attach deadline.");
-			else lock(sync) { attachedProgramId=adding ? (attachedProgramId+";"+programId) : programId; faultMessage=null; }
+			else if(!connected) {
+				// Take back only the entry this call added. Two entries can name the same image — a second
+				// copy started with adopt_existing=false, or the same path under a different engine — and
+				// removing every match would forget the target that is still running.
+				lock(sync) { var owned=(attachedProgramId?.Split(';') ?? Array.Empty<string>()).ToList(); owned.Remove(programId); attachedProgramId=string.Join(";",owned); }
+				throw new RpcException("attach_failed",lastUserMessage ?? "The additional debug target did not connect before the attach deadline.");
+			}
+			else lock(sync) faultMessage=null;
 			NotifyConnectionStateChanged();
 			return await OnDebuggerAsync(State,cancellationToken).ConfigureAwait(false);
 		}
@@ -466,6 +551,9 @@ namespace dgSpy.Extension {
 			await Task.Delay(250,cancellationToken).ConfigureAwait(false);
 			await OnDebuggerAsync(()=>true,cancellationToken).ConfigureAwait(false);
 		}
+		/// <summary>Engine hits for a breakpoint this session, or null with no session — zero would wrongly
+		/// read as "reached zero times" when nothing was measuring.</summary>
+		long? EngineHits(int breakpointId) { lock(sync) { if (sessionId is null) return null; engineHitCounts.TryGetValue(breakpointId,out var hits); return hits; } }
 		BreakpointInfo Describe(DbgCodeBreakpoint bp,uint? requested=null) {
 			var message=bp.BoundBreakpointsMessage;
 			var severity=message.Severity==DbgBoundCodeBreakpointSeverity.Error ? "error" : message.Severity==DbgBoundCodeBreakpointSeverity.Warning ? "warning" : "none";
@@ -482,6 +570,7 @@ namespace dgSpy.Extension {
 				Bound=bp.BoundBreakpoints.Length!=0 && message.Severity==DbgBoundCodeBreakpointSeverity.None,
 				BoundCount=bp.BoundBreakpoints.Length,Severity=severity,Message=message.Message.Length==0 ? null : message.Message,
 				SessionId=sessionId,StateVersion=stateVersion,
+				EngineHitCount=EngineHits(bp.Id),
 				Condition=bp.Condition?.Condition,
 				ConditionKind=bp.Condition is null ? null : bp.Condition.Value.Kind==DbgCodeBreakpointConditionKind.WhenChanged ? BreakpointConditionKinds.WhenChanged : BreakpointConditionKinds.IsTrue,
 				HitCount=bp.HitCount?.Count,
@@ -686,7 +775,33 @@ namespace dgSpy.Extension {
 		// stalls event delivery for every session. See docs/DGSPY_BASELINE.md.
 		// The token abandons the *wait*, not the queued work; dnSpy gives us no way to cancel a
 		// dispatcher callback, so the callback still runs and its result is dropped.
-		public void Dispose() { shutdown.Cancel(); tcpListener?.Stop(); connectionStateTimer?.Dispose(); evaluations.Dispose(); targetControl.Dispose(); shutdown.Dispose(); }
+		/// <summary>Detaches every live target before this process goes away. A host holding an ICorDebug
+		/// attachment takes its debuggee down with it when it exits -- confirmed by killing a host and
+		/// watching the attached process die with it, not inferred. That makes closing dnSpy, for any
+		/// reason including deploying a newer payload, capable of destroying whatever the user was
+		/// debugging, with nothing anywhere saying why the target vanished.
+		///
+		/// It cannot save a target from a host that is killed outright; nothing running inside the host
+		/// can. It does cover every orderly exit, which is the one an agent or a redeploy causes.
+		/// Bounded, and every failure is swallowed: an exit path must always reach the exit.</summary>
+		public void DetachTargetsBeforeExit(TimeSpan timeout) {
+			try {
+				if (!manager.IsDebugging) return;
+				// Not disposed on purpose: the callback may still be queued when the wait gives up, and
+				// setting a disposed event would throw on the debugger thread during shutdown.
+				var completed=new ManualResetEventSlim(false);
+				Action work=()=>{ try { if (manager.IsDebugging && manager.CanDetachWithoutTerminating) manager.DetachAll(); } catch { } finally { completed.Set(); } };
+				if (manager.Dispatcher is IDbgDispatcherDiagnostics diagnostics) { if (!diagnostics.TryBeginInvoke(work)) return; }
+				else manager.Dispatcher.BeginInvoke(work);
+				if (!completed.Wait(timeout)) return;
+				// DetachAll only asks; the engine removes the processes asynchronously, and exiting before
+				// it has done so is the same as never detaching at all.
+				var deadline=DateTime.UtcNow+timeout;
+				while (manager.IsDebugging && DateTime.UtcNow<deadline) Thread.Sleep(50);
+			}
+			catch { }
+		}
+		public void Dispose() { shutdown.Cancel(); tcpListener?.Stop(); connectionStateTimer?.Dispose(); programOutput.Dispose(); evaluations.Dispose(); targetControl.Dispose(); shutdown.Dispose(); }
 	}
 
 	/// <summary>

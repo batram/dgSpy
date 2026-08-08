@@ -110,6 +110,45 @@ public sealed class ToolCatalogTests {
 		Assert.Contains("Default 0",description,StringComparison.Ordinal);
 	}
 
+	/// <summary>With ~97 tools and a per-schema loading cost, an agent does not browse the catalog — it
+	/// reaches for the obvious tool and finds everything else through that one's description. A
+	/// capability nothing points at is therefore invisible, and invisible is worse than absent: an agent
+	/// that could not find conditional breakpoints hand-computed the loop iteration instead and reported
+	/// an answer, believed verified, that was wrong by one iteration. These assertions are on the
+	/// pointers, not the prose, so a rewrite may reword them but not drop them.</summary>
+	[Theory]
+	// The entry point for "stop at one specific iteration". Both breakpoint-setting tools must name the
+	// tool that attaches the condition; neither takes one itself.
+	[InlineData("set_breakpoint","update_breakpoint")]
+	[InlineData("set_il_breakpoint","update_breakpoint")]
+	// A step loop that re-reads state each time is what the composite already does in one call.
+	[InlineData("step_into","step_and_inspect")]
+	[InlineData("step_over","step_and_inspect")]
+	[InlineData("step_out","step_and_inspect")]
+	// Resume-and-wait, composed.
+	[InlineData("continue","run_to_method")]
+	// The blocking form of the same stream.
+	[InlineData("get_output","wait_for_output")]
+	// Confirming a removal needs the name-scoped read; without it the only view is thousands of
+	// framework defaults, and a caller cannot prove its own cleanup happened.
+	[InlineData("remove_exception_policy","list_exception_policies")]
+	// Clearing every breakpoint takes the human's hand-set ones with it.
+	[InlineData("clear_breakpoints","export_breakpoints")]
+	public void Tools_an_agent_reaches_for_first_name_the_capability_reached_through_them(string tool,string referenced) =>
+		Assert.Contains(referenced,Description(ToolCatalog.All.Single(t=>Name(t)==tool)),StringComparison.Ordinal);
+
+	/// <summary>The two exception list tools report the same entries, so they must narrow a lookup the
+	/// same way. They used to disagree, which is half of why this pair read as two separate features
+	/// with two vocabularies rather than one thing with two views.</summary>
+	[Fact]
+	public void Both_exception_list_tools_can_be_scoped_to_a_single_entry() {
+		foreach(var name in new[]{"list_exception_policies","list_exception_breakpoints"}) {
+			var properties=InputProperties(ToolCatalog.All.Single(t=>Name(t)==name));
+			Assert.True(properties.ContainsKey("name"),$"{name} cannot be scoped to one entry.");
+			Assert.True(properties.ContainsKey("category"),$"{name} cannot be scoped to one category.");
+		}
+	}
+
 	[Fact]
 	public void Multi_target_lifecycle_tools_expose_process_selectors() {
 		foreach(var name in new[]{"pause","continue","detach","terminate"}) {

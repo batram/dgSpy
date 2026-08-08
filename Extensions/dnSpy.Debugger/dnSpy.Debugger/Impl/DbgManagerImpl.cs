@@ -1224,10 +1224,24 @@ namespace dnSpy.Debugger.Impl {
 				objs = objsToClose.ToArray();
 				objsToClose.Clear();
 			}
+			// Closing is cleanup, and one object's cleanup failing says nothing about the rest. Letting it
+			// propagate abandoned every object after it in the batch -- their native buffers, engine
+			// handles and dnSpy state stayed alive for the lifetime of the process -- and recorded a
+			// dispatcher fault for what is a bug in a single object's Close. Each failure is reported on
+			// its own and the batch still drains.
+			Exception? first = null;
 			foreach (var obj in objs) {
-				if (obj is not null)
+				if (obj is null)
+					continue;
+				try {
 					obj.Close(Dispatcher);
+				}
+				catch (Exception ex) {
+					first ??= ex;
+				}
 			}
+			if (first is not null)
+				throw new InvalidOperationException($"One or more debugger objects failed to close: {first.Message}", first);
 		}
 
 		public override event EventHandler<DbgManagerMessageEventArgs>? DbgManagerMessage;

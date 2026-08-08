@@ -32,9 +32,14 @@ function Invoke-Checked {
 	if ($LASTEXITCODE) { throw "$Label failed with exit code $LASTEXITCODE" }
 }
 
+# Processes running from an agent worktree under .claude\worktrees hold that worktree's own build
+# output, not this tree's; matching them here refused gate runs for a concurrent session that could
+# not actually lock anything this gate builds.
+$worktrees = Join-Path $repoRoot '.claude\worktrees'
 $locking = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
 	$_.Name -in @('dotnet.exe','MSBuild.exe','dnSpy.exe','testhost.exe') -and
-	($_.ExecutablePath -like "$repoRoot*" -or $_.CommandLine -like "*$repoRoot*")
+	($_.ExecutablePath -like "$repoRoot*" -or $_.CommandLine -like "*$repoRoot*") -and
+	-not ($_.ExecutablePath -like "$worktrees*" -or $_.CommandLine -like "*$worktrees*")
 })
 if ($locking.Count) {
 	$details = ($locking | ForEach-Object { "$($_.Name):$($_.ProcessId)" }) -join ', '
@@ -79,6 +84,7 @@ try {
 		}
 	}
 	Invoke-Checked 'dgSpy build and deploy' { .\build-dgspy.ps1 -TargetFramework $TargetFramework }
+	Invoke-Checked 'PowerShell host-launcher tests' { .\tests\TestSupport\Start-DgSpyHost.Tests.ps1 }
 
 	if ($UpdateSnapshots) {
 		$env:DGSPY_UPDATE_SNAPSHOTS = '1'
@@ -132,7 +138,13 @@ try {
 	}
 	if ($Stage -in @('Unity','Full')) {
 		Write-Host '== start isolated Unity debugger host ==' -ForegroundColor Cyan
-		$unityHostId = & .\tests\TestSupport\Start-DgSpyHost.ps1 -RpcPort 7351 -TargetFramework $TargetFramework
+		# A dedicated port like the MonoTarget smokes use (7361/7363/7365), not 7351: an installed
+		# dgSpy holding 7351 makes this stage silently test the WRONG host - the second dnSpy cannot
+		# bind the port, but the readiness probe is a bare TCP connect and reaches the installed
+		# host instead. Start-DgSpyHost exports DGSPY_RPC_PORT, and Invoke-DgSpyRpc honors it, so
+		# the smoke follows automatically.
+		$unityRpcPort = if ($env:DGSPY_RPC_PORT) { [int]$env:DGSPY_RPC_PORT } else { 7367 }
+		$unityHostId = & .\tests\TestSupport\Start-DgSpyHost.ps1 -RpcPort $unityRpcPort -TargetFramework $TargetFramework
 		try {
 			Invoke-Checked 'Unity read-only modernization smoke' { .\tests\run-uch-modernization-smoke.ps1 }
 		}

@@ -4,7 +4,9 @@ function Invoke-DgSpyRpc {
 	param(
 		[Parameter(Mandatory=$true)][string]$OperationName,
 		[hashtable]$OperationArguments = @{},
-		[int]$RpcPort = 7351,
+		# Honors the same environment variable the extension host reads, so a test batch that starts
+		# its own host on a free port does not have to fight an installed dgSpy already holding 7351.
+		[int]$RpcPort = $(if ($env:DGSPY_RPC_PORT) { [int]$env:DGSPY_RPC_PORT } else { 7351 }),
 		[int]$DeadlineSeconds = 15,
 		[string]$RpcToken,
 		[string]$HostId

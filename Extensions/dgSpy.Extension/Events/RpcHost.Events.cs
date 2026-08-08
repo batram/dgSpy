@@ -14,14 +14,9 @@ namespace dgSpy.Extension {
 		Task<WaitResult> WaitForStopAsync(RpcRequest req,CancellationToken cancellationToken) => WaitForEventsAsync(req,new[]{EventKinds.Stopped},cancellationToken);
 		Task<WaitResult> WaitForEventAsync(RpcRequest req,CancellationToken cancellationToken) => WaitForEventsAsync(req,ReadKinds(req),cancellationToken);
 
-		/// <summary>Not racy: a cursor ahead of the stream can only become reachable once more events
-		/// arrive, and the caller cannot have obtained it from any of them. See EventCursorGuard.</summary>
-		void CheckEventCursor(long after) => EventCursorGuard.EnsureReachable(after,events.LastEventId);
-
 		async Task<WaitResult> WaitForEventsAsync(RpcRequest req,IReadOnlyCollection<string>? kinds,CancellationToken cancellationToken) {
 			CheckSession(req);
-			long after=(long?)req.Arguments["after_event_id"] ?? 0;
-			CheckEventCursor(after);
+			long after=ReadCursor(req);
 			int timeout=Math.Min(10000,Math.Max(1,(int?)req.Arguments["timeout_ms"] ?? 5000));
 			using var wait=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 			wait.CancelAfter(timeout);
@@ -40,9 +35,18 @@ namespace dgSpy.Extension {
 
 		EventResult GetEvents(RpcRequest req) {
 			CheckSession(req);
+			return EventResult(events.Snapshot(ReadCursor(req),ReadKinds(req)));
+		}
+
+		/// <summary>Reads <c>after_event_id</c>, rejecting a cursor beyond the newest event. Such a cursor
+		/// can never be satisfied — the next events take the ids it would skip — so waiting on it is a
+		/// silent forever-timeout. The known way to produce one is feeding a version counter (state_version
+		/// or a `versions` field) where an event cursor belongs; say so instead of timing out. The decision
+		/// itself lives in EventCursorGuard, where the boundary has an executable check.</summary>
+		long ReadCursor(RpcRequest req) {
 			long after=(long?)req.Arguments["after_event_id"] ?? 0;
-			CheckEventCursor(after);
-			return EventResult(events.Snapshot(after,ReadKinds(req)));
+			EventCursorGuard.EnsureReachable(after,events.LastEventId);
+			return after;
 		}
 
 		DebugEvent GetStopReason(RpcRequest req) {
@@ -228,8 +232,6 @@ namespace dgSpy.Extension {
 		void CheckScopedVersion(RpcRequest req,string name,long current,string scope) {
 			var expected=(long?)req.Arguments[name];
 			if(expected.HasValue && expected.Value!=current) throw new RpcException("stale_"+scope,$"Expected {scope} version {expected.Value}, current {scope} version is {current}.");
-			var legacy=(long?)req.Arguments["expected_state_version"];
-			if(!expected.HasValue && legacy.HasValue && legacy.Value!=stateVersion) throw new RpcException("stale_state",$"Expected state {legacy.Value}, current state is {stateVersion}.");
 		}
 		void CheckOperationVersion(RpcRequest req) {
 			if(req.Arguments["session_id"] is not null) CheckSession(req);

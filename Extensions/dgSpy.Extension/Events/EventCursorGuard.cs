@@ -18,8 +18,8 @@ namespace dgSpy.Extension {
 		internal static void EnsureReachable(long after,long lastEventId) {
 			if (!IsAheadOfStream(after,lastEventId)) return;
 			throw new RpcException("cursor_ahead_of_stream",
-				$"after_event_id {after} is ahead of this session's last event id {lastEventId}, so no event can ever satisfy it. "+
-				"Cursors come from a response: pass a previous response's last_event_id, or set_il_breakpoint's cursor_event_id. "+
+				$"after_event_id {after} is beyond the newest event {lastEventId} and can never be satisfied: the next events take the very ids it would skip. "+
+				"Event cursors come from cursor_event_id, event_id, or last_event_id — a versions counter or state_version is not a cursor. "+
 				$"Resume from {lastEventId}, or from 0 to replay the retained session. A cursor from another session, or from before a restart, is never valid here.");
 		}
 	}

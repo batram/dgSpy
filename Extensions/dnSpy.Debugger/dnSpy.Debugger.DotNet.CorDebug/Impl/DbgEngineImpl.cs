@@ -780,7 +780,11 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 					dbgOptions.DebugOptions.NGENPolicy = CorDebugNGENPolicy.DISABLE_LOCAL_NIC;
 
 				dbgOptions.DebugOptions.DebugOptionsProvider = new DebugOptionsProviderImpl(debuggerSettings);
-				if (debuggerSettings.RedirectGuiConsoleOutput && PortableExecutableFileHelpers.IsGuiApp(options.Filename))
+				// An explicit request wins over the user's GUI-only setting. Without it a console program's
+				// output is invisible to a programmatic caller: the new console owns the std handles.
+				if (options.RedirectConsoleOutput is bool requestedRedirect)
+					dbgOptions.RedirectConsoleOutput = requestedRedirect;
+				else if (debuggerSettings.RedirectGuiConsoleOutput && PortableExecutableFileHelpers.IsGuiApp(options.Filename))
 					dbgOptions.RedirectConsoleOutput = true;
 
 				redirectConsoleOutput = dbgOptions.RedirectConsoleOutput;

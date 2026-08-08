@@ -72,10 +72,19 @@
     },
     {
       "name": "launch_local_host",
-      "description": "SIDE EFFECTING. Install the bundled local host when needed, launch dnSpy, and wait briefly for registration.",
+      "description": "SIDE EFFECTING. Ensure exactly one managed local host is running: adopt one that is already running the installed payload, install and launch when none is, and never start a second process beside a running one. Fails with host_already_running when a different build owns the endpoint; replace=true then detaches that host\u0027s targets, closes it, and launches the installed payload, which ends its debugging sessions.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "replace": {
+            "type": "boolean",
+            "description": "Close a running host that is not the installed payload and launch that payload instead. Detaches its targets first; any debugging session it holds ends."
+          },
+          "allow_terminate": {
+            "type": "boolean",
+            "description": "With replace, proceed even when a target cannot be detached without killing it. Destroys that process."
+          }
+        },
         "required": []
       },
       "annotations": {
@@ -589,7 +598,7 @@
     },
     {
       "name": "launch",
-      "description": "Launch a target through dnSpy\u0027s debugger engine. Unlike attach, dnSpy owns the process, so terminate and restart have deterministic semantics.",
+      "description": "Launch a target through dnSpy\u0027s debugger engine. Unlike attach, dnSpy owns the process, so terminate and restart have deterministic semantics, and the target\u0027s stdout/stderr can be captured \u2014 get_output carries them. This call creates the process and then waits for the engine, so its side effect outlives a cancelled call: if it is interrupted (\u0022Tool execution was interrupted\u0022), assume the process EXISTS and do not treat that as failure. Retrying is safe \u2014 a repeat launch of the same image adopts the live session it already started instead of creating a second debuggee, and returns that session \u2014 but list_sessions shows it too, under a program_id of \u0022launch:\u003Cengine\u003E:\u003Cpath\u003E\u0022.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -622,6 +631,14 @@
               "entry_point"
             ]
           },
+          "redirect_output": {
+            "type": "boolean",
+            "description": "Default true: capture the target\u0027s stdout/stderr and publish them to get_output and wait_for_output. False gives the target its own console, whose output nothing can read back."
+          },
+          "adopt_existing": {
+            "type": "boolean",
+            "description": "Default true: when a live launch session already owns this image, return it instead of starting a second process. This is what makes an interrupted launch safe to retry. Pass false only to run a second copy of the same program deliberately."
+          },
           "environment": {
             "type": "object",
             "additionalProperties": {
@@ -646,7 +663,7 @@
     },
     {
       "name": "get_session_state",
-      "description": "Get current debugger session state.",
+      "description": "Get current debugger session state. You rarely need this before a mutation: every attach, launch, wait and guarded call returns the same counters in a \u0060versions\u0060 object (lifecycle_version, execution_version, breakpoints_version, stop_id, last_event_id), read after that call applied. Take the next call\u0027s \u0060expected_*\u0060 guards from there and call this only to resynchronize after an error or after something outside this client moved the target. Guards and cursors are different kinds of number \u2014 guards are versions, cursors are event ids, and one is never accepted for the other. \u0060versions.last_event_id\u0060 is the newest event AT RESPONSE TIME, so it is a correct cursor for reading history with get_events, and the WRONG one to wait from for an event the same call is about to cause: a breakpoint on a hot path can be hit before a resume even returns, and waiting from a cursor that already includes that stop waits for the next one. To wait for a stop, use a cursor captured BEFORE the resume \u2014 set_breakpoint and set_il_breakpoint return exactly that as \u0060cursor_event_id\u0060.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -782,10 +799,6 @@
           "expected_lifecycle_version": {
             "type": "integer",
             "description": "Required exact lifecycle_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -818,10 +831,6 @@
           "expected_lifecycle_version": {
             "type": "integer",
             "description": "Required exact lifecycle_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -851,10 +860,6 @@
           "expected_lifecycle_version": {
             "type": "integer",
             "description": "Required exact lifecycle_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -884,9 +889,6 @@
           "process_id": {
             "type": "integer"
           },
-          "expected_state_version": {
-            "type": "integer"
-          },
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
@@ -905,7 +907,7 @@
     },
     {
       "name": "continue",
-      "description": "Continue one process. process_id is optional only when exactly one process is active.",
+      "description": "Continue one process. process_id is optional only when exactly one process is active. It does not wait for the next stop. Capture the wait cursor BEFORE calling this \u2014 set_breakpoint returns one as cursor_event_id \u2014 because a breakpoint on a hot path can be hit before this call returns, and \u0060versions.last_event_id\u0060 in the response would then already include that stop, so waiting from it waits for the one after. To resume as far as a known place instead, run_to_method and run_to_location do the breakpoint/continue/wait/cleanup round in one call.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -917,9 +919,6 @@
             "type": "string"
           },
           "process_id": {
-            "type": "integer"
-          },
-          "expected_state_version": {
             "type": "integer"
           },
           "expected_execution_version": {
@@ -940,7 +939,7 @@
     },
     {
       "name": "set_il_breakpoint",
-      "description": "Set an exact module/token/IL-offset breakpoint and report whether the engine actually bound it. Check \u0060bound\u0060: false with severity \u0022error\u0022 will never be hit, false with no error is pending a module load. On Mono/Unity a breakpoint can only sit on a sequence point; many offsets qualify but a frame\u0027s own il_offset often does not, and a refused one is retried at method entry (offset 0) unless snap_to_sequence_point is false \u2014 when that happens \u0060snapped\u0060 is true and it stops earlier than requested. Pass the returned \u0060cursor_event_id\u0060 to wait_for_stop as after_event_id: a cursor read after this call has already missed the first hit on a hot method.",
+      "description": "Set an exact module/token/IL-offset breakpoint and report whether the engine actually bound it. Check \u0060bound\u0060: false with severity \u0022error\u0022 will never be hit, false with no error is pending a module load. On Mono/Unity a breakpoint can only sit on a sequence point; many offsets qualify but a frame\u0027s own il_offset often does not, and a refused one is retried at method entry (offset 0) unless snap_to_sequence_point is false \u2014 when that happens \u0060snapped\u0060 is true and it stops earlier than requested. Pass the returned \u0060cursor_event_id\u0060 to wait_for_stop as after_event_id: a cursor read after this call has already missed the first hit on a hot method. The breakpoint starts unconditional \u2014 attach a condition, hit count or trace message by passing the returned breakpoint_id to update_breakpoint. Use get_il to see which offsets are sequence points before choosing one.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -968,10 +967,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -990,7 +985,7 @@
     },
     {
       "name": "list_breakpoints",
-      "description": "List all dnSpy breakpoints with their binding state. Breakpoints are global and outlive a session.",
+      "description": "List all dnSpy breakpoints with their binding state. Breakpoints are global and outlive a session. engine_hit_count reports times the engine reached each breakpoint this session, counted before conditions run \u2014 a false-but-working condition still ticks it, distinguishing \u0027condition not yet true\u0027 from \u0027never reached\u0027.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1027,10 +1022,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -1047,7 +1038,7 @@
     },
     {
       "name": "clear_breakpoints",
-      "description": "Remove every dnSpy breakpoint, including any set by hand in the dnSpy UI. Breakpoints outlive a detach and rebind on the next attach, so clear them before reattaching if a fresh session should not stop on old ones.",
+      "description": "Remove every dnSpy breakpoint, including any set by hand in the dnSpy UI. Breakpoints outlive a detach and rebind on the next attach, so clear them before reattaching if a fresh session should not stop on old ones. To drop only your own, remove_breakpoint takes one id and leaves the rest alone; to be able to put a human\u0027s back, export_breakpoints first and import_breakpoints after.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1062,10 +1053,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -1081,7 +1068,7 @@
     },
     {
       "name": "wait_for_stop",
-      "description": "Wait without polling for stops after an event cursor. THE CURSOR IS YOURS TO TRACK: reads are non-destructive, so the server keeps no per-caller position and nothing is consumed by reading it. Every response carries last_event_id \u2014 pass it as the next call\u0027s after_event_id. Omitting after_event_id means \u0022from the start of the session\u0022, NOT \u0022only what is new\u0022: a bare call replays every retained stop, so a poll loop that never passes it re-processes stops it already handled and will conclude the target is hitting breakpoints it hit minutes ago. The default is deliberately the replaying one, because the opposite default would silently drop a stop that landed between two calls, and a duplicate is recoverable where a lost stop is not. Seed the first cursor from set_breakpoint\u0027s cursor_event_id or attach\u0027s last_event_id rather than reading one afterwards. A truncated result supplies oldest_available_cursor so a caller that fell behind the bounded buffer can recover.",
+      "description": "Wait without polling for stops after an event cursor. Concurrent waiters do not consume events. THE CURSOR IS YOURS TO TRACK: because reads are non-destructive the server keeps no per-caller position, so every response carries last_event_id and you pass it as the next call\u0027s after_event_id. Omitting after_event_id means \u0022from the start of the session\u0022, NOT \u0022only what is new\u0022: a bare call replays every retained stop, so a poll loop that never advances it re-processes stops it already handled. That default is deliberate \u2014 the opposite one would silently drop a stop that landed between two calls, and a duplicate is recoverable where a lost stop is not. Seed the first cursor from set_il_breakpoint\u0027s cursor_event_id or attach\u0027s last_event_id rather than reading one afterwards. A truncated result supplies oldest_available_cursor so the caller can recover. A cursor beyond the newest event is rejected with cursor_ahead_of_stream instead of waiting forever \u2014 cursors come from cursor_event_id, event_id, or last_event_id, never from a version counter.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1094,7 +1081,7 @@
           },
           "after_event_id": {
             "type": "integer",
-            "description": "Exclusive cursor: return only events with a higher id. Pass the previous response\u0027s last_event_id. Default 0 replays the whole retained session. A cursor past the last event id is rejected with cursor_ahead_of_stream rather than waiting out the timeout on an event that can never arrive."
+            "description": "Exclusive cursor: return only events with a higher id. Pass the previous response\u0027s last_event_id, or set_il_breakpoint\u0027s cursor_event_id. Default 0 replays the whole retained session."
           },
           "timeout_ms": {
             "type": "integer",
@@ -1115,7 +1102,7 @@
     },
     {
       "name": "wait_for_event",
-      "description": "Wait without polling for any requested event kinds after a cursor. Returns immediately when a matching buffered event already exists; concurrent waiters are non-destructive. The cursor is caller-supplied on exactly the terms described on wait_for_stop: advance after_event_id with each response\u0027s last_event_id, and note that omitting it replays the session\u0027s retained history rather than returning only new events.",
+      "description": "Wait without polling for any requested event kinds after a cursor. Returns immediately when a matching buffered event already exists; concurrent waiters are non-destructive. The cursor is caller-supplied on exactly the terms described on wait_for_stop: advance after_event_id with each response\u0027s last_event_id, and note that omitting it replays the session\u0027s retained history rather than returning only new events. A cursor beyond the newest event is rejected with cursor_ahead_of_stream instead of waiting forever.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1128,7 +1115,7 @@
           },
           "after_event_id": {
             "type": "integer",
-            "description": "Exclusive cursor: return only events with a higher id. Pass the previous response\u0027s last_event_id. Default 0 replays the whole retained session. A cursor past the last event id is rejected with cursor_ahead_of_stream rather than waiting out the timeout on an event that can never arrive."
+            "description": "Exclusive cursor: return only events with a higher id. Pass the previous response\u0027s last_event_id, or set_il_breakpoint\u0027s cursor_event_id. Default 0 replays the whole retained session."
           },
           "kinds": {
             "type": "array",
@@ -1182,7 +1169,7 @@
     },
     {
       "name": "get_events",
-      "description": "Read normalized lifecycle and debugger events without consuming them. Optional kinds filter the bounded per-session stream; truncated reports when the requested cursor is older than retained history. Shares one bounded buffer and one caller-supplied cursor with wait_for_stop and wait_for_event \u2014 advance after_event_id with each response\u0027s last_event_id, and note that omitting it returns the session\u0027s retained history rather than only what is new.",
+      "description": "Read the STRUCTURED stream: normalized lifecycle and debugger events, without consuming them. Nothing the target printed appears here \u2014 console text is get_output. Optional kinds filter the bounded per-session stream; truncated reports when the requested cursor is older than retained history, and a cursor beyond the newest event is rejected with cursor_ahead_of_stream rather than returning a clean empty result. Shares one bounded buffer and one caller-supplied cursor with wait_for_stop and wait_for_event: advance after_event_id with each response\u0027s last_event_id, since omitting it returns the retained history rather than only what is new.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1195,7 +1182,7 @@
           },
           "after_event_id": {
             "type": "integer",
-            "description": "Exclusive cursor: return only events with a higher id. Pass the previous response\u0027s last_event_id. Default 0 returns the whole retained session. A cursor past the last event id is rejected with cursor_ahead_of_stream."
+            "description": "Exclusive cursor: return only events with a higher id. Pass the previous response\u0027s last_event_id. Default 0 returns the whole retained session."
           },
           "kinds": {
             "type": "array",
@@ -1379,7 +1366,7 @@
     },
     {
       "name": "update_breakpoint",
-      "description": "Change an existing breakpoint\u0027s enabled state, condition, hit count, or trace message. Conditions and hit counts are evaluated by the engine inside the target, so a condition that cannot be evaluated fails at hit time rather than here. Pass an empty string for condition or trace_message to clear it; omit a field to leave it unchanged.",
+      "description": "THIS IS WHERE CONDITIONAL BREAKPOINTS LIVE. Change an existing breakpoint\u0027s enabled state, condition, hit count, or trace message, using a breakpoint_id from set_breakpoint, set_il_breakpoint or list_breakpoints. A condition (\u0060i == 3\u0060, \u0060name == \u0022x\u0022\u0060) or a hit count is how you stop at one specific loop iteration; stepping to it, or computing which iteration it would be, is neither necessary nor reliable. Conditions and hit counts are evaluated by the engine inside the target, so a condition that cannot be evaluated fails at hit time rather than here \u2014 list_breakpoints reports engine_hit_count, counted before the condition runs, which separates \u0022condition never true\u0022 from \u0022never reached\u0022. Pass an empty string for condition or trace_message to clear it; omit a field to leave it unchanged.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1420,7 +1407,7 @@
           },
           "trace_message": {
             "type": "string",
-            "description": "Print instead of (or as well as) stopping. Empty string clears."
+            "description": "Print instead of (or as well as) stopping. Empty string clears. The message goes to dnSpy\u0027s Output window only: it is NOT on the get_output stream and produces no event, so an MCP caller cannot read it. Use a condition and a real stop instead unless a human is watching the window."
           },
           "trace_continue": {
             "type": "boolean",
@@ -1433,10 +1420,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -1453,7 +1436,7 @@
     },
     {
       "name": "set_exception_breakpoint",
-      "description": "Stop when an exception is thrown. Pass a fully qualified type name, or omit name to set the category\u0027s default that governs every exception it does not name. Like code breakpoints these are dnSpy-global and outlive a session.",
+      "description": "Stop when an exception is thrown. Pass a fully qualified type name, or omit name to set the category\u0027s default that governs every exception it does not name. Like code breakpoints these are dnSpy-global and outlive a session. Exception breakpoints and exception policies are ONE thing: this writes the same entry set_exception_policy writes (that tool additionally takes module conditions); list with either list tool and remove with remove_exception_policy.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1484,10 +1467,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -1503,13 +1482,21 @@
     },
     {
       "name": "list_exception_breakpoints",
-      "description": "List exceptions configured to break on throw. By default this reports first-chance entries only, which is the set someone deliberately configured: dnSpy stops on SECOND chance for essentially every .NET exception it knows, so including those returns thousands of identical stock entries that say nothing about this session. Bounded, with total and truncated.",
+      "description": "List exceptions configured to break on throw. By default this reports first-chance entries only, which is the set someone deliberately configured: dnSpy stops on SECOND chance for essentially every .NET exception it knows, so including those returns thousands of identical stock entries that say nothing about this session. Bounded, with total and truncated. Same underlying entries as list_exception_policies; that tool is the raw view with module conditions, and takes the same category and name filters.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "host_id": {
             "type": "string",
             "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "category": {
+            "type": "string",
+            "description": "Exact category, eg. DotNet. Omit for every category."
+          },
+          "name": {
+            "type": "string",
+            "description": "Exact fully qualified type name. The empty string selects the category default entry, the one set_exception_breakpoint writes when name is omitted. Omit the argument entirely for every entry."
           },
           "include_second_chance": {
             "type": "boolean",
@@ -1532,7 +1519,7 @@
     },
     {
       "name": "step_into",
-      "description": "Step into the call at the current instruction. The stop arrives on the event stream like any other, with stop_reason \u0022step\u0022: pass the returned cursor_event_id to wait_for_stop. completed=false means the step is still running, not that it failed.",
+      "description": "Step into the call at the current instruction. The stop arrives on the event stream like any other, with stop_reason \u0022step\u0022: pass the returned cursor_event_id to wait_for_stop. The result\u0027s status says what happened: \u0022completed\u0022, \u0022step_error\u0022, or \u0022in_flight\u0022 with a hint \u2014 in_flight means the target is running again and a step across interop, optimized, or interpreted code may never land. See step_and_inspect to combine a step with evaluation in one call.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1546,9 +1533,6 @@
           "thread_id": {
             "type": "string",
             "description": "Defaults to the thread that carried the stop. Stepping the wrong thread resumes the target and stops somewhere unrelated, so pass this explicitly when several threads are interesting."
-          },
-          "expected_state_version": {
-            "type": "integer"
           },
           "expected_execution_version": {
             "type": "integer",
@@ -1573,7 +1557,7 @@
     },
     {
       "name": "step_over",
-      "description": "Step over the call at the current instruction. See step_into for how completion is reported.",
+      "description": "Step over the call at the current instruction. See step_into for how completion is reported. Stepping repeatedly and reading state each time is what step_and_inspect does in one call; to reach a distant point, prefer run_to_method or a conditional breakpoint (see set_breakpoint) over a step loop.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1586,9 +1570,6 @@
           },
           "thread_id": {
             "type": "string"
-          },
-          "expected_state_version": {
-            "type": "integer"
           },
           "expected_execution_version": {
             "type": "integer",
@@ -1613,7 +1594,7 @@
     },
     {
       "name": "step_out",
-      "description": "Run to the caller of the current frame. See step_into for how completion is reported.",
+      "description": "Run to the caller of the current frame. See step_into for how completion is reported, and step_and_inspect to step and inspect in one call. An active breakpoint in the method being left hits first: the step reports completed:false and the next stop is that breakpoint, not the caller. Remove it first when the point is to reach the frame above.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1626,9 +1607,6 @@
           },
           "thread_id": {
             "type": "string"
-          },
-          "expected_state_version": {
-            "type": "integer"
           },
           "expected_execution_version": {
             "type": "integer",
@@ -1653,7 +1631,7 @@
     },
     {
       "name": "evaluate",
-      "description": "Evaluate an expression against a paused frame. Returns the raw scalar and dnSpy\u0027s formatted display text as separate fields, so numbers stay comparable without parsing display text. has_raw_value distinguishes a value of null from a value that is unavailable or optimized away. Running target code is guarded by TWO independent gates, both off by default, and they are not interchangeable: allow_func_eval permits executing target code at all, and allow_side_effects permits an expression dnSpy classifies as side-effecting. A property getter such as DateTime.Now.Ticks trips only the first, so allow_func_eval alone runs it. An explicit method call such as Telemetry.ComputeReading(5) trips BOTH, and side effects are checked first \u2014 so passing allow_func_eval alone leaves the error \u0022This expression causes side effects and will not be evaluated\u0022 completely unchanged, which reads like the flag was ignored and is not. Pass both for a method call, or use invoke_method, which sets both and audits the call. One exception explains conflicting reports of this tool: dnSpy\u0027s \u0060ac\u0060 (\u0022always calculate\u0022) format specifier, appended to the expression as \u0060Some.Method(1), ac\u0060, opens the side-effects gate on its own, so that shape DOES succeed with allow_func_eval alone. It is dnSpy syntax rather than a dgSpy argument and it bypasses the side-effects opt-in, so prefer allow_side_effects. Every refusal carries \u0060recovery\u0060 naming the gate that blocked it; never fall back to computing a method\u0027s result by hand.",
+      "description": "Evaluate an expression against a paused frame. Returns the raw scalar and dnSpy\u0027s formatted display text as separate fields, so numbers stay comparable without parsing display text. has_raw_value distinguishes a value of null from a value that is unavailable or optimized away. Running target code is guarded by TWO independent gates, both off by default and NOT interchangeable: allow_func_eval permits executing target code at all, allow_side_effects permits an expression dnSpy classifies as side-effecting. A property getter such as DateTime.Now.Ticks trips only the first, so allow_func_eval alone runs it \u2014 and it can deadlock a target holding a lock or mutate what you were inspecting, which is why it is off. An explicit method call such as Telemetry.ComputeReading(5) trips BOTH, and side effects are checked first, so passing allow_func_eval alone leaves the error \u0022This expression causes side effects and will not be evaluated\u0022 completely unchanged, which reads like the flag was ignored and is not. Pass both for a method call, or use invoke_method, which sets both and audits the call. One exception explains conflicting reports of this tool: dnSpy\u0027s \u0060ac\u0060 (\u0022always calculate\u0022) format specifier, appended as \u0060Some.Method(1), ac\u0060, opens the side-effects gate on its own, so that shape DOES succeed with allow_func_eval alone; it is dnSpy syntax rather than a dgSpy argument and bypasses the opt-in, so prefer allow_side_effects. Every refusal carries \u0060recovery\u0060 naming the gate that blocked it; never fall back to computing a method\u0027s result by hand. For an object, get_members expands it a level rather than guessing member names; get_autos returns what the current statement touches without naming anything; add_watch re-evaluates the same expression at every later stop, which a value read here cannot survive.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1730,10 +1708,6 @@
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
           },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
-          },
           "expected_stop_id": {
             "type": "string",
             "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
@@ -1785,10 +1759,6 @@
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           },
           "expected_stop_id": {
             "type": "string",
@@ -1872,10 +1842,6 @@
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -2003,10 +1969,6 @@
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
           },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
-          },
           "expected_stop_id": {
             "type": "string",
             "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
@@ -2112,10 +2074,6 @@
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           },
           "expected_stop_id": {
             "type": "string",
@@ -2674,7 +2632,7 @@
     },
     {
       "name": "set_breakpoint",
-      "description": "Set a breakpoint by type and method name instead of a metadata token. Resolves the name, then takes exactly the same path as set_il_breakpoint, so binding state, Mono sequence-point snapping and cursor_event_id behave identically \u2014 read that tool\u0027s description. Overloads are reported as ambiguous with their full names rather than resolved by guessing.",
+      "description": "Set a breakpoint by type and method name instead of a metadata token. Resolves the name, then takes exactly the same path as set_il_breakpoint, so binding state, Mono sequence-point snapping and cursor_event_id behave identically \u2014 read that tool\u0027s description. Overloads are reported as ambiguous with their full names rather than resolved by guessing. CONDITIONAL BREAKPOINTS: this tool sets an unconditional one; pass the returned breakpoint_id to update_breakpoint to attach a condition (\u0060i == 3\u0060), a hit count (stop on the nth hit), or a trace message that prints without stopping. To stop at one specific loop iteration, do that rather than stepping to it or computing the value by hand.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2710,10 +2668,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -2936,10 +2890,6 @@
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
           },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
-          },
           "expected_stop_id": {
             "type": "string",
             "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
@@ -3059,10 +3009,6 @@
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3119,7 +3065,7 @@
     },
     {
       "name": "get_output",
-      "description": "Read the bounded non-destructive debugger output stream after a cursor.",
+      "description": "Read the bounded non-destructive TEXT stream after a cursor: the debugged program\u0027s own console output plus the host\u0027s commentary, interleaved in one ring and told apart by each message\u0027s category. StandardOutput and StandardError are the program\u0027s stdout/stderr, reassembled into whole lines. Output, ErrorUser and StepFilter are host records, including the audit line every side-effecting call writes. Program output exists only for a target this dgSpy launched with redirect_output (the default): an attached process\u0027s console handles were never ours, so nothing can be captured from one, and get_output then carries host records alone. To block until the next line arrives instead of polling, use wait_for_output. Structured events \u2014 breakpoint hits, steps, exceptions, process exit \u2014 are not here; they are get_events.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3132,7 +3078,8 @@
           },
           "after_output_id": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Cursor from a previous response\u0027s last_output_id. Omit to read from the oldest retained line."
           }
         },
         "required": [
@@ -3147,7 +3094,7 @@
     },
     {
       "name": "wait_for_output",
-      "description": "Wait for debugger output after a cursor without consuming it.",
+      "description": "Wait, without consuming, for new text on exactly the stream get_output returns \u2014 program stdout/stderr and host commentary. Use it to wait for something the program prints; use wait_for_stop or wait_for_event to wait for a debugger event. A trailing line the program wrote without a newline is published after a short quiet period rather than held until its next write, so a prompt still arrives.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3165,7 +3112,8 @@
           "timeout_ms": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 10000
+            "maximum": 10000,
+            "description": "Default 5000."
           }
         },
         "required": [
@@ -3222,10 +3170,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3307,10 +3251,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3344,10 +3284,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3420,10 +3356,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3464,7 +3396,7 @@
     },
     {
       "name": "list_exception_policies",
-      "description": "List bounded exception definitions with flags and module conditions.",
+      "description": "List bounded exception definitions with flags and module conditions \u2014 the raw view of the same entries list_exception_breakpoints reports, without that tool\u0027s first-chance default filter. Pass category and name to read ONE entry, which is how a remove_exception_policy is confirmed: entries is empty and total is 0 when it is gone. Reports total and truncated.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3475,10 +3407,19 @@
           "session_id": {
             "type": "string"
           },
+          "category": {
+            "type": "string",
+            "description": "Exact category, eg. DotNet. Omit for every category."
+          },
+          "name": {
+            "type": "string",
+            "description": "Exact fully qualified type name. The empty string selects the category default entry, the one set_exception_breakpoint writes when name is omitted. Omit the argument entirely for every entry."
+          },
           "count": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 2000
+            "maximum": 2000,
+            "description": "Default 200."
           }
         },
         "required": [
@@ -3493,7 +3434,7 @@
     },
     {
       "name": "set_exception_policy",
-      "description": "Add or replace thrown/unhandled flags and module conditions for an exception.",
+      "description": "Add or replace thrown/unhandled flags and module conditions for an exception. Writes the same entry set_exception_breakpoint writes; use this form when module conditions are needed.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3525,10 +3466,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3544,7 +3481,7 @@
     },
     {
       "name": "remove_exception_policy",
-      "description": "Remove one exception policy.",
+      "description": "Remove one exception policy (the same entries set_exception_breakpoint and set_exception_policy create). Returns removed=true with the entry\u0027s former flags under former_policy \u2014 those flags describe what was just deleted, not something still in effect. Confirm with list_exception_policies passing the same category and name; total 0 means it is gone. To undo every policy change at once instead, see restore_exception_defaults.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3556,18 +3493,16 @@
             "type": "string"
           },
           "category": {
-            "type": "string"
+            "type": "string",
+            "description": "Default DotNet."
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "Fully qualified type name. Omit to remove the category default entry."
           },
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3583,7 +3518,7 @@
     },
     {
       "name": "restore_exception_defaults",
-      "description": "Reset dnSpy exception policies to defaults and remove user additions.",
+      "description": "Reset dnSpy exception policies to defaults and remove user additions, including entries created by set_exception_breakpoint.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3597,10 +3532,6 @@
           "expected_breakpoints_version": {
             "type": "integer",
             "description": "Required exact breakpoints_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           }
         },
         "required": [
@@ -3702,10 +3633,6 @@
           "expected_execution_version": {
             "type": "integer",
             "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
-          },
-          "expected_state_version": {
-            "type": "integer",
-            "description": "Deprecated compatibility guard. Prefer the scoped version field."
           },
           "expected_stop_id": {
             "type": "string",

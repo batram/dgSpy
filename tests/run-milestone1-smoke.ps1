@@ -105,6 +105,22 @@ function Write-StopDiagnostics {
 			"`n          thread $($_.thread_id): " + (@($frames | ForEach-Object { $_.name }) -join ' <- ')
 		}) -join ''
 	}
+	# One stack sample cannot tell "the target never resumed" from "the target is running and the
+	# breakpoint is dead": a single pause can legitimately land anywhere, including back at the frame
+	# the last stop was on. Two samples with a resume between them can. Identical frames across both
+	# means the thread is not moving; different frames mean it is, and the breakpoint is the suspect.
+	if ($state.state -eq 'running') {
+		Show-Probe 'second stack sample after a further resume' {
+			$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $SessionId }
+			Start-Sleep -Milliseconds 1500
+			$null = Invoke-MutatingTool -Name 'pause' -Arguments @{ session_id = $SessionId }
+			$threads = @(Invoke-Tool -Name 'list_threads' -Arguments @{ session_id = $SessionId } | ForEach-Object { $_ })
+			($threads | Select-Object -First 8 | ForEach-Object {
+				$frames = @(Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $SessionId; thread_id = $_.thread_id; max_frames = 8 } | ForEach-Object { $_ })
+				"`n          thread $($_.thread_id): " + (@($frames | ForEach-Object { $_.name }) -join ' <- ')
+			}) -join ''
+		}
+	}
 	if ($null -ne $targetProcess) {
 		$targetProcess.Refresh()
 		$exited = $targetProcess.HasExited
@@ -367,6 +383,10 @@ try {
 	Assert-That 'remove_breakpoint refuses an unknown id' ($missingBreakpoint -match 'does not exist|list_breakpoints')
 	$removed = Invoke-MutatingTool -Name 'remove_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id }
 	Assert-That 'remove_breakpoint reports the exact removed id' ($removed.removed -and $removed.breakpoint_id -eq $breakpoint.breakpoint_id)
+	# Guarded operations echo the full version vector so the caller's next guard and event cursor come
+	# from the response, not an interposed get_session_state.
+	Assert-That 'remove_breakpoint echoes the version vector' ($null -ne $removed.versions -and $removed.versions.breakpoints_version -ge 1 -and $null -ne $removed.versions.execution_version -and $null -ne $removed.versions.lifecycle_version) "(versions=$($removed.versions | ConvertTo-Json -Compress))"
+	Assert-That 'the echoed vector carries a usable event cursor' ($removed.versions.last_event_id -ge 1) "(was $($removed.versions.last_event_id))"
 	$afterRemove = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{})
 	Assert-That 'remove_breakpoint leaves the removed breakpoint absent' (@($afterRemove | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id }).Count -eq 0)
 	$breakpoint = Invoke-MutatingTool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken; il_offset = 0 }
@@ -379,6 +399,15 @@ try {
 	Assert-That 'the stop event is after the cursor' ($firstStop.event_id -gt $cursor)
 	Assert-That 'the normalized stop preserves its reason and target identity' ($firstStop.stop_reason -eq 'breakpoint' -and $firstStop.process_id -eq $targetId -and -not [string]::IsNullOrWhiteSpace($firstStop.thread_id))
 	Assert-That 'the normalized stop preserves breakpoint identity and IL location' ($firstStop.breakpoint_id -eq $breakpoint.breakpoint_id -and $firstStop.module -like '*Milestone1Target.exe' -and $firstStop.method_token -eq $methodToken -and $firstStop.il_offset -eq 0)
+	# Engine hits are counted before conditions run, so a hit breakpoint must show at least one.
+	$hitListing = @(Invoke-Tool -Name 'list_breakpoints' -Arguments @{}) | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id }
+	Assert-That 'list_breakpoints reports engine_hit_count after a hit' ($hitListing.engine_hit_count -ge 1) "(was $($hitListing.engine_hit_count))"
+	# A cursor beyond the stream can never be satisfied — the next events take the ids it would skip.
+	# It must fail loudly, not wait out its timeout and return a clean empty result.
+	$aheadWait = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = 999999999; timeout_ms = 1000 } -ExpectError
+	Assert-That 'wait_for_stop rejects a cursor beyond the stream' ($aheadWait -match 'can never be satisfied') "(was '$aheadWait')"
+	$aheadEvents = Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $sessionId; after_event_id = 999999999 } -ExpectError
+	Assert-That 'get_events rejects a cursor beyond the stream' ($aheadEvents -match 'can never be satisfied') "(was '$aheadEvents')"
 	$exactReason = Invoke-Tool -Name 'get_stop_reason' -Arguments @{ session_id = $sessionId; event_id = $firstStop.event_id }
 	$latestReason = Invoke-Tool -Name 'get_stop_reason' -Arguments @{ session_id = $sessionId }
 	Assert-That 'get_stop_reason returns an exact retained stop' ($exactReason.event_id -eq $firstStop.event_id -and $exactReason.stop_reason -eq 'breakpoint')
@@ -407,7 +436,7 @@ try {
 	$waiter2 = Start-Job -ScriptBlock $waitScript -ArgumentList $gatewayUrl,$token,$sessionId,$firstStop.event_id
 	Start-Sleep -Milliseconds 300
 	$beforeResume = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
-	Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId; expected_state_version = $beforeResume.state_version } | Out-Null
+	Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId; expected_execution_version = $beforeResume.execution_version } | Out-Null
 	$concurrent1 = (Receive-Job -Job $waiter1 -Wait -AutoRemoveJob) | ConvertFrom-Json
 	$concurrent2 = (Receive-Job -Job $waiter2 -Wait -AutoRemoveJob) | ConvertFrom-Json
 	$secondStop1 = @($concurrent1.events)[0]
@@ -448,6 +477,8 @@ try {
 	Assert-That 'step_over reports its own kind' ($stepped.step_kind -eq 'over')
 	Assert-That 'step_over returns a cursor taken before the step' ($stepped.cursor_event_id -ge $stepCursor)
 	Assert-That 'step_over reports no engine error' ($null -eq $stepped.error) "(was $($stepped.error))"
+	Assert-That 'step_over echoes the version vector' ($null -ne $stepped.versions -and $null -ne $stepped.versions.execution_version -and $null -ne $stepped.versions.last_event_id) "(versions=$($stepped.versions | ConvertTo-Json -Compress))"
+	Assert-That 'step_over reports a status matching its completed flag' (($stepped.completed -and $stepped.status -eq 'completed') -or (-not $stepped.completed -and $stepped.status -eq 'in_flight' -and -not [string]::IsNullOrWhiteSpace($stepped.hint))) "(completed=$($stepped.completed) status=$($stepped.status))"
 	# Completion arrives on the event stream exactly like a breakpoint hit: same tool, same cursor
 	# discipline, different stop_reason. That is the Phase 4 exit criterion.
 	$stepStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $stepped.cursor_event_id; timeout_ms = 8000 }
@@ -553,6 +584,34 @@ try {
 	$returnStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $returnCursor; timeout_ms = 8000 }
 	Assert-That 'the target resumes from the exception into the normal fixture breakpoint' (-not $returnStop.timed_out)
 	if ($returnStop.timed_out) {
+		# Only two things can produce this timeout: the target never resumed from the exception, or it
+		# resumed and the recreated breakpoint is dead. Both readings below are taken before
+		# Write-StopDiagnostics pauses the session, because both need it running.
+		#
+		# CPU time is the one signal that does not go through the debugger at all. A thread parked at
+		# the exception site burns none; the fixture loop burns a little even with Tick's 100ms sleep.
+		if ($null -ne $targetProcess) {
+			try {
+				$targetProcess.Refresh(); $cpuBefore = $targetProcess.TotalProcessorTime
+				Start-Sleep -Seconds 2
+				$targetProcess.Refresh(); $cpuAfter = $targetProcess.TotalProcessorTime
+				Write-Host "  DIAG  target CPU time over 2s of nominal running: $(($cpuAfter - $cpuBefore).TotalMilliseconds) ms"
+			}
+			catch { Write-Host "  DIAG  CPU time read threw: $($_.Exception.Message)" -ForegroundColor DarkYellow }
+		}
+		# A breakpoint at a location this run has never touched is hit if and only if the target is
+		# executing. The recreated breakpoint cannot say that, because being dead is the hypothesis.
+		# UseWorker is called from Tick on every iteration of the fixture loop.
+		try {
+			$probeMember = (Invoke-Tool -Name 'list_members' -Arguments @{ session_id = $sessionId; module = $targetExe; type = 'Milestone1Target.Program'; name_pattern = 'UseWorker' }).symbols |
+				Where-Object { $_.name -eq 'UseWorker' } | Select-Object -First 1
+			$probeCursor = (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }).last_event_id
+			$probe = Invoke-MutatingTool -Name 'set_il_breakpoint' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $probeMember.method_token; il_offset = 0 }
+			Write-Host "  DIAG  fresh-location probe breakpoint: $($probe | ConvertTo-Json -Compress -Depth 5)"
+			$probeStop = Invoke-Tool -Name 'wait_for_stop' -Arguments @{ session_id = $sessionId; after_event_id = $probeCursor; timeout_ms = 6000 }
+			Write-Host "  DIAG  fresh-location probe hit: $(-not $probeStop.timed_out) (true means the target is executing and the recreated breakpoint is the problem)"
+		}
+		catch { Write-Host "  DIAG  fresh-location probe threw: $($_.Exception.Message)" -ForegroundColor DarkYellow }
 		Write-StopDiagnostics -SessionId $sessionId -AfterEventId $returnCursor -What 'no stop after resuming from the fixture exception'
 		throw 'The target never stopped again after the fixture exception; every later check needs that stop.'
 	}
@@ -738,7 +797,8 @@ try {
 	$policy = Invoke-MutatingTool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true; stop_unhandled = $false; conditions = @(@{ kind = 'module_equals'; module = 'Milestone1Target.exe' }) }
 	Assert-That 'exception policy mutation preserves flags and module conditions' ($policy.stop_thrown -and -not $policy.stop_unhandled -and @($policy.conditions).Count -eq 1 -and $policy.conditions[0].module -eq 'Milestone1Target.exe')
 	$removedPolicy = Invoke-MutatingTool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' }
-	Assert-That 'remove_exception_policy returns the policy it removed' ($removedPolicy.name -eq 'Milestone1Target.Phase8FixtureException')
+	Assert-That 'remove_exception_policy confirms the removal' ($removedPolicy.removed -eq $true)
+	Assert-That 'remove_exception_policy reports the former policy under former_policy' ($removedPolicy.former_policy.name -eq 'Milestone1Target.Phase8FixtureException')
 	$null = Invoke-MutatingTool -Name 'set_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException'; stop_thrown = $true }
 	$null = Invoke-MutatingTool -Name 'restore_exception_defaults' -Arguments @{ session_id = $sessionId }
 	$removedAfterReset = Invoke-MutatingTool -Name 'remove_exception_policy' -Arguments @{ session_id = $sessionId; category = 'DotNet'; name = 'Milestone1Target.Phase8FixtureException' } -ExpectError
@@ -990,11 +1050,20 @@ try {
 	$reenabled = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $true }
 	Assert-That 'the code breakpoint can be re-enabled after stepping' ($reenabled.enabled)
 
-	$stale = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId; expected_state_version = 1 } -ExpectError
-	Assert-That 'a stale expected_state_version is rejected' ($stale -match 'stale|Expected state')
+	$staleState = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $sessionId }
+	$stale = Invoke-Tool -Name 'pause' -Arguments @{ session_id = $sessionId; expected_execution_version = $staleState.execution_version + 1000 } -ExpectError
+	Assert-That 'a stale expected_execution_version is rejected' ($stale -match 'stale|Expected execution')
 
 	# Evaluation runs off the dispatcher now, so a running target must be refused explicitly rather
 	# than racing against a stack that is being torn down.
+	#
+	# Disable the Tick breakpoint first, so "running" lasts until the explicit pause below instead of
+	# ending at the next hit. This used to lean on Tick's 100ms body being longer than the round trip,
+	# which made the check a race against how quickly `continue` returns -- and `continue` now returns
+	# only once the Continued event has been recorded, so it returns later and the window closed. The
+	# assertion is about a running target, not about resume latency, so it should not depend on either.
+	# clear_breakpoints below still finds this breakpoint: disabled is not removed.
+	$null = Invoke-MutatingTool -Name 'update_breakpoint' -Arguments @{ breakpoint_id = $breakpoint.breakpoint_id; enabled = $false }
 	Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $sessionId } | Out-Null
 	$running = Invoke-Tool -Name 'get_callstack' -Arguments @{ session_id = $sessionId } -ExpectError
 	Assert-That 'get_callstack on a running target is refused' ($running -match 'not_paused|Pause the session')

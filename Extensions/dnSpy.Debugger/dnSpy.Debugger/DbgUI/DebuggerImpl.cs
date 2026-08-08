@@ -89,7 +89,12 @@ namespace dnSpy.Debugger.DbgUI {
 		}
 
 		void AppWindow_MainWindowClosing(object? sender, CancelEventArgs e) {
-			if (IsDebugging) {
+			// dgSpy addition: a headless host has nobody at the keyboard, so this question is never
+			// answered and the close silently never completes -- the window stays up, the process keeps
+			// running, and whatever asked it to close waits forever. It also blocks the one path that
+			// makes closing safe: the dgSpy extension detaches every target on AppExit, and AppExit is
+			// downstream of this handler. Cancelling here is what would strand the target, not closing.
+			if (IsDebugging && !DgSpyWindowActivation.Suppressed) {
 				var result = messageBoxService.Value.ShowIgnorableMessage(new Guid("B4B8E13C-B7B7-490A-953B-8ED8EAE7C170"), dnSpy_Debugger_Resources.AskAppWindowClosingStopDebugging, MsgBoxButton.Yes | MsgBoxButton.No);
 				if (result == MsgBoxButton.None || result == MsgBoxButton.No)
 					e.Cancel = true;

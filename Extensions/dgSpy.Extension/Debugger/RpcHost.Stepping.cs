@@ -68,6 +68,8 @@ namespace dgSpy.Extension {
 			return new StepResult {
 				SessionId=sessionId ?? "",ThreadId=threadId,StepKind=kindName,CursorEventId=cursor,
 				Completed=completed,Error=string.IsNullOrEmpty(error) ? null : error,StateVersion=stateVersion,
+				Status=!completed ? "in_flight" : string.IsNullOrEmpty(error) ? "completed" : "step_error",
+				Hint=completed ? null : "The step resumed the target and has not landed yet. Wait on wait_for_stop from cursor_event_id. A step across interop, optimized, or interpreted code may never land — if no stop arrives, the target is simply running again; pause it or set a breakpoint instead.",
 			};
 		}
 

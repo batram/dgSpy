@@ -152,17 +152,18 @@ public class SessionControlTests {
 	}
 
 	[Fact]
-	public void Every_session_mutation_schema_advertises_scoped_version_guard_and_legacy_alias() {
+	public void Every_session_mutation_schema_advertises_scoped_version_guard_and_no_deprecated_alias() {
 		var tools=ProtocolJson.ToNode(ToolCatalog.All)!.AsArray();
 		foreach(var operation in CapabilityCatalog.Operations.Where(item=>item.MutatesSession)) {
 			var tool=tools.OfType<JsonObject>().Single(item=>(string?)item["name"]==operation.Operation);
 			if(tool["inputSchema"]?["properties"]?["session_id"] is not null)
 			{
 				var guard=MutationGuards.Argument(operation.Operation);
-				Assert.NotNull(tool["inputSchema"]?["properties"]?["expected_state_version"]);
+				// The deprecated expected_state_version alias is gone: a dead parameter on every mutating
+				// schema taxes exactly the schema-budgeted blind-driving scenario this server exists for.
+				Assert.Null(tool["inputSchema"]?["properties"]?["expected_state_version"]);
 				Assert.NotNull(tool["inputSchema"]?["properties"]?[guard]);
 				Assert.Contains(guard,ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
-				Assert.DoesNotContain("expected_state_version",ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
 				if(MutationGuards.RequiresStop(operation.Operation)) Assert.Contains("expected_stop_id",ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
 			}
 		}
@@ -337,6 +338,10 @@ public class HostRegistryTests {
 			var responder=Task.Run(async ()=>{ for(string? line;(line=await remoteReader.ReadLineAsync()) is not null;){ var request=ProtocolJson.Deserialize<RpcRequest>(line)!; lock(seen) seen.Add(request); object result=request.Operation switch {
 				"set_breakpoint"=>new { breakpoint_id=11,cursor_event_id=4,bound=true },
 				"get_session_state"=>new SessionState { SessionId="session-a",State="paused",StateVersion=14,ExecutionVersion=2,LifecycleVersion=2,BreakpointsVersion=1 },
+				// The host stamps every guarded response with the vector read after it applied. The
+				// removal is the last call the composition makes, so its vector is the one the caller
+				// must guard the next call with.
+				"remove_breakpoint"=>new { breakpoint_id=11,removed=true,versions=new { lifecycle_version=2,execution_version=3,breakpoints_version=2,stop_id="stop-2",last_event_id=9 } },
 				_=>new { ok=true } }; await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,result))); } });
 			var clients=new McpClientSessions(TimeSpan.FromMinutes(5)); clients.Touch("client-a"); var controllers=new SessionControllers(clients); controllers.Claim("session-a","host-a","client-a"); var audit=new GatewayAuditLog(auditPath,4096);
 			var executor=new GatewayToolExecutor(router,controllers,new GatewayAccessPolicy("full-control"),audit);
@@ -357,6 +362,17 @@ public class HostRegistryTests {
 			var removed=seen.Single(request=>request.Operation=="remove_breakpoint");
 			Assert.Equal(11,(int?)removed.Arguments["breakpoint_id"]);
 			Assert.Equal(1,(int?)removed.Arguments["expected_breakpoints_version"]);
+			// A composition is where the counters are hardest to guess: four guarded host calls moved
+			// them and only the gateway saw the intermediate responses. Handing back no vector made the
+			// caller re-read state after every run_to_*, which is the interposed get_session_state this
+			// change set exists to delete. It must be the post-cleanup vector, not the wait's: removing
+			// the temporary breakpoint moved breakpoints_version again.
+			var versions=ProtocolJson.ToNode(response.Result)?["versions"];
+			Assert.NotNull(versions);
+			Assert.Equal(2,(int?)versions!["breakpoints_version"]);
+			Assert.Equal(3,(int?)versions["execution_version"]);
+			Assert.Equal("stop-2",(string?)versions["stop_id"]);
+			Assert.Equal(9,(int?)versions["last_event_id"]);
 		}
 		finally { Directory.Delete(directory,true); }
 	}

@@ -199,6 +199,11 @@ namespace dgSpy.Protocol {
 		/// existed there is no meaningful "just before", and emitting 0 would invite a caller to replay
 		/// the whole event log.</summary>
 		[JsonPropertyName("cursor_event_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public long? CursorEventId { get; set; }
+		/// <summary>Times the engine reached this breakpoint this session, counted BEFORE conditions,
+		/// hit counts, and filters run. A conditional breakpoint whose condition keeps evaluating false
+		/// still ticks this counter, which is how a working-but-never-true condition is distinguished
+		/// from a breakpoint that is never reached at all. Absent when no session is active.</summary>
+		[JsonPropertyName("engine_hit_count"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public long? EngineHitCount { get; set; }
 		[JsonPropertyName("state_version")] public long StateVersion { get; set; }
 		/// <summary>Condition expression, evaluated in the target when the breakpoint is reached. Absent
 		/// when the breakpoint is unconditional.</summary>
@@ -228,6 +233,12 @@ namespace dgSpy.Protocol {
 		/// <summary>True when the step completed before this call returned. False is not a failure — wait
 		/// for the <c>stopped</c> event with <c>stop_reason: "step"</c> from <c>cursor_event_id</c>.</summary>
 		[JsonPropertyName("completed")] public bool Completed { get; set; }
+		/// <summary><c>completed</c>, <c>step_error</c> (the engine reported a failure; see <c>error</c>),
+		/// or <c>in_flight</c> (the step resumed the target and had not landed when this call returned).</summary>
+		[JsonPropertyName("status")] public string Status { get; set; }="";
+		/// <summary>Present only for <c>in_flight</c>: what the caller should do next, and the warning that
+		/// a step across interop, optimized, or interpreted code may never land at all.</summary>
+		[JsonPropertyName("hint"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Hint { get; set; }
 		/// <summary>The engine's own reason when the step failed, eg. stepping out of the outermost frame.</summary>
 		[JsonPropertyName("error"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Error { get; set; }
 		[JsonPropertyName("state_version")] public long StateVersion { get; set; }

@@ -21,6 +21,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using dnSpy.Contracts.Debugger;
+using dnSpy.Contracts.Debugger.DotNet.Evaluation;
 using dnSpy.Contracts.Debugger.DotNet.Metadata.Internal;
 
 namespace dnSpy.Debugger.DotNet.Metadata.Internal {
@@ -30,13 +31,40 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 			public readonly object LockObj = new object();
 			public readonly Dictionary<ulong, DbgRawMetadataImpl> Dict = new Dictionary<ulong, DbgRawMetadataImpl>();
 			public readonly List<DbgRawMetadataImpl> OtherMetadata = new List<DbgRawMetadataImpl>();
+			// The engine's evaluation dispatcher, captured at Create time. Every metadata reader --
+			// the Roslyn expression compiler included -- runs on this one thread (see
+			// DbgEngineLocalsProviderImpl.GetNodes and its siblings, which all marshal onto it).
+			public DbgDotNetDispatcher? Dispatcher;
+
+			// Runs on the DbgManager dispatcher thread during DbgRuntimeImpl.CloseCore, while the
+			// engine and its dispatcher thread are still alive (DbgManagerImpl closes the runtime
+			// before the engine). Freeing the buffers right here raced Roslyn reading them through
+			// raw MetadataBlock pointers on the engine thread and killed the process with an
+			// AccessViolationException; refcount-based deferral was measured to crash the same way.
+			// Instead: mark everything disposed first, so no reader that starts later can obtain the
+			// addresses, then post the free onto the engine dispatcher itself. The free then runs
+			// behind any in-flight evaluation on the only thread reads happen on, so read and free
+			// can no longer overlap. ForceDispose suppresses finalization before the post: if the
+			// dispatcher silently drops it during shutdown, the buffers remain allocated until process
+			// exit rather than being freed concurrently on the finalizer thread.
+			// See docs/local/dnspy-raw-metadata-use-after-free.md.
 			public void Dispose() {
-				foreach (var kv in Dict)
-					kv.Value.ForceDispose();
-				Dict.Clear();
-				foreach (var m in OtherMetadata)
+				DbgRawMetadataImpl[] all;
+				DbgDotNetDispatcher? dispatcher;
+				lock (LockObj) {
+					all = new DbgRawMetadataImpl[Dict.Count + OtherMetadata.Count];
+					Dict.Values.CopyTo(all, 0);
+					OtherMetadata.CopyTo(all, Dict.Count);
+					Dict.Clear();
+					OtherMetadata.Clear();
+					dispatcher = Dispatcher;
+				}
+				foreach (var m in all)
 					m.ForceDispose();
-				OtherMetadata.Clear();
+				dispatcher?.TryBeginInvoke(() => {
+					foreach (var m in all)
+						m.FreeAfterQuiesce();
+				});
 			}
 		}
 
@@ -50,6 +78,7 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 
 			var state = runtime.GetOrCreateData<RuntimeState>();
 			lock (state.LockObj) {
+				state.Dispatcher ??= (runtime.InternalRuntime as IDbgDotNetRuntime)?.Dispatcher;
 				if (state.Dict.TryGetValue(moduleAddress, out var rawMd)) {
 					if (rawMd.TryAddRef() is not null) {
 						if (rawMd.IsFileLayout != isFileLayout || rawMd.Size != moduleSize) {
@@ -81,6 +110,7 @@ namespace dnSpy.Debugger.DotNet.Metadata.Internal {
 
 			var state = runtime.GetOrCreateData<RuntimeState>();
 			lock (state.LockObj) {
+				state.Dispatcher ??= (runtime.InternalRuntime as IDbgDotNetRuntime)?.Dispatcher;
 				var rawMd = new DbgRawMetadataImpl(moduleBytes, isFileLayout);
 				try {
 					state.OtherMetadata.Add(rawMd);
