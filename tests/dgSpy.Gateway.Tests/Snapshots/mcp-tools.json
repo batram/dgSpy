@@ -540,7 +540,7 @@
     },
     {
       "name": "attach_endpoint",
-      "description": "Attach to a Mono/Unity soft-debugger endpoint by address and port. Use this when the target was launched with --debugger-agent=transport=dt_socket,server=y,address=HOST:PORT: such a target emits no discovery beacon, so list_programs can never see it and attach cannot reach it. Returns state \u0022faulted\u0022 with fault_message when the connection fails.",
+      "description": "Attach to a Mono/Unity soft-debugger endpoint by address and port. Use this when the target was launched with --debugger-agent=transport=dt_socket,server=y,address=HOST:PORT: such a target emits no discovery beacon, so list_programs can never see it and attach cannot reach it. Returns state \u0022faulted\u0022 with fault_message when the connection fails. A server=y agent accepts EXACTLY ONE connection per launch, so never TCP-probe the port to check whether the target is up: the probe consumes the single connection permanently, and this tool then faults with a connection error that reads like a target-side problem when the target is fine. Connect only with this tool, once. A clean detach makes the agent listen again; anything else means relaunching the target.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -686,7 +686,7 @@
     },
     {
       "name": "get_session_controller",
-      "description": "Report whether a debugger session currently has an MCP controller. Inspection never claims it or changes target state.",
+      "description": "Report whether a debugger session currently has an MCP controller. Inspection never claims it or changes target state. When owned, controller_expires_utc and controller_expires_in_seconds say when the lease lapses if that controller never calls again, so a caller that legitimately lost its transport \u2014 the MCP client replacing its stdio server gives the session a new identity and strands the old lease on a dead one \u2014 can wait a known interval instead of polling blind, then claim_session. controller_is_caller distinguishes \u0022someone else holds it\u0022 from \u0022you already do\u0022.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1263,7 +1263,7 @@
     },
     {
       "name": "list_threads",
-      "description": "List paused target threads with stable thread_id values. It does not eagerly fetch every stack because Unity threads can exit during frame retrieval; select a returned thread_id with get_callstack or get_frame.",
+      "description": "List paused target threads with stable thread_id values. It does not eagerly fetch every stack because Unity threads can exit during frame retrieval; select a returned thread_id with get_callstack or get_frame. Do not try to predict func-eval viability from \u0060states\u0060: CorDebug publishes UnsafePoint there and Mono publishes no equivalent at all, so a rule learned on one engine is wrong on the other. Pass include_evaluability instead.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1273,6 +1273,10 @@
           },
           "session_id": {
             "type": "string"
+          },
+          "include_evaluability": {
+            "type": "boolean",
+            "description": "Default false. True probes each thread and adds can_evaluate plus evaluate_blocked_reason (no_frames, native_frame, or unsafe_point), which is the signal invoke_method, create_object and reference-valued set_value actually depend on. Costs one bounded stack walk per thread; on Unity that is the call a disappearing thread can stall, which is why it is opt-in."
           }
         },
         "required": [
@@ -1687,7 +1691,7 @@
     },
     {
       "name": "invoke_method",
-      "description": "SIDE EFFECTING and audited. Evaluate a complete method-call expression in the paused target. Func-eval and side effects are always enabled by this tool boundary and cannot be downgraded or enabled accidentally through evaluate.",
+      "description": "SIDE EFFECTING and audited. Evaluate a complete method-call expression in the paused target. Func-eval and side effects are always enabled by this tool boundary and cannot be downgraded or enabled accidentally through evaluate. On failure read compiler_error: true means the expression never compiled and nothing ran, so fix the expression; false means it compiled and the engine refused to execute it here, so the same call can succeed against another thread or another stop. A func-eval needs a thread the engine will let it start on \u2014 call list_threads with include_evaluability=true and pass a thread_id whose can_evaluate is true.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1743,7 +1747,7 @@
     },
     {
       "name": "create_object",
-      "description": "SIDE EFFECTING and audited. Evaluate a complete object-construction expression in the paused target. Func-eval and side effects are always enabled.",
+      "description": "SIDE EFFECTING and audited. Evaluate a complete object-construction expression in the paused target. Func-eval and side effects are always enabled. compiler_error and thread selection work exactly as described on invoke_method.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2063,7 +2067,7 @@
     },
     {
       "name": "set_value",
-      "description": "Assign to a local, parameter, field or property in the paused target. Always side-effecting: the assignment executes in the target. compiler_error=true means the expression did not compile and nothing ran; an error without it means the target may already have been touched.",
+      "description": "Assign to a local, parameter, field or property in the paused target. Always side-effecting: the assignment executes in the target. compiler_error=true means the expression did not compile and nothing ran; an error without it means the target may already have been touched. Executing in the target is not the same as needing a func-eval, and the difference decides what is still possible against an idle process. Storing a value that already exists over there is a direct write and succeeds even with every thread at an unsafe point; producing a value the engine must first create \u2014 a string literal, a boxed value, a new object \u2014 is a func-eval and is refused at an unsafe point like any other. The cost of the value is what matters, not whether the target is a primitive: assigning null to a reference is as free as assigning an int, while assigning a string literal to that same reference is refused. When it is refused, see invoke_method for how to reach a thread that can evaluate; note also that the unsafe-point thread\u0027s evaluable frame is often not frame 0, so pass frame_index for the frame whose locals you actually want.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2912,7 +2916,7 @@
     },
     {
       "name": "get_autos",
-      "description": "Return the C# Autos provider values for a selected paused frame, capped at 200.",
+      "description": "Return the C# Autos provider values for a selected paused frame, capped at 200. dnSpy does not implement an Autos provider for any .NET engine, so on this host every call returns capability_unsupported rather than a success carrying a placeholder row. Use get_frame with include=[\u0022locals\u0022,\u0022this\u0022] instead \u2014 that provider is real and reports the same information.",
       "inputSchema": {
         "type": "object",
         "properties": {

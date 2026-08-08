@@ -312,6 +312,55 @@ public class HostRegistryTests {
 		finally { Directory.Delete(directory,true); }
 	}
 
+	/// <summary>run_to_method is not one host call but four, and the gateway composes their arguments
+	/// itself. It composed two of them wrongly and nothing noticed, because every test that touched
+	/// run_to_* asserted on the tool's schema rather than on what the host was actually asked.
+	///
+	/// It dropped `module` and `expected_breakpoints_version` when creating the temporary breakpoint, so
+	/// the host answered "module is required" to a caller who had passed module. It then guarded the
+	/// resume with the deprecated `expected_state_version` alias carrying an execution_version, and the
+	/// host compares that alias against state_version -- a different counter -- so the call died with a
+	/// stale_state naming two numbers the caller never supplied. Both defects made a gateway composition
+	/// bug read as caller error, which is exactly the failure mode this whole change set is about.</summary>
+	[Fact]
+	public async Task Run_to_method_forwards_the_arguments_its_composed_host_calls_require() {
+		var directory=CreateRegistryDirectory(); var auditPath=Path.Combine(directory,"audit.jsonl");
+		try {
+			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} }); var router=new HostRouter(HostRegistry.FromJson(json,directory));
+			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start(); using var remote=new TcpClient(); var accept=listener.AcceptTcpClientAsync(); await remote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var gateway=await accept;
+			var gatewayReader=new StreamReader(gateway.GetStream(),Encoding.UTF8,false,4096,true); var gatewayWriter=new StreamWriter(gateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true}; Assert.True(router.TryRegister("host-a",gateway,gatewayReader,gatewayWriter,out _));
+			var remoteReader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true); var remoteWriter=new StreamWriter(remote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true};
+			var seen=new System.Collections.Generic.List<RpcRequest>();
+			// Serve until the connection closes rather than counting calls: a fixed count deadlocks the
+			// test the moment the composition under test makes one call fewer, which is precisely the
+			// change this test exists to catch.
+			var responder=Task.Run(async ()=>{ for(string? line;(line=await remoteReader.ReadLineAsync()) is not null;){ var request=ProtocolJson.Deserialize<RpcRequest>(line)!; lock(seen) seen.Add(request); object result=request.Operation switch {
+				"set_breakpoint"=>new { breakpoint_id=11,cursor_event_id=4,bound=true },
+				"get_session_state"=>new SessionState { SessionId="session-a",State="paused",StateVersion=14,ExecutionVersion=2,LifecycleVersion=2,BreakpointsVersion=1 },
+				_=>new { ok=true } }; await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,result))); } });
+			var clients=new McpClientSessions(TimeSpan.FromMinutes(5)); clients.Touch("client-a"); var controllers=new SessionControllers(clients); controllers.Claim("session-a","host-a","client-a"); var audit=new GatewayAuditLog(auditPath,4096);
+			var executor=new GatewayToolExecutor(router,controllers,new GatewayAccessPolicy("full-control"),audit);
+
+			var response=await executor.ExecuteAsync("run_to_method",ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a",module="Target.exe",type="Target.Program",method="Tick",
+				expected_execution_version=2,expected_breakpoints_version=0,expected_stop_id="stop-1" }),"client-a",default);
+			listener.Stop();
+
+			Assert.Null(response.Error);
+			var created=seen.Single(request=>request.Operation=="set_breakpoint");
+			Assert.Equal("Target.exe",(string?)created.Arguments["module"]);
+			Assert.Equal(0,(int?)created.Arguments["expected_breakpoints_version"]);
+			var resumed=seen.Single(request=>request.Operation=="continue");
+			Assert.Equal(2,(int?)resumed.Arguments["expected_execution_version"]);
+			Assert.Null(resumed.Arguments["expected_state_version"]);
+			// The temporary breakpoint must actually come back out: breakpoints outlive a session and
+			// rebind on the next attach, so a leaked one stops a later run for no reason anybody can see.
+			var removed=seen.Single(request=>request.Operation=="remove_breakpoint");
+			Assert.Equal(11,(int?)removed.Arguments["breakpoint_id"]);
+			Assert.Equal(1,(int?)removed.Arguments["expected_breakpoints_version"]);
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
 	static string CreateRegistryDirectory() {
 		var directory=Path.Combine(Path.GetTempPath(),"dgspy-host-registry-"+Guid.NewGuid().ToString("N"));
 		Directory.CreateDirectory(directory);

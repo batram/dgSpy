@@ -19,6 +19,7 @@ using dnSpy.Contracts.Debugger.Breakpoints.Code;
 using dnSpy.Contracts.Debugger.Breakpoints.Modules;
 using dnSpy.Contracts.Debugger.CallStack;
 using dnSpy.Contracts.Debugger.DotNet.Code;
+using dnSpy.Contracts.Debugger.DotNet.CorDebug;
 using dnSpy.Contracts.Debugger.DotNet.Mono;
 using dnSpy.Contracts.Debugger.Evaluation;
 using dnSpy.Contracts.Debugger.DotNet.Metadata;
@@ -498,14 +499,49 @@ namespace dgSpy.Extension {
 		static string ThreadId(DbgThread thread) => $"{thread.Process.Id}:{thread.Id}";
 		async Task<ThreadInfo[]> ListThreadsAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
+			var evaluability=(bool?)req.Arguments["include_evaluability"] ?? false;
 			return await OnDebuggerAsync(()=>{
 				if (IsTargetRunning!=false) throw new RpcException("not_paused","Pause the session before listing threads so managed-frame availability is stable.");
 				return manager.Processes.SelectMany(process=>process.Threads).Select(thread=>{
-					return new ThreadInfo { ThreadId=ThreadId(thread),ProcessId=thread.Process.Id,OsThreadId=thread.Id,ManagedThreadId=thread.ManagedId,
+					var states=thread.State.Select(state=>state.State).ToArray();
+					var info=new ThreadInfo { ThreadId=ThreadId(thread),ProcessId=thread.Process.Id,OsThreadId=thread.Id,ManagedThreadId=thread.ManagedId,
 						Name=thread.Name,Kind=thread.Kind,IsMain=thread.IsMain,IsCurrent=thread==manager.CurrentThread.Current,
-						SuspendedCount=thread.SuspendedCount,States=thread.State.Select(state=>state.State).ToArray() };
+						SuspendedCount=thread.SuspendedCount,States=states };
+					if (evaluability) { var reason=EvaluationBlocker(thread,states); info.CanEvaluate=reason is null; info.EvaluateBlockedReason=reason; }
+					return info;
 				}).OrderBy(thread=>thread.ProcessId).ThenBy(thread=>thread.OsThreadId).ToArray();
 			},cancellationToken).ConfigureAwait(false);
+		}
+		/// <summary>Why a func-eval against this thread would be refused, or null when it would be accepted.
+		/// Both engines answer the same two questions, but neither answers them through the same field, and
+		/// `states` alone predicts nothing portable — CorDebug publishes UnsafePoint there and Mono publishes
+		/// no equivalent at all, which is why an agent that learned the CorDebug rule gets Unity wrong.
+		///
+		/// CorDebug parks a thread at a GC-unsafe point and reports it as a user state; ICorDebugEval then
+		/// fails with CORDBG_E_ILLEGAL_AT_GC_UNSAFE_POINT. Mono answers a func-eval request with
+		/// ERR_NOT_SUSPENDED unless the thread parked itself at a managed safepoint, which is exactly the
+		/// condition under which it also has managed frames to walk; a thread sitting in native code has
+		/// neither. Probing frames costs one bounded stack walk per thread, which is why it is opt-in: the
+		/// Mono frame fetch is the call a disappearing Unity thread can hang, and dnSpy's fork bounds it at
+		/// three seconds rather than never returning.</summary>
+		string? EvaluationBlocker(DbgThread thread,string[] states) {
+			// Order mirrors the engine's own: it rejects a missing or native frame before it looks at the
+			// safe point, so a thread that is both reports the reason the caller would actually hit.
+			var walker=thread.CreateStackWalker();
+			try {
+				var probe=walker.GetNextStackFrames(1);
+				try {
+					if (probe.Length==0) return "no_frames";
+					// A DbgStackWalker yields native frames too, so "has a frame" is not "has a managed frame".
+					// Only a managed frame carries a module, and evaluating against a native one fails with
+					// "Can't evaluate expressions when current stack frame is a native stack frame".
+					if (probe[0].Module is null) return "native_frame";
+				}
+				finally { manager.Close(probe); }
+			}
+			catch (Exception ex) when (ex is not RpcException) { return "no_frames"; }
+			finally { walker.Close(); }
+			return Array.IndexOf(states,CorThreadUserStates.UnsafePoint)>=0 ? "unsafe_point" : null;
 		}
 		async Task<FrameInfo[]> GetCallStackAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
