@@ -181,6 +181,13 @@ bootstrap/process watching, profiler/ReJIT, transpilers, reverse patches, CoreCL
 debugging remain deferred. The current tool surface does not provide these capabilities until their
 implementation milestones and acceptance gates are complete.
 
+Before those milestones, a disposable stage-0 CLR spike proves Harmony patch/unpatch, dependency
+loading, CorDebug coexistence, and authenticated pipe transport using a manually prepared stop. The
+production design then requires extension-hosted process exclusion, coincident user/internal
+breakpoint ownership, orthogonal action/interruption/cleanup outcomes, host-enforced default-deny
+capability permissions, and restart-safe probe discovery credentials. Mono/UCH must reuse a proven
+compatible resident BepInEx HarmonyX/MonoMod backend rather than loading a competing implementation.
+
 General target-code execution outside HookLab, assembly editing, general live method-body replacement,
 and dnSpy-host scripting remain unscheduled. Their trust boundaries and prerequisites are in
 [future capabilities](FUTURE_CAPABILITIES.md).

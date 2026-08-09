@@ -15,49 +15,63 @@ host script or open-ended expression program.
 
 The host performs one state machine:
 
-1. Create an internally owned temporary breakpoint and record the current event cursor/state.
-2. Continue and wait for natural execution to the exact target within the bound.
-3. Validate process, runtime, thread, frame, method/offset, and CorDebug evaluability.
-4. If explicitly allowed, search only declared nearby sequence points/IL offsets and record the slot
+1. Acquire the extension's process-scoped action lease and record the current event cursor/state.
+2. Add an internal logical owner to a multiplexed physical breakpoint at the target location.
+3. Continue and wait for natural execution to the exact target within the bound.
+4. Validate process, runtime, thread, frame, method/offset, and CorDebug evaluability.
+5. If explicitly allowed, search only declared nearby sequence points/IL offsets and record the slot
    actually used; otherwise fail.
-5. Execute the predeclared action, collect a structured result, and perform explicit verification.
-6. Remove only the internal breakpoint, wait for breakpoint-set settling, release temporary handles,
+6. Execute the predeclared action, collect a structured result, and perform explicit verification.
+7. Release only the internal breakpoint owner, wait for breakpoint-set settling, release temporary handles,
    and apply the requested resume policy.
 
-Terminal outcomes are exactly distinguishable as `trigger_not_reached`, `reached_not_evaluable`,
-`nearby_slot_not_found`, `action_failed`, `verification_failed`, or `completed`. Results also report
-whether the action may have executed, verification evidence, cleanup outcome, final debugger state,
-audit ID, and the status operation needed after ambiguity. No outcome claims that arbitrary execution
-is guaranteed.
+Results have three orthogonal status fields whose values are fixed before protocol DTOs ship:
+
+- `action_outcome`: `trigger_not_reached`, `reached_not_evaluable`, `nearby_slot_not_found`,
+  `action_failed`, `verification_failed`, or `completed`;
+- `interruption_reason`: `none`, `timeout`, `cancelled`, `client_disconnected`, `target_exited`,
+  `appdomain_unloaded`, `ui_shutdown`, `dispatcher_degraded`, or `external_debugger_action`; and
+- `cleanup_outcome`: `not_required`, `completed`, `failed`, or `ambiguous`.
+
+Results also report whether the action may have executed, verification evidence, final debugger state,
+audit ID, and the status operation needed after ambiguity. An interruption never gets collapsed into
+an action failure, and cleanup failure never overwrites what is known about the action. No outcome
+claims that arbitrary execution is guaranteed.
 
 Timeout, cancellation, disconnect, and target exit follow the same cleanup state machine. A timeout
-must not silently leave an internal breakpoint or unexpected pause behind.
+must not silently leave an internal breakpoint owner or unexpected pause behind.
 
 ## Specialized managed-payload action
 
-The payload action accepts a bounded assembly digest/identity, initializer type and method, protocol
-version, and bounded initialization data. Files are staged in a configured hash-verified host cache.
-At an evaluatable managed frame the host uses a fixed `Assembly.Load(byte[])` bootstrap, invokes the
-fixed initializer contract, verifies returned probe identity and transport health, and deletes staged
-files where possible.
+The payload action accepts a bounded bootstrap digest/identity, dependency manifest, initializer type
+and method, protocol version, and bounded initialization data. Files are staged in a configured
+hash-verified host cache. At an evaluatable managed frame the host loads one bootstrap assembly with
+`Assembly.Load(byte[])`. Its initializer has no static dependency on payload types, installs a resolver
+restricted to the manifest's exact assembly identities and embedded hash-verified bytes, then loads the
+probe and backend. It invokes the fixed initializer contract, verifies returned probe identity and
+transport health, and deletes staged files where possible. No dependency is resolved from the target's
+working directory, the host cache, or an unverified probing path after bootstrap.
 
 The loaded assembly may remain resident until AppDomain exit even after its hooks are removed. This
-action is always audited, requires the target-code/runtime-hook permission, and cannot be repurposed
-into an arbitrary bootstrap expression. Public `invoke_method` calls are not composed to implement it.
+action is always audited, requires `runtime_hooks`, and additionally requires `custom_hook_code` when
+the payload contains caller-supplied compiled code. It cannot be repurposed into an arbitrary bootstrap
+expression. Public `invoke_method` calls are not composed to implement it.
 
-## Non-stopping tracepoint actions
+## Auto-continued debugger tracepoint actions
 
 Host-side tracepoints capture declared bounded arguments, locals, fields, results where the engine can
-observe them, and exceptions without surfacing an interactive debugger stop to MCP. Capture never
-calls getters or `ToString()` by default. Depth, element count, string length, bytes/event, events/sec,
-total buffer bytes, sampling, and lifetime are mandatory bounds.
+observe them, and exceptions without surfacing an interactive debugger stop to MCP. They are not
+zero-stop instrumentation: CorDebug still pauses the target on every hit while the host captures and
+continues it. They are therefore unsuitable for hot or timing-sensitive paths where an in-process
+HookLab hook is required. Capture never calls getters or `ToString()` by default. Depth, element count,
+string length, bytes/event, events/sec, total buffer bytes, sampling, and lifetime are mandatory bounds.
 
 Events use existing cursor/wait conventions and include truncation, dropped counts, target identity,
 thread, method/offset, and capture status. A hot or repeatedly failing tracepoint is sampled or
 auto-disabled according to policy. Optimized-away or unavailable values are reported truthfully.
 Mutation remains an explicit atomic action or HookLab hook, not a hidden tracepoint side effect.
 
-## Non-stopping exception capture
+## Auto-continued debugger exception capture
 
 Exception tracing records, where available:
 
@@ -67,15 +81,41 @@ Exception tracing records, where available:
 - first-chance/handled/unhandled disposition and continuation state; and
 - process/runtime/AppDomain/thread/module identities.
 
-The host continues automatically under declared policy. It does not claim native stack recovery, COM
-internal state, unmanaged pointer provenance, or causality beyond the managed debugger boundary.
+The host continues automatically under declared policy, but the target still incurs a debugger stop
+for each captured exception. It does not claim native stack recovery, COM internal state, unmanaged
+pointer provenance, or causality beyond the managed debugger boundary.
 
 ## Concurrency, ownership, and cleanup
 
-Only one atomic action may control a process at a time; conflicting requests return
-`action_in_progress`. Internal breakpoints carry an unforgeable host owner token. Cleanup enumerates
-and removes only that action's resources, preserves all user-created and other-client breakpoints, and
-waits for debugger breakpoint-set settling before reporting completion.
+The coordinator and lease live in `dgSpy.Extension`, next to `OnDebuggerAsync` and the breakpoint
+services, rather than in the Gateway. Only one atomic action may control a process at a time. Every
+conflicting host mutation—including continue, pause, step, detach, terminate, restart, instruction
+pointer changes, and breakpoint mutation—consults that lease before reaching the engine; RPC and CLI
+requests return `action_in_progress`. Existing version and stop guards remain optimistic stale-state
+detection and are not treated as exclusion.
+
+Relevant dnSpy UI commands are disabled while an action owns the selected process. Their disabled-state
+text and the dgSpy activity/status surface identify the owning action, its bounded deadline, and the
+cancel/status operation instead of presenting unexplained grey controls. Any engine state transition
+that bypasses the coordinator is treated as `external_debugger_action`: the action stops issuing work,
+performs ownership-scoped cleanup, and never overwrites or automatically resumes the externally
+selected state.
+
+Internal breakpoints carry an unforgeable host owner token. The internal-breakpoint facility
+multiplexes logical owners onto a physical engine breakpoint, so an internal action can share an exact
+location with a user breakpoint without changing its condition, trace, hit count, labels, or enabled
+state. Hits are fanned out to both pipelines. If the user breakpoint requests a visible stop, that stop
+wins over the action's resume policy. Cleanup releases only the action's logical owner and removes the
+physical breakpoint only when no owner remains. Engines that cannot provide these semantics advertise
+the capability as absent rather than falling back to the public `breakpoints.Add`, which rejects a
+duplicate location.
+
+Capability absence is the shipping answer only for an engine dgSpy does not control, such as Mono. For
+CorDebug it is a stage-0 stop condition: dnSpy's public breakpoint service exposes no owner list and
+binds through an engine-created bound breakpoint, so the facility must be prototyped against that layer
+before stage 1. If it cannot be built there, the atomic breakpoint contract is redesigned rather than
+shipped with the capability reported absent wherever a user breakpoint already occupies the location.
+See the stage-0 spike in [HOOKLAB_IMPLEMENTATION_PLAN.md](HOOKLAB_IMPLEMENTATION_PLAN.md).
 
 Disconnect does not abandon the state machine: the host completes or cancels according to the
 request's policy, records the terminal result for later retrieval, and resumes deterministically.
@@ -90,15 +130,21 @@ natural arrival and are not broadened. Results explicitly distinguish natural ex
 function evaluation, and injected payload execution. Mono exposes only operations proven by its own
 capability and lifecycle tests.
 
+The protocol and capability catalog version every new operation and result schema. Older Gateways omit
+unknown tools, newer Gateways refuse an incompatible host contract before mutation, and provider or
+engine capability absence remains distinct from permission denial.
+
 ## Verification and acceptance
 
-- Fixture tests cover every terminal outcome, exact and nearby slots, hot-breakpoint races, unsafe
-  points, action/verification exceptions, timeouts, disconnect, cancellation, target exit, cleanup,
-  and ambiguity recovery.
-- Breakpoint tests prove user-created breakpoints survive and internal breakpoints settle before a
-  terminal result.
-- Trace tests prove no MCP-visible stop, bounded capture, overflow accounting, hot-hook behavior, and
-  unavailable-value reporting.
+- Fixture tests cover every `action_outcome`, every `interruption_reason` and `cleanup_outcome`, exact
+  and nearby slots, hot-breakpoint races, unsafe points, action/verification exceptions, and ambiguity
+  recovery without implying that every Cartesian combination is valid.
+- Breakpoint tests prove user-created breakpoints survive, coincident user/internal owners both receive
+  a hit, a user-visible stop wins, and internal breakpoints settle before a terminal result.
+- Concurrency tests race same-client and other-client RPC/CLI mutations, UI commands, and direct engine
+  transitions against an action and prove host-side exclusion or truthful interruption.
+- Trace tests prove no MCP-visible stop, explicitly measure target pause cost, enforce bounded capture
+  and overflow accounting, and reject hot-path configurations that require an in-process hook.
 - Exception tests cover handled/unhandled and first-chance events, HRESULT and managed stack capture,
   native-transition markers, and automatic continuation.
 - HookLab tests prove atomic probe install, identity/pipe verification, failed-bootstrap cleanup, and

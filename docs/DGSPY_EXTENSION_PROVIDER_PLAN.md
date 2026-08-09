@@ -7,10 +7,13 @@ specified in [DGSPY_ATOMIC_ACTIONS_PLAN.md](DGSPY_ATOMIC_ACTIONS_PLAN.md).
 
 ## Stable provider contract and composition
 
-Add a small `dgSpy.ExtensionContracts` assembly containing immutable DTOs and a minimal
+Add a small `dgSpy.ExtensionContracts` netstandard2.0 assembly containing immutable DTOs and a minimal
 `IDgSpyExtensionProvider` interface. It contains no WPF, dnSpy implementation, Gateway, or HookLab
-types. The dgSpy extension discovers providers through optional MEF `[ImportMany]` lazy imports and
-must compose and operate with zero providers.
+types, and is consumable by provider implementations loaded into both net48 and net10 dnSpy hosts. It
+is a host/provider plug-in ABI and is never loaded into the debug target. HookLab's provider references
+both this assembly and `HookLab.Contracts`; target probes reference only `HookLab.Contracts`. The two
+assemblies do not duplicate DTOs. The dgSpy extension discovers providers through optional MEF
+`[ImportMany]` lazy imports and must compose and operate with zero providers.
 
 A missing, malformed, or throwing provider is quarantined and reported as degraded or unavailable;
 it must never compose dgSpy, its menus, or its RPC service away silently. Composition tests cover zero
@@ -76,9 +79,18 @@ Add three dedicated permissions:
 - `custom_hook_code`
 - `hook_export`
 
-Inspect-only always refuses all three. Provisioned full-control local and remote hosts may enable them
-explicitly, independently. An upgrade must not widen an existing deployment: absent configuration is
-deny until the administrator enables the new permissions.
+These permissions require a new host capability-policy subsystem. The provider dispatcher in
+`dgSpy.Extension` is the authoritative enforcement point for every classified typed, generic, direct
+RPC, CLI, and GUI provider operation. The Gateway repeats the check as an outer policy boundary but is
+never the only enforcer. The existing `DGSPY_ACCESS_MODE=inspect-only` is a coarse ceiling that refuses
+all three; `full-control` merely makes them eligible and does not grant them.
+
+Local and remote host configuration enables each permission independently by canonical provider and
+operation classification. Missing configuration is deny. Upgrade and remote-package generation write
+explicit disabled entries, never infer grants from the old binary access mode, and preserve existing
+administrator choices on later upgrades. Configuration parsing, deployment manifests, host capability
+advertising, audit, and UI status all use the same immutable policy snapshot. Policy changes require an
+explicit reload/restart boundary and never widen an in-flight action.
 
 Expert source compiles on the selected remote host so framework and target references match. Source,
 reference roots/count/bytes, diagnostics, output bytes, duration, memory where enforceable, and
@@ -115,10 +127,11 @@ from the extension dispatcher and cannot strand the debugger paused.
   rejection.
 - Gateway tests prove generic/typed routing parity, authorization, lease/version concurrency, timeout
   ambiguity, audit redaction, and artifact containment/retrieval.
-- Extension tests prove composition with absent and broken providers and dispatcher isolation.
+- Extension tests prove composition with absent and broken providers, dispatcher isolation, direct-RPC
+  enforcement, default-deny upgrades, independent grants, and inspect-only precedence.
 - Live CLR tests prove install, detach-with-hooks, post-detach control, Gateway/dnSpy reconnection,
   PID-reuse rejection, explicit removal, and target exit.
-- Remote tests prove selected-host compilation, central permission/ownership enforcement, identical
-  artifact hashes, and redacted audit.
+- Remote tests prove selected-host compilation, host-side permission/ownership enforcement, provisioned
+  default-deny policy, identical artifact hashes, and redacted audit.
 - Mono provider capabilities remain absent until the HookLab CLR gate is green and Mono acceptance is
   complete.
