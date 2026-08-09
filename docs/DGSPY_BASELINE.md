@@ -135,6 +135,15 @@ Duplicate files must have identical SHA-256 hashes except for the explicit Windo
 variants retained from dnSpy at the same .NET servicing version. Packaging fails on every unknown or
 version-mismatched collision.
 
+With no switches, `pack-dgspy.ps1` remains the release-engineering command: it writes the optimally
+compressed portable archive `artifacts\dgspy\dgspy-win-x64.zip`. `-CompressionLevel Fastest` and
+`-CompressionLevel NoCompression` are available for explicit ZIP experiments, but do not change the
+default. `install-dgspy.ps1` from a repository checkout instead calls the packer with
+`-DirectoryPackage` and publishes `artifacts\dgspy-local\dgspy-win-x64`; this avoids a local ZIP
+round-trip while retaining a complete package that a failed install can reuse through the printed
+`-PackagePath` recovery command. `-PackagePath` accepts either a release ZIP or a complete package
+directory. Both formats carry the same `cli` payload and manifest verification fields.
+
 Build the deploy-only remote host archive on the development machine:
 
 ```powershell

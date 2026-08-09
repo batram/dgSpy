@@ -1,7 +1,16 @@
-param([string]$Configuration='Release',[string]$Runtime='win-x64',[string]$OutputDirectory="$PSScriptRoot\artifacts\dgspy")
+param(
+  [string]$Configuration='Release',
+  [string]$Runtime='win-x64',
+  [string]$OutputDirectory="$PSScriptRoot\artifacts\dgspy",
+  [ValidateSet('Optimal','Fastest','NoCompression')][string]$CompressionLevel='Optimal',
+  [switch]$DirectoryPackage
+)
 $ErrorActionPreference='Stop'
 # See build.ps1: keep MSBuild from leaving reusable worker nodes holding bin/obj handles.
 $env:MSBUILDDISABLENODEREUSE='1'
+[void][Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem')
+$packStopwatch=[Diagnostics.Stopwatch]::StartNew()
+$lastPhase=$packStopwatch.Elapsed
 $hostFrameworkOverrides=@(
   'Microsoft.VisualBasic.dll',
   'System.Diagnostics.EventLog.dll',
@@ -58,6 +67,12 @@ function Get-GitValue([string[]]$GitArguments) {
   catch { return $null }
 }
 
+function Write-PackTiming([string]$Phase) {
+  $now=$packStopwatch.Elapsed
+  Write-Host ("dgSpy package timing: {0} {1:n1}s (total {2:n1}s)" -f $Phase,($now-$script:lastPhase).TotalSeconds,$now.TotalSeconds)
+  $script:lastPhase=$now
+}
+
 $resolved=[IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $resolved -Force|Out-Null
 $staging=Join-Path $resolved ('.staging-'+[Guid]::NewGuid().ToString('N'))
@@ -69,12 +84,15 @@ try {
   # payload; it never discovers a source checkout or invokes an SDK.
   & (Join-Path $PSScriptRoot 'build.ps1') net-x64 -NoMsbuild
   if(-not $?){ throw 'Remote host publish failed.' }
+  Write-PackTiming 'dnSpy build'
   dotnet build (Join-Path $PSScriptRoot 'Extensions\dgSpy.Extension\dgSpy.Extension.csproj') -c $Configuration -f net10.0-windows --nologo -v:minimal
   if($LASTEXITCODE){ throw "Remote extension build failed: $LASTEXITCODE" }
+  Write-PackTiming 'extension build'
   dotnet publish (Join-Path $PSScriptRoot 'dgSpy.Cli\dgSpy.Cli.csproj') -c $Configuration -r $Runtime --self-contained true -o $cliPublish --nologo -v:minimal
   if($LASTEXITCODE){ throw "CLI publish failed: $LASTEXITCODE" }
   dotnet publish (Join-Path $PSScriptRoot 'dgSpy.Gateway\dgSpy.Gateway.csproj') -c $Configuration -r $Runtime --self-contained true -o $gatewayPublish --nologo -v:minimal
   if($LASTEXITCODE){ throw "Gateway publish failed: $LASTEXITCODE" }
+  Write-PackTiming 'CLI and Gateway publish'
   $hostPublish=Join-Path $PSScriptRoot 'dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish'
   $extensionOutput=Join-Path $PSScriptRoot "Extensions\dgSpy.Extension\bin\$Configuration\net10.0-windows"
   foreach($required in 'dnSpy.exe','bin\dnSpy.dll','bin\hostfxr.dll','bin\coreclr.dll'){
@@ -90,6 +108,7 @@ try {
   foreach($file in 'dgSpy.Extension.x.dll','dgSpy.Extension.x.pdb','dgSpy.Protocol.dll','dgSpy.Protocol.pdb'){
     Copy-Item -LiteralPath (Join-Path $extensionOutput $file) -Destination $extensionDestination
   }
+  Write-PackTiming 'payload staging and merge'
   $launcherDestination=Join-Path $cli 'launcher';New-Item -ItemType Directory -Path $launcherDestination -Force|Out-Null
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'packaging\remote-host\Start-dgSpyRemoteHost.ps1') -Destination $launcherDestination
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'packaging\remote-host\Start-dgSpyRemoteHost.cmd') -Destination $launcherDestination
@@ -100,14 +119,42 @@ try {
   $commit=Get-GitValue 'rev-parse','HEAD'
   $dirty=[bool](Get-GitValue 'status','--porcelain')
   $extensionSha=(Get-FileHash -LiteralPath (Join-Path $extensionDestination 'dgSpy.Extension.x.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
-  $manifest=[ordered]@{format_version=1;runtime=$Runtime;target_framework='net10.0';shared_runtime=$true;created_utc=[DateTime]::UtcNow.ToString('O');entrypoint='cli/bin/dgspy.exe';gateway='cli/bin/dgSpy.Gateway.exe';host='cli/dnSpy.exe';extension_sha256=$extensionSha;file_count=$shape.file_count;payload_bytes=$shape.payload_bytes;git_commit=$commit;git_dirty=$dirty}
+  $manifest=[ordered]@{format_version=1;runtime=$Runtime;target_framework='net10.0';shared_runtime=$true;package_format=$(if($DirectoryPackage){'directory'}else{'zip'});archive_compression=$(if($DirectoryPackage){$null}else{$CompressionLevel});created_utc=[DateTime]::UtcNow.ToString('O');entrypoint='cli/bin/dgspy.exe';gateway='cli/bin/dgSpy.Gateway.exe';host='cli/dnSpy.exe';extension_sha256=$extensionSha;file_count=$shape.file_count;payload_bytes=$shape.payload_bytes;git_commit=$commit;git_dirty=$dirty}
   Write-Host "dgSpy extension $($extensionSha.Substring(0,12)) from commit $(if($commit){$commit.Substring(0,12)}else{'unknown'})$(if($dirty){' (dirty tree)'})"
   [IO.File]::WriteAllText((Join-Path $staging 'manifest.json'),(($manifest|ConvertTo-Json)+"`n"),[Text.UTF8Encoding]::new($false))
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-dgspy.ps1') -Destination $staging
-  $archive=Join-Path $resolved "dgspy-$Runtime.zip"
-  Compress-Archive -Path (Join-Path $staging 'cli'),(Join-Path $staging 'manifest.json'),(Join-Path $staging 'install-dgspy.ps1') -DestinationPath $archive -Force
-  Write-Host "dgSpy package: $archive"
+  if($DirectoryPackage) {
+    # Source installs consume this tree on the same machine. Publish it by rename so a failed rebuild
+    # leaves the prior complete directory available for an install retry.
+    $packageDirectory=Join-Path $resolved "dgspy-$Runtime"
+    $previousDirectory=$packageDirectory+'.previous-'+[Guid]::NewGuid().ToString('N')
+    if(Test-Path -LiteralPath $packageDirectory){ Move-Item -LiteralPath $packageDirectory -Destination $previousDirectory }
+    try { Move-Item -LiteralPath $staging -Destination $packageDirectory }
+    catch {
+      if(-not (Test-Path -LiteralPath $packageDirectory) -and (Test-Path -LiteralPath $previousDirectory)){ Move-Item -LiteralPath $previousDirectory -Destination $packageDirectory }
+      throw
+    }
+    if(Test-Path -LiteralPath $previousDirectory) {
+      try { Remove-Item -LiteralPath $previousDirectory -Recurse -Force }
+      catch { Write-Warning "The new package directory is complete, but its predecessor could not be removed: $previousDirectory ($($_.Exception.Message))" }
+    }
+    Write-PackTiming 'directory publish'
+    Write-Host "dgSpy package directory: $packageDirectory"
+  }
+  else {
+    $archive=Join-Path $resolved "dgspy-$Runtime.zip"
+    # Compress-Archive is exceptionally slow for this hundreds-of-megabytes, many-file payload. The
+    # framework ZipFile implementation is also what the Gateway uses for remote packages. Create beside
+    # the destination and rename only after success so a failed retry preserves the last complete archive.
+    $temporaryArchive=$archive+'.tmp-'+[Guid]::NewGuid().ToString('N')
+    $compression=[IO.Compression.CompressionLevel]::$CompressionLevel
+    [IO.Compression.ZipFile]::CreateFromDirectory($staging,$temporaryArchive,$compression,$false)
+    Move-Item -LiteralPath $temporaryArchive -Destination $archive -Force
+    Write-PackTiming 'ZIP creation'
+    Write-Host "dgSpy package: $archive"
+  }
 } finally {
+  if($temporaryArchive -and (Test-Path -LiteralPath $temporaryArchive)){ Remove-Item -LiteralPath $temporaryArchive -Force }
   $resolvedStaging=[IO.Path]::GetFullPath($staging)
   if($resolvedStaging.StartsWith($resolved+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $resolvedStaging)){ Remove-Item -LiteralPath $resolvedStaging -Recurse -Force }
 }

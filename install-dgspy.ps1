@@ -1,5 +1,6 @@
 param(
 	[Parameter(Mandatory=$true)][ValidateSet('codex','claude')][string]$Agent,
+	# A release ZIP or an already-extracted/package directory. Repository installs populate this internally.
 	[string]$PackagePath,
 	[string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA 'Programs\dgSpyMcp'),
 	# Kill whatever is running out of the install directory instead of refusing. This terminates the MCP
@@ -9,8 +10,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+[void][Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem')
 $temporaryRoot = $null
 $sourceRoot = $PSScriptRoot
+$packageBuiltHere = $false
+$installStopwatch = [Diagnostics.Stopwatch]::StartNew()
+$lastPhase = $installStopwatch.Elapsed
 
 function Invoke-WithRetry([scriptblock]$Action, [int]$Attempts = 10, [int]$DelayMs = 300) {
 	for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
@@ -22,25 +27,41 @@ function Invoke-WithRetry([scriptblock]$Action, [int]$Attempts = 10, [int]$Delay
 	}
 }
 
+function Write-InstallTiming([string]$Phase) {
+	$now = $installStopwatch.Elapsed
+	Write-Host ("dgSpy install timing: {0} {1:n1}s (total {2:n1}s)" -f $Phase,($now-$script:lastPhase).TotalSeconds,$now.TotalSeconds)
+	$script:lastPhase = $now
+}
+
 try {
-	# A release archive already contains cli\bin\dgspy.exe. A repository checkout builds that same complete
-	# archive first, so installation and agent registration are identical after this point.
+	# A release archive already contains cli\bin\dgspy.exe. A repository checkout builds the same complete
+	# package first, so installation and agent registration are identical after this point.
 	if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot 'cli\bin\dgspy.exe') -PathType Leaf)) {
 		if ([string]::IsNullOrWhiteSpace($PackagePath)) {
 			$packScript = Join-Path $PSScriptRoot 'pack-dgspy.ps1'
 			if (-not (Test-Path -LiteralPath $packScript -PathType Leaf)) {
-				throw 'This is neither an extracted dgSpy release nor a repository checkout. Pass -PackagePath to dgspy-win-x64.zip.'
+				throw 'This is neither an extracted dgSpy release nor a repository checkout. Pass -PackagePath to dgspy-win-x64.zip or an extracted package directory.'
 			}
-			& $packScript
+			# A local source install consumes this tree immediately, so do not create and extract an archive
+			# that never crosses a network. Keep it outside artifacts\dgspy so it cannot be mistaken for the
+			# optimally compressed release artifact.
+			$localPackageDirectory = Join-Path $PSScriptRoot 'artifacts\dgspy-local'
+			& $packScript -OutputDirectory $localPackageDirectory -DirectoryPackage
 			if ($LASTEXITCODE) { throw "dgSpy package build failed with exit code $LASTEXITCODE." }
-			$PackagePath = Join-Path $PSScriptRoot 'artifacts\dgspy\dgspy-win-x64.zip'
+			$PackagePath = Join-Path $localPackageDirectory 'dgspy-win-x64'
+			$packageBuiltHere = $true
+			Write-InstallTiming 'package build'
 		}
 		$resolvedPackage = [IO.Path]::GetFullPath($PackagePath)
-		if (-not (Test-Path -LiteralPath $resolvedPackage -PathType Leaf)) { throw "Complete dgSpy package not found: $resolvedPackage" }
-		$temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ('dgspy-install-'+[Guid]::NewGuid().ToString('N'))
-		New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
-		Expand-Archive -LiteralPath $resolvedPackage -DestinationPath $temporaryRoot
-		$sourceRoot = $temporaryRoot
+		if (Test-Path -LiteralPath $resolvedPackage -PathType Container) { $sourceRoot = $resolvedPackage }
+		elseif (Test-Path -LiteralPath $resolvedPackage -PathType Leaf) {
+			$temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ('dgspy-install-'+[Guid]::NewGuid().ToString('N'))
+			New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
+			[IO.Compression.ZipFile]::ExtractToDirectory($resolvedPackage,$temporaryRoot)
+			$sourceRoot = $temporaryRoot
+			Write-InstallTiming 'package extraction'
+		}
+		else { throw "Complete dgSpy package not found: $resolvedPackage" }
 	}
 
 	$sourceCli = Join-Path $sourceRoot 'cli\bin\dgspy.exe'
@@ -75,9 +96,17 @@ try {
 		# targets with it, and an agent that loses its MCP server mid-session needs to know why.
 		Write-Warning "Force: terminating processes running from the install directory: $detail"
 		foreach ($holder in $holders) {
-			try { Stop-Process -Id $holder.Id -Force -ErrorAction Stop } catch { throw "Failed to terminate $($holder.ProcessName) (PID $($holder.Id)): $($_.Exception.Message)" }
+			try { Stop-Process -Id $holder.Id -Force -ErrorAction Stop }
+			catch {
+				# Exiting between enumeration and Stop-Process is the successful outcome, not an install
+				# failure. Only suppress the race when that exact PID is now absent; access denied and a
+				# still-live process remain hard failures.
+				if ($null -ne (Get-Process -Id $holder.Id -ErrorAction SilentlyContinue)) {
+					throw "Failed to terminate $($holder.ProcessName) (PID $($holder.Id)): $($_.Exception.Message)"
+				}
+			}
 		}
-		foreach ($holder in $holders) { $holder.WaitForExit(15000) | Out-Null }
+		foreach ($holder in $holders) { try { $holder.WaitForExit(15000) | Out-Null } catch { } }
 		$stillRunning = @(Get-Process -ErrorAction SilentlyContinue |
 			Where-Object { $_.Path -and $_.Path.StartsWith($resolvedInstall+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) })
 		if ($stillRunning.Count -gt 0) {
@@ -95,12 +124,18 @@ try {
 			$sourceFile = Join-Path $sourceRoot $file
 			if (Test-Path -LiteralPath $sourceFile -PathType Leaf) { Copy-Item -LiteralPath $sourceFile -Destination $staging }
 		}
+		Write-InstallTiming 'installation staging copy'
 		# A process exiting does not mean Windows has released its handle on the directory yet, so the swap
 		# can fail for a moment after a successful -Force kill. Retry briefly rather than failing an install
 		# that is about to be possible.
 		Invoke-WithRetry { if (Test-Path -LiteralPath $resolvedInstall) { Move-Item -LiteralPath $resolvedInstall -Destination $backup } }
 		Invoke-WithRetry { Move-Item -LiteralPath $staging -Destination $resolvedInstall }
-		if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
+		Write-InstallTiming 'directory swap'
+		if (Test-Path -LiteralPath $backup) {
+			try { Invoke-WithRetry { Remove-Item -LiteralPath $backup -Recurse -Force } }
+			catch { Write-Warning "The new installation is active, but the previous installation could not be removed: $backup ($($_.Exception.Message))" }
+		}
+		Write-InstallTiming 'previous installation cleanup'
 	}
 	catch {
 		if (-not (Test-Path -LiteralPath $resolvedInstall) -and (Test-Path -LiteralPath $backup)) { Move-Item -LiteralPath $backup -Destination $resolvedInstall }
@@ -157,6 +192,12 @@ try {
 
 	Write-Host "dgSpy is installed and registered for $Agent."
 	Write-Host 'The CLI will start the Gateway on first MCP use. Restart the agent, then say: Use dgspy and go local.'
+}
+catch {
+	if ($packageBuiltHere -and $PackagePath -and (Test-Path -LiteralPath $PackagePath)) {
+		Write-Warning "The completed package was preserved. Retry the install without rebuilding: .\install-dgspy.ps1 $Agent -PackagePath '$PackagePath'$(if ($Force) { ' -Force' })"
+	}
+	throw
 }
 finally {
 	if ($null -ne $temporaryRoot -and (Test-Path -LiteralPath $temporaryRoot)) { Remove-Item -LiteralPath $temporaryRoot -Recurse -Force }

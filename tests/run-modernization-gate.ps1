@@ -85,6 +85,7 @@ try {
 	}
 	Invoke-Checked 'dgSpy build and deploy' { .\build-dgspy.ps1 -TargetFramework $TargetFramework }
 	Invoke-Checked 'PowerShell host-launcher tests' { .\tests\TestSupport\Start-DgSpyHost.Tests.ps1 }
+	Invoke-Checked 'PowerShell packaging-script tests' { .\tests\TestSupport\PackagingScripts.Tests.ps1 }
 
 	if ($UpdateSnapshots) {
 		$env:DGSPY_UPDATE_SNAPSHOTS = '1'
