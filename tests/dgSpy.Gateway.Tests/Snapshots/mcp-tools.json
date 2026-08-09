@@ -78,7 +78,7 @@
     },
     {
       "name": "launch_local_host",
-      "description": "SIDE EFFECTING. Ensure exactly one managed local host is running: adopt one that is already running the installed payload, install and launch when none is, and never start a second process beside a running one. Fails with host_already_running when a different build owns the endpoint; replace=true then detaches that host\u0027s targets, closes it, and launches the installed payload, which ends its debugging sessions.",
+      "description": "SIDE EFFECTING. Ensure exactly one managed local host is running: adopt one that is already running the installed payload, install and launch when none is, and never start a second process beside a running one. Fails with host_already_running when a different build owns the endpoint; replace=true then detaches that host\u0027s targets, closes it, and launches the installed payload, which ends its debugging sessions. Pass elevated=true when a target process is missing from list_programs because it belongs to another user or to a service; the result reports the host\u0027s actual elevation.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -89,6 +89,10 @@
           "allow_terminate": {
             "type": "boolean",
             "description": "With replace, proceed even when a target cannot be detached without killing it. Destroys that process."
+          },
+          "elevated": {
+            "type": "boolean",
+            "description": "Launch the host elevated, so it can see and attach to processes owned by other users and by services. Prompts for User Account Control on the interactive desktop; a dismissed prompt fails with elevation_declined. A running host is adopted only when it is already elevated. Requires the default state root and no DGSPY_HOST_ID, DGSPY_RPC_TOKEN or DGSPY_RPC_PORT override, because elevation cannot pass them to the host."
           }
         },
         "required": []

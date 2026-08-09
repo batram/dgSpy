@@ -309,7 +309,34 @@ running one. It adopts a host already running the installed payload, and otherwi
 `host_already_running` naming both builds. Two hosts contending for the endpoint is the worst state
 available: the second process composes, finds the port taken, and every answer keeps coming from the
 superseded build while the call reports success. It is indistinguishable from a working host until
-results start disagreeing with the tree.
+results start disagreeing with the tree. Two things enforce that beyond the process scan, because the
+scan only sees dnSpy under the managed install root: `RunningManagedHosts` resolves image paths with
+`QueryFullProcessImageName` rather than `Process.MainModule`, which is refused across an integrity
+boundary and would hide an elevated host from the very check meant to find it; and the launch refuses
+outright when something already accepts connections on `127.0.0.1:7351`, which catches a host installed
+somewhere else entirely.
+
+**An elevated host is opt-in, and its elevation is reported rather than assumed.** dnSpy's manifest is
+`asInvoker`, so a host inherits the Gateway's integrity level and cannot see processes owned by other
+users or by services. `launch_local_host` with `elevated=true` starts it through ShellExecute with the
+`runas` verb; a dismissed User Account Control prompt fails with `elevation_declined` rather than
+reporting a host that does not exist. ShellExecute cannot carry an environment block, so the elevated
+child computes its own state root, identity, credential and port — the launch is therefore refused with
+`elevated_launch_unsupported_environment` when the Gateway uses a non-default `DGSPY_STATE_ROOT` or has
+`DGSPY_HOST_ID`, `DGSPY_RPC_TOKEN` or `DGSPY_RPC_PORT` set, because the two sides would otherwise
+disagree about where to meet. Adoption is not a shortcut around this: a running host that matches the
+payload but is not provably elevated fails with `host_not_elevated` or `host_elevation_unknown` instead
+of being adopted, since the caller cannot check that claim afterwards and would find out only when a
+target stayed invisible. The gateway↔host hop is a loopback socket with a shared token, so a
+medium-integrity Gateway talks to an elevated host without any further arrangement.
+
+Reading an elevated host's identity is permitted; ending its process is not. `replace=true` from an
+unelevated Gateway therefore fails with `replace_requires_elevation` *before* it detaches anything —
+the natural place to discover the refusal is `Process.Kill`, by which point the replacement has already
+detached every session to make the close safe, so the caller would have lost the debugging state and
+still be looking at the host they asked to replace. Close the elevated dnSpy by hand instead. Only a
+proven elevated host blocks; an unreadable token falls through to the existing failure path rather than
+refusing replacements on a machine where the query is unavailable.
 
 **A dispatcher fault is not the same as a dead dispatcher.** `dispatcher_state` is `healthy`,
 `faulted` (a debugger-thread callback failed and was contained; the host still works) or `unavailable`

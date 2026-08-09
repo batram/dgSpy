@@ -13,8 +13,9 @@ public sealed class DeploymentService {
 	readonly string stateRoot;
 	readonly string installRoot;
 	readonly string packageRoot;
+	internal static string DefaultStateRoot() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy");
 	public DeploymentService() {
-		stateRoot=Environment.GetEnvironmentVariable("DGSPY_STATE_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy");
+		stateRoot=Environment.GetEnvironmentVariable("DGSPY_STATE_ROOT") ?? DefaultStateRoot();
 		installRoot=Environment.GetEnvironmentVariable("DGSPY_INSTALL_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","dgSpy");
 		packageRoot=Path.GetFullPath(Environment.GetEnvironmentVariable("DGSPY_PACKAGE_ROOT") ?? Path.Combine(stateRoot,"packages"));
 	}
@@ -86,7 +87,12 @@ public sealed class DeploymentService {
 	// with the process id and both builds when it is not, or -- only when the caller asked for it --
 	// replace it, which detaches its targets first and then closes it.
 	async Task<object> LaunchLocalAsync(JsonObject args,HostRouter router,CancellationToken token) {
-		var replace=(bool?)args["replace"]==true; var allowTerminate=(bool?)args["allow_terminate"]==true;
+		var replace=(bool?)args["replace"]==true; var allowTerminate=(bool?)args["allow_terminate"]==true; var elevated=(bool?)args["elevated"]==true;
+		// Before anything is closed or installed. Elevation goes through ShellExecute, which cannot carry
+		// an environment block -- the consent service builds the child's -- so an elevated host only works
+		// where it would compute the same values unaided. Discovering that after replace=true had already
+		// detached and closed the running host would leave the caller with no host at all and a refusal.
+		if(elevated) RequireElevatedLaunchEnvironment(stateRoot,Environment.GetEnvironmentVariable);
 		// The running-host decision is made before anything is deployed. Installing first would move
 		// current.json onto a version that is not the one running, and deployment freshness -- the check
 		// that catches a host answering from superseded code -- compares exactly those two things.
@@ -99,10 +105,16 @@ public sealed class DeploymentService {
 			// running the code we would have deployed. Reporting started=true for a process we did not
 			// start would be a lie the caller cannot check.
 			if(matches && running.Length==1) {
+				// Elevation is not a property of the payload, so a host that matches by build can still be
+				// the wrong host for this call. Adopting it while the caller asked for elevation would
+				// answer "connected" to a request for access the adopted process does not have, and the
+				// caller would only find out when a target stayed invisible.
+				var runningElevation=ProcessIdentity.IsElevated(running[0].Id);
+				if(elevated) RequireAdoptedHostElevated(running[0].Id,runningElevation);
 				var adoptedCurrent=ReadCurrent();
 				return new { started=false,adopted=true,installed=false,redeployed=false,replaced=false,active_version=(string?)adoptedCurrent?["active_version"],
 					extension_sha256=payloadExtensionSha,process_id=(int?)live!["dnspy_process_id"] ?? running[0].Id,connected=true,host_id=(string?)adoptedCurrent?["host_id"],
-					recovery=(string?)null,detail="A local host already running this exact payload was adopted rather than duplicated." };
+					elevated=runningElevation,recovery=(string?)null,detail="A local host already running this exact payload was adopted rather than duplicated." };
 			}
 			var describe=string.Join(", ",running.Select(process=>$"pid {process.Id}"));
 			var runningBuild=live is null ? "not answering RPC" : $"build {(string?)live["build_label"] ?? "unknown"}, extension {Shorten((string?)live["extension_sha256"])}";
@@ -120,15 +132,87 @@ public sealed class DeploymentService {
 		// prompt on close waits for a person who is not there -- which blocks the orderly exit that
 		// detaches targets before the process dies. Every other launcher (the remote host, the smokes)
 		// already passes it; the gateway was the one that did not.
-		var start=new ProcessStartInfo(executable,"--dgspy-no-window-activation") { UseShellExecute=false }; start.Environment["DGSPY_STATE_ROOT"]=stateRoot; BackfillWindowsEnvironment(start.Environment);
-		var process=Process.Start(start) ?? throw new InvalidOperationException("dnSpy did not start.");
+		ProcessStartInfo start;
+		if(elevated) {
+			BackfillOwnWindowsEnvironment();
+			start=new ProcessStartInfo(executable,"--dgspy-no-window-activation") { UseShellExecute=true,Verb="runas" };
+		}
+		else { start=new ProcessStartInfo(executable,"--dgspy-no-window-activation") { UseShellExecute=false }; start.Environment["DGSPY_STATE_ROOT"]=stateRoot; BackfillWindowsEnvironment(start.Environment); }
+		// The scan above finds dnSpy processes under this install root. A host installed somewhere else --
+		// another dgSpy install, a hand-started build -- is invisible to it and still owns the port, which
+		// is the two-hosts state by another route. The endpoint itself is the only thing that answers this
+		// without guessing, so ask it directly and refuse rather than launch into an owned port.
+		RequireLocalRpcEndpointFree(LocalRpcPort(),running.Length>0);
+		Process process;
+		try { process=Process.Start(start) ?? throw new InvalidOperationException("dnSpy did not start."); }
+		catch(System.ComponentModel.Win32Exception ex) when (elevated && ex.NativeErrorCode==ErrorCancelled) {
+			throw new GatewayControlException("elevation_declined",
+				$"The elevation prompt for the local host was dismissed or denied, so no host was started{(running.Length>0 ? " -- and the host that was running has already been replaced, so there is now no local host at all" : "")}. Approve the User Account Control prompt and call launch_local_host again, or call it without elevated=true for a host that runs at the Gateway's own integrity level.");
+		}
+		// Elevation is reported from what happened, not from what was asked. A successful runas start is
+		// itself the proof for the elevated path; every other path has to ask the process.
+		var launchedElevation=elevated ? true : ProcessIdentity.IsElevated(process.Id);
 		for(var attempt=0;attempt<20;attempt++) {
 			await Task.Delay(250,token);
 			var hosts=await router.ListHostsAsync(token);
 			if(hosts.Any(item=>System.Text.Json.JsonSerializer.Serialize(item).Contains("\"state\":\"connected\"",StringComparison.Ordinal)))
-				return new { started=true,adopted=false,installed,redeployed=installed,replaced=running.Length>0,active_version=version,payload_sha256=deployedSha,extension_sha256=deployedExtensionSha,process_id=process.Id,connected=true,host_id=hostId,recovery=(string?)null };
+				return new { started=true,adopted=false,installed,redeployed=installed,replaced=running.Length>0,active_version=version,payload_sha256=deployedSha,extension_sha256=deployedExtensionSha,process_id=process.Id,connected=true,host_id=hostId,elevated=launchedElevation,recovery=(string?)null };
 		}
-		return new { started=true,adopted=false,installed,redeployed=installed,replaced=running.Length>0,active_version=version,payload_sha256=deployedSha,extension_sha256=deployedExtensionSha,process_id=process.Id,connected=false,host_id=hostId,recovery="Call doctor; dnSpy may still be composing extensions." };
+		return new { started=true,adopted=false,installed,redeployed=installed,replaced=running.Length>0,active_version=version,payload_sha256=deployedSha,extension_sha256=deployedExtensionSha,process_id=process.Id,connected=false,host_id=hostId,elevated=launchedElevation,recovery="Call doctor; dnSpy may still be composing extensions." };
+	}
+	const int ErrorCancelled=1223;
+
+	/// <summary>Refuses to adopt a running host when the caller asked for an elevated one and cannot be
+	/// shown that it is. An undeterminable token fails the same way as a medium-integrity one: the whole
+	/// point of the flag is access the caller could not otherwise get, and a guess about that is worth
+	/// nothing.</summary>
+	internal static void RequireAdoptedHostElevated(int processId,bool? elevation) {
+		if(elevation==true) return;
+		throw elevation==false
+			? new GatewayControlException("host_not_elevated",
+				$"A local host (pid {processId}) is already running the installed payload, but it is not elevated, so adopting it would not give the elevated debugger access this call asked for -- processes owned by other users and by services would stay invisible exactly as they are now. It was left running and nothing was started. Call launch_local_host again with replace=true and elevated=true to close it and launch an elevated host, which ends any debugging session it holds, or drop elevated to adopt the host as it is.")
+			: new GatewayControlException("host_elevation_unknown",
+				$"A local host (pid {processId}) is already running the installed payload, but the Gateway could not read its token to prove whether it is elevated, so it cannot honestly report that this call produced elevated access. It was left running and nothing was started. Call launch_local_host with replace=true and elevated=true to close it and launch a host whose elevation is known, or drop elevated to adopt the host as it is.");
+	}
+
+	/// <summary>The variables an elevated launch cannot deliver. The host reads its state root, identity,
+	/// credential and port from its own environment, and a ShellExecute child gets none of ours -- so an
+	/// elevated launch is only sound where the host would compute the same values unaided. Same user, so
+	/// the default state root under LOCALAPPDATA resolves identically on both sides; anything the operator
+	/// overrode does not, and the resulting host would either answer on a port nobody dials or fail the
+	/// handshake with a credential nobody shares.</summary>
+	internal static void RequireElevatedLaunchEnvironment(string stateRoot,Func<string,string?> readEnvironment) {
+		var expected=DefaultStateRoot();
+		if(!PathsEqual(stateRoot,expected))
+			throw new GatewayControlException("elevated_launch_unsupported_environment",
+				$"An elevated local host cannot be started while the Gateway uses a custom state root ('{stateRoot}'): elevation goes through ShellExecute, which cannot pass DGSPY_STATE_ROOT to the child, so the elevated host would read '{expected}' instead and the two sides would not share a credential. Nothing was started. Run the Gateway with the default state root, or start the host elevated yourself with DGSPY_STATE_ROOT set and call launch_local_host without elevated to adopt it.");
+		var overridden=new[]{"DGSPY_HOST_ID","DGSPY_RPC_TOKEN","DGSPY_RPC_PORT"}.Where(name=>!string.IsNullOrWhiteSpace(readEnvironment(name))).ToArray();
+		if(overridden.Length>0)
+			throw new GatewayControlException("elevated_launch_unsupported_environment",
+				$"An elevated local host cannot be started while {string.Join(" and ",overridden)} {(overridden.Length==1 ? "is" : "are")} set: elevation goes through ShellExecute, which cannot pass {(overridden.Length==1 ? "it" : "them")} to the child, so the elevated host would generate or default {(overridden.Length==1 ? "its own value" : "its own values")} and the Gateway could not reach it. Nothing was started. Unset {(overridden.Length==1 ? "it" : "them")} and retry, or start the host elevated yourself with {(overridden.Length==1 ? "it" : "them")} set and call launch_local_host without elevated to adopt it.");
+	}
+	static bool PathsEqual(string left,string right) {
+		static string Normalize(string path) { try { return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); } catch { return path.TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar); } }
+		return string.Equals(Normalize(left),Normalize(right),StringComparison.OrdinalIgnoreCase);
+	}
+
+	static int LocalRpcPort() => int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var port) ? port : 7351;
+	/// <summary>Whether something already accepts connections on the local RPC endpoint. Only a completed
+	/// connection counts as owned. This check is defence in depth behind the running-host scan, so a probe
+	/// that cannot run must not block a launch that scan already cleared -- refusing to start any host at
+	/// all is the worse failure of the two.</summary>
+	internal static bool LocalRpcEndpointOwned(int port,Func<int,bool> connect) { try { return connect(port); } catch { return false; } }
+	static void RequireLocalRpcEndpointFree(int port,bool replaced) {
+		if(!LocalRpcEndpointOwned(port,TryConnectLoopback)) return;
+		throw new GatewayControlException("local_rpc_endpoint_owned",
+			$"Something is already listening on the local debugger endpoint 127.0.0.1:{port}, and it is not a dnSpy from this managed install, so nothing was started{(replaced ? " -- the host that was running has already been replaced, so recover before retrying" : "")}. Launching now would produce a second host that composes, finds the port taken, and sits idle while every answer keeps coming from whatever owns the port. Close the process holding it -- another dgSpy install or a hand-started dnSpy are the usual owners -- and call launch_local_host again.");
+	}
+	internal static bool TryConnectLoopback(int port) {
+		using var client=new System.Net.Sockets.TcpClient();
+		var connect=client.ConnectAsync(IPAddress.Loopback,port);
+		// A refused connection faults the task, and on loopback that is the ordinary answer for a free
+		// port -- not an error to propagate.
+		try { return connect.Wait(TimeSpan.FromSeconds(2)) && client.Connected; } catch(AggregateException) { return false; }
 	}
 
 	/// <summary>Closing a host that holds an ICorDebug attachment kills the target with it -- verified,
@@ -136,6 +220,11 @@ public sealed class DeploymentService {
 	/// target the engine cannot detach from without killing it stops the replacement instead, because
 	/// destroying whatever the user was debugging is never an acceptable side effect of a redeploy.</summary>
 	async Task ReplaceRunningHostAsync(Process[] running,JsonNode? live,HostRouter router,bool allowTerminate,CancellationToken token) {
+		// Before the detaches, not after the kill. A medium-integrity Gateway cannot terminate an elevated
+		// host, and the natural place to discover that is Process.Kill -- by which point every session has
+		// already been detached to make the close safe. The caller would have lost the debugging state the
+		// detach was protecting and still be looking at the host it asked to replace.
+		RequireReplacementPermitted(running.Select(process=>(SafePid(process),ProcessIdentity.IsElevated(SafePid(process)))).ToArray(),ProcessIdentity.IsElevated(Environment.ProcessId));
 		RequireReplacementSessionVisibility(running.Length,live,allowTerminate);
 		if(live is not null) {
 			foreach(var session in await LocalSessionsAsync(router,allowTerminate,token)) {
@@ -186,6 +275,19 @@ public sealed class DeploymentService {
 		throw new GatewayControlException("replace_failed",
 			$"The managed dnSpy host{(alive.Length==1 ? "" : "s")} {string.Join(", ",alive.Select(pid=>"pid "+pid))} did not exit after being closed, so no replacement was started: launching one now would leave two hosts fighting for the same RPC endpoint. Close {(alive.Length==1 ? "it" : "them")} manually, then call launch_local_host again.");
 	}
+	/// <summary>Refuses a replacement the Gateway could not finish. Killing a process is a write, and the
+	/// integrity policy that lets a medium-integrity Gateway read an elevated host's identity does not let
+	/// it end the process. Only a proven elevated host blocks: an unreadable token leaves the existing
+	/// behaviour alone, because guessing here would refuse ordinary replacements on a machine where the
+	/// token query is unavailable.</summary>
+	internal static void RequireReplacementPermitted(IReadOnlyList<(int Pid,bool? Elevated)> running,bool? gatewayElevated) {
+		if(gatewayElevated!=false) return;
+		var elevated=running.Where(host=>host.Elevated==true).Select(host=>host.Pid).ToArray();
+		if(elevated.Length==0) return;
+		throw new GatewayControlException("replace_requires_elevation",
+			$"The running host{(elevated.Length==1 ? "" : "s")} {string.Join(", ",elevated.Select(pid=>"pid "+pid))} {(elevated.Length==1 ? "is" : "are")} elevated and this Gateway is not, so it cannot close {(elevated.Length==1 ? "it" : "them")}. Nothing was detached and nothing was started: stopping at the kill instead would have detached every session first and then failed anyway, losing the debugging state for no gain. Close the elevated dnSpy yourself and call launch_local_host again, or keep using it -- an elevated host serves an unelevated Gateway perfectly well.");
+	}
+
 	internal static void RequireReplacementSessionVisibility(int runningCount,JsonNode? live,bool allowTerminate) {
 		if(allowTerminate) return;
 		if(live is null)
@@ -200,8 +302,7 @@ public sealed class DeploymentService {
 		var root=Path.Combine(installRoot,"versions")+Path.DirectorySeparatorChar;
 		var found=new List<Process>();
 		foreach(var process in Process.GetProcessesByName("dnSpy")) {
-			string? path=null;
-			try { path=process.MainModule?.FileName; } catch { }
+			var path=ProcessIdentity.ImagePath(process);
 			if(path is not null && path.StartsWith(root,StringComparison.OrdinalIgnoreCase)) found.Add(process); else process.Dispose();
 		}
 		return found.ToArray();
@@ -382,6 +483,15 @@ public sealed class DeploymentService {
 	static void BackfillWindowsEnvironment(IDictionary<string,string?> environment) {
 		var windows=Environment.GetFolderPath(Environment.SpecialFolder.Windows); if(string.IsNullOrWhiteSpace(windows)) return;
 		foreach(var name in new[]{"windir","SystemRoot"}) if(!environment.TryGetValue(name,out var value)||string.IsNullOrWhiteSpace(value)) environment[name]=windows;
+	}
+	/// <summary>The same repair, applied to our own environment, for the one launch that cannot pass a
+	/// block of its own: a ShellExecute child inherits whatever the caller has, so a client that handed
+	/// the Gateway an environment without windir would otherwise still kill the elevated host in WPF
+	/// startup. Filling a gap the process should never have had is safe; nothing here overwrites a value.
+	/// </summary>
+	static void BackfillOwnWindowsEnvironment() {
+		var windows=Environment.GetFolderPath(Environment.SpecialFolder.Windows); if(string.IsNullOrWhiteSpace(windows)) return;
+		foreach(var name in new[]{"windir","SystemRoot"}) if(string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name))) Environment.SetEnvironmentVariable(name,windows);
 	}
 	static void AtomicWrite(string path,string content) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); var temporary=path+".tmp-"+Guid.NewGuid().ToString("N"); File.WriteAllText(temporary,content,new UTF8Encoding(false)); File.Move(temporary,path,true); }
 	static void CopyTree(string source,string destination,CancellationToken token) { foreach(var directory in Directory.EnumerateDirectories(source,"*",SearchOption.AllDirectories)) { token.ThrowIfCancellationRequested(); Directory.CreateDirectory(Path.Combine(destination,Path.GetRelativePath(source,directory))); } Directory.CreateDirectory(destination); foreach(var file in Directory.EnumerateFiles(source,"*",SearchOption.AllDirectories)) { token.ThrowIfCancellationRequested(); var target=Path.Combine(destination,Path.GetRelativePath(source,file)); Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file,target,false); } }

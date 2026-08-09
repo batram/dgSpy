@@ -102,6 +102,102 @@ public sealed class DeploymentServiceTests : IDisposable {
 		Assert.NotNull((string?)afterRebuild["payload"]!["recovery"]);
 	}
 
+	/// <summary>The whole value of elevated=true is access the caller could not otherwise get, so the one
+	/// answer that must never come back is a cheerful adoption of a medium-integrity host. An
+	/// undeterminable token is refused for the same reason a false one is: the caller cannot check the
+	/// claim afterwards, and would discover the truth only when a target stayed invisible.</summary>
+	[Fact]
+	public void Adoption_refuses_a_host_that_is_not_provably_elevated_when_elevation_was_asked_for() {
+		DeploymentService.RequireAdoptedHostElevated(4242,true);
+
+		var medium=Assert.Throws<GatewayControlException>(()=>DeploymentService.RequireAdoptedHostElevated(4242,false));
+		Assert.Equal("host_not_elevated",medium.Code);
+		Assert.Contains("pid 4242",medium.Message);
+		Assert.Contains("replace=true",medium.Message);
+
+		var unknown=Assert.Throws<GatewayControlException>(()=>DeploymentService.RequireAdoptedHostElevated(4242,null));
+		Assert.Equal("host_elevation_unknown",unknown.Code);
+		Assert.Contains("pid 4242",unknown.Message);
+	}
+
+	/// <summary>Elevation goes through ShellExecute, which cannot hand the child an environment block, so
+	/// every DGSPY_* value the operator overrode would silently fail to reach the elevated host: it would
+	/// generate its own credential, or bind a port nobody dials, and the launch would report a started
+	/// host the Gateway can never talk to. Refuse those combinations before starting anything.</summary>
+	[Fact]
+	public void Elevated_launch_refuses_environments_it_cannot_hand_to_the_child() {
+		var clean=DeploymentService.DefaultStateRoot();
+		DeploymentService.RequireElevatedLaunchEnvironment(clean,_=>null);
+		// The same directory named differently is still the same directory.
+		DeploymentService.RequireElevatedLaunchEnvironment(clean+Path.DirectorySeparatorChar,_=>null);
+		DeploymentService.RequireElevatedLaunchEnvironment(Path.Combine(clean,"..","dgSpy"),_=>null);
+		// Only the variables the host itself reads matter; the client-facing token is not one of them.
+		DeploymentService.RequireElevatedLaunchEnvironment(clean,name=>name=="DGSPY_TOKEN"?"abc":null);
+
+		var custom=Assert.Throws<GatewayControlException>(()=>DeploymentService.RequireElevatedLaunchEnvironment(Path.Combine(root,"state"),_=>null));
+		Assert.Equal("elevated_launch_unsupported_environment",custom.Code);
+		Assert.Contains("Nothing was started",custom.Message);
+
+		foreach(var name in new[]{"DGSPY_HOST_ID","DGSPY_RPC_TOKEN","DGSPY_RPC_PORT"}) {
+			var overridden=Assert.Throws<GatewayControlException>(()=>DeploymentService.RequireElevatedLaunchEnvironment(clean,candidate=>candidate==name?"set":null));
+			Assert.Equal("elevated_launch_unsupported_environment",overridden.Code);
+			Assert.Contains(name,overridden.Message);
+		}
+	}
+
+	/// <summary>Defence in depth behind the running-host scan, which only sees dnSpy under this install
+	/// root: a host installed elsewhere owns the port just as effectively. A probe that cannot run must
+	/// not block the launch, because refusing to start any host at all is the worse of the two failures.
+	/// </summary>
+	[Fact]
+	public void Endpoint_occupancy_blocks_a_launch_only_on_a_completed_connection() {
+		Assert.True(DeploymentService.LocalRpcEndpointOwned(7351,_=>true));
+		Assert.False(DeploymentService.LocalRpcEndpointOwned(7351,_=>false));
+		Assert.False(DeploymentService.LocalRpcEndpointOwned(7351,_=>throw new InvalidOperationException("probe broken")));
+
+		// Against real sockets, because the failure that matters is not a branch: a refused connection
+		// faults the connect task, and reading that fault as an error rather than as an empty port would
+		// refuse every launch on a healthy machine.
+		var listener=new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback,0); listener.Start();
+		var occupied=((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+		try { Assert.True(DeploymentService.TryConnectLoopback(occupied)); }
+		finally { listener.Stop(); }
+		Assert.False(DeploymentService.TryConnectLoopback(occupied));
+	}
+
+	/// <summary>The scan must survive an integrity boundary. MainModule needs PROCESS_VM_READ and is
+	/// refused against an elevated host, which is exactly the host this flag creates; QueryFullProcessImageName
+	/// needs only PROCESS_QUERY_LIMITED_INFORMATION. This pins the P/Invoke signatures, whose failure mode
+	/// is a silent null that reads as "no such process".</summary>
+	[Fact]
+	public void Process_identity_answers_for_a_process_it_can_open() {
+		using var self=System.Diagnostics.Process.GetCurrentProcess();
+		Assert.Equal(Environment.ProcessPath,ProcessIdentity.ImagePath(self),StringComparer.OrdinalIgnoreCase);
+		Assert.NotNull(ProcessIdentity.IsElevated(self.Id));
+		Assert.Null(ProcessIdentity.IsElevated(0));
+	}
+
+	/// <summary>Killing a process is a write, and an unelevated Gateway is refused it against an elevated
+	/// host even though it can read that host's identity. Discovering that at Process.Kill costs the
+	/// caller every session, because the replacement detaches them all first to make the close safe -- so
+	/// the refusal has to come before any of that. An unreadable token must not refuse, or a machine where
+	/// the query is unavailable could never replace a host at all.</summary>
+	[Fact]
+	public void Replacement_refuses_before_detaching_when_it_could_never_close_the_host() {
+		var elevatedHost=new[]{(4242,(bool?)true)};
+		var refused=Assert.Throws<GatewayControlException>(()=>DeploymentService.RequireReplacementPermitted(elevatedHost,false));
+		Assert.Equal("replace_requires_elevation",refused.Code);
+		Assert.Contains("pid 4242",refused.Message);
+		Assert.Contains("Nothing was detached",refused.Message);
+
+		// An elevated Gateway closes an elevated host, and elevation it cannot read is left to the
+		// existing failure path rather than guessed at.
+		DeploymentService.RequireReplacementPermitted(elevatedHost,true);
+		DeploymentService.RequireReplacementPermitted(elevatedHost,null);
+		DeploymentService.RequireReplacementPermitted(new[]{(4242,(bool?)null)},false);
+		DeploymentService.RequireReplacementPermitted(new[]{(4242,(bool?)false)},false);
+	}
+
 	[Fact]
 	public void Replacement_refuses_to_kill_hosts_whose_sessions_cannot_all_be_observed() {
 		var unavailable=Assert.Throws<GatewayControlException>(()=>DeploymentService.RequireReplacementSessionVisibility(1,null,false));
