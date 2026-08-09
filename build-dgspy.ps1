@@ -30,6 +30,14 @@ if ([string]::IsNullOrWhiteSpace($DnSpyDir)) {
 $extensionProject = Join-Path $PSScriptRoot 'Extensions\dgSpy.Extension\dgSpy.Extension.csproj'
 $gatewayProject = Join-Path $PSScriptRoot 'dgSpy.Gateway\dgSpy.Gateway.csproj'
 $cliProject = Join-Path $PSScriptRoot 'dgSpy.Cli\dgSpy.Cli.csproj'
+$extensionContractsProject = Join-Path $PSScriptRoot 'dgSpy.ExtensionContracts\dgSpy.ExtensionContracts.csproj'
+$hookLabContractsProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Contracts\HookLab.Contracts.csproj'
+
+dotnet build $extensionContractsProject -c $Configuration --nologo -v:minimal
+if ($LASTEXITCODE) { throw "Extension contracts build failed with exit code $LASTEXITCODE" }
+
+dotnet build $hookLabContractsProject -c $Configuration --nologo -v:minimal
+if ($LASTEXITCODE) { throw "HookLab contracts build failed with exit code $LASTEXITCODE" }
 
 dotnet build $extensionProject -c $Configuration -f $TargetFramework --nologo -v:minimal
 if ($LASTEXITCODE) { throw "Extension build failed with exit code $LASTEXITCODE" }

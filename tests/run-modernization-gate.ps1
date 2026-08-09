@@ -93,6 +93,7 @@ try {
 	}
 	try {
 		Invoke-Checked 'Protocol tests' { dotnet test tests\dgSpy.Protocol.Tests\dgSpy.Protocol.Tests.csproj -c Release --nologo -v:minimal }
+		Invoke-Checked 'Contract boundary tests' { dotnet test tests\dgSpy.Contracts.Tests\dgSpy.Contracts.Tests.csproj -c Release --nologo -v:minimal }
 		Invoke-Checked 'Gateway tests and contract snapshots' { dotnet test tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj -c Release --nologo -v:minimal }
 		Invoke-Checked 'Extension tests' { dotnet test tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj -c Release --nologo -v:minimal }
 		# Must run after the publish above: it loads the published assemblies and
