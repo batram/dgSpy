@@ -33,6 +33,16 @@ unprotect the resulting blob. Windows refused with:
 This is separate from the record ACL test: the focused suite also proves that discovery records have
 protected, non-inherited ACLs containing only the writing user's SID.
 
+## Secret rotation: what it provides
+
+Rotation derives the next secret as
+`HMAC-SHA256(current, "rotate1" || serverChallenge || clientChallenge)`, and both challenges travel in
+the clear. That one-way ratchet means a captured secret reveals nothing about earlier ones, but it does
+not self-heal: an attacker holding one secret who can also observe handshakes derives every successor,
+so rotation never locks them out. Reading pipe traffic already requires same-user access, which this
+design does not claim to defend against, and a discovery record leaked on its own cannot be advanced
+without the challenges. Recorded so rotation is not later cited as a mitigation for a disclosed secret.
+
 ## Harness incidents
 
 The first integrity run exposed two harness defects, not transport defects:
