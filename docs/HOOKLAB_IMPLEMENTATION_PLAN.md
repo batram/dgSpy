@@ -220,10 +220,15 @@ A source breakpoint on a hooked method therefore binds and then never fires. Sta
 binding as evidence that the breakpoint is live, and must not offer `get_il`/`get_csharp` output as
 evidence that the original body still executes: a silently inert breakpoint is worse than a refused one.
 The truthful contract is that hooked methods keep their metadata view and lose original-body execution
-breakpoints, and that execution is observed through the hook instead, where breakpoints and frames are
-fully available. Stage 0 also observed this surviving an unpatch, since Harmony rebuilds a DynamicMethod
-rather than restoring the original entry; that persistence is an inference from roughly fifty calls in a
-five-second window, so stage 1 measures it properly instead of inheriting it as fact.
+breakpoints, and that execution is observed through the hook instead, where breakpoints, frames, and
+stepping are all fully available - stage 0 stepped inside an active prefix from IL 0 to IL 9 with
+accurate locals.
+
+This survives an unpatch, and that is measured rather than inferred: in a single-process fixture at a
+unique module path, the `Worker.Run` breakpoint stayed at `engine_hit_count:0` both before and after
+`Unpatch`, while an exact-path control breakpoint on an un-hooked method in the same module reached
+`engine_hit_count:1` immediately. Harmony rebuilds a DynamicMethod rather than restoring the original
+entry, so the original body stays off every executed path for the life of the process.
 VMConnect acceptance requires a non-stopping postfix that observes `SyncDisplaySettings()` failure and
 schedules a bounded UI-thread retry without breaking fullscreen or waiting for an agent response while
 paused. It is a validation target, not a bundled machine-specific patch.
