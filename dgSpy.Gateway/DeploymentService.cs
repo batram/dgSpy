@@ -104,13 +104,15 @@ public sealed class DeploymentService {
 			// Adoption is the honest answer to "make sure the local host is running" when it already is,
 			// running the code we would have deployed. Reporting started=true for a process we did not
 			// start would be a lie the caller cannot check.
-			if(matches && running.Length==1) {
-				// Elevation is not a property of the payload, so a host that matches by build can still be
-				// the wrong host for this call. Adopting it while the caller asked for elevation would
-				// answer "connected" to a request for access the adopted process does not have, and the
-				// caller would only find out when a target stayed invisible.
-				var runningElevation=ProcessIdentity.IsElevated(running[0].Id);
-				if(elevated) RequireAdoptedHostElevated(running[0].Id,runningElevation);
+			// Elevation is not a property of the payload, so a host that matches by build can still be the
+			// wrong host for this call. Adopting it while the caller asked for elevation would answer
+			// "connected" to a request for access the adopted process does not have, and the caller would
+			// only find out when a target stayed invisible.
+			var runningElevation=running.Length==1 ? ProcessIdentity.IsElevated(running[0].Id) : null;
+			var decision=DecideRunningHost(elevated,runningElevation,replace);
+			if(matches && running.Length==1 && decision==RunningHostDecision.RefuseElevation)
+				RequireAdoptedHostElevated(running[0].Id,runningElevation);
+			if(matches && running.Length==1 && decision==RunningHostDecision.Adopt) {
 				var adoptedCurrent=ReadCurrent();
 				return new { started=false,adopted=true,installed=false,redeployed=false,replaced=false,active_version=(string?)adoptedCurrent?["active_version"],
 					extension_sha256=payloadExtensionSha,process_id=(int?)live!["dnspy_process_id"] ?? running[0].Id,connected=true,host_id=(string?)adoptedCurrent?["host_id"],
@@ -161,6 +163,17 @@ public sealed class DeploymentService {
 		return new { started=true,adopted=false,installed,redeployed=installed,replaced=running.Length>0,active_version=version,payload_sha256=deployedSha,extension_sha256=deployedExtensionSha,process_id=process.Id,connected=false,host_id=hostId,elevated=launchedElevation,recovery="Call doctor; dnSpy may still be composing extensions." };
 	}
 	const int ErrorCancelled=1223;
+
+	internal enum RunningHostDecision { Adopt,RefuseElevation,Replace }
+	/// <summary>What to do with a running host that already matches the installed payload. Elevation is
+	/// the only thing that can make a matching host the wrong one, and the caller who passed replace has
+	/// already said what to do about that -- so refusing must not pre-empt them. Refusing regardless made
+	/// host_not_elevated advertise a recovery ("call again with replace=true and elevated=true") that the
+	/// code could never reach, so following the instruction reproduced the error verbatim.</summary>
+	internal static RunningHostDecision DecideRunningHost(bool elevated,bool? runningElevation,bool replace) =>
+		!elevated || runningElevation==true ? RunningHostDecision.Adopt
+		: replace ? RunningHostDecision.Replace
+		: RunningHostDecision.RefuseElevation;
 
 	/// <summary>Refuses to adopt a running host when the caller asked for an elevated one and cannot be
 	/// shown that it is. An undeterminable token fails the same way as a medium-integrity one: the whole

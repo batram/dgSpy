@@ -102,6 +102,27 @@ public sealed class DeploymentServiceTests : IDisposable {
 		Assert.NotNull((string?)afterRebuild["payload"]!["recovery"]);
 	}
 
+	/// <summary>host_not_elevated tells the caller to retry with replace=true and elevated=true. That
+	/// recovery was unreachable: the refusal fired inside the adoption branch before replace was ever
+	/// consulted, so following the instruction reproduced the error verbatim. A refusal whose own recovery
+	/// cannot be executed is worse than no refusal, because it costs the caller a round trip to learn
+	/// nothing.</summary>
+	[Fact]
+	public void An_elevated_relaunch_replaces_a_medium_integrity_host_instead_of_refusing_forever() {
+		Assert.Equal(DeploymentService.RunningHostDecision.Replace,DeploymentService.DecideRunningHost(true,false,true));
+		Assert.Equal(DeploymentService.RunningHostDecision.Replace,DeploymentService.DecideRunningHost(true,null,true));
+		Assert.Equal(DeploymentService.RunningHostDecision.RefuseElevation,DeploymentService.DecideRunningHost(true,false,false));
+		Assert.Equal(DeploymentService.RunningHostDecision.RefuseElevation,DeploymentService.DecideRunningHost(true,null,false));
+
+		// An already-elevated host is adopted rather than needlessly replaced, even when replace was
+		// offered -- replace is permission to close it, not an instruction to.
+		Assert.Equal(DeploymentService.RunningHostDecision.Adopt,DeploymentService.DecideRunningHost(true,true,true));
+		Assert.Equal(DeploymentService.RunningHostDecision.Adopt,DeploymentService.DecideRunningHost(true,true,false));
+		// Callers who never asked about elevation are unaffected by any of it.
+		foreach(var elevation in new bool?[]{true,false,null})
+			Assert.Equal(DeploymentService.RunningHostDecision.Adopt,DeploymentService.DecideRunningHost(false,elevation,false));
+	}
+
 	/// <summary>The whole value of elevated=true is access the caller could not otherwise get, so the one
 	/// answer that must never come back is a cheerful adoption of a medium-integrity host. An
 	/// undeterminable token is refused for the same reason a false one is: the caller cannot check the
