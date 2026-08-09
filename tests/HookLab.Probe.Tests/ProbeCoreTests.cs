@@ -1,0 +1,236 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
+using HookLab.Contracts;
+using HookLab.Probe.CorDebug;
+using HookLab.Probe.CorDebug.Patching;
+using Xunit;
+
+namespace HookLab.Probe.Tests {
+	public sealed class ProbeCoreTests {
+		static readonly MethodInfo TargetMethod = typeof(Fixture).GetMethod(nameof(Fixture.Add))!;
+		static readonly HookLimits Limits = new HookLimits(1000, 4096, 4, 8, 32, 3);
+
+		[Fact]
+		public void EveryMethodGuardRejectsIndependently() {
+			var valid = GuardFor(TargetMethod);
+			AssertGuard("module_mvid", new MethodGuard(Guid.NewGuid(), valid.MetadataToken, valid.DeclaringType, valid.MethodSignature, valid.IlSha256));
+			AssertGuard("metadata_token", new MethodGuard(valid.ModuleMvid, valid.MetadataToken + 1, valid.DeclaringType, valid.MethodSignature, valid.IlSha256));
+			AssertGuard("declaring_type", new MethodGuard(valid.ModuleMvid, valid.MetadataToken, "Wrong.Type", valid.MethodSignature, valid.IlSha256));
+			AssertGuard("method_signature", new MethodGuard(valid.ModuleMvid, valid.MetadataToken, valid.DeclaringType, "System.Int32 Add(System.String)", valid.IlSha256));
+			AssertGuard("il_sha256", new MethodGuard(valid.ModuleMvid, valid.MetadataToken, valid.DeclaringType, valid.MethodSignature, new string('0', 64)));
+			MethodGuards.ValidateMethod(TargetMethod, valid);
+		}
+
+		[Fact]
+		public void EveryTargetIdentityGuardRejectsIndependently() {
+			var now = new DateTime(638900000000000000, DateTimeKind.Utc);
+			var valid = new TargetIdentity("host", "c:\\fixture.exe", 42, now, "x64", "v4.0.30319", "1");
+			var variants = new[] {
+				new TargetIdentity("other", valid.ImagePath, valid.ProcessId, now, valid.Architecture, valid.RuntimeId, valid.AppDomainId),
+				new TargetIdentity(valid.HostId, "c:\\other.exe", valid.ProcessId, now, valid.Architecture, valid.RuntimeId, valid.AppDomainId),
+				new TargetIdentity(valid.HostId, valid.ImagePath, 43, now, valid.Architecture, valid.RuntimeId, valid.AppDomainId),
+				new TargetIdentity(valid.HostId, valid.ImagePath, valid.ProcessId, now.AddTicks(1), valid.Architecture, valid.RuntimeId, valid.AppDomainId),
+				new TargetIdentity(valid.HostId, valid.ImagePath, valid.ProcessId, now, "x86", valid.RuntimeId, valid.AppDomainId),
+				new TargetIdentity(valid.HostId, valid.ImagePath, valid.ProcessId, now, valid.Architecture, "mono", valid.AppDomainId),
+				new TargetIdentity(valid.HostId, valid.ImagePath, valid.ProcessId, now, valid.Architecture, valid.RuntimeId, "2") };
+			foreach (var variant in variants) Assert.Throws<GuardMismatchException>(() => MethodGuards.ValidateTarget(valid, variant));
+			MethodGuards.ValidateTarget(valid, valid);
+		}
+
+		[Fact]
+		public void InventoryFailsClosedBeforeBackendAssemblyResolution() {
+			var before = Loaded("0Harmony");
+			var incompatible = new AssemblyName("HarmonyX") { Version = new Version(2, 10, 0, 0) };
+			var error = Assert.Throws<BackendCompatibilityException>(() => BackendInventory.Inspect(new[] { incompatible }));
+			Assert.Contains(incompatible.FullName, error.Message);
+			Assert.Equal(before, Loaded("0Harmony"));
+			var exact = BackendInventory.Inspect(new[] { new AssemblyName("0Harmony") { Version = BackendInventory.PinnedVersion } });
+			Assert.True(exact.UseResident);
+			var order = new List<string>();
+			var value = BackendInventory.SelectBeforeResolve(
+				() => { order.Add("inventory"); return BackendInventory.Inspect(Array.Empty<AssemblyName>()); },
+				_ => { order.Add("resolve"); return 42; });
+			Assert.Equal(42, value);
+			Assert.Equal(new[] { "inventory", "resolve" }, order);
+		}
+
+		[Theory]
+		[InlineData(HookKind.Prefix)]
+		[InlineData(HookKind.Postfix)]
+		[InlineData(HookKind.Finalizer)]
+		public void SupportedPatchKindsCaptureAndPreserveBehavior(HookKind kind) {
+			var method = kind == HookKind.Finalizer ? typeof(Fixture).GetMethod(nameof(Fixture.Throwing))! : TargetMethod;
+			using (var runtime = Runtime()) {
+				var document = new HookDocument(1, kind.ToString(), kind, GuardFor(method), "{}", Limits, true);
+				runtime.Install(method, document, 0);
+				if (kind == HookKind.Finalizer) Assert.Throws<FixtureException>(() => Fixture.Throwing());
+				else Assert.Equal(3, Fixture.Add(1, 2));
+				Assert.Single(runtime.Events.Drain(10));
+			}
+		}
+
+		[Fact]
+		public void PatchLifecycleVersionsAndStaleRejectionAreAtomic() {
+			using (var runtime = Runtime()) {
+				Assert.Equal(5, Fixture.Add(2, 3));
+				var installed = runtime.Install(TargetMethod, Document(), 0);
+				Assert.Equal(1, installed.HooksVersion);
+				Assert.Equal(5, Fixture.Add(2, 3));
+				Assert.Single(runtime.Events.Drain(10));
+				Assert.Throws<StaleHooksVersionException>(() => runtime.Uninstall(installed.PatchId, 0));
+				Assert.Equal(1, runtime.HooksVersion);
+				var removed = runtime.Uninstall(installed.PatchId, 1);
+				Assert.Equal(2, removed.HooksVersion);
+				Assert.Equal(5, Fixture.Add(2, 3));
+				Assert.Empty(runtime.Events.Drain(10));
+			}
+		}
+
+		[Fact]
+		public void RingOverflowCarriesProvenDropAccounting() {
+			var buffer = new BoundedEventBuffer(2, 1000);
+			for (var index = 0; index < 5; index++) buffer.TryAppend(dropped => Event(index, dropped));
+			Assert.Equal(3, buffer.DroppedCount);
+			var first = buffer.Drain(10);
+			Assert.Equal(new long[] { 0, 0 }, first.Select(x => x.DroppedCount));
+			buffer.TryAppend(dropped => Event(6, dropped));
+			Assert.Equal(3, buffer.Drain(10).Single().DroppedCount);
+		}
+
+		[Fact]
+		public void CaptureEnforcesBoundsWithoutGettersOrToString() {
+			var hostile = new Hostile { Visible = new string('x', 100), Items = Enumerable.Range(0, 20).ToArray() };
+			var limits = new HookLimits(10, 4096, 3, 2, 5, 2);
+			var capture = BoundedCapture.Serialize(hostile, limits);
+			Assert.True(capture.Truncated);
+			Assert.Contains("xxxxx", capture.Json);
+			Assert.DoesNotContain(new string('x', 6), capture.Json);
+			Assert.Equal(0, hostile.GetterCalls);
+			Assert.Equal(0, hostile.ToStringCalls);
+		}
+
+		[Fact]
+		public void CallbackFailuresFailOpenAndAutoDisable() {
+			using (var runtime = Runtime()) {
+				var installed = runtime.Install(TargetMethod, Document("{\"throw\":true}"), 0);
+				for (var count = 0; count < Limits.MaximumConsecutiveFailures; count++) Assert.Equal(3, Fixture.Add(1, 2));
+				Assert.True(runtime.IsAutoDisabled(installed.PatchId));
+				Assert.Empty(runtime.Events.Drain(10));
+			}
+		}
+
+		[Fact]
+		public void HookCallbackDoesNotBlockOnConsumerDelivery() {
+			var consumer = new BlockingConsumer();
+			using (var runtime = Runtime(consumer)) {
+				runtime.Install(TargetMethod, Document(), 0);
+				try {
+					var invocation = Task.Run(() => Fixture.Add(1, 2));
+					Assert.True(invocation.Wait(TimeSpan.FromSeconds(2)));
+					Assert.Equal(3, invocation.Result);
+					Assert.True(consumer.Started.WaitOne(TimeSpan.FromSeconds(2)));
+				} finally { consumer.Release.Set(); }
+			}
+		}
+
+		[Fact]
+		public void RateAndByteBoundsProduceExplicitDropsAndTruncation() {
+			var tiny = new HookLimits(1, 16, 2, 1, 2, 2);
+			var capture = BoundedCapture.Serialize(new string('a', 50), tiny);
+			Assert.True(capture.Truncated);
+			Assert.True(System.Text.Encoding.UTF8.GetByteCount(capture.Json) <= tiny.MaximumEventBytes);
+			var buffer = new BoundedEventBuffer(10, 5);
+			Assert.False(buffer.TryAppend(dropped => Event(1, dropped, "123456")));
+			Assert.Equal(1, buffer.DroppedCount);
+		}
+
+		[Fact]
+		public void InliningIsReportedAsRiskWithCallerValidationHooks() {
+			var caller = typeof(Fixture).GetMethod(nameof(Fixture.Caller))!;
+			var assessment = InliningInspector.Assess(TargetMethod, new[] { caller });
+			Assert.Contains("validation", assessment.Reason, StringComparison.OrdinalIgnoreCase);
+			Assert.Equal(caller, assessment.ValidationCallers.Single());
+		}
+
+		// The wake-up used to be lost when an event landed between the consumer's final drain and the
+		// pending-flag reset: the append saw the flag still set and suppressed its own notification.
+		// This forces exactly that window by appending from inside the consumer callback.
+		[Fact]
+		public void EventAppendedDuringDeliveryStillWakesTheConsumer() {
+			var consumer = new InterleavingConsumer();
+			using (var runtime = Runtime(consumer)) {
+				consumer.Runtime = runtime;
+				runtime.Install(TargetMethod, Document(), 0);
+				Fixture.Add(1, 2);
+				Assert.True(consumer.SecondDelivery.WaitOne(TimeSpan.FromSeconds(5)),
+					"An event appended during delivery never woke the consumer again.");
+				Assert.Equal(2, consumer.Delivered);
+			}
+		}
+
+		[Fact]
+		public void ConsumerFailuresAreRecordedRatherThanSwallowed() {
+			var consumer = new ThrowingConsumer();
+			using (var runtime = Runtime(consumer)) {
+				runtime.Install(TargetMethod, Document(), 0);
+				Fixture.Add(1, 2);
+				Assert.True(consumer.Called.WaitOne(TimeSpan.FromSeconds(5)));
+				SpinWait.SpinUntil(() => runtime.ConsumerDispatchFailures > 0, TimeSpan.FromSeconds(5));
+				Assert.True(runtime.ConsumerDispatchFailures > 0);
+				Assert.Contains("consumer exploded", runtime.LastConsumerDispatchError ?? "", StringComparison.Ordinal);
+			}
+		}
+
+		static ProbeRuntime Runtime(IHookEventConsumer? consumer = null) {
+			var identity = Identity();
+			return ProbeInitializer.Initialize(new ProbeInitialization(identity, new IdentityProvider(identity), consumer, eventCapacity: 16, byteCapacity: 65536));
+		}
+		static TargetIdentity Identity() => new TargetIdentity("test", Assembly.GetExecutingAssembly().Location, System.Diagnostics.Process.GetCurrentProcess().Id,
+			System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(), "x64", Environment.Version.ToString(), AppDomain.CurrentDomain.Id.ToString());
+		static HookDocument Document(string behavior = "{}") => new HookDocument(1, "add", HookKind.Prefix, GuardFor(TargetMethod), behavior, Limits, true);
+		static MethodGuard GuardFor(MethodInfo method) => new MethodGuard(method.Module.ModuleVersionId, unchecked((uint)method.MetadataToken), method.DeclaringType!.FullName!, MethodGuards.Signature(method), MethodGuards.IlSha256(method));
+		static void AssertGuard(string name, MethodGuard guard) { var error = Assert.Throws<GuardMismatchException>(() => MethodGuards.ValidateMethod(TargetMethod, guard)); Assert.Equal(name, error.GuardName); }
+		static bool Loaded(string name) => AppDomain.CurrentDomain.GetAssemblies().Any(a => string.Equals(a.GetName().Name, name, StringComparison.Ordinal));
+		static HookEvent Event(long sequence, long dropped, string payload = "{}") => new HookEvent("probe", "patch", 1, sequence, DateTime.UtcNow, 1, payload, false, dropped);
+
+		sealed class IdentityProvider : ITargetIdentityProvider { readonly TargetIdentity identity; public IdentityProvider(TargetIdentity identity) { this.identity = identity; } public TargetIdentity GetCurrentIdentity() => identity; }
+		sealed class BlockingConsumer : IHookEventConsumer {
+			public readonly ManualResetEvent Started = new ManualResetEvent(false); public readonly ManualResetEvent Release = new ManualResetEvent(false);
+			public void EventsAvailable(IHookEventSource source) { Started.Set(); Release.WaitOne(); }
+		}
+		sealed class InterleavingConsumer : IHookEventConsumer {
+			public readonly ManualResetEvent SecondDelivery = new ManualResetEvent(false);
+			public ProbeRuntime? Runtime;
+			public int Delivered;
+			public void EventsAvailable(IHookEventSource source) {
+				var round = Interlocked.Increment(ref Delivered);
+				source.Drain(16);
+				// Round 1 appends while this delivery is still in flight, which is the window that used
+				// to swallow the notification. Round 2 must therefore happen without any further hook
+				// activity, or the wake-up was lost.
+				if (round == 1) Fixture.Add(3, 4);
+				else SecondDelivery.Set();
+			}
+		}
+		sealed class ThrowingConsumer : IHookEventConsumer {
+			public readonly ManualResetEvent Called = new ManualResetEvent(false);
+			public void EventsAvailable(IHookEventSource source) { Called.Set(); throw new InvalidOperationException("consumer exploded"); }
+		}
+		sealed class Hostile {
+			public string Visible = ""; public int[] Items = Array.Empty<int>(); public int GetterCalls; public int ToStringCalls;
+			public string Dangerous { get { GetterCalls++; throw new InvalidOperationException(); } }
+			public override string ToString() { ToStringCalls++; throw new InvalidOperationException(); }
+		}
+		static class Fixture {
+			[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
+			[MethodImpl(MethodImplOptions.NoInlining)] public static int Caller() => Add(1, 2);
+			[MethodImpl(MethodImplOptions.NoInlining)] public static void Throwing() { throw new FixtureException(); }
+		}
+		sealed class FixtureException : Exception { }
+	}
+}

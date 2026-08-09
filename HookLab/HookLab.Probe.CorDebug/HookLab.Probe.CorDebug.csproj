@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>HookLab.Probe.CorDebug</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.3.6" GeneratePathProperty="true" ExcludeAssets="runtime" />
+    <ProjectReference Include="..\HookLab.Contracts\HookLab.Contracts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="$(PkgLib_Harmony)\lib\net48\0Harmony.dll" LogicalName="HookLab.Probe.CorDebug.Backends.0Harmony.dll" />
+  </ItemGroup>
+</Project>
