@@ -190,6 +190,12 @@ item, not a post-release cleanup.
    This spike is not shipped, is not exposed as a workflow, and does not weaken the production rule
    that bootstrap is one specialized host action. Stop before the atomic/provider implementation if
    either the bootstrap or breakpoint experiment cannot establish these facts.
+
+   **Both experiments ran and both returned go.** See
+   `docs/local/evidence/hooklab-bootstrap-spike-verdict.md` and
+   `docs/local/evidence/hooklab-breakpoint-multiplex-verdict.md`. The measured consequences are folded
+   into the paragraphs below; what the spikes did not establish is listed in each verdict and must not
+   be treated as proven.
 1. **CLR fixture and transport:** disposable net48 fixture, guarded atomic injection, authenticated
    pipe health, status, unpatch, and clean exit.
 2. **Observation:** non-stopping prefix/postfix/finalizer events, bounds, counters, and GUI event view.
@@ -204,9 +210,20 @@ item, not a post-release cleanup.
 
 The CLR fixture must prove install from both net48 and net10 dnSpy hosts, observe, mutate, retry,
 exception handling, expert compilation, unpatch, detach-with-hooks, post-detach control, reconnection,
-export, and clean process exit. It also verifies debugger behavior after patching: breakpoints, stepping,
-call stacks, `get_il`, and `get_csharp` either remain accurate or explicitly report that metadata and
-execution have diverged.
+export, and clean process exit. It also verifies debugger behavior after patching, whose shape stage 0
+measured rather than predicted: a hooked method keeps full metadata fidelity - `get_il`, `get_csharp`,
+call stacks, and breakpoint *binding* all continue to describe the original body - but loses execution
+visibility of that body, because Harmony's detour routes calls into an unnamed `[Lightweight Function]`
+DynamicMethod and the original jitted entry leaves every executed path.
+
+A source breakpoint on a hooked method therefore binds and then never fires. Stage 1 must not present
+binding as evidence that the breakpoint is live, and must not offer `get_il`/`get_csharp` output as
+evidence that the original body still executes: a silently inert breakpoint is worse than a refused one.
+The truthful contract is that hooked methods keep their metadata view and lose original-body execution
+breakpoints, and that execution is observed through the hook instead, where breakpoints and frames are
+fully available. Stage 0 also observed this surviving an unpatch, since Harmony rebuilds a DynamicMethod
+rather than restoring the original entry; that persistence is an inference from roughly fifty calls in a
+five-second window, so stage 1 measures it properly instead of inheriting it as fact.
 VMConnect acceptance requires a non-stopping postfix that observes `SyncDisplaySettings()` failure and
 schedules a bounded UI-thread retry without breaking fullscreen or waiting for an agent response while
 paused. It is a validation target, not a bundled machine-specific patch.

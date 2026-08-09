@@ -110,6 +110,18 @@ physical breakpoint only when no owner remains. Engines that cannot provide thes
 the capability as absent rather than falling back to the public `breakpoints.Add`, which rejects a
 duplicate location.
 
+Stage 0 measured this facility as viable on CorDebug and located it: `DnDebugger`'s IL breakpoint list,
+one layer below `DbgCodeBreakpointsService`, imposes no uniqueness constraint on location, each
+`DnILCodeBreakpoint` owns its own `ICorDebugFunctionBreakpoint`, the CLR raises a separate breakpoint
+callback per object at one IL offset, and dnSpy's own `CreateBreakpointForStepper` already uses exactly
+this shape. Two measured consequences bind the implementation. A disabled user breakpoint has no
+physical breakpoint at all, so an owner is built from the location itself rather than from a bound
+breakpoint, and re-enabling one mid-action inserts a physical breakpoint underneath a running action. A
+stop caused by an internal-only owner otherwise reaches MCP as an unexplained `pause`: every such stop
+carries its owning action instead, because an unattributed pause is exactly the kind of untruthful
+result the outcome fields exist to prevent. See
+`docs/local/evidence/hooklab-breakpoint-multiplex-verdict.md`.
+
 Capability absence is the shipping answer only for an engine dgSpy does not control, such as Mono. For
 CorDebug it is a stage-0 stop condition: dnSpy's public breakpoint service exposes no owner list and
 binds through an engine-created bound breakpoint, so the facility must be prototyped against that layer
