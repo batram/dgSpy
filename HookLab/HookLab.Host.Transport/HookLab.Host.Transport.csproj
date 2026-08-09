@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net48;net10.0-windows</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\HookLab.Contracts\HookLab.Contracts.csproj" />
+    <Compile Include="..\HookLab.Probe.CorDebug\Transport\ProbeWireProtocol.cs" Link="Shared\ProbeWireProtocol.cs" />
+    <Compile Include="..\HookLab.Probe.CorDebug\Transport\ProbeAuthentication.cs" Link="Shared\ProbeAuthentication.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <Reference Include="System.Security" />
+  </ItemGroup>
+</Project>

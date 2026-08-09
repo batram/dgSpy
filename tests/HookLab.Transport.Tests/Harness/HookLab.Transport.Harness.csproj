@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\HookLab\HookLab.Probe.CorDebug\HookLab.Probe.CorDebug.csproj" />
+    <ProjectReference Include="..\..\..\HookLab\HookLab.Host.Transport\HookLab.Host.Transport.csproj" Aliases="hosttransport" />
+  </ItemGroup>
+</Project>

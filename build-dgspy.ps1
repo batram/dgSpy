@@ -32,12 +32,20 @@ $gatewayProject = Join-Path $PSScriptRoot 'dgSpy.Gateway\dgSpy.Gateway.csproj'
 $cliProject = Join-Path $PSScriptRoot 'dgSpy.Cli\dgSpy.Cli.csproj'
 $extensionContractsProject = Join-Path $PSScriptRoot 'dgSpy.ExtensionContracts\dgSpy.ExtensionContracts.csproj'
 $hookLabContractsProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Contracts\HookLab.Contracts.csproj'
+$hookLabProbeProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Probe.CorDebug\HookLab.Probe.CorDebug.csproj'
+$hookLabHostTransportProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Host.Transport\HookLab.Host.Transport.csproj'
 
 dotnet build $extensionContractsProject -c $Configuration --nologo -v:minimal
 if ($LASTEXITCODE) { throw "Extension contracts build failed with exit code $LASTEXITCODE" }
 
 dotnet build $hookLabContractsProject -c $Configuration --nologo -v:minimal
 if ($LASTEXITCODE) { throw "HookLab contracts build failed with exit code $LASTEXITCODE" }
+
+dotnet build $hookLabProbeProject -c $Configuration --nologo -v:minimal
+if ($LASTEXITCODE) { throw "HookLab probe build failed with exit code $LASTEXITCODE" }
+
+dotnet build $hookLabHostTransportProject -c $Configuration --nologo -v:minimal
+if ($LASTEXITCODE) { throw "HookLab host transport build failed with exit code $LASTEXITCODE" }
 
 dotnet build $extensionProject -c $Configuration -f $TargetFramework --nologo -v:minimal
 if ($LASTEXITCODE) { throw "Extension build failed with exit code $LASTEXITCODE" }
