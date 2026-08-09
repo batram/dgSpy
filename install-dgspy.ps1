@@ -75,6 +75,15 @@ try {
 	if ([string]::IsNullOrWhiteSpace($installParent) -or $resolvedInstall.Equals([IO.Path]::GetPathRoot($resolvedInstall),[StringComparison]::OrdinalIgnoreCase)) {
 		throw "Refusing unsafe install directory: $resolvedInstall"
 	}
+	# Policy is mutable administrator state, not package payload. Create explicit disabled defaults once
+	# and leave the file untouched on every later upgrade.
+	$policyDirectory = Join-Path $env:LOCALAPPDATA 'dgSpy'
+	$policyFile = Join-Path $policyDirectory 'capability-policy.json'
+	if (-not (Test-Path -LiteralPath $policyFile -PathType Leaf)) {
+		New-Item -ItemType Directory -Path $policyDirectory -Force | Out-Null
+		$disabledPolicy = [ordered]@{ format_version=1; defaults=[ordered]@{ runtime_hooks=$false; custom_hook_code=$false; hook_export=$false }; entries=@() }
+		[IO.File]::WriteAllText($policyFile,(($disabledPolicy | ConvertTo-Json -Depth 4) + "`n"),[Text.UTF8Encoding]::new($false))
+	}
 	New-Item -ItemType Directory -Path $installParent -Force | Out-Null
 	$existingCli = Join-Path $resolvedInstall 'cli\bin\dgspy.exe'
 	$legacyCli = Join-Path $resolvedInstall 'cli\dgspy.exe'

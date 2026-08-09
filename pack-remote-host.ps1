@@ -70,6 +70,8 @@ $credential = [Convert]::ToBase64String($credentialBytes)
 $transport = if ($UseTls) { 'tls' } else { 'plaintext' }
 $remoteConfiguration = [ordered]@{ format_version=1; host_id=$HostId; gateway_address=$GatewayAddress; gateway_port=if($UseTls){$GatewayTlsPort}else{$GatewayPort}; transport=$transport }
 [IO.File]::WriteAllText((Join-Path $resolvedBundle 'remote-host.json'),(($remoteConfiguration | ConvertTo-Json) + "`n"),[Text.UTF8Encoding]::new($false))
+$disabledPolicy = [ordered]@{ format_version=1; defaults=[ordered]@{ runtime_hooks=$false; custom_hook_code=$false; hook_export=$false }; entries=@() }
+[IO.File]::WriteAllText((Join-Path $resolvedBundle 'capability-policy.json'),(($disabledPolicy | ConvertTo-Json -Depth 4) + "`n"),[Text.UTF8Encoding]::new($false))
 $gatewayDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($GatewayHostsFile))
 New-Item -ItemType Directory -Path $gatewayDirectory -Force | Out-Null
 $centralTokenFile = Join-Path $gatewayDirectory "$HostId.token"

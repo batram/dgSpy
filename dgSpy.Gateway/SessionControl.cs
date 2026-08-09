@@ -79,6 +79,9 @@ public sealed class GatewayAccessPolicy {
 	public GatewayAccessPolicy() { var configured=Environment.GetEnvironmentVariable("DGSPY_ACCESS_MODE")?.Trim().ToLowerInvariant(); Mode=configured is null or "" or "full-control" ? "full-control" : configured=="inspect-only" ? configured : throw new InvalidOperationException("DGSPY_ACCESS_MODE must be full-control or inspect-only."); }
 	internal GatewayAccessPolicy(string mode) { Mode=mode; }
 	public void AuthorizeMutation(string operation) { if(Mode=="inspect-only") throw new GatewayControlException("access_denied",$"Gateway access mode 'inspect-only' denies '{operation}'."); }
+	/// <summary>Outer provider boundary for T10. Capture once before dispatch so reload cannot widen work
+	/// already in flight; the extension must independently capture and demand its authoritative decision.</summary>
+	public GatewayCapabilityDecision CaptureCapability(string hostId,string provider,string operation,CapabilityPermission permission,string? policyPath=null) => CapabilityPolicySnapshot.Load(hostId,policyPath,Mode).CaptureDecision(provider,operation,permission);
 }
 
 public sealed class GatewayAuditLog {
