@@ -101,14 +101,19 @@ that bypasses the coordinator is treated as `external_debugger_action`: the acti
 performs ownership-scoped cleanup, and never overwrites or automatically resumes the externally
 selected state.
 
-Internal breakpoints carry an unforgeable host owner token. The internal-breakpoint facility
-multiplexes logical owners onto a physical engine breakpoint, so an internal action can share an exact
+Internal breakpoints carry an unforgeable host owner token. An internal action can share an exact
 location with a user breakpoint without changing its condition, trace, hit count, labels, or enabled
-state. Hits are fanned out to both pipelines. If the user breakpoint requests a visible stop, that stop
-wins over the action's resume policy. Cleanup releases only the action's logical owner and removes the
-physical breakpoint only when no owner remains. Engines that cannot provide these semantics advertise
-the capability as absent rather than falling back to the public `breakpoints.Add`, which rejects a
-duplicate location.
+state. Each owner receives its hits independently. If the user breakpoint requests a visible stop, that
+stop wins over the action's resume policy. Cleanup releases only that action's own resources and leaves
+every other owner untouched. Engines that cannot provide these semantics advertise the capability as
+absent rather than falling back to the public `breakpoints.Add`, which rejects a duplicate location.
+
+The mechanism is one engine breakpoint per logical owner, not several owners refcounted onto a single
+shared one. The CLR raises a separate callback per breakpoint object at the same IL offset, so
+independent delivery comes free and no shared physical breakpoint has to be tracked or torn down when
+its last owner leaves. Do not design against a refcount that does not exist. The stage-0 verdict
+evaluated the shared-breakpoint alternative and rejected it; see
+`docs/local/evidence/hooklab-breakpoint-multiplex-verdict.md`.
 
 Stage 0 measured this facility as viable on CorDebug and located it: `DnDebugger`'s IL breakpoint list,
 one layer below `DbgCodeBreakpointsService`, imposes no uniqueness constraint on location, each

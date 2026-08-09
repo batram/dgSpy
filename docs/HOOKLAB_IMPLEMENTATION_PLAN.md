@@ -17,6 +17,8 @@ unchanged until these milestones are implemented and accepted.
 | `HookLab.Extension.x.dll` | net48/net10 dnSpy WPF UI, authoring, orchestration, event view, and package export. |
 | `HookLab.Contracts.dll` | netstandard2.0 hook/package/probe DTOs shared by the HookLab host components and target probes. |
 | `HookLab.Probe.CorDebug.dll` | net48 target probe using a pinned standard Harmony release. |
+| `HookLab.Host.Transport.dll` | net48/net10 host-side pipe client, discovery records, and credential lifecycle. |
+| `HookLab.Bootstrap.dll` | Dependency-free byte-loaded bootstrap that resolves the probe from embedded verified bytes. |
 | `HookLab.Probe.Mono.dll` | Later Unity/Mono probe reusing a validated resident HarmonyX/MonoMod backend. |
 | `HookLab.Compiler.exe` | Isolated Roslyn helper compiling against exact references on the selected host. |
 
@@ -88,6 +90,15 @@ record; startup quarantines stale, malformed, replayed, or identity-mismatched r
 the secret after authentication. This protects continuity credentials from other accounts and
 accidental disclosure; it is not a sandbox against arbitrary code already running as the same user or
 inside the target.
+
+Rotation is a one-way ratchet over the current secret and two challenges that travel in the clear. A
+captured secret therefore reveals nothing about earlier ones, but rotation does not self-heal: an
+attacker holding one secret who can also observe handshakes derives every successor. Reading pipe
+traffic already implies same-user access, which this design does not claim to defend against, and a
+discovery record leaked on its own cannot be advanced without the challenges - so the exposure is
+narrow. It is recorded because "rotation" otherwise reads as "a leaked secret stops working", which is
+the wrong thing for audit or threat text to assume. See
+`tests/HookLab.Transport.Tests/ACCEPTANCE.md`.
 
 Messages are length-prefixed, versioned, size-limited, and schema-validated. Hook callbacks never
 wait for the pipe. They append compact events to a bounded ring buffer and a worker performs delivery.
@@ -224,11 +235,13 @@ breakpoints, and that execution is observed through the hook instead, where brea
 stepping are all fully available - stage 0 stepped inside an active prefix from IL 0 to IL 9 with
 accurate locals.
 
-This survives an unpatch, and that is measured rather than inferred: in a single-process fixture at a
-unique module path, the `Worker.Run` breakpoint stayed at `engine_hit_count:0` both before and after
-`Unpatch`, while an exact-path control breakpoint on an un-hooked method in the same module reached
-`engine_hit_count:1` immediately. Harmony rebuilds a DynamicMethod rather than restoring the original
-entry, so the original body stays off every executed path for the life of the process.
+The behavior survives an unpatch, and that much is measured: in a single-process fixture at a unique
+module path, the `Worker.Run` breakpoint stayed at `engine_hit_count:0` both before and after `Unpatch`,
+while an exact-path control breakpoint on an un-hooked method in the same module reached
+`engine_hit_count:1` immediately. The likeliest explanation is that Harmony keeps routing calls through
+a rebuilt replacement rather than restoring the original entry - but that mechanism is inference, not
+measurement, and only the behavior may be relied on. Plan for a breakpoint that stays inert after
+unpatch; do not build anything on why.
 VMConnect acceptance requires a non-stopping postfix that observes `SyncDisplaySettings()` failure and
 schedules a bounded UI-thread retry without breaking fullscreen or waiting for an agent response while
 paused. It is a validation target, not a bundled machine-specific patch.
