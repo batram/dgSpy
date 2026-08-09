@@ -37,7 +37,12 @@ namespace HookLab.Probe.CorDebug.Patching {
 				if (value is string str) { String(str); return; }
 				if (value is bool flag) { text.Append(flag ? "true" : "false"); return; }
 				if (value is char character) { String(character.ToString()); return; }
-				if (value.GetType().IsPrimitive || value is decimal) { text.Append(Convert.ToString(value, CultureInfo.InvariantCulture)); return; }
+					// JSON has no NaN or Infinity. Convert.ToString emits them bare, which produces a
+					// well-formed frame carrying malformed JSON - the codec's strictness cannot catch it,
+					// because the payload is opaque to the envelope.
+					if (value is double d) { if (double.IsNaN(d) || double.IsInfinity(d)) { String(d.ToString(CultureInfo.InvariantCulture)); return; } text.Append(d.ToString("R", CultureInfo.InvariantCulture)); return; }
+					if (value is float f) { if (float.IsNaN(f) || float.IsInfinity(f)) { String(f.ToString(CultureInfo.InvariantCulture)); return; } text.Append(f.ToString("R", CultureInfo.InvariantCulture)); return; }
+					if (value.GetType().IsPrimitive || value is decimal) { text.Append(Convert.ToString(value, CultureInfo.InvariantCulture)); return; }
 				if (value is IDictionary dictionary) { Dictionary(dictionary, depth); return; }
 				if (value is IEnumerable enumerable) { Enumerable(enumerable, depth); return; }
 				Object(value, depth);
@@ -65,7 +70,24 @@ namespace HookLab.Probe.CorDebug.Patching {
 				foreach (var value in values) { if (count != 0) text.Append(','); if (count++ >= limits.MaximumCollectionCount) { Marker("collection"); break; } Value(value, depth + 1); }
 				text.Append(']');
 			}
-			void String(string value) { if (value.Length > limits.MaximumStringLength) { value = value.Substring(0, limits.MaximumStringLength); Truncated = true; } text.Append('"'); foreach (var c in value) { if (c == '"' || c == '\\') { text.Append('\\').Append(c); } else if (c == '\n') text.Append("\\n"); else if (c == '\r') text.Append("\\r"); else text.Append(c); } text.Append('"'); }
+			// Every control character below 0x20 needs escaping, not just the two that are common: a
+			// captured string carrying a tab or a NUL otherwise emits raw and invalidates the payload,
+			// inside a frame the codec still considers well formed.
+			void String(string value) {
+				if (value.Length > limits.MaximumStringLength) { value = value.Substring(0, limits.MaximumStringLength); Truncated = true; }
+				text.Append('"');
+				foreach (var c in value) {
+					if (c == '"' || c == '\\') text.Append('\\').Append(c);
+					else if (c == '\n') text.Append("\\n");
+					else if (c == '\r') text.Append("\\r");
+					else if (c == '\t') text.Append("\\t");
+					else if (c == '\b') text.Append("\\b");
+					else if (c == '\f') text.Append("\\f");
+					else if (c < ' ' || c == '\u007f') text.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+					else text.Append(c);
+				}
+				text.Append('"');
+			}
 			void Marker(string reason) { Truncated = true; text.Append("{\"truncated\":"); String(reason); text.Append('}'); }
 			void MarkerProperty(string reason) { Truncated = true; String("$truncated"); text.Append(':'); String(reason); }
 		}

@@ -30,15 +30,18 @@ namespace HookLab.Probe.CorDebug.Transport {
 		readonly byte[] endpointNonce;
 		readonly string pipeName;
 		readonly Thread listener;
+		readonly int authenticationTimeoutMilliseconds;
 		readonly ManualResetEvent stopped = new ManualResetEvent(false);
 		volatile bool disposed;
 		int endpointTaken;
 		byte[] secret;
 		NamedPipeServerStream? activePipe;
-		Stream? authenticatedPipe;
+		volatile Stream? authenticatedPipe;
 
-		public ProbePipeServer(ProbeCommandHandler commandHandler) {
+		public ProbePipeServer(ProbeCommandHandler commandHandler, int authenticationTimeoutMilliseconds = 5000) {
 			this.commandHandler = commandHandler ?? throw new ArgumentNullException(nameof(commandHandler));
+			if (authenticationTimeoutMilliseconds <= 0) throw new ArgumentOutOfRangeException(nameof(authenticationTimeoutMilliseconds));
+			this.authenticationTimeoutMilliseconds = authenticationTimeoutMilliseconds;
 			secret = ProbeAuthentication.CreateSecret(); endpointNonce = ProbeAuthentication.CreateNonce();
 			pipeName = "dgspy-hooklab-" + Guid.NewGuid().ToString("N");
 			listener = new Thread(Listen) { IsBackground = true, Name = "HookLab probe pipe" }; listener.Start();
@@ -73,7 +76,7 @@ namespace HookLab.Probe.CorDebug.Transport {
 			security.SetAccessRuleProtection(true, false);
 			security.AddAccessRule(new PipeAccessRule(sid, PipeAccessRights.FullControl, AccessControlType.Allow));
 			return new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
-				PipeOptions.None, 4096, 4096, security, HandleInheritability.None);
+				PipeOptions.Asynchronous, 4096, 4096, security, HandleInheritability.None);
 		}
 
 		void Serve(Stream pipe) {
@@ -98,22 +101,33 @@ namespace HookLab.Probe.CorDebug.Transport {
 		}
 
 		void Authenticate(Stream pipe) {
-			var clientVersion = BitConverter.ToInt32(ReadExactly(pipe, sizeof(int)), 0);
-			var compatible = clientVersion == ProbeWireProtocol.ProtocolVersion;
-			var versionResponse = new byte[sizeof(int) + 1]; BitConverter.GetBytes(ProbeWireProtocol.ProtocolVersion).CopyTo(versionResponse, 0); versionResponse[sizeof(int)] = compatible ? (byte)1 : (byte)0;
-			pipe.Write(versionResponse, 0, versionResponse.Length); pipe.Flush();
-			if (!compatible) throw new InvalidDataException("Client protocol version is incompatible.");
-			var serverChallenge = ProbeAuthentication.CreateNonce(); pipe.Write(serverChallenge, 0, serverChallenge.Length); pipe.Flush();
-			var request = ReadExactly(pipe, 1 + ProbeAuthentication.NonceBytes + 32);
-			if (request[0] > 1) throw new InvalidDataException("Invalid authentication mode.");
-			var clientChallenge = new byte[ProbeAuthentication.NonceBytes]; Buffer.BlockCopy(request, 1, clientChallenge, 0, clientChallenge.Length);
-			var supplied = new byte[32]; Buffer.BlockCopy(request, 1 + clientChallenge.Length, supplied, 0, supplied.Length);
-			byte[] current; lock (secretGate) current = (byte[])secret.Clone();
-			var expected = ProbeAuthentication.ClientProof(current, serverChallenge, clientChallenge, endpointNonce);
-			if (!ProbeAuthentication.FixedTimeEquals(supplied, expected)) throw new UnauthorizedAccessException("Probe authentication failed.");
-			var serverProof = ProbeAuthentication.ServerProof(current, serverChallenge, clientChallenge, endpointNonce);
-			pipe.Write(serverProof, 0, serverProof.Length); pipe.Flush();
-			if (request[0] == 1) lock (secretGate) { var rotated = ProbeAuthentication.DeriveRotatedSecret(current, serverChallenge, clientChallenge); Array.Clear(secret, 0, secret.Length); secret = rotated; }
+			var timedOut = 0;
+			using (var deadline = new Timer(_ => { Interlocked.Exchange(ref timedOut, 1); try { pipe.Dispose(); } catch { } }, null, authenticationTimeoutMilliseconds, Timeout.Infinite)) {
+				try {
+					var clientVersion = BitConverter.ToInt32(ReadExactly(pipe, sizeof(int)), 0);
+					var compatible = clientVersion == ProbeWireProtocol.ProtocolVersion;
+					var versionResponse = new byte[sizeof(int) + 1]; BitConverter.GetBytes(ProbeWireProtocol.ProtocolVersion).CopyTo(versionResponse, 0); versionResponse[sizeof(int)] = compatible ? (byte)1 : (byte)0;
+					pipe.Write(versionResponse, 0, versionResponse.Length); pipe.Flush();
+					if (!compatible) throw new InvalidDataException("Client protocol version is incompatible.");
+					var serverChallenge = ProbeAuthentication.CreateNonce(); pipe.Write(serverChallenge, 0, serverChallenge.Length); pipe.Flush();
+					var request = ReadExactly(pipe, 1 + ProbeAuthentication.NonceBytes + 32);
+					if (request[0] > 1) throw new InvalidDataException("Invalid authentication mode.");
+					var clientChallenge = new byte[ProbeAuthentication.NonceBytes]; Buffer.BlockCopy(request, 1, clientChallenge, 0, clientChallenge.Length);
+					var supplied = new byte[32]; Buffer.BlockCopy(request, 1 + clientChallenge.Length, supplied, 0, supplied.Length);
+					byte[] current; lock (secretGate) current = (byte[])secret.Clone();
+					var expected = ProbeAuthentication.ClientProof(current, serverChallenge, clientChallenge, endpointNonce);
+					if (!ProbeAuthentication.FixedTimeEquals(supplied, expected)) {
+						// Complete the fixed-size proof exchange so the client reports authentication rejection,
+						// not an ambiguous EOF or connect failure.
+						var rejectedProof = new byte[32]; pipe.Write(rejectedProof, 0, rejectedProof.Length); pipe.Flush();
+						throw new UnauthorizedAccessException("Probe authentication failed.");
+					}
+					var serverProof = ProbeAuthentication.ServerProof(current, serverChallenge, clientChallenge, endpointNonce);
+					pipe.Write(serverProof, 0, serverProof.Length); pipe.Flush();
+					if (request[0] == 1) lock (secretGate) { var rotated = ProbeAuthentication.DeriveRotatedSecret(current, serverChallenge, clientChallenge); Array.Clear(secret, 0, secret.Length); secret = rotated; }
+				}
+				catch (ObjectDisposedException ex) when (Volatile.Read(ref timedOut) != 0) { throw new IOException("Probe authentication timed out.", ex); }
+			}
 		}
 
 		public void EventsAvailable(IHookEventSource source) {

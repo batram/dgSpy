@@ -66,7 +66,10 @@ public sealed class TransportTests {
 		var path = store.Write(record); var found = store.Discover(new ExactIdentity(identity), DateTime.UtcNow).Single(); Assert.Equal(record.ProbeInstanceId, found.ProbeInstanceId);
 		var rules = new FileInfo(path).GetAccessControl().GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().ToArray();
 		Assert.True(new FileInfo(path).GetAccessControl().AreAccessRulesProtected); Assert.All(rules, rule => Assert.Equal(WindowsIdentity.GetCurrent().User, rule.IdentityReference));
-		store.Rotate(found, ProbeAuthentication.CreateSecret()); Assert.Single(store.Discover(new ExactIdentity(identity), DateTime.UtcNow));
+		store.Rotate(found, ProbeAuthentication.CreateSecret());
+		var rotated = store.Discover(new ExactIdentity(identity), DateTime.UtcNow).Single();
+		Assert.True(rotated.ExpiresUtc > record.ExpiresUtc);
+		Assert.Single(store.Discover(new ExactIdentity(identity), record.ExpiresUtc.AddSeconds(1)));
 		File.Copy(path, Path.Combine(store.DirectoryPath, "replay.probe")); Assert.Single(store.Discover(new ExactIdentity(identity), DateTime.UtcNow)); Assert.False(File.Exists(Path.Combine(store.DirectoryPath, "replay.probe")));
 		store.Delete(record); Assert.Empty(store.Discover(new ExactIdentity(identity), DateTime.UtcNow));
 	}
@@ -86,7 +89,7 @@ public sealed class TransportTests {
 		WaitFor(Path.Combine(temporary.Path, "harness-result.txt"));
 		var store = new ProbeDiscoveryStore(temporary.Path); var record = store.Discover(new AlwaysCurrent(), DateTime.UtcNow).Single();
 		var wrong = (byte[])record.Secret.Clone(); wrong[0] ^= 0xff;
-		Assert.ThrowsAny<Exception>(() => new ProbeConnection(record.PipeName, wrong, record.EndpointNonce, timeoutMilliseconds: 2000));
+		Assert.Throws<UnauthorizedAccessException>(() => new ProbeConnection(record.PipeName, wrong, record.EndpointNonce, timeoutMilliseconds: 2000));
 		var mismatch = Assert.Throws<ProbeProtocolMismatchException>(() => new ProbeConnection(record.PipeName, record.Secret, record.EndpointNonce, timeoutMilliseconds: 2000, protocolVersion: 2)); Assert.Equal(1, mismatch.SupportedVersion);
 		using (var connection = new ProbeConnection(record.PipeName, record.Secret, record.EndpointNonce)) {
 			ProbeMessage? observed = null; connection.EventReceived += message => observed = message;
@@ -96,10 +99,21 @@ public sealed class TransportTests {
 			var stale = connection.Send(Request("mutate", "{}", 0)); Assert.Equal("error", stale.Operation);
 		}
 		var health = store.RecoverAndRotate(record); Assert.Equal("status", health.Status.Operation);
-		Assert.ThrowsAny<Exception>(() => new ProbeConnection(record.PipeName, record.Secret, record.EndpointNonce, timeoutMilliseconds: 2000));
+		Assert.Throws<UnauthorizedAccessException>(() => new ProbeConnection(record.PipeName, record.Secret, record.EndpointNonce, timeoutMilliseconds: 2000));
 		var rotated = store.Discover(new AlwaysCurrent(), DateTime.UtcNow).Single(); using var final = new ProbeConnection(rotated.PipeName, rotated.Secret, rotated.EndpointNonce);
 		Assert.Equal("status", final.Send(Request("status", "{}", null)).Operation);
 		harness.Kill(); harness.WaitForExit(5000);
+	}
+
+	[Fact]
+	public void StalledAuthenticationTimesOutAndDoesNotWedgeListener() {
+		using var temporary = new TemporaryDirectory();
+		using var process = StartHarness("stall-auth", temporary.Path, 1);
+		try {
+			Assert.True(process.WaitForExit(5000));
+			Assert.Equal(0, process.ExitCode);
+		}
+		finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); } }
 	}
 
 	[Fact]

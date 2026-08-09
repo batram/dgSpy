@@ -12,6 +12,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 		readonly long byteCapacity;
 		long currentBytes;
 		long dropped;
+		long drained;
 
 		public BoundedEventBuffer(int eventCapacity, long byteCapacity) {
 			if (eventCapacity <= 0) throw new ArgumentOutOfRangeException(nameof(eventCapacity));
@@ -32,8 +33,11 @@ namespace HookLab.Probe.CorDebug.Patching {
 		public IReadOnlyList<HookEvent> Drain(int maximumCount) {
 			if (maximumCount <= 0) throw new ArgumentOutOfRangeException(nameof(maximumCount));
 			var result = new List<HookEvent>();
-			lock (gate) while (result.Count < maximumCount && events.Count != 0) {
-				var item = events.Dequeue(); currentBytes -= Encoding.UTF8.GetByteCount(item.PayloadJson); result.Add(item);
+			lock (gate) {
+				while (result.Count < maximumCount && events.Count != 0) {
+					var item = events.Dequeue(); currentBytes -= Encoding.UTF8.GetByteCount(item.PayloadJson); result.Add(item);
+				}
+				drained += result.Count;
 			}
 			return result.AsReadOnly();
 		}
@@ -42,5 +46,9 @@ namespace HookLab.Probe.CorDebug.Patching {
 		/// clearing its pending flag: an append that lands between a consumer's final drain and that
 		/// clear suppresses its own wake-up, so the delivering thread owns it.</summary>
 		public bool HasPendingEvents { get { lock (gate) return events.Count != 0; } }
+		/// <summary>Total events handed out by <see cref="Drain"/>. The delivery loop compares this
+		/// across a consumer call to tell "made progress" from "did nothing": a consumer that returns
+		/// without draining must not be called again until something new arrives, or delivery spins.</summary>
+		public long DrainedCount { get { lock (gate) return drained; } }
 	}
 }

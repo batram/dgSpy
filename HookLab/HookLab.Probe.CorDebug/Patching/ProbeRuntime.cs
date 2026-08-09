@@ -102,31 +102,39 @@ namespace HookLab.Probe.CorDebug.Patching {
 		// suppressed wake-up.
 		void Deliver() {
 			var consumer = initialization.Consumer!;
-			var consecutiveFailures = 0;
 			while (true) {
-				try { consumer.EventsAvailable(buffer); consecutiveFailures = 0; }
-				catch (Exception ex) { consecutiveFailures++; RecordConsumerFailure(ex); }
+				var drainedBefore = buffer.DrainedCount;
+				try { consumer.EventsAvailable(buffer); }
+				catch (Exception ex) { RecordConsumerFailure(ex); }
 				Volatile.Write(ref notificationPending, 0);
 				if (!buffer.HasPendingEvents) return;
-				// A consumer that throws every time would otherwise spin here against a buffer it never
-				// drains. Stop re-arming and let the next append schedule a fresh attempt.
-				if (consecutiveFailures >= ConsumerFailureLimit) return;
+				// Re-arm only when the consumer actually took events. A consumer that returns without
+				// draining is normal - the pipe worker does exactly that while disconnected, which is the
+				// state "hooks survive detach" requires - and looping on it burns a core inside the
+				// target for the life of the process. Leave the flag clear; the next append schedules a
+				// fresh attempt, so nothing is stranded.
+				if (buffer.DrainedCount == drainedBefore) return;
 				if (Interlocked.Exchange(ref notificationPending, 1) != 0) return;
 			}
 		}
 
-		const int ConsumerFailureLimit = 8;
 		long consumerDispatchFailures;
 		string? lastConsumerDispatchError;
+		long reentrantEventsSuppressed;
+		long rateLimitedEventsDropped;
 
 		/// <summary>Consumer dispatch failures are counted and their last message kept rather than
 		/// swallowed: a consumer that throws on every delivery otherwise looks exactly like one that
 		/// works, and nothing can act on a failure it cannot see.</summary>
 		public long ConsumerDispatchFailures { get { lock (gate) return consumerDispatchFailures; } }
 		public string? LastConsumerDispatchError { get { lock (gate) return lastConsumerDispatchError; } }
+		public long ReentrantEventsSuppressed { get { lock (gate) return reentrantEventsSuppressed; } }
+		public long RateLimitedEventsDropped { get { lock (gate) return rateLimitedEventsDropped; } }
 		void RecordConsumerFailure(Exception ex) {
 			lock (gate) { consumerDispatchFailures++; lastConsumerDispatchError = ex.GetType().FullName + ": " + ex.Message; }
 		}
+		internal void RecordReentrantSuppression() { lock (gate) reentrantEventsSuppressed++; }
+		internal void RecordRateLimitedDrop() { lock (gate) rateLimitedEventsDropped++; }
 		internal BoundedEventBuffer Buffer => buffer;
 
 		public void Dispose() {
@@ -135,18 +143,24 @@ namespace HookLab.Probe.CorDebug.Patching {
 	}
 
 	internal sealed class HookContext {
-		long sequence; int consecutiveFailures; int active; long rateSecond; int rateCount;
+		// Per-thread, not per-context: the hazard is a hook re-entering while its own capture runs on the
+		// same thread, which an instance flag cannot express. An instance flag also rejects genuinely
+		// concurrent invocations from other threads, which are distinct events that belong in the buffer.
+		[ThreadStatic] static bool dispatching;
+		long sequence; int consecutiveFailures; long rateSecond; int rateCount;
 		internal HookContext(ProbeRuntime runtime, MethodBase method, string patchId, HookDocument document, long installedVersion) {
 			Runtime = runtime; Method = method; PatchId = patchId; Document = document; InstalledVersion = installedVersion;
 		}
 		internal ProbeRuntime Runtime { get; } internal MethodBase Method { get; } internal string PatchId { get; }
 		internal HookDocument Document { get; } internal long InstalledVersion { get; } internal bool Disabled { get; private set; }
 		internal void Invoke(object? instance, object[] args, Exception? exception) {
-			if (Disabled || Interlocked.Exchange(ref active, 1) != 0) return; // bounded reentrancy: one level
+			if (Disabled) return;
+			if (dispatching) { Runtime.RecordReentrantSuppression(); return; }
+			dispatching = true;
 			try {
 				var second = DateTime.UtcNow.Ticks / TimeSpan.TicksPerSecond;
 				if (Interlocked.Read(ref rateSecond) != second) { Interlocked.Exchange(ref rateSecond, second); Interlocked.Exchange(ref rateCount, 0); }
-				if (Interlocked.Increment(ref rateCount) > Document.Limits.MaximumEventsPerSecond) return;
+				if (Interlocked.Increment(ref rateCount) > Document.Limits.MaximumEventsPerSecond) { Runtime.RecordRateLimitedDrop(); return; }
 				if (Document.BehaviorJson.IndexOf("\"throw\":true", StringComparison.OrdinalIgnoreCase) >= 0) throw new InvalidOperationException("Injected hook behavior failure.");
 				var capture = BoundedCapture.Serialize(new CaptureEnvelope(instance, args, exception), Document.Limits);
 				var sequenceValue = Interlocked.Increment(ref sequence);
@@ -154,7 +168,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 					DateTime.UtcNow, Thread.CurrentThread.ManagedThreadId, capture.Json, capture.Truncated, dropped));
 				Interlocked.Exchange(ref consecutiveFailures, 0); Runtime.Notify();
 			} catch { if (Interlocked.Increment(ref consecutiveFailures) >= Document.Limits.MaximumConsecutiveFailures) Disabled = true; }
-			finally { Volatile.Write(ref active, 0); }
+			finally { dispatching = false; }
 		}
 		sealed class CaptureEnvelope {
 			internal CaptureEnvelope(object? instance, object[] arguments, Exception? exception) { Instance = instance; Arguments = arguments; Exception = exception; }

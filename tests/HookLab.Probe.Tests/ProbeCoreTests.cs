@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -150,6 +151,44 @@ namespace HookLab.Probe.Tests {
 		}
 
 		[Fact]
+		public void ConcurrentInvocationsAreCapturedIndependently() {
+			var method = typeof(Fixture).GetMethod(nameof(Fixture.Echo))!;
+			var blocking = new BlockingEnumerable();
+			using (var runtime = Runtime()) {
+				runtime.Install(method, new HookDocument(1, "echo", HookKind.Prefix, GuardFor(method), "{}", Limits, true), 0);
+				var first = Task.Run(() => Fixture.Echo(blocking));
+				Assert.True(blocking.Entered.WaitOne(TimeSpan.FromSeconds(5)));
+				try { Assert.Same(Array.Empty<int>(), Fixture.Echo(Array.Empty<int>())); }
+				finally { blocking.Release.Set(); }
+				Assert.True(first.Wait(TimeSpan.FromSeconds(5)));
+				Assert.Equal(2, runtime.Events.Drain(10).Count);
+				Assert.Equal(0, runtime.ReentrantEventsSuppressed);
+			}
+		}
+
+		[Fact]
+		public void SameThreadRecursiveHookIsSuppressedAndCounted() {
+			var echo = typeof(Fixture).GetMethod(nameof(Fixture.Echo))!;
+			using (var runtime = Runtime()) {
+				runtime.Install(TargetMethod, Document(), 0);
+				runtime.Install(echo, new HookDocument(1, "echo", HookKind.Prefix, GuardFor(echo), "{}", Limits, true), 1);
+				Fixture.Echo(new ReentrantEnumerable());
+				Assert.Single(runtime.Events.Drain(10));
+				Assert.Equal(1, runtime.ReentrantEventsSuppressed);
+			}
+		}
+
+		[Fact]
+		public void RateLimitedInvocationsAreCounted() {
+			var limited = new HookLimits(1, 4096, 4, 8, 32, 3);
+			using (var runtime = Runtime()) {
+				runtime.Install(TargetMethod, new HookDocument(1, "limited", HookKind.Prefix, GuardFor(TargetMethod), "{}", limited, true), 0);
+				for (var index = 0; index < 10; index++) Fixture.Add(index, 1);
+				Assert.True(runtime.RateLimitedEventsDropped > 0);
+			}
+		}
+
+		[Fact]
 		public void InliningIsReportedAsRiskWithCallerValidationHooks() {
 			var caller = typeof(Fixture).GetMethod(nameof(Fixture.Caller))!;
 			var assessment = InliningInspector.Assess(TargetMethod, new[] { caller });
@@ -170,6 +209,22 @@ namespace HookLab.Probe.Tests {
 				Assert.True(consumer.SecondDelivery.WaitOne(TimeSpan.FromSeconds(5)),
 					"An event appended during delivery never woke the consumer again.");
 				Assert.Equal(2, consumer.Delivered);
+			}
+		}
+
+		// A consumer that returns without draining is normal - the pipe worker does exactly that while
+		// disconnected. An earlier delivery loop re-armed on any non-empty buffer and called such a
+		// consumer 232 million times from one hook invocation, pinning a core inside the target.
+		[Fact]
+		public void NonDrainingConsumerIsNotCalledInALoop() {
+			var consumer = new NonDrainingConsumer();
+			using (var runtime = Runtime(consumer)) {
+				runtime.Install(TargetMethod, Document(), 0);
+				Fixture.Add(1, 2);
+				Assert.True(consumer.Called.WaitOne(TimeSpan.FromSeconds(5)));
+				Thread.Sleep(250);
+				Assert.InRange(Volatile.Read(ref consumer.Calls), 1, 2);
+				Assert.True(runtime.Events.Drain(10).Count > 0, "The undrained event must still be waiting.");
 			}
 		}
 
@@ -217,6 +272,11 @@ namespace HookLab.Probe.Tests {
 				else SecondDelivery.Set();
 			}
 		}
+		sealed class NonDrainingConsumer : IHookEventConsumer {
+			public readonly ManualResetEvent Called = new ManualResetEvent(false);
+			public int Calls;
+			public void EventsAvailable(IHookEventSource source) { Interlocked.Increment(ref Calls); Called.Set(); }
+		}
 		sealed class ThrowingConsumer : IHookEventConsumer {
 			public readonly ManualResetEvent Called = new ManualResetEvent(false);
 			public void EventsAvailable(IHookEventSource source) { Called.Set(); throw new InvalidOperationException("consumer exploded"); }
@@ -226,8 +286,17 @@ namespace HookLab.Probe.Tests {
 			public string Dangerous { get { GetterCalls++; throw new InvalidOperationException(); } }
 			public override string ToString() { ToStringCalls++; throw new InvalidOperationException(); }
 		}
+		sealed class BlockingEnumerable : IEnumerable {
+			public readonly ManualResetEvent Entered = new ManualResetEvent(false);
+			public readonly ManualResetEvent Release = new ManualResetEvent(false);
+			public IEnumerator GetEnumerator() { Entered.Set(); Release.WaitOne(); return Array.Empty<object>().GetEnumerator(); }
+		}
+		sealed class ReentrantEnumerable : IEnumerable {
+			public IEnumerator GetEnumerator() { Fixture.Add(10, 20); return Array.Empty<object>().GetEnumerator(); }
+		}
 		static class Fixture {
 			[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
+			[MethodImpl(MethodImplOptions.NoInlining)] public static object Echo(object value) => value;
 			[MethodImpl(MethodImplOptions.NoInlining)] public static int Caller() => Add(1, 2);
 			[MethodImpl(MethodImplOptions.NoInlining)] public static void Throwing() { throw new FixtureException(); }
 		}

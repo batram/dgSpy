@@ -12,6 +12,7 @@ namespace HookLab.Host.Transport.Discovery {
 	public sealed class ProbeDiscoveryStore {
 		const int FormatVersion = 1;
 		const int MaximumRecordBytes = 64 * 1024;
+		static readonly TimeSpan DiscoveryRecordLifetime = TimeSpan.FromMinutes(5);
 		static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 		readonly string directory;
 		readonly string quarantineDirectory;
@@ -59,7 +60,7 @@ namespace HookLab.Host.Transport.Discovery {
 
 		public string Rotate(ProbeDiscoveryRecord previous, byte[] rotatedSecret) {
 			var replacement = new ProbeDiscoveryRecord(previous.Target, previous.ProbeInstanceId, previous.PipeName, previous.EndpointNonce,
-				rotatedSecret, previous.ProtocolVersion, previous.ExpiresUtc);
+				rotatedSecret, previous.ProtocolVersion, DateTime.UtcNow.Add(DiscoveryRecordLifetime));
 			return Write(replacement);
 		}
 		public ProbeHealthResult RecoverAndRotate(ProbeDiscoveryRecord record, int timeoutMilliseconds = 5000) {

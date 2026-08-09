@@ -2,6 +2,7 @@ extern alias hosttransport;
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Pipes;
 using System.Security.Principal;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -24,6 +25,20 @@ internal static class Program {
 			if (mode == "dpapi-write") { var record = Record(ProbeAuthentication.CreateSecret(), ProbeAuthentication.CreateNonce(), "unused"); new ProbeDiscoveryStore(root).Write(record); File.WriteAllText(result, integrity + "|written"); return 0; }
 			if (mode == "dpapi-blob-write") { File.WriteAllBytes(Required(commandLine, "-Blob"), DiscoveryCredentialProtection.Protect(Encoding.UTF8.GetBytes("cross-account-secret"))); File.WriteAllText(result, integrity + "|protected"); return 0; }
 			if (mode == "dpapi-blob-read") { var plain = DiscoveryCredentialProtection.Unprotect(File.ReadAllBytes(Required(commandLine, "-Blob"))); File.WriteAllText(result, integrity + "|" + Encoding.UTF8.GetString(plain)); return 0; }
+			if (mode == "stall-auth") {
+				using (var server = new ProbePipeServer((operation, payload, expected) => new ProbeCommandResult("{}", 0), authenticationTimeoutMilliseconds: 200)) {
+					var endpoint = server.TakeInitialEndpoint();
+					using (var stalled = new NamedPipeClientStream(".", endpoint.PipeName, PipeDirection.InOut)) {
+						stalled.Connect(2000);
+						try { if (stalled.ReadByte() != -1) return 4; } catch (IOException) { }
+					}
+					using (var connection = new ProbeConnection(endpoint.PipeName, endpoint.Secret, endpoint.EndpointNonce, timeoutMilliseconds: 2000)) {
+						var response = connection.Send(new ProbeMessage(1, ProbeMessageKind.Request, "stall-recovery", "status", "{}"));
+						if (response.Operation != "status") return 4;
+					}
+				}
+				File.WriteAllText(result, integrity + "|pass"); return 0;
+			}
 			if (mode == "client") {
 				var record = Single(new ProbeDiscoveryStore(root).Discover(new CurrentTarget(), DateTime.UtcNow));
 				using (var connection = new ProbeConnection(record.PipeName, record.Secret, record.EndpointNonce)) {

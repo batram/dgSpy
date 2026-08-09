@@ -40,18 +40,24 @@ public sealed class ContractAssemblyBoundaryTests {
 	// GetReferencedAssemblies only reports what survived compilation, so an unused ProjectReference to
 	// dnSpy or WPF is elided from metadata and the runtime check above passes while the project file
 	// says otherwise. Declared intent is what a future edit changes first, so assert on that too.
+	// HookLab.Contracts reaches a target probe, so it must not declare the provider ABI either - the
+	// runtime check below only sees references that survived compilation, and an unused ProjectReference
+	// is elided from metadata while sitting in plain sight in the project file.
 	[Theory]
-	[InlineData("dgSpy.ExtensionContracts", "dgSpy.ExtensionContracts.csproj")]
-	[InlineData("HookLab\\HookLab.Contracts", "HookLab.Contracts.csproj")]
-	public void ContractProjectsDeclareNoForbiddenReferences(string projectDirectory, string projectFile) {
+	[InlineData("dgSpy.ExtensionContracts", "dgSpy.ExtensionContracts.csproj", false)]
+	[InlineData("HookLab\\HookLab.Contracts", "HookLab.Contracts.csproj", true)]
+	public void ContractProjectsDeclareNoForbiddenReferences(string projectDirectory, string projectFile, bool forbidProviderAbi) {
 		var path = Path.Combine(RepositoryRoot(), projectDirectory, projectFile);
 		Assert.True(File.Exists(path), $"Contract project not found at '{path}'.");
+		var forbidden = forbidProviderAbi
+			? ForbiddenReferencePrefixes.Concat(new[] { "dgSpy.ExtensionContracts" }).ToArray()
+			: ForbiddenReferencePrefixes;
 		var declared = XDocument.Load(path).Descendants()
 			.Where(element => element.Name.LocalName is "ProjectReference" or "PackageReference" or "Reference")
 			.Select(element => (string?)element.Attribute("Include") ?? string.Empty)
 			.ToArray();
 
-		var offenders = declared.Where(include => ForbiddenReferencePrefixes.Any(prefix =>
+		var offenders = declared.Where(include => forbidden.Any(prefix =>
 			Path.GetFileName(include).StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
 			include.Split('\\', '/').Any(segment => segment.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))).ToArray();
 		Assert.Empty(offenders);
