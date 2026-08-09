@@ -18,6 +18,7 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\LaunchSessionOwnership.cs" Link="Debugger\LaunchSessionOwnership.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\BreakpointSnapPolicy.cs" Link="Debugger\BreakpointSnapPolicy.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\OwnedBreakpoints\OwnedBreakpointStopLabel.cs" Link="Debugger\OwnedBreakpoints\OwnedBreakpointStopLabel.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\ActionLeaseCoordinator.cs" Link="Debugger\ActionLeaseCoordinator.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcException.cs" Link="Rpc\RpcException.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcSecurity.cs" Link="Rpc\RpcSecurity.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\SymbolSearchQuery.cs" Link="Decompiler\SymbolSearchQuery.cs" />

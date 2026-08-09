@@ -36,6 +36,7 @@ sealed class PublishedHost {
 	public IReadOnlyList<Assembly> Assemblies { get; }
 	public CompositionConfiguration Configuration { get; }
 	public ComposableCatalog Catalog { get; }
+	readonly Resolver resolver;
 
 	static readonly Lazy<PublishedHost> instance = new(() => new PublishedHost(), isThreadSafe: true);
 	public static PublishedHost Instance => instance.Value;
@@ -77,12 +78,17 @@ sealed class PublishedHost {
 		// graph. The default one calls Assembly.Load, which searches the test host's
 		// own context and cannot see anything loaded above, so it has to be pointed
 		// at the same context or every part fails to resolve its parameters.
-		var resolver = new Resolver(new HostAssemblyLoader(context));
+		resolver = new Resolver(new HostAssemblyLoader(context));
 		var discovery = new AttributedPartDiscoveryV1(resolver);
 		var parts = discovery.CreatePartsAsync(Assemblies).GetAwaiter().GetResult();
 
 		Catalog = ComposableCatalog.Create(resolver).AddParts(parts);
 		Configuration = CompositionConfiguration.Create(Catalog);
+	}
+
+	public CompositionConfiguration ComposeWithoutAssembly(string assemblyName) {
+			var parts=Catalog.Parts.Where(part=>!string.Equals(part.Type.Assembly.GetName().Name,assemblyName,StringComparison.OrdinalIgnoreCase));
+		return CompositionConfiguration.Create(ComposableCatalog.Create(resolver).AddParts(parts));
 	}
 
 	/// <summary>

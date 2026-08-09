@@ -12,6 +12,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using dgSpy.Extension.ToolWindows;
+using dgSpy.Extension.Debugger;
 using dgSpy.Extension.Debugger.OwnedBreakpoints;
 using dgSpy.Protocol;
 using dnSpy.Contracts.Debugger;
@@ -39,6 +40,7 @@ namespace dgSpy.Extension {
 		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer();
 		readonly ProgramOutputAssembler programOutput; readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>(); readonly Dictionary<int,long> engineHitCounts=new Dictionary<int,long>();
 		readonly OwnedBreakpointService ownedBreakpoints;
+		readonly ActionLeaseCoordinator actionLeases;
 		long lifecycleVersion,executionVersion,breakpointsVersion; string? stopId; string? connectionState; DateTime lastGatewayHeartbeatUtc;
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		readonly RpcSecuritySettings rpcSecurity=RpcSecuritySettings.Load();
@@ -59,9 +61,10 @@ namespace dgSpy.Extension {
 				return running == 0 ? false : running == processes.Length ? true : null;
 			}
 		}
-		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDsDocumentService documentService, IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers, OwnedBreakpointService ownedBreakpoints) {
+		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDsDocumentService documentService, IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers, OwnedBreakpointService ownedBreakpoints, ActionLeaseCoordinator? actionLeases=null) {
 			this.programs=programs; this.manager=manager; this.debuggerSettings=debuggerSettings; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.documentService=documentService; this.moduleIdProviders=moduleIdProviders.ToArray(); this.decompilers=decompilers;
 			this.ownedBreakpoints=ownedBreakpoints ?? throw new ArgumentNullException(nameof(ownedBreakpoints));
+			this.actionLeases=actionLeases ?? ActionLeaseCoordinator.Shared;
 			programOutput=new ProgramOutputAssembler((origin,line) => output.Add(origin.Category,line,origin.ProcessId,origin.RuntimeId));
 			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e);
 			// MessageBoundBreakpoint fires on every engine hit, BEFORE dnSpy's condition/hit-count/filter
@@ -206,6 +209,22 @@ namespace dgSpy.Extension {
 			"pause","continue","step_into","step_over","step_out","set_value","invoke_method","create_object","write_memory","set_instruction_pointer","create_object_id","release_object_id","write_value_export",
 			"set_il_breakpoint","set_breakpoint","remove_breakpoint","clear_breakpoints","update_breakpoint","set_exception_breakpoint","set_module_breakpoint","update_module_breakpoint","remove_module_breakpoint","import_breakpoints","set_exception_policy","remove_exception_policy","restore_exception_defaults",
 		};
+		// Mutations which can invalidate an atomic action's captured process state. This deliberately
+		// includes evaluation-side effects and debugger policy changes in addition to engine transitions.
+		// Session creation and waits are excluded: they do not mutate an already-owned process.
+		static readonly HashSet<string> actionLeaseOperations=new HashSet<string>(StringComparer.Ordinal) {
+			"detach","terminate","restart","pause","continue","step_into","step_over","step_out",
+			"set_value","invoke_method","create_object","write_memory","set_instruction_pointer","create_object_id","release_object_id","write_value_export",
+			"set_il_breakpoint","set_breakpoint","remove_breakpoint","clear_breakpoints","update_breakpoint","set_exception_breakpoint","set_module_breakpoint","update_module_breakpoint","remove_module_breakpoint","import_breakpoints","set_exception_policy","remove_exception_policy","restore_exception_defaults",
+		};
+		async Task DemandActionLeaseAvailableAsync(RpcRequest req,CancellationToken cancellationToken) {
+			if(!actionLeaseOperations.Contains(req.Operation)) return;
+			int? processId=null;
+			if(req.Arguments["process_id"] is not null)
+				processId=await OnDebuggerAsync(()=>SelectProcess(req).Id,cancellationToken).ConfigureAwait(false);
+			if(actionLeases.TryGetBlock(processId,req.Operation,out var owner))
+				throw new RpcException("action_in_progress",owner.FormatBlockReason(req.Operation));
+		}
 		// The operations whose whole purpose is to move execution. Their state change is not applied by
 		// the call itself: executionVersion moves when the engine's Continued or Stopped event is
 		// recorded on the debugger thread, which happens after the RPC has already composed its answer.
@@ -264,6 +283,7 @@ namespace dgSpy.Extension {
 			CheckOperationVersion(req);
 			using var requestCancellation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
 			if (req.DeadlineUtc is DateTime requestDeadline) requestCancellation.CancelAfter(requestDeadline-DateTime.UtcNow > TimeSpan.Zero ? requestDeadline-DateTime.UtcNow : TimeSpan.FromMilliseconds(1));
+			await DemandActionLeaseAvailableAsync(req,requestCancellation.Token).ConfigureAwait(false);
 			switch (req.Operation) {
 			case "ping": return RpcResponse.Success(req.RequestId,new Handshake { ExtensionVersion=Version,HostId=rpcSecurity.HostId });
 			case "gateway_heartbeat": lock(sync) lastGatewayHeartbeatUtc=DateTime.UtcNow; NotifyConnectionStateChanged(); return RpcResponse.Success(req.RequestId,new { connected=true });

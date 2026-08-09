@@ -110,6 +110,14 @@ public class CompositionTests {
 		Assert.Contains("CorDebug", exporters[0].Definition.Type.FullName ?? "", StringComparison.Ordinal);
 	}
 
+	[Fact]
+	public void Debugger_composes_with_zero_action_guards() {
+		RequirePublishedHost();
+		var configuration=PublishedHost.Instance.ComposeWithoutAssembly("dgSpy.Extension.x");
+		Assert.True(configuration.CompositionErrors.IsEmpty,
+			"Removing dgSpy.Extension.x must leave the optional ImportMany<DbgActionGuard> imports satisfied so stock dnSpy behavior is unchanged.");
+	}
+
 	/// <summary>
 	/// A content type has to be registered before EditValueProviderService.Create
 	/// will accept it. When the environment editor was restored without its two

@@ -27,12 +27,16 @@ using dnSpy.Debugger.Steppers;
 
 namespace dnSpy.Debugger.Impl {
 	sealed partial class DbgManagerImpl {
-		internal void Step(DbgStepperImpl stepper, object? stepperTag, DbgEngineStepKind step, bool singleProcess) =>
+		internal void Step(DbgStepperImpl stepper, object? stepperTag, DbgEngineStepKind step, bool singleProcess) {
+			if (!CanMutate(stepper.Process, PredefinedDbgActionOperations.Step, out var actionError)) {
+				DbgThread(() => RaiseStepperError_DbgThread(stepper, actionError!));
+				return;
+			}
 			DbgThread(() => Step_DbgThread(stepper, stepperTag, step, singleProcess));
+		}
 
 		void Step_DbgThread(DbgStepperImpl stepper, object? stepperTag, DbgEngineStepKind step, bool singleProcess) {
 			Dispatcher.VerifyAccess();
-
 			var infos = new List<EngineInfo>();
 			EngineInfo? stepperEngineInfo = null;
 			lock (lockObj) {

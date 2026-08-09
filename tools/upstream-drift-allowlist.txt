@@ -52,7 +52,13 @@ dnSpy/dnSpy.Contracts.Debugger/DbgDispatcher.cs                           dispat
 Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DbgDispatcherImpl.cs        dispatcher surface for RPC marshalling
 Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DebuggerThread.cs           dispatcher surface for RPC marshalling
 Extensions/dnSpy.Debugger/dnSpy.Debugger/Shared/Dispatcher.cs             dispatcher surface for RPC marshalling
-Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DbgManagerImpl.cs           session and engine state needed by the RPC host
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DbgManagerImpl.cs           session and engine state needed by the RPC host; optional atomic-action mutation guard
+
+# HookLab atomic actions: optional deny-if-any guard at the four public debugger mutation choke points.
+dnSpy/dnSpy.Contracts.Debugger/DbgActionGuard.cs                          optional contract and shared operation names for atomic-action refusal
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DbgManagerImpl.Steppers.cs  refuse public stepping before its debugger-thread marshal
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Impl/DbgRuntimeImpl.cs           refuse instruction-pointer mutation before its dispatcher marshal
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Breakpoints/Code/DbgCodeBreakpointsServiceImpl.cs refuse public breakpoint mutation before its dispatcher marshal
 
 # Attach: dgSpy exposes attachable processes over MCP and needs stable identity.
 dnSpy/dnSpy.Contracts.Debugger/Attach/AttachableProcess.cs                stable process identity for list_programs

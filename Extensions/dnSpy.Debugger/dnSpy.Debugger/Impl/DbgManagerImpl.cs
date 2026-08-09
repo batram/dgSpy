@@ -265,13 +265,14 @@ namespace dnSpy.Debugger.Impl {
 		readonly Lazy<DbgEngineProvider, IDbgEngineProviderMetadata>[] dbgEngineProviders;
 		readonly Lazy<IDbgManagerStartListener>[] dbgManagerStartListeners;
 		readonly Lazy<DbgModuleMemoryRefreshedNotifier>[] dbgModuleMemoryRefreshedNotifiers;
+		readonly Lazy<DbgActionGuard>[] dbgActionGuards;
 		readonly List<StartDebuggingOptions> restartOptions;
 		readonly HashSet<ProcessKey> debuggedRuntimes;
 		readonly List<DbgObject> objsToClose;
 		int hasNotifiedStartListenersCounter;
 
 		[ImportingConstructor]
-		DbgManagerImpl(DbgDispatcherProvider dbgDispatcherProvider, DebuggerSettings debuggerSettings, Lazy<BoundCodeBreakpointsService> boundCodeBreakpointsService, [ImportMany] IEnumerable<Lazy<DbgEngineProvider, IDbgEngineProviderMetadata>> dbgEngineProviders, [ImportMany] IEnumerable<Lazy<IDbgManagerStartListener>> dbgManagerStartListeners, [ImportMany] IEnumerable<Lazy<DbgModuleMemoryRefreshedNotifier>> dbgModuleMemoryRefreshedNotifiers) {
+		DbgManagerImpl(DbgDispatcherProvider dbgDispatcherProvider, DebuggerSettings debuggerSettings, Lazy<BoundCodeBreakpointsService> boundCodeBreakpointsService, [ImportMany] IEnumerable<Lazy<DbgEngineProvider, IDbgEngineProviderMetadata>> dbgEngineProviders, [ImportMany] IEnumerable<Lazy<IDbgManagerStartListener>> dbgManagerStartListeners, [ImportMany] IEnumerable<Lazy<DbgModuleMemoryRefreshedNotifier>> dbgModuleMemoryRefreshedNotifiers, [ImportMany] IEnumerable<Lazy<DbgActionGuard>> dbgActionGuards) {
 			lockObj = new object();
 			this.dbgDispatcherProvider = dbgDispatcherProvider;
 			this.debuggerSettings = debuggerSettings;
@@ -289,7 +290,32 @@ namespace dnSpy.Debugger.Impl {
 			this.dbgEngineProviders = dbgEngineProviders.OrderBy(a => a.Metadata.Order).ToArray();
 			this.dbgManagerStartListeners = dbgManagerStartListeners.ToArray();
 			this.dbgModuleMemoryRefreshedNotifiers = dbgModuleMemoryRefreshedNotifiers.ToArray();
+			this.dbgActionGuards = dbgActionGuards.ToArray();
 			new DelayedIsRunningHelper(this, InternalDispatcher, RaiseDelayedIsRunningChanged_DbgThread);
+		}
+
+		internal bool CanMutate(DbgProcess? process, string operation, out string? error) {
+			var blocked = new List<(DbgActionGuard Guard, DbgActionBlockInfo Info)>();
+			foreach (var guard in dbgActionGuards) {
+				var value = guard.Value;
+				if (value.TryGetBlock(process, operation, out var info))
+					blocked.Add((value, info));
+			}
+			foreach (var block in blocked)
+				block.Guard.ReportBlocked(block.Info);
+			if (blocked.Count != 0) {
+				error = blocked[0].Info.Message;
+				return false;
+			}
+			error = null;
+			return true;
+		}
+
+		bool CanMutateAll(string operation) {
+			DbgProcess[] snapshot;
+			lock (lockObj)
+				snapshot = processes.ToArray();
+			return snapshot.All(process => CanMutate(process, operation, out _));
 		}
 
 		// DbgManager thread
@@ -650,6 +676,8 @@ namespace dnSpy.Debugger.Impl {
 		}
 
 		public override void Restart() {
+			if (!CanMutateAll(PredefinedDbgActionOperations.Restart))
+				return;
 			lock (lockObj) {
 				if (!CanRestart)
 					return;
@@ -678,6 +706,8 @@ namespace dnSpy.Debugger.Impl {
 		StopDebuggingHelper? stopDebuggingHelper;
 
 		public override void BreakAll() {
+			if (!CanMutateAll(PredefinedDbgActionOperations.Pause))
+				return;
 			lock (lockObj) {
 				if (breakAllHelper is not null)
 					return;
@@ -965,8 +995,11 @@ namespace dnSpy.Debugger.Impl {
 			}
 		}
 
-		public override void RunAll() =>
+		public override void RunAll() {
+			if (!CanMutateAll(PredefinedDbgActionOperations.Continue))
+				return;
 			DbgThread(() => RunAll_DbgThread());
+		}
 
 		void RunAll_DbgThread() {
 			Dispatcher.VerifyAccess();
@@ -979,6 +1012,8 @@ namespace dnSpy.Debugger.Impl {
 		public override void Run(DbgProcess process) {
 			if (process is null)
 				throw new ArgumentNullException(nameof(process));
+			if (!CanMutate(process, PredefinedDbgActionOperations.Continue, out _))
+				return;
 			if (debuggerSettings.BreakAllProcesses)
 				RunAll();
 			else
@@ -1074,7 +1109,11 @@ namespace dnSpy.Debugger.Impl {
 				RunEngines_DbgThread(new[] { engineInfo });
 		}
 
-		public override void StopDebuggingAll() => DbgThread(() => StopDebuggingAll_DbgThread());
+		public override void StopDebuggingAll() {
+			if (!CanMutateAll(PredefinedDbgActionOperations.Terminate))
+				return;
+			DbgThread(() => StopDebuggingAll_DbgThread());
+		}
 		void StopDebuggingAll_DbgThread() {
 			Dispatcher.VerifyAccess();
 			lock (lockObj) {
@@ -1088,7 +1127,11 @@ namespace dnSpy.Debugger.Impl {
 			}
 		}
 
-		public override void TerminateAll() => DbgThread(() => TerminateAll_DbgThread());
+		public override void TerminateAll() {
+			if (!CanMutateAll(PredefinedDbgActionOperations.Terminate))
+				return;
+			DbgThread(() => TerminateAll_DbgThread());
+		}
 		void TerminateAll_DbgThread() {
 			Dispatcher.VerifyAccess();
 			lock (lockObj) {
@@ -1097,7 +1140,11 @@ namespace dnSpy.Debugger.Impl {
 			}
 		}
 
-		public override void DetachAll() => DbgThread(() => DetachAll_DbgThread());
+		public override void DetachAll() {
+			if (!CanMutateAll(PredefinedDbgActionOperations.Detach))
+				return;
+			DbgThread(() => DetachAll_DbgThread());
+		}
 		void DetachAll_DbgThread() {
 			Dispatcher.VerifyAccess();
 			lock (lockObj) {
@@ -1118,7 +1165,11 @@ namespace dnSpy.Debugger.Impl {
 			}
 		}
 
-		internal void Detach(DbgProcessImpl process) => DbgThread(() => Detach_DbgThread(process));
+		internal void Detach(DbgProcessImpl process) {
+			if (!CanMutate(process, PredefinedDbgActionOperations.Detach, out _))
+				return;
+			DbgThread(() => Detach_DbgThread(process));
+		}
 		void Detach_DbgThread(DbgProcessImpl process) {
 			Dispatcher.VerifyAccess();
 			lock (lockObj) {
@@ -1129,7 +1180,11 @@ namespace dnSpy.Debugger.Impl {
 			}
 		}
 
-		internal void Terminate(DbgProcessImpl process) => DbgThread(() => Terminate_DbgThread(process));
+		internal void Terminate(DbgProcessImpl process) {
+			if (!CanMutate(process, PredefinedDbgActionOperations.Terminate, out _))
+				return;
+			DbgThread(() => Terminate_DbgThread(process));
+		}
 		void Terminate_DbgThread(DbgProcessImpl process) {
 			Dispatcher.VerifyAccess();
 			lock (lockObj) {
@@ -1140,7 +1195,11 @@ namespace dnSpy.Debugger.Impl {
 			}
 		}
 
-		internal void Break(DbgProcessImpl process) => DbgThread(() => Break_DbgThread(process));
+		internal void Break(DbgProcessImpl process) {
+			if (!CanMutate(process, PredefinedDbgActionOperations.Pause, out _))
+				return;
+			DbgThread(() => Break_DbgThread(process));
+		}
 		void Break_DbgThread(DbgProcessImpl process) {
 			Dispatcher.VerifyAccess();
 			lock (lockObj) {
@@ -1151,7 +1210,11 @@ namespace dnSpy.Debugger.Impl {
 			}
 		}
 
-		internal void Run(DbgProcessImpl process) => DbgThread(() => Run_DbgThread(process));
+		internal void Run(DbgProcessImpl process) {
+			if (!CanMutate(process, PredefinedDbgActionOperations.Continue, out _))
+				return;
+			DbgThread(() => Run_DbgThread(process));
+		}
 		void Run_DbgThread(DbgProcessImpl process) {
 			Dispatcher.VerifyAccess();
 			var engineInfos = new List<EngineInfo>();

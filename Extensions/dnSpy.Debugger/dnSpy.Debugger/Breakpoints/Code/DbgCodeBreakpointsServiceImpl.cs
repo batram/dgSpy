@@ -43,6 +43,7 @@ namespace dnSpy.Debugger.Breakpoints.Code {
 		readonly HashSet<DbgCodeBreakpointImpl> breakpoints;
 		readonly Dictionary<DbgCodeLocation, DbgCodeBreakpointImpl> locationToBreakpoint;
 		readonly DbgDispatcherProvider dbgDispatcherProvider;
+		readonly Lazy<DbgActionGuard>[] dbgActionGuards;
 		int breakpointId;
 		bool isDebugging;
 
@@ -51,11 +52,12 @@ namespace dnSpy.Debugger.Breakpoints.Code {
 		internal DbgDispatcherProvider DbgDispatcher => dbgDispatcherProvider;
 
 		[ImportingConstructor]
-		DbgCodeBreakpointsServiceImpl(DbgDispatcherProvider dbgDispatcherProvider, [ImportMany] IEnumerable<Lazy<IDbgCodeBreakpointsServiceListener>> dbgCodeBreakpointsServiceListener) {
+		DbgCodeBreakpointsServiceImpl(DbgDispatcherProvider dbgDispatcherProvider, [ImportMany] IEnumerable<Lazy<IDbgCodeBreakpointsServiceListener>> dbgCodeBreakpointsServiceListener, [ImportMany] IEnumerable<Lazy<DbgActionGuard>> dbgActionGuards) {
 			lockObj = new object();
 			breakpoints = new HashSet<DbgCodeBreakpointImpl>();
 			locationToBreakpoint = new Dictionary<DbgCodeLocation, DbgCodeBreakpointImpl>();
 			this.dbgDispatcherProvider = dbgDispatcherProvider;
+			this.dbgActionGuards = dbgActionGuards.ToArray();
 			breakpointId = 0;
 			isDebugging = false;
 
@@ -64,10 +66,23 @@ namespace dnSpy.Debugger.Breakpoints.Code {
 		}
 
 		void Dbg(Action callback) => dbgDispatcherProvider.Dbg(callback);
+		bool CanMutate() {
+			var blocked = new List<(DbgActionGuard Guard, DbgActionBlockInfo Info)>();
+			foreach (var guard in dbgActionGuards) {
+				var value = guard.Value;
+				if (value.TryGetBlock(null, PredefinedDbgActionOperations.BreakpointMutation, out var info))
+					blocked.Add((value, info));
+			}
+			foreach (var block in blocked)
+				block.Guard.ReportBlocked(block.Info);
+			return blocked.Count == 0;
+		}
 
 		public override void Modify(DbgCodeBreakpointAndSettings[] settings) {
 			if (settings is null)
 				throw new ArgumentNullException(nameof(settings));
+			if (!CanMutate())
+				return;
 			Dbg(() => ModifyCore(settings));
 		}
 
@@ -117,6 +132,8 @@ namespace dnSpy.Debugger.Breakpoints.Code {
 		public override DbgCodeBreakpoint[] Add(DbgCodeBreakpointInfo[] breakpoints) {
 			if (breakpoints is null)
 				throw new ArgumentNullException(nameof(breakpoints));
+			if (!CanMutate())
+				return Array.Empty<DbgCodeBreakpoint>();
 			var bpImpls = new List<DbgCodeBreakpointImpl>(breakpoints.Length);
 			List<DbgObject>? objsToClose = null;
 			lock (lockObj) {
@@ -180,6 +197,8 @@ namespace dnSpy.Debugger.Breakpoints.Code {
 		public override void Remove(DbgCodeBreakpoint[] breakpoints) {
 			if (breakpoints is null)
 				throw new ArgumentNullException(nameof(breakpoints));
+			if (!CanMutate())
+				return;
 			Dbg(() => RemoveCore(breakpoints));
 		}
 
@@ -217,7 +236,11 @@ namespace dnSpy.Debugger.Breakpoints.Code {
 			return null;
 		}
 
-		public override void Clear() => Dbg(() => RemoveCore(VisibleBreakpoints.ToArray()));
+		public override void Clear() {
+			if (!CanMutate())
+				return;
+			Dbg(() => RemoveCore(VisibleBreakpoints.ToArray()));
+		}
 
 		public override void UpdateIsDebugging_DbgThread(bool newIsDebugging) {
 			dbgDispatcherProvider.VerifyAccess();
