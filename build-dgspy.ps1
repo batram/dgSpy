@@ -30,6 +30,7 @@ if ([string]::IsNullOrWhiteSpace($DnSpyDir)) {
 $extensionProject = Join-Path $PSScriptRoot 'Extensions\dgSpy.Extension\dgSpy.Extension.csproj'
 $gatewayProject = Join-Path $PSScriptRoot 'dgSpy.Gateway\dgSpy.Gateway.csproj'
 $cliProject = Join-Path $PSScriptRoot 'dgSpy.Cli\dgSpy.Cli.csproj'
+$protocolProject = Join-Path $PSScriptRoot 'dgSpy.Protocol\dgSpy.Protocol.csproj'
 $extensionContractsProject = Join-Path $PSScriptRoot 'dgSpy.ExtensionContracts\dgSpy.ExtensionContracts.csproj'
 $hookLabContractsProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Contracts\HookLab.Contracts.csproj'
 $hookLabProbeProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Probe.CorDebug\HookLab.Probe.CorDebug.csproj'
@@ -43,6 +44,12 @@ if (-not (Test-Path $DnSpyDir)) {
 # ProjectReferences after packaging: implementation projects can target the packaged root and copy
 # their dependency closure there, breaking AppDirectories.BinDirectory.
 & (Join-Path $PSScriptRoot 'tools\Test-DgSpyPackagedHostLayout.ps1') -HostRoot $DnSpyDir -TargetFramework $TargetFramework
+
+# BuildProjectReferences=false below suppresses ALL of the extension's project references, not just the
+# dnSpy ones, so every dgSpy dependency it needs must be built here explicitly. Omitting dgSpy.Protocol
+# passed locally, where a stale DLL was already on disk, and failed every clean CI job with CS0006.
+dotnet build $protocolProject -c $Configuration --nologo -v:minimal
+if ($LASTEXITCODE) { throw "Protocol build failed with exit code $LASTEXITCODE" }
 
 dotnet build $extensionContractsProject -c $Configuration --nologo -v:minimal
 if ($LASTEXITCODE) { throw "Extension contracts build failed with exit code $LASTEXITCODE" }
