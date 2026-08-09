@@ -4,6 +4,14 @@ These capabilities are deliberately unscheduled. Implement one only for a concre
 remote authorization and audit model can grant it independently. None is a sandbox, and no permission
 implies another.
 
+Runtime Harmony hooking is no longer merely speculative: its approved, staged design is in the
+[HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md),
+[extension-provider and MCP plan](DGSPY_EXTENSION_PROVIDER_PLAN.md), and
+[atomic-actions plan](DGSPY_ATOMIC_ACTIONS_PLAN.md). Those plans cover guarded declarative hooks and
+isolated expert compilation, but custom C# remains unsandboxed target-code execution. The sections
+below continue to govern general execution, assembly editing/live replacement, and host scripting
+outside that bounded design.
+
 ## Target C# execution
 
 Execute caller-supplied C# in an explicitly selected debug target.
@@ -29,6 +37,10 @@ stale state, limits, audit redaction, and remote-default-off policy.
 ## Assembly editing, project export, and live patching
 
 Expose dnSpy/dnlib services without automating WPF.
+
+HookLab's validated source-project-plus-exact-DLL export does not authorize general assembly editing,
+overwriting target artifacts, or debugger/JIT method-body replacement. Those remain separate
+capabilities with separate permissions and acceptance gates.
 
 - Use copy-on-write edit transactions keyed by exact document identity and original SHA-256.
 - Preview deterministic manifests and diagnostics before writing.

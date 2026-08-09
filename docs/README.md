@@ -13,6 +13,15 @@
   focused fixes upstream.
 - [Remote hosts](REMOTE_HOSTS.md) — deploy packages and the target outbound registration/TLS design.
 
+## Approved implementation designs
+
+- [HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md) - standalone GUI extension,
+  guarded Harmony probes, hybrid hook authoring, and source-plus-DLL export.
+- [Extension-provider and hooking MCP plan](DGSPY_EXTENSION_PROVIDER_PLAN.md) - optional MEF
+  providers, typed `hook_*` tools, permissions, leases, audit, and remote artifacts.
+- [Atomic actions and non-stopping tracing plan](DGSPY_ATOMIC_ACTIONS_PLAN.md) - host-side
+  timing-sensitive actions, payload bootstrap, tracepoints, and exception capture.
+
 ## Worked examples
 
 - [Differential debugging across two processes](example/differential-debugging-two-processes.md) —
@@ -24,6 +33,9 @@
 
 - [Future capabilities](FUTURE_CAPABILITIES.md) — unscheduled target-code execution, assembly
   editing/project export/live patching, and dnSpy-host scripting.
+
+The approved HookLab plans above supersede the runtime-hooking portion of that speculative policy;
+general target execution, assembly editing/live replacement, and host scripting remain unscheduled.
 
 ## Historical evidence
 

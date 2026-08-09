@@ -167,8 +167,22 @@ authenticated, loopback-only, and shared by equally trusted local callers.
 
 ## 2. Optional high-risk capabilities
 
-Target-code execution, artifact editing/project export/live patching, and dnSpy-host scripting remain
-unscheduled. Their trust boundaries, prerequisites, and exit criteria are consolidated in
+Runtime hooking now has an approved concrete design split across:
+
+- [HookLab implementation](HOOKLAB_IMPLEMENTATION_PLAN.md) for the GUI, guarded probes, hybrid
+  authoring, and validated source-plus-DLL export;
+- [extension-provider and MCP integration](DGSPY_EXTENSION_PROVIDER_PLAN.md) for optional MEF
+  composition, typed tools, permissions, independent leases, audit, and remote operation; and
+- [atomic actions and non-stopping tracing](DGSPY_ATOMIC_ACTIONS_PLAN.md) for timing-sensitive
+  bootstrap, tracepoints, and exception capture without agent pause round trips.
+
+Delivery is x64 CLR v4/net48 first and Unity/Mono only after the CLR gate is green. Automatic native
+bootstrap/process watching, profiler/ReJIT, transpilers, reverse patches, CoreCLR, x86, and native
+debugging remain deferred. The current tool surface does not provide these capabilities until their
+implementation milestones and acceptance gates are complete.
+
+General target-code execution outside HookLab, assembly editing, general live method-body replacement,
+and dnSpy-host scripting remain unscheduled. Their trust boundaries and prerequisites are in
 [future capabilities](FUTURE_CAPABILITIES.md).
 
 Do not implement one merely to make the tool surface broader. Start only for a concrete workflow, after
