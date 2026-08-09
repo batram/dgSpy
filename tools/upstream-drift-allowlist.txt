@@ -24,7 +24,9 @@
 dgSpy.Cli/                     dgSpy MCP command line client
 dgSpy.Gateway/                 dgSpy MCP gateway
 dgSpy.Protocol/                dgSpy wire protocol
+dgSpy.ExtensionContracts/      dgSpy optional feature-provider ABI, loaded only host-side
 Extensions/dgSpy.Extension/    dgSpy in-process dnSpy extension
+HookLab/                       HookLab contracts, target probe and host transport
 Build/RemoteCertificateTool/   certificate helper for remote hosts
 tests/                         dgSpy test suites, fixtures and gates
 docs/                          dgSpy documentation
@@ -160,3 +162,9 @@ Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/Impl/DbgEngineImpl.Threads.
 dnSpy/dnSpy.Contracts.Debugger/StartDebuggingOptions.cs                                 tri-state RedirectConsoleOutput for programmatic launch
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DbgEngineImpl.cs           honour the explicit redirect request on launch
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/Impl/DbgEngineImpl.cs               honour the explicit redirect request on launch
+
+# Internal atomic actions need an engine breakpoint owner below dnSpy's public
+# duplicate-rejecting breakpoint collection. Keep this bridge narrow so dgSpy
+# does not use reflection or expose general CorDebug internals.
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DgSpyOwnedBreakpointFacade.cs  owned internal breakpoint facade
+dnSpy/dnSpy.Contracts.Debugger.DotNet.CorDebug/DgSpyOwnedBreakpointService.cs                narrow owned-breakpoint contract for dgSpy consumers

@@ -98,6 +98,19 @@ public class CompositionTests {
 	}
 
 	/// <summary>
+	/// dgSpy consumes only the contracts assembly. CorDebug owns the implementation export, so the
+	/// extension never needs a runtime reference to the scanner-loaded implementation assembly.
+	/// </summary>
+	[Fact]
+	public void Owned_breakpoint_service_contract_is_exported() {
+		RequirePublishedHost();
+		var exporters = PartsExporting(PublishedHost.Instance.Catalog,
+			"dnSpy.Contracts.Debugger.DotNet.CorDebug.IDgSpyOwnedBreakpointService");
+		Assert.Single(exporters);
+		Assert.Contains("CorDebug", exporters[0].Definition.Type.FullName ?? "", StringComparison.Ordinal);
+	}
+
+	/// <summary>
 	/// A content type has to be registered before EditValueProviderService.Create
 	/// will accept it. When the environment editor was restored without its two
 	/// ContentTypeDefinition exports, opening the editor threw

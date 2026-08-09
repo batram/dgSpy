@@ -12,6 +12,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using dgSpy.Extension.ToolWindows;
+using dgSpy.Extension.Debugger.OwnedBreakpoints;
 using dgSpy.Protocol;
 using dnSpy.Contracts.Debugger;
 using dnSpy.Contracts.Debugger.Attach;
@@ -37,6 +38,7 @@ namespace dgSpy.Extension {
 		readonly EvaluationQueue evaluations=new EvaluationQueue(); readonly SemaphoreSlim targetControl=new SemaphoreSlim(1,1);
 		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer();
 		readonly ProgramOutputAssembler programOutput; readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>(); readonly Dictionary<int,long> engineHitCounts=new Dictionary<int,long>();
+		readonly OwnedBreakpointService ownedBreakpoints;
 		long lifecycleVersion,executionVersion,breakpointsVersion; string? stopId; string? connectionState; DateTime lastGatewayHeartbeatUtc;
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		readonly RpcSecuritySettings rpcSecurity=RpcSecuritySettings.Load();
@@ -57,8 +59,9 @@ namespace dgSpy.Extension {
 				return running == 0 ? false : running == processes.Length ? true : null;
 			}
 		}
-		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDsDocumentService documentService, IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers) {
+		public RpcHost(AttachableProcessesService programs, DbgManager manager, DebuggerSettings debuggerSettings, DbgCodeBreakpointsService breakpoints, DbgModuleBreakpointsService moduleBreakpoints, DbgObjectIdService objectIds, DbgDotNetCodeLocationFactory locations, DbgCallStackService callStack, DbgLanguageService languages, DbgExceptionSettingsService exceptions, DbgMetadataService metadataService, IDsDocumentService documentService, IEnumerable<Lazy<DbgModuleIdProvider>> moduleIdProviders, IDecompilerService decompilers, OwnedBreakpointService ownedBreakpoints) {
 			this.programs=programs; this.manager=manager; this.debuggerSettings=debuggerSettings; this.breakpoints=breakpoints; this.moduleBreakpoints=moduleBreakpoints; this.objectIds=objectIds; this.locations=locations; this.callStack=callStack; this.languages=languages; this.exceptions=exceptions; this.metadataService=metadataService; this.documentService=documentService; this.moduleIdProviders=moduleIdProviders.ToArray(); this.decompilers=decompilers;
+			this.ownedBreakpoints=ownedBreakpoints ?? throw new ArgumentNullException(nameof(ownedBreakpoints));
 			programOutput=new ProgramOutputAssembler((origin,line) => output.Add(origin.Category,line,origin.ProcessId,origin.RuntimeId));
 			manager.Message += (_,e) => OnDebuggerMessage(e); manager.ProcessPaused += (_,e) => OnProcessPaused(e);
 			// MessageBoundBreakpoint fires on every engine hit, BEFORE dnSpy's condition/hit-count/filter
@@ -854,7 +857,7 @@ namespace dgSpy.Extension {
 			}
 			catch { }
 		}
-		public void Dispose() { shutdown.Cancel(); tcpListener?.Stop(); connectionStateTimer?.Dispose(); programOutput.Dispose(); evaluations.Dispose(); targetControl.Dispose(); shutdown.Dispose(); }
+		public void Dispose() { shutdown.Cancel(); tcpListener?.Stop(); connectionStateTimer?.Dispose(); ownedBreakpoints.Dispose(); programOutput.Dispose(); evaluations.Dispose(); targetControl.Dispose(); shutdown.Dispose(); }
 	}
 
 	/// <summary>

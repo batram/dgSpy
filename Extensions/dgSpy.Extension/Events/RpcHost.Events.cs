@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using dgSpy.Extension.Debugger.OwnedBreakpoints;
 using dgSpy.Protocol;
 using dnSpy.Contracts.Debugger;
 using dnSpy.Contracts.Debugger.Breakpoints.Code;
@@ -159,6 +160,13 @@ namespace dgSpy.Extension {
 				.Where(info=>info.Kind==DbgBreakInfoKind.Message).Select(info=>info.Data as DbgMessageEventArgs).Where(message=>message is not null).ToArray();
 			var cause=messages.FirstOrDefault(message=>MessageThread(message!)==paused.Thread) ?? messages.FirstOrDefault();
 			var value=StopEvent(cause,paused.Process,paused.Thread);
+			// A coincident user breakpoint remains the authoritative visible cause. For an internal-only
+			// stop CorDebug emits a generic break message, so attach the unforgeable owner identity instead
+			// of exposing a truthless bare pause to MCP.
+			var hasOwner=ownedBreakpoints.TryConsumeStopAttribution(paused.Process,paused.Thread,out var ownerToken);
+			var ownerReason=OwnedBreakpointStopLabel.Select(cause is not null && cause is not DbgMessageBreakEventArgs,
+				hasOwner ? ownerToken : (Guid?)null);
+			if(ownerReason is not null) value.Reason=ownerReason;
 			Record(value);
 		}
 

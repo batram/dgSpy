@@ -35,6 +35,15 @@ $hookLabContractsProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Contracts\Ho
 $hookLabProbeProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Probe.CorDebug\HookLab.Probe.CorDebug.csproj'
 $hookLabHostTransportProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Host.Transport\HookLab.Host.Transport.csproj'
 
+if (-not (Test-Path $DnSpyDir)) {
+	throw "dnSpy directory not found: $DnSpyDir. Build dnSpy first ($hostBuildCommand) or pass -DnSpyDir."
+}
+
+# The extension consumes assemblies produced by the documented host build. Never rebuild its dnSpy
+# ProjectReferences after packaging: implementation projects can target the packaged root and copy
+# their dependency closure there, breaking AppDirectories.BinDirectory.
+& (Join-Path $PSScriptRoot 'tools\Test-DgSpyPackagedHostLayout.ps1') -HostRoot $DnSpyDir -TargetFramework $TargetFramework
+
 dotnet build $extensionContractsProject -c $Configuration --nologo -v:minimal
 if ($LASTEXITCODE) { throw "Extension contracts build failed with exit code $LASTEXITCODE" }
 
@@ -47,8 +56,10 @@ if ($LASTEXITCODE) { throw "HookLab probe build failed with exit code $LASTEXITC
 dotnet build $hookLabHostTransportProject -c $Configuration --nologo -v:minimal
 if ($LASTEXITCODE) { throw "HookLab host transport build failed with exit code $LASTEXITCODE" }
 
-dotnet build $extensionProject -c $Configuration -f $TargetFramework --nologo -v:minimal
+dotnet build $extensionProject -c $Configuration -f $TargetFramework --nologo -v:minimal -p:BuildProjectReferences=false
 if ($LASTEXITCODE) { throw "Extension build failed with exit code $LASTEXITCODE" }
+
+& (Join-Path $PSScriptRoot 'tools\Test-DgSpyPackagedHostLayout.ps1') -HostRoot $DnSpyDir -TargetFramework $TargetFramework
 
 dotnet build $gatewayProject -c $Configuration --nologo -v:minimal
 if ($LASTEXITCODE) { throw "Gateway build failed with exit code $LASTEXITCODE" }
@@ -57,10 +68,6 @@ dotnet build $cliProject -c $Configuration --nologo -v:minimal
 if ($LASTEXITCODE) { throw "CLI build failed with exit code $LASTEXITCODE" }
 
 if ($NoDeploy) { return }
-
-if (-not (Test-Path $DnSpyDir)) {
-	throw "dnSpy directory not found: $DnSpyDir. Build dnSpy first ($hostBuildCommand) or pass -DnSpyDir."
-}
 
 $extensionOutput = Join-Path $PSScriptRoot "Extensions\dgSpy.Extension\bin\$Configuration\$TargetFramework"
 $runtimeBin = Join-Path $DnSpyDir 'bin'
@@ -117,3 +124,4 @@ foreach ($file in $deployFiles) {
 }
 
 Write-Host "Deployed dgSpy extension to $deployDir"
+& (Join-Path $PSScriptRoot 'tools\Test-DgSpyPackagedHostLayout.ps1') -HostRoot $DnSpyDir -TargetFramework $TargetFramework

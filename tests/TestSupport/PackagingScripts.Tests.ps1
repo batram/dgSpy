@@ -4,6 +4,8 @@ $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $packPath = Join-Path $repoRoot 'pack-dgspy.ps1'
 $installPath = Join-Path $repoRoot 'install-dgspy.ps1'
+$layoutTestPath = Join-Path $repoRoot 'tools\Test-DgSpyPackagedHostLayout.ps1'
+$poisonedRootFixture = Join-Path $PSScriptRoot 'Fixtures\poisoned-net48-root-files.txt'
 
 function Read-ScriptAst([string]$ScriptPath) {
 	$tokens = $null
@@ -43,4 +45,58 @@ if ($installText -notmatch 'ZipFile\]::ExtractToDirectory') {
 	throw 'Release ZIP installation must retain the native extraction path.'
 }
 
-Write-Host 'PASSED  release ZIP and local directory packaging contracts'
+$fixtureRoot = Join-Path $PSScriptRoot 'bin\packaged-layout-contract'
+if (Test-Path -LiteralPath $fixtureRoot) { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force }
+try {
+	New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'bin') -Force | Out-Null
+	Set-Content -LiteralPath (Join-Path $fixtureRoot 'dnSpy.exe') -Value ''
+	Set-Content -LiteralPath (Join-Path $fixtureRoot 'dnSpy.Console.exe') -Value ''
+	Set-Content -LiteralPath (Join-Path $fixtureRoot 'bin\dnSpy.Contracts.DnSpy.dll') -Value ''
+	& $layoutTestPath -HostRoot $fixtureRoot -TargetFramework net10.0-windows
+
+	Set-Content -LiteralPath (Join-Path $fixtureRoot 'dnSpy.Contracts.DnSpy.dll') -Value ''
+	try {
+		& $layoutTestPath -HostRoot $fixtureRoot -TargetFramework net10.0-windows
+		throw 'Layout validator accepted a root dnSpy.Contracts.DnSpy.dll.'
+	}
+	catch {
+		if ($_.Exception.Message -notmatch 'AppDirectories\.BinDirectory') { throw }
+	}
+	Remove-Item -LiteralPath (Join-Path $fixtureRoot 'dnSpy.Contracts.DnSpy.dll') -Force
+
+	# Preserve the exact root listing captured from the T07-poisoned net48 package. This catches
+	# both the BinDirectory-defining contract copy and its broader transitive dependency closure.
+	Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+	New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'bin') -Force | Out-Null
+	Set-Content -LiteralPath (Join-Path $fixtureRoot 'bin\dnSpy.Contracts.DnSpy.dll') -Value ''
+	foreach ($name in Get-Content -LiteralPath $poisonedRootFixture) {
+		Set-Content -LiteralPath (Join-Path $fixtureRoot $name) -Value ''
+	}
+	try {
+		& $layoutTestPath -HostRoot $fixtureRoot -TargetFramework net48
+		throw 'Layout validator accepted the captured poisoned net48 root.'
+	}
+	catch {
+		if ($_.Exception.Message -notmatch 'AppDirectories\.BinDirectory') { throw }
+	}
+
+	Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+	New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'bin') -Force | Out-Null
+	Set-Content -LiteralPath (Join-Path $fixtureRoot 'dnSpy.exe') -Value ''
+	Set-Content -LiteralPath (Join-Path $fixtureRoot 'dnSpy.Console.exe') -Value ''
+	Set-Content -LiteralPath (Join-Path $fixtureRoot 'bin\dnSpy.Contracts.DnSpy.dll') -Value ''
+
+	Set-Content -LiteralPath (Join-Path $fixtureRoot 'stray.dll') -Value ''
+	try {
+		& $layoutTestPath -HostRoot $fixtureRoot -TargetFramework net10.0-windows
+		throw 'Layout validator accepted an unexpected root file.'
+	}
+	catch {
+		if ($_.Exception.Message -notmatch 'unexpected files') { throw }
+	}
+}
+finally {
+	if (Test-Path -LiteralPath $fixtureRoot) { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force }
+}
+
+Write-Host 'PASSED  release ZIP, local directory, and packaged host layout contracts'

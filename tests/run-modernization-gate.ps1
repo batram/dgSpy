@@ -123,6 +123,12 @@ try {
 
 	if ($Stage -in @('CorDebug','Full')) {
 		Invoke-Checked 'CorDebug live smoke' { .\tests\run-milestone1-smoke.ps1 -TargetFramework $TargetFramework }
+		# T07's multiplex matrix uses the retained net48 CorDebug fixture and test controller. The net10
+		# CorDebug job still runs the general live smoke above; the dedicated net48 CI job makes this
+		# behavioral contract durable without rebuilding the deployment the gate already validated.
+		if ($TargetFramework -eq 'net48') {
+			Invoke-Checked 'Owned-breakpoint live matrix' { .\tests\run-owned-breakpoint-smoke.ps1 -TargetFramework $TargetFramework -SkipBuild }
+		}
 	}
 	# Needs a listening uch-debug-target player, which this repo neither builds nor ships: it takes a
 	# Unity editor and a licence, which hosted runners do not have. Launch it first with the target
