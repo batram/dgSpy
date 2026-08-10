@@ -64,6 +64,9 @@ namespace HookLab.Probe.CorDebug.Transport {
 		/// <summary>Guarded by <see cref="commandGate"/>. Once set, no further command is admitted to the
 		/// handler. Closed by <see cref="TryQuiesce"/> and <see cref="Dispose"/>.</summary>
 		bool commandGateClosed;
+		/// <summary>Set once, by whichever of <see cref="Dispose"/> and <see cref="TryQuiesce"/> gets there
+		/// first, so exactly one thread is ever started to run the cancellation callbacks.</summary>
+		int cancellationRequested;
 		volatile bool disposed;
 		int endpointTaken;
 		byte[] secret;
@@ -296,6 +299,13 @@ namespace HookLab.Probe.CorDebug.Transport {
 		/// a listener inside the exact window this gate exists to close.</summary>
 		internal Action? DispatchAdmissionProbeForTest { get; set; }
 
+		/// <summary>Test-only seam, invoked on the disposing thread from inside <see cref="Dispose"/> after the
+		/// transport is closed and before cancellation is requested. Internal, never set in production. It exists
+		/// because the admission window this class has now been fixed for twice lives *inside* Dispose: a test
+		/// that releases the listener from outside releases it either before Dispose begins or after it returns,
+		/// and neither of those can distinguish a correct ordering from a broken one.</summary>
+		internal Action? ShutdownProbeForTest { get; set; }
+
 		/// <summary>How many client commands are inside the handler right now. Zero does not by itself mean
 		/// the endpoint is finished - use <see cref="TryQuiesce"/>, which cancels first and then observes.</summary>
 		public int InFlightCommands { get { lock (commandGate) return inFlightCommands; } }
@@ -321,17 +331,53 @@ namespace HookLab.Probe.CorDebug.Transport {
 		/// gate close are idempotent, and the wait observes rather than mutates.</summary>
 		public bool TryQuiesce(int millisecondsTimeout) {
 			if (millisecondsTimeout < 0) throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout));
-			CancelCommands();
-			// Before the wait, necessarily: the wait is the observation, and an admission that could still
-			// succeed after it would be exactly the race this closes.
+			// Same first step as Dispose, and for the same reason: the wait below is the observation, and an
+			// admission that could still succeed after it would be exactly the race this closes. Both shutdown
+			// entry points now close the gate before doing anything else, so there is one ordering to reason
+			// about rather than two.
 			CloseCommandGate();
+			// Posted, not run here - see CancelCommands. The caller's bound is the wait below and nothing else;
+			// it is not extended by however long a handler's cancellation callback takes.
+			CancelCommands();
 			return commandsIdle.WaitOne(millisecondsTimeout);
 		}
 
-		/// <summary>Never throws. Cancel runs registered callbacks on this thread, and this thread can be the
-		/// target's own inside a func-eval; a callback that throws must not become the caller's problem, and
-		/// must not stop the endpoint being closed.</summary>
-		void CancelCommands() { try { commandCancellation.Cancel(); } catch (Exception) { } }
+		/// <summary>Requests cancellation without ever running a cancellation callback on the caller's thread,
+		/// and returns as soon as the request is posted.
+		///
+		/// <see cref="CancellationTokenSource.Cancel()"/> runs every registered callback inline on the thread
+		/// that calls it. Doing that here handed both bounds in this class to arbitrary handler code: a handler
+		/// that registers a blocking cleanup callback - which is exactly what a patching command will do - makes
+		/// <see cref="Dispose"/> block, and <see cref="Dispose"/> is the one method whose caller may be the
+		/// target's own thread inside a func-eval with a shorter timeout than the callback; and it makes
+		/// <see cref="TryQuiesce"/> overrun its caller's bound before it has even reached the wait. Neither bound
+		/// can be enforced by the caller, because neither can interrupt an inline callback once it starts.
+		///
+		/// So the Cancel itself runs on a thread of its own, started once however many times this is called. The
+		/// weakening is deliberate and small: cancellation was always a request rather than a guarantee, and the
+		/// only thing that changes is that its delivery is no longer synchronous with the request. Nothing reads
+		/// the token's state to decide anything - <see cref="TryQuiesce"/> answers from
+		/// <see cref="commandsIdle"/>, so a late delivery makes it answer false, which is the conservative
+		/// "still in flight" answer, never a false quiesced.
+		///
+		/// Never throws, for the same reason as before: a callback that throws must not become the caller's
+		/// problem, must not stop the endpoint being closed, and - now that it runs on a thread this class owns -
+		/// must not escape a thread delegate, which on .NET Framework terminates the debuggee.</summary>
+		void CancelCommands() {
+			if (Interlocked.Exchange(ref cancellationRequested, 1) != 0) return;
+			// A dedicated thread rather than the pool: a blocking callback would otherwise occupy a pool thread
+			// in the debuggee, and a saturated pool would delay the very delivery this is posting.
+			try { new Thread(RunCancellation) { IsBackground = true, Name = "HookLab probe cancel" }.Start(); return; }
+			catch (Exception) { }
+			try { if (ThreadPool.QueueUserWorkItem(_ => RunCancellation())) return; }
+			catch (Exception) { }
+			// Both ways of leaving this thread failed, which on this platform means the process is already out of
+			// threads or memory. Delivering the cancellation matters more than the bound in that state, and the
+			// alternative is a handler that is never told to stop at all.
+			RunCancellation();
+		}
+
+		void RunCancellation() { try { commandCancellation.Cancel(); } catch (Exception) { } }
 
 		/// <summary>Bounded and non-blocking: it closes the listening endpoint and returns. It deliberately does
 		/// not wait for the listener thread and does not dispose <c>stopped</c>.
@@ -345,9 +391,24 @@ namespace HookLab.Probe.CorDebug.Transport {
 		/// It also cancels any command inside the handler, and deliberately does not wait for it to leave.
 		/// A returned Dispose therefore establishes that the endpoint is unreachable - not that the probe has
 		/// stopped working. <see cref="TryQuiesce"/> is what establishes the second, under a bound its caller
-		/// chooses.</summary>
+		/// chooses.
+		///
+		/// What it does establish about work not yet started is exact: no command that was not already inside
+		/// the handler when this began can ever start. The dispatch gate is closed as the first step, before the
+		/// transport is closed and before cancellation is requested, so a listener holding a decoded request is
+		/// refused whether it reaches admission before, during or after this call. Closing the gate last left it
+		/// open across both of those steps, and a request decoded in that window still ran.</summary>
 		public void Dispose() {
 			if (disposed) return; disposed = true;
+			// First, and before anything that can take time or wake a thread: refuses any command not already
+			// admitted. Closing the transport does not stop a request the listener had already decoded, and
+			// closing the gate last left exactly that request admissible for the length of the two steps
+			// below - the listener could find the gate still open, enter the handler, and start mutating the
+			// target while this method was still running and after it returned. The order is the whole fix:
+			// once the gate is shut, no later step can re-open it, so every admission decision this Dispose
+			// races with resolves as a refusal. Neither blocking nor unbounded - it is one lock acquisition,
+			// against critical sections that only touch a counter and an event.
+			CloseCommandGate();
 			NamedPipeServerStream? current;
 			lock (pipeGate) current = activePipe;
 			// Disposing the server stream both closes the endpoint and releases a listener already parked in
@@ -355,16 +416,18 @@ namespace HookLab.Probe.CorDebug.Transport {
 			// either the listener published its pipe and this sees it, or it has not reached the gate yet and
 			// will observe disposed and exit without creating one.
 			try { current?.Dispose(); } catch { }
-			// After the endpoint is closed, so a handler woken by cancellation can never be handed a client
-			// connection made in between. Cancellation is a request, not a guarantee: whether the handler
-			// actually left is what TryQuiesce answers, and this method deliberately does not wait for it -
-			// the caller can be the target's own thread inside a func-eval, and the bound belongs to them.
+			// Test-only seam, between closing the endpoint and cancelling. It is the only point from which a
+			// test can release a listener *inside* Dispose and so observe what an admission racing the shutdown
+			// resolves to; from outside, the release necessarily lands before Dispose starts or after it
+			// returns, and both of those are already safe whatever the ordering. Null in production.
+			try { ShutdownProbeForTest?.Invoke(); } catch (Exception) { }
+			// Still strictly after the endpoint is closed - that relative order is unchanged, so a handler woken
+			// by cancellation still cannot be handed a client connection made in between. Moving the gate close
+			// ahead of both cannot re-introduce that: it only removes admissions, never creates one.
+			// Cancellation is a request, not a guarantee: whether the handler actually left is what TryQuiesce
+			// answers, and this method deliberately does not wait for it - the caller can be the target's own
+			// thread inside a func-eval, and the bound belongs to them.
 			CancelCommands();
-			// And refuses any command not already admitted. Closing the transport does not stop a request the
-			// listener had already decoded: without this, that request would still be dispatched and would start
-			// mutating the target after Dispose returned and the caller reported the endpoint gone. Neither
-			// blocking nor unbounded - it is one lock acquisition.
-			CloseCommandGate();
 		}
 
 		/// <summary>Waits for the listener thread to finish unwinding. Nothing in production calls this - it

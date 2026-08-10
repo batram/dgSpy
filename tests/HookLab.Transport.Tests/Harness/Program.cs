@@ -43,6 +43,8 @@ internal static class Program {
 			if (mode == "injected-secret") return InjectedSecret(result, integrity);
 			if (mode == "quiescence") return Quiescence(result, integrity);
 			if (mode == "dispatch-gate") return DispatchGate(result, integrity);
+			if (mode == "dispose-window") return DisposeWindow(result, integrity);
+			if (mode == "cancel-callback") return CancelCallback(result, integrity);
 			if (mode == "client") {
 				var record = Single(new ProbeDiscoveryStore(root).Discover(new CurrentTarget(), DateTime.UtcNow));
 				using (var connection = new ProbeConnection(record.PipeName, record.Secret, record.EndpointNonce)) {
@@ -168,7 +170,12 @@ internal static class Program {
 		if (server.InFlightCommands != 1) return 43;
 		// Dispose cancelled the handler's token by itself. Checked before any TryQuiesce call, which would
 		// have cancelled it too and made this pass regardless.
-		if (!handlerToken.IsCancellationRequested) return 44;
+		//
+		// Bounded poll rather than an immediate read: Dispose posts the cancellation to a thread of its own
+		// instead of running the registered callbacks on the caller's, so delivery is no longer synchronous
+		// with the return. The assertion is unchanged in substance - a Dispose that cancels nothing never
+		// satisfies it - and nothing else here signals this token, so a pass still comes only from Dispose.
+		if (!SpinUntil(() => handlerToken.IsCancellationRequested, 5000)) return 44;
 		// The honest answer while a side-effecting command is still running.
 		if (server.TryQuiesce(200)) return 45;
 		// Now it demonstrably finishes, and only then may a caller call its cleanup completed.
@@ -297,6 +304,123 @@ internal static class Program {
 		}
 		File.WriteAllText(result, integrity + "|pass");
 		return 0;
+	}
+
+	// Case 3 of dispatch-gate holds the listener at admission across a whole Dispose: it is released only after
+	// Dispose has returned, so the gate is necessarily already closed by then and the case passes under any
+	// ordering of Dispose's steps. That is the blind spot this mode exists for. Here the listener is released
+	// from *inside* Dispose, after the transport is closed and before cancellation - the interval in which the
+	// gate used to still be open - and the requirement is unchanged: once Dispose has returned, no command
+	// decoded before or during it may have begun executing.
+	//
+	// Nothing here calls TryQuiesce, at any point, deliberately: TryQuiesce closes the gate itself, so a single
+	// call anywhere before the assertion would supply the very property the assertion is meant to detect. That
+	// mistake has already made two assertions in this file vacuous. For the same reason the handler ignores its
+	// cancellation token and does nothing but record that it ran: a cooperative handler would refuse the work on
+	// its own account and hide whether the gate did anything.
+	static int DisposeWindow(string result, string integrity) {
+		const int iterations = 5;
+		for (var index = 0; index < iterations; index++) {
+			var sideEffect = 0;
+			var decoded = new ManualResetEvent(false);
+			var release = new ManualResetEvent(false);
+			var handlerEntered = new ManualResetEvent(false);
+			var server = new ProbePipeServer((operation, payload, expected, cancellation) => {
+				Interlocked.Exchange(ref sideEffect, 1); handlerEntered.Set();
+				return new ProbeCommandResult("{}", 0);
+			});
+			server.DispatchAdmissionProbeForTest = () => { decoded.Set(); release.WaitOne(20000); };
+			// Releases the listener in the middle of Dispose and then gives it a real chance to be admitted:
+			// the wait returns as soon as the handler is entered, so a Dispose that still admits it loses the
+			// race deterministically rather than by luck, and one that refuses it pays this bound once.
+			server.ShutdownProbeForTest = () => { release.Set(); handlerEntered.WaitOne(500); };
+			var endpoint = server.TakeInitialEndpoint();
+			StartClient(endpoint.PipeName, endpoint.Secret, endpoint.EndpointNonce);
+			if (!decoded.WaitOne(10000)) return 80;
+			// The window is real: a request is in the listener's hand and nothing counts it.
+			if (server.InFlightCommands != 0) return 81;
+			server.Dispose();
+			// Nothing may have started by the time Dispose returned; waiting for the listener to unwind is what
+			// makes the assertion "the handler never ran" rather than "it had not run yet".
+			if (Volatile.Read(ref sideEffect) != 0) { File.WriteAllText(result, integrity + "|admitted_during_dispose|iteration=" + index); return 82; }
+			release.Set();
+			if (!server.WaitForShutdown(10000)) return 83;
+			if (Volatile.Read(ref sideEffect) != 0) { File.WriteAllText(result, integrity + "|admitted_after_dispose|iteration=" + index); return 84; }
+			if (server.InFlightCommands != 0) return 85;
+			if (server.ListenerFailure != null) { File.WriteAllText(result, integrity + "|listener_failure=" + server.ListenerFailure); return 86; }
+		}
+		// And the reordering did not turn Dispose into a gate that refuses on a healthy endpoint: one with no
+		// shutdown in progress still serves commands.
+		using (var serving = new ProbePipeServer((operation, payload, expected, cancellation) => new ProbeCommandResult("{\"status\":\"ready\"}", 5))) {
+			var servingEndpoint = serving.TakeInitialEndpoint();
+			using (var connection = new ProbeConnection(servingEndpoint.PipeName, servingEndpoint.Secret, servingEndpoint.EndpointNonce, timeoutMilliseconds: 5000)) {
+				var response = connection.Send(new ProbeMessage(1, ProbeMessageKind.Request, "admitted", "status", "{}"));
+				if (response.Operation != "status" || response.ExpectedHooksVersion != 5) return 87;
+			}
+		}
+		File.WriteAllText(result, integrity + "|pass");
+		return 0;
+	}
+
+	// CancellationTokenSource.Cancel runs every registered callback inline on the thread that calls it, so for as
+	// long as the probe cancelled on its caller's thread, a handler that registered a blocking cleanup callback
+	// owned both of this class's bounds: Dispose - whose caller can be the target's own thread inside a func-eval
+	// with a shorter evaluation timeout than the callback - and TryQuiesce, which would overrun its caller's
+	// timeout before reaching the wait that timeout describes. The two bounds are different promises and are
+	// measured separately here: Dispose must not wait at all, TryQuiesce may wait up to what it was given.
+	//
+	// The existing quiescence mode cannot see this: its handlers wait on the token's wait handle and register
+	// nothing, so Cancel has no callback to run and returns instantly whichever thread it is on.
+	static int CancelCallback(string result, string integrity) {
+		const int callbackBlockMilliseconds = 3000;
+		const int disposeBoundMilliseconds = 250;
+		const int quiesceBoundMilliseconds = 250;
+		var entered = new ManualResetEvent(false);
+		var callbackEntered = new ManualResetEvent(false);
+		var releaseCallback = new ManualResetEvent(false);
+		var releaseHandler = new ManualResetEvent(false);
+		var callbackThread = 0;
+		var server = new ProbePipeServer((operation, payload, expected, cancellation) => {
+			// The shape a patching command takes: cleanup registered against the token, and cleanup that can
+			// take longer than a func-eval is willing to wait.
+			cancellation.Register(() => { Interlocked.Exchange(ref callbackThread, Thread.CurrentThread.ManagedThreadId); callbackEntered.Set(); releaseCallback.WaitOne(callbackBlockMilliseconds); });
+			entered.Set();
+			releaseHandler.WaitOne(20000);
+			return new ProbeCommandResult("{}", 0);
+		});
+		var endpoint = server.TakeInitialEndpoint();
+		StartClient(endpoint.PipeName, endpoint.Secret, endpoint.EndpointNonce);
+		if (!entered.WaitOne(10000)) return 90;
+		var disposingThread = Thread.CurrentThread.ManagedThreadId;
+		var watch = Stopwatch.StartNew();
+		server.Dispose();
+		var disposeElapsed = watch.ElapsedMilliseconds;
+		if (disposeElapsed > disposeBoundMilliseconds) { File.WriteAllText(result, integrity + "|dispose_ms=" + disposeElapsed); return 91; }
+		// The cancellation was genuinely delivered, not merely skipped to keep the bound - and it ran somewhere
+		// other than the thread that called Dispose, which is the whole mechanism.
+		if (!callbackEntered.WaitOne(5000)) return 92;
+		if (Volatile.Read(ref callbackThread) == disposingThread) return 93;
+		// TryQuiesce's own bound, measured while the same callback is still blocking. It may wait up to what it
+		// was given and no longer, and it must not inherit Dispose's promise of not waiting at all either: the
+		// handler is still inside, so the honest answer is false.
+		var quiesceWatch = Stopwatch.StartNew();
+		var quiesced = server.TryQuiesce(quiesceBoundMilliseconds);
+		var quiesceElapsed = quiesceWatch.ElapsedMilliseconds;
+		if (quiesced) return 94;
+		if (quiesceElapsed > quiesceBoundMilliseconds + 250) { File.WriteAllText(result, integrity + "|quiesce_ms=" + quiesceElapsed); return 95; }
+		releaseCallback.Set();
+		releaseHandler.Set();
+		if (!server.TryQuiesce(10000)) return 96;
+		if (server.InFlightCommands != 0) return 97;
+		if (server.ListenerFailure != null) { File.WriteAllText(result, integrity + "|listener_failure=" + server.ListenerFailure); return 98; }
+		File.WriteAllText(result, integrity + "|pass|dispose_ms=" + disposeElapsed + "|quiesce_ms=" + quiesceElapsed);
+		return 0;
+	}
+
+	static bool SpinUntil(Func<bool> condition, int millisecondsTimeout) {
+		var deadline = Stopwatch.StartNew();
+		while (deadline.ElapsedMilliseconds < millisecondsTimeout) { if (condition()) return true; Thread.Sleep(5); }
+		return condition();
 	}
 
 	static void StartClient(string pipeName, byte[] secret, byte[] nonce) {

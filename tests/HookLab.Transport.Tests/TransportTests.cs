@@ -242,6 +242,40 @@ public sealed class TransportTests {
 		finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); } }
 	}
 
+	// The dispatch-gate harness holds a decoded request across a whole Dispose and releases it afterwards, so
+	// the gate is already closed when the listener asks - it passes whatever order Dispose does its steps in.
+	// This one releases the listener from inside Dispose, between closing the transport and requesting
+	// cancellation, which is where the gate used to still be open: the listener was admitted there, entered a
+	// handler that need not observe cancellation, and mutated the target while Dispose returned to a caller
+	// entitled to report the endpoint gone. Dispose closes the gate first now, and this is the only test that
+	// can tell the two orderings apart.
+	[Fact]
+	public void ACommandDecodedBeforeDisposeCannotBeAdmittedWhileDisposeIsRunning() {
+		using var temporary = new TemporaryDirectory();
+		using var process = StartHarness("dispose-window", temporary.Path, 1);
+		try {
+			Assert.True(process.WaitForExit(60000), "dispose-window harness did not exit.");
+			Assert.True(process.ExitCode == 0, "dispose-window harness failed: exit " + process.ExitCode + "; " + HarnessReport(temporary.Path));
+		}
+		finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); } }
+	}
+
+	// Cancel runs registered cancellation callbacks inline on the calling thread, so a handler that registers
+	// blocking cleanup - the shape a patching command takes - used to own both of the endpoint's bounds: Dispose,
+	// whose caller may be the target's own thread inside a func-eval, and TryQuiesce, which would overrun the
+	// timeout its caller chose before even reaching the wait that timeout describes. The harness registers such a
+	// callback and measures both, and checks the callback ran off the disposing thread rather than being skipped.
+	[Fact]
+	public void ABlockingCancellationCallbackCannotOverrunDisposeOrQuiesceBounds() {
+		using var temporary = new TemporaryDirectory();
+		using var process = StartHarness("cancel-callback", temporary.Path, 1);
+		try {
+			Assert.True(process.WaitForExit(60000), "cancel-callback harness did not exit.");
+			Assert.True(process.ExitCode == 0, "cancel-callback harness failed: exit " + process.ExitCode + "; " + HarnessReport(temporary.Path));
+		}
+		finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); } }
+	}
+
 	[Fact]
 	public void MutualAuthenticationDetectsPipeNameSquatting() {
 		var name = "dgspy-hooklab-squatter-" + Guid.NewGuid().ToString("N"); var nonce = ProbeAuthentication.CreateNonce(); var secret = ProbeAuthentication.CreateSecret();

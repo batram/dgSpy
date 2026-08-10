@@ -72,6 +72,63 @@ measured against the real assembly on net48 x64, not reasoned from the source:
 `stopped`; `WaitForShutdown(int)` exists for tests only. Same sweep after the fix: worst dispose 2 ms
 over 400 cycles, zero wedged listeners, zero endpoints still connectable.
 
+## The admission window inside Dispose, and the bound Cancel could take away (2026-08-10)
+
+Second iteration of the same defect in the same method. `946f8f307` closed the window in which a
+request decoded before a shutdown could still be admitted, by making admission and the gate close one
+decision under one lock - but `Dispose` closed the gate *last*, after disposing the pipe and
+cancelling, so the window survived at a smaller size: a listener holding a decoded request could reach
+`TryEnterCommand`, find the gate open, and enter a handler that need not observe cancellation, while
+`Dispose` was still running and after it returned. `TryQuiesce` was never affected - it closes the gate
+and then waits, so it observes anything it admitted.
+
+The final ordering, and why each step is where it is:
+
+1. `CloseCommandGate()` - **first**, because it is the only step that cannot be undone by a later one
+   and the only one that decides admissions. Every admission racing this shutdown now resolves as a
+   refusal, whether the listener asks before, during or after the call. One lock acquisition, against
+   critical sections that touch a counter and an event, so the non-blocking contract is unchanged.
+2. Dispose the published pipe under `pipeGate` - unchanged, including the publication gate in `Listen`
+   that fixed 180 of 400 wedged cycles.
+3. `CancelCommands()` - still strictly after the endpoint is closed, so a handler woken by cancellation
+   still cannot be handed a connection made in between. Moving the gate close ahead of both cannot
+   reintroduce that: closing the gate only removes admissions, it never creates one.
+
+Separately, `CancellationTokenSource.Cancel()` runs registered callbacks inline on the calling thread,
+so a handler registering blocking cleanup owned both bounds in this class - `Dispose`, whose caller may
+be the target's own thread inside a func-eval, and `TryQuiesce`, which would overrun the timeout its
+caller chose before reaching the wait that timeout describes. The Cancel now runs on a thread the class
+owns, started once. Delivery is therefore asynchronous; nothing decides anything from the token's
+state, and `TryQuiesce` still answers from `commandsIdle`, so a late delivery yields the conservative
+"still in flight" answer and never a false quiesced. The two bounds stay different promises: `Dispose`
+does not wait at all, `TryQuiesce(n)` may wait up to n.
+
+Measured on net48 x64 against the real assembly, harness rebuilt for each variant:
+
+| Variant | `dispose-window` | `cancel-callback` | `dispatch-gate` | `quiescence` | `dispose-bounded` |
+|---|---|---|---|---|---|
+| Fixed | pass | pass, dispose 0 ms, quiesce 251 ms | pass | pass | worst 2 ms, 0 wedged |
+| Gate closed last (the defect) | **fail, exit 82, iteration 0** - handler ran before `Dispose` returned | pass | pass | pass | worst 2 ms |
+| Cancel inline on the caller's thread | pass | **fail, exit 91, dispose 3005 ms** | pass | pass | - |
+| Never cancel at all | pass | **fail, exit 92** - callback never ran | **fail, exit 44** | - | - |
+
+Row 2 is the measured form of "the pre-existing tests structurally cannot see this": `dispatch-gate`
+case 3 releases its listener only after `Dispose` has returned, so the gate is necessarily closed by
+then and the case passes under either ordering. `dispose-window` releases the listener from inside
+`Dispose`, through an internal `ShutdownProbeForTest` seam placed between the pipe disposal and the
+cancellation, and waits for the handler rather than sleeping, so a `Dispose` that still admits the
+request loses the race deterministically. Rows 3 and 4 separate "bounded" from "skipped": the bound
+alone would also be satisfied by never cancelling, which is why `cancel-callback` requires the callback
+to have run, and to have run on a thread other than the disposing one.
+
+Neither new mode calls `TryQuiesce` before its assertion, deliberately: `TryQuiesce` closes the gate
+and cancels, and a single call in the wrong place supplies exactly the property being asserted. That
+mistake has made an assertion in this file vacuous twice.
+
+Transport 19/19 and Bootstrap 46/46 after the fix. Not established: no live CorDebug run - both new
+modes exercise the endpoint in the harness process only, never against a real debuggee, and no test
+covers a handler that both registers a blocking callback and mutates a target.
+
 ## Host-injected endpoint secret
 
 The host may generate the 32-byte secret and pass it to `ProbePipeServer` rather than receiving one
