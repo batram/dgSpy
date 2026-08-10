@@ -346,9 +346,13 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "type": {
             "type": "string"
@@ -376,7 +380,6 @@
         },
         "required": [
           "session_id",
-          "module",
           "type",
           "method",
           "expected_execution_version",
@@ -403,9 +406,13 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "method_token": {
             "type": "integer"
@@ -430,7 +437,6 @@
         },
         "required": [
           "session_id",
-          "module",
           "method_token",
           "il_offset",
           "expected_execution_version",
@@ -511,7 +517,7 @@
           },
           "request": {
             "type": "object",
-            "description": "Atomic action request schema v1: action_id, action_name, process_id, runtime_id, app_domain_id, module, method_token, il_offset, optional nearby_offsets, deadline_utc, resume_policy and disconnect_policy."
+            "description": "Atomic action request schema v1: action_id, action_name, process_id, runtime_id, app_domain_id, module_id from discovery (preferred; module is legacy), method_token, il_offset, optional nearby_offsets, deadline_utc, resume_policy and disconnect_policy."
           }
         },
         "required": [
@@ -597,7 +603,7 @@
           },
           "request": {
             "type": "object",
-            "description": "Atomic action request schema v1: action_id, action_name, process_id, runtime_id, app_domain_id, module, method_token, il_offset, optional nearby_offsets, deadline_utc and resume_policy. disconnect_policy is rejected on this operation."
+            "description": "Atomic action request schema v1: action_id, action_name, process_id, runtime_id, app_domain_id, module_id from discovery (preferred; module is legacy), method_token, il_offset, optional nearby_offsets, deadline_utc and resume_policy. disconnect_policy is rejected on this operation."
           }
         },
         "required": [
@@ -1194,9 +1200,13 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "method_token": {
             "type": "integer"
@@ -1215,7 +1225,6 @@
         },
         "required": [
           "session_id",
-          "module",
           "method_token",
           "il_offset",
           "expected_breakpoints_version"
@@ -2198,9 +2207,13 @@
             "type": "integer",
             "minimum": 0
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "method_token": {
             "type": "integer"
@@ -2220,7 +2233,6 @@
         },
         "required": [
           "session_id",
-          "module",
           "method_token",
           "il_offset",
           "expected_execution_version",
@@ -2551,9 +2563,13 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Full path, filename, or module name from list_modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "name_pattern": {
             "type": "string",
@@ -2571,8 +2587,7 @@
           }
         },
         "required": [
-          "session_id",
-          "module"
+          "session_id"
         ]
       },
       "annotations": {
@@ -2594,9 +2609,13 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "type": {
             "type": "string",
@@ -2618,7 +2637,6 @@
         },
         "required": [
           "session_id",
-          "module",
           "type"
         ]
       },
@@ -2800,9 +2818,13 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "method_token": {
             "type": "integer"
@@ -2819,8 +2841,7 @@
           }
         },
         "required": [
-          "session_id",
-          "module"
+          "session_id"
         ]
       },
       "annotations": {
@@ -2842,9 +2863,13 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "method_token": {
             "type": "integer"
@@ -2864,8 +2889,7 @@
           }
         },
         "required": [
-          "session_id",
-          "module"
+          "session_id"
         ]
       },
       "annotations": {
@@ -2887,9 +2911,13 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "type": {
             "type": "string"
@@ -2916,7 +2944,6 @@
         },
         "required": [
           "session_id",
-          "module",
           "type",
           "method",
           "expected_breakpoints_version"
@@ -2982,7 +3009,7 @@
     },
     {
       "name": "find_references",
-      "description": "Drill-in tool. Takes module plus token, which is exactly what \u0060search\u0060 returns. Find loaded methods whose IL references a target metadata member. The target is module plus token; search_module optionally limits the scan.",
+      "description": "Drill-in tool. Takes module_id plus token, which is exactly what \u0060search\u0060 returns. Find loaded methods whose IL references a target metadata member. search_module optionally limits the scan.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2993,9 +3020,13 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "token": {
             "type": "integer"
@@ -3012,7 +3043,6 @@
         },
         "required": [
           "session_id",
-          "module",
           "token"
         ]
       },
@@ -3024,7 +3054,7 @@
     },
     {
       "name": "find_implementations",
-      "description": "Drill-in tool. Takes module plus token or a type name, both of which \u0060search\u0060 returns. Find directly derived types and direct interface implementers. search_module limits the loaded modules scanned and should be used on Unity.",
+      "description": "Drill-in tool. Takes module_id plus token or a type name, both of which \u0060search\u0060 returns. Find directly derived types and direct interface implementers. search_module limits the loaded modules scanned and should be used on Unity.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3035,9 +3065,13 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "token": {
             "type": "integer"
@@ -3056,8 +3090,7 @@
           }
         },
         "required": [
-          "session_id",
-          "module"
+          "session_id"
         ]
       },
       "annotations": {
@@ -3079,17 +3112,20 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "token": {
             "type": "integer"
           }
         },
         "required": [
-          "session_id",
-          "module"
+          "session_id"
         ]
       },
       "annotations": {
@@ -3910,9 +3946,13 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "token": {
             "type": "integer"
@@ -3946,7 +3986,6 @@
         },
         "required": [
           "session_id",
-          "module",
           "token"
         ]
       },
@@ -3969,9 +4008,13 @@
           "session_id": {
             "type": "string"
           },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
           "module": {
             "type": "string",
-            "description": "Module name, filename, or full path, from search or list_modules. Case-insensitive and the file extension is optional, so \u0022Assembly-CSharp\u0022 resolves \u0022Assembly-CSharp.dll\u0022. A substring matches too, but an exact name always beats one, so a stem is never ambiguous against a longer neighbour. When it does not resolve, the error names the closest loaded modules."
+            "description": "Legacy name/path selector; module_id is exact and preferred."
           },
           "offset": {
             "type": "integer",
@@ -3984,8 +4027,7 @@
           }
         },
         "required": [
-          "session_id",
-          "module"
+          "session_id"
         ]
       },
       "annotations": {

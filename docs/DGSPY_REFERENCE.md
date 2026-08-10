@@ -390,9 +390,12 @@ delayed rather than withheld.
   directly out of IL rather than decompiling, which is what makes it far cheaper than `search_text`.
   The port and the reasons for not driving dnSpy's own `IDocumentSearcher` are in
   [SEARCH_PROPOSAL.md](SEARCH_PROPOSAL.md).
-- **`search` results round-trip; nothing needs parsing.** `full_name` is one of the strings the matcher
+- **`search` results round-trip; nothing needs parsing.** A loaded-module hit carries an opaque,
+  session-scoped `module_id`. Pass it unchanged to exact module tools: it identifies one dnSpy
+  `DbgModule`, including process, runtime, app domain and load instance. An unloaded or replaced module
+  answers `stale_module_id`; refresh `search` or `list_modules`. `full_name` is one of the strings the matcher
   itself tests, so it is accepted back as `pattern`. `declaring_type` is accepted by `list_members` and
-  `get_csharp`. `module` plus `token` is accepted by `get_il`, `find_references`, `analyze_symbol` and
+  `get_csharp`. `module_id` plus `token` is accepted by `get_il`, `find_references`, `analyze_symbol` and
   `set_il_breakpoint`. This is the rule commit `3fcbacd73` established for `get_members`, applied to a
   second surface: a tool must never emit an identifier it would then reject.
 - **`search` is the only read-only tool whose scope can leave the debug session.** `scope: "session"`
@@ -413,11 +416,13 @@ delayed rather than withheld.
   `search_text` decompiles every method it looks at. A cursor is what a caller needed, not a bigger cap.
   A cursor is only valid for a repeat call carrying the same filter arguments, since those are what fix
   the traversal.
-- **One module-name rule, for the whole family.** Every `module` and `search_module` argument accepts a
+- **Module names are filters and a legacy selector, not identity.** Every `module`, `search_module`, and
+  `name_pattern` argument accepts a
   module name, a filename, or a full path, case-insensitively and with the extension optional, so
   `Assembly-CSharp` reaches `Assembly-CSharp.dll`. A substring matches too, but an exact name always beats
   one, so a stem is never reported ambiguous against a longer neighbour like `Assembly-CSharp-firstpass.dll`.
-  This used to be two rules: `get_csharp`, `list_types` and `list_members` compared for equality while
+  Exact module tools prefer `module_id`; name/path selection remains for pending breakpoints and older
+  callers and reports ambiguity rather than guessing. This used to be two rules: `get_csharp`, `list_types` and `list_members` compared for equality while
   `search`, `search_symbols` and `search_text` took a substring, and nothing in either schema said which,
   so `get_csharp(module: "Assembly-CSharp")` answered `module_not_found` for a module `search` was happily
   searching. Equality missed because both `name` and `filename` carry the `.dll`. Case was never the
@@ -428,12 +433,13 @@ delayed rather than withheld.
   context. It now lists the closest loaded module names, including ones that differ only in separators
   (`AssemblyCSharp` suggests `Assembly-CSharp.dll`). Ambiguity is still reported with its candidates
   rather than resolved by guessing.
-- **`list_modules` and `list_documents` filter and page.** Both take `name_pattern`, `offset` and `count`
+- **`list_modules` and `list_documents` filter and page.** Both return `module_id` for loaded modules;
+  `list_modules` also reports app-domain identity. Both take `name_pattern`, `offset` and `count`
   (default 100, max 500) and report `total` and `truncated`, like every sibling in the family. `name_pattern`
   follows the same module-name rule as `module`. Both answer with an object --- `{ modules | documents,
   total, offset, truncated }` --- not a bare array. On `list_documents` the filter saves real work, not
   just output: every row it returns loads that module's metadata.
-- **`search_symbols` remains, narrower.** It returns module plus metadata token, which is exactly what
+- **`search_symbols` remains, narrower.** It returns module identity plus metadata token, which is exactly what
   `set_il_breakpoint` takes, so an agent never has to parse display text into an identity.
   `set_breakpoint` does the same resolution server-side and then follows the identical
   path, so binding state and Mono snapping cannot diverge between the two tools.

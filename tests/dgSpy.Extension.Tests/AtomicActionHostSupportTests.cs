@@ -95,6 +95,12 @@ public sealed class AtomicActionHostSupportTests {
 		Assert.Null(scoped.Arguments["runtime_id"]);
 	}
 
+	[Fact] public void The_nested_exact_module_identity_scopes_the_module_search() {
+		var request=Request(); request.ModuleId="dm1:11859180ea4d44a99eb658e003cca953:42:cd03acdd4f3a473685914902b4dcc8c1:3:17";
+		var scoped=AtomicActionRequestScope.ScopeModuleSearch(new RpcRequest { Operation="run_atomic_action",Arguments=new JsonObject() },request);
+		Assert.Equal(request.ModuleId,(string?)scoped.Arguments["module_id"]);
+	}
+
 	[Fact] public void Target_exit_and_appdomain_unload_producers_filter_on_identity() {
 		Assert.Equal(InterruptionReason.target_exited,AtomicActionInterruptions.ProcessExited(42,42)!.Reason);
 		Assert.Null(AtomicActionInterruptions.ProcessExited(42,43));

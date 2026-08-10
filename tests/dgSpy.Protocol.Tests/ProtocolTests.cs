@@ -370,6 +370,18 @@ public class CapabilityContractTests {
 	}
 
 	[Fact]
+	public void Module_backed_results_carry_the_exact_instance_identity() {
+		const string moduleId="dm1:11859180ea4d44a99eb658e003cca953:42:cd03acdd4f3a473685914902b4dcc8c1:3:17";
+		var module=ProtocolJson.ParseObject(ProtocolJson.Serialize(new ModuleInfo { ModuleId=moduleId,Name="same.dll",ProcessId=42,RuntimeGuid="runtime",AppDomainId=3,Order=17 }));
+		var symbol=ProtocolJson.ParseObject(ProtocolJson.Serialize(new SymbolInfo { ModuleId=moduleId,Module="same.dll",Name="M",FullName="T.M" }));
+		var frame=ProtocolJson.ParseObject(ProtocolJson.Serialize(new FrameInfo { ModuleId=moduleId,Module="same.dll" }));
+		var breakpoint=ProtocolJson.ParseObject(ProtocolJson.Serialize(new BreakpointInfo { Module="same.dll",ModuleIds=new[]{moduleId,"other"} }));
+		Assert.Equal(moduleId,(string?)module["module_id"]); Assert.Equal(3,(int?)module["app_domain_id"]);
+		Assert.Equal(moduleId,(string?)symbol["module_id"]); Assert.Equal(moduleId,(string?)frame["module_id"]);
+		Assert.Equal(new[]{moduleId,"other"},breakpoint["module_ids"]!.AsArray().Select(value=>(string?)value));
+	}
+
+	[Fact]
 	public void Phase7_capabilities_separate_inspection_from_audited_mutation() {
 		var mutating=new[] { "invoke_method","create_object","write_memory","set_instruction_pointer" };
 		var readOnly=new[] { "read_memory","get_disassembly","get_registers" };

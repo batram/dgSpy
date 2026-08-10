@@ -184,14 +184,16 @@ namespace dgSpy.Extension {
 			var module=(string?)req.Arguments["module"];
 			var token=(uint?)req.Arguments["method_token"] ?? throw new RpcException("invalid_arguments","method_token is required.");
 			var offset=(uint?)req.Arguments["il_offset"] ?? throw new RpcException("invalid_arguments","il_offset is required.");
-			if (string.IsNullOrWhiteSpace(module)) throw new RpcException("invalid_arguments","module is required.");
+			if (string.IsNullOrWhiteSpace(module) && string.IsNullOrWhiteSpace((string?)req.Arguments["module_id"])) throw new RpcException("invalid_arguments","module_id is required. Refresh get_frame and pass its exact identifier.");
 			var captured=await CaptureFrameAsync(req,cancellationToken).ConfigureAwait(false);
 			return await OnDebuggerAsync(()=>{
-				if (!string.Equals(captured.Frame.Module?.Filename,module,StringComparison.OrdinalIgnoreCase) || captured.Frame.FunctionToken!=token)
-					throw new RpcException("invalid_location","The target must be in the selected frame's current method. Refresh get_frame and pass that module and method_token.");
-				var location=locations.Create(ModuleId.Create(module!),token,offset);
+				var selected=FindModule(req,module!);
+				if (captured.Frame.Module!=selected || captured.Frame.FunctionToken!=token)
+					throw new RpcException("invalid_location","The target must be in the selected frame's current method. Refresh get_frame and pass its module_id and method_token.");
+				var selectedId=GetModuleId(selected) ?? throw new RpcException("metadata_unavailable","The selected module has no stable engine identity.");
+				var location=locations.Create(selectedId,token,offset);
 				if (!captured.Frame.Thread.CanSetIP(location)) { location.Close(); throw new RpcException("capability_unavailable","The engine rejected this instruction-pointer location for the selected frame."); }
-				var auditId=AuditMutation(req.Operation,$"module={module} token=0x{token:X8} il_offset=0x{offset:X}");
+				var auditId=AuditMutation(req.Operation,$"module_id={ModuleIdOf(selected)} token=0x{token:X8} il_offset=0x{offset:X}");
 				captured.Frame.Thread.SetIP(location);
 				location.Close();
 				return new MutationResult { Completed=true,CausesSideEffects=true,AuditId=auditId,Capability="set_instruction_pointer" };

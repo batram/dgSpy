@@ -30,6 +30,9 @@ namespace dgSpy.Extension {
 
 		AtomicActionPlan PrepareAtomicAction(RpcRequest req) {
 			var request=ProtocolJson.FromNode<AtomicActionRequest>(req.Arguments["request"]) ?? throw new RpcException("invalid_arguments","request is required.");
+			// From this boundary onward the state machine compares and reports the exact loaded-module
+			// identity. The legacy display name remains accepted only for callers that did not supply one.
+			if(!String.IsNullOrWhiteSpace(request.ModuleId)) request.Module=request.ModuleId;
 			AtomicActionRequestScope.ValidateProcessIds((int?)req.Arguments["process_id"],request.ProcessId);
 			request.DeadlineUtc=AtomicActionDeadline.Resolve(request.DeadlineUtc,(int?)req.Arguments["timeout_ms"],DateTime.UtcNow);
 			var kind=(string?)req.Arguments["action_kind"] ?? throw new RpcException("invalid_arguments","action_kind is required.");
@@ -276,7 +279,7 @@ namespace dgSpy.Extension {
 					// fired and hid a probe that had failed outright, and the state machine then printed one
 					// hardcoded unsafe-point sentence for all of them.
 					var states=thread.State.Select(value=>value.State).ToArray();
-					return new AtomicActionStop(runtime!.Guid.ToString("D"),module!.AppDomain?.Id.ToString(CultureInfo.InvariantCulture) ?? "default",process!.Id,ThreadId(thread),module.Filename,hit.Location.Token,hit.Location.Offset,owner.ProbeEvaluability(thread,states));
+					return new AtomicActionStop(runtime!.Guid.ToString("D"),module!.AppDomain?.Id.ToString(CultureInfo.InvariantCulture) ?? "default",process!.Id,ThreadId(thread),owner.ModuleIdOf(module),hit.Location.Token,hit.Location.Offset,owner.ProbeEvaluability(thread,states));
 				},cancellationToken).ConfigureAwait(false);
 			}
 			/// <summary>

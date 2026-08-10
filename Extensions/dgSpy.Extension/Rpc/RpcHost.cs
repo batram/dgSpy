@@ -566,7 +566,8 @@ namespace dgSpy.Extension {
 		// point. CorDebug normally accepts arbitrary offsets, but can refuse an instruction boundary too.
 		async Task<BreakpointInfo> SetBreakpointAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
-			var module=(string?)req.Arguments["module"] ?? throw new RpcException("invalid_arguments","module is required");
+			var module=(string?)req.Arguments["module"];
+			if (string.IsNullOrWhiteSpace(module) && string.IsNullOrWhiteSpace((string?)req.Arguments["module_id"])) throw new RpcException("invalid_arguments","module_id is required. Refresh list_modules or search.");
 			var token=(uint?)req.Arguments["method_token"] ?? 0;
 			var requested=(uint?)req.Arguments["il_offset"] ?? 0;
 			bool snap=(bool?)req.Arguments["snap_to_sequence_point"] ?? true;
@@ -651,9 +652,11 @@ namespace dgSpy.Extension {
 			// it. Bound is a claim about binding, not a promise of a hit — a breakpoint in code that
 			// never runs again is bound and silent, which is correct.
 			var offset=location?.Offset ?? 0;
+			var loadedModules=location is null ? Array.Empty<DbgModule>() : manager.Processes.SelectMany(process=>process.Runtimes).SelectMany(runtime=>runtime.Modules).Where(module=>GetModuleId(module)==location.Module).ToArray();
+			var moduleIds=loadedModules.Select(ModuleIdOf).OrderBy(id=>id,StringComparer.Ordinal).ToArray();
 			if (requested is null) lock(sync) if (requestedOffsets.TryGetValue(bp.Id,out var remembered)) requested=remembered;
 			return new BreakpointInfo {
-				BreakpointId=bp.Id,Module=location?.Module.ModuleName ?? "",MethodToken=location?.Token ?? 0,IlOffset=offset,
+				BreakpointId=bp.Id,Module=location?.Module.ModuleName ?? "",ModuleIds=moduleIds,ModuleId=moduleIds.Length==1 ? moduleIds[0] : null,MethodToken=location?.Token ?? 0,IlOffset=offset,
 				RequestedIlOffset=requested ?? offset,Snapped=(requested ?? offset)!=offset,Enabled=bp.IsEnabled,
 				Bound=bp.BoundBreakpoints.Length!=0 && message.Severity==DbgBoundCodeBreakpointSeverity.None,
 				BoundCount=bp.BoundBreakpoints.Length,Severity=severity,Message=message.Message.Length==0 ? null : message.Message,
@@ -809,7 +812,7 @@ namespace dgSpy.Extension {
 			var captured=await OnDebuggerAsync(()=>{
 				if(IsTargetRunning!=false) throw new RpcException("not_paused","Pause the session before requesting its call stack.");
 				return callStack.Frames.Frames.Where(frame=>ThreadId(frame.Thread)==selectedThreadId).Take(max).Select((frame,index)=>new CapturedFrame(frame,languages.GetCurrentLanguage(frame.Runtime.RuntimeKindGuid),new FrameInfo {
-					FrameId=$"{sessionId}:{stateVersion}:{selectedThreadId}:{index}",ThreadId=selectedThreadId,FrameIndex=index,Module=frame.Module?.Filename ?? "",ModuleName=frame.Module?.Name ?? "",
+					FrameId=$"{sessionId}:{stateVersion}:{selectedThreadId}:{index}",ThreadId=selectedThreadId,FrameIndex=index,Module=frame.Module?.Filename ?? "",ModuleId=frame.Module is null ? null : ModuleIdOf(frame.Module),ModuleName=frame.Module?.Name ?? "",
 					MethodToken=frame.FunctionToken,IlOffset=frame.FunctionOffset,Name=$"0x{frame.FunctionToken:X8}+0x{frame.FunctionOffset:X}",
 				})).ToArray();
 			},cancellationToken).ConfigureAwait(false);
@@ -826,7 +829,7 @@ namespace dgSpy.Extension {
 				try {
 					frames=walker.GetNextStackFrames(max);
 					return frames.Select((frame,index)=>new CapturedFrame(frame,languages.GetCurrentLanguage(frame.Runtime.RuntimeKindGuid),new FrameInfo {
-						FrameId=$"{sessionId}:{stateVersion}:{selectedThreadId}:{index}",ThreadId=selectedThreadId,FrameIndex=index,Module=frame.Module?.Filename ?? "",ModuleName=frame.Module?.Name ?? "",
+						FrameId=$"{sessionId}:{stateVersion}:{selectedThreadId}:{index}",ThreadId=selectedThreadId,FrameIndex=index,Module=frame.Module?.Filename ?? "",ModuleId=frame.Module is null ? null : ModuleIdOf(frame.Module),ModuleName=frame.Module?.Name ?? "",
 						MethodToken=frame.FunctionToken,IlOffset=frame.FunctionOffset,Name=$"0x{frame.FunctionToken:X8}+0x{frame.FunctionOffset:X}",
 					})).ToArray();
 				}

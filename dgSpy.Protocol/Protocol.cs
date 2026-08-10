@@ -178,9 +178,10 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("frame_index")] public int FrameIndex { get; set; }
 		/// <summary>Formatted frame, eg. "Milestone1Target.Program.Tick(int)". Display only.</summary>
 		[JsonPropertyName("name")] public string Name { get; set; }="";
-		/// <summary>Module filename. Together with method_token and il_offset this is the durable
-		/// identity: pass these three straight to set_il_breakpoint.</summary>
+		/// <summary>Module filename for display. <see cref="ModuleId"/> is the exact loaded identity to
+		/// pass with method_token and il_offset to set_il_breakpoint.</summary>
 		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("module_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? ModuleId { get; set; }
 		[JsonPropertyName("module_name")] public string ModuleName { get; set; }="";
 		[JsonPropertyName("method_token")] public uint MethodToken { get; set; }
 		[JsonPropertyName("il_offset")] public uint IlOffset { get; set; }
@@ -202,6 +203,11 @@ namespace dgSpy.Protocol {
 	public sealed class BreakpointInfo {
 		[JsonPropertyName("breakpoint_id")] public int BreakpointId { get; set; }
 		[JsonPropertyName("module")] public string Module { get; set; }=""; [JsonPropertyName("method_token")] public uint MethodToken { get; set; }
+		/// <summary>Exact loaded instances currently represented by this logical breakpoint. A code
+		/// breakpoint can bind the same engine module identity in more than one app domain.</summary>
+		[JsonPropertyName("module_ids")] public string[] ModuleIds { get; set; }=Array.Empty<string>();
+		/// <summary>Convenience identity when exactly one loaded instance matches.</summary>
+		[JsonPropertyName("module_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? ModuleId { get; set; }
 		[JsonPropertyName("il_offset")] public uint IlOffset { get; set; }
 		/// <summary>The offset the caller asked for. Differs from <see cref="IlOffset"/> only when
 		/// <see cref="Snapped"/> is true.</summary>
@@ -400,10 +406,13 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("removed")] public bool Removed { get; set; }
 	}
 	public sealed class ModuleInfo {
+		[JsonPropertyName("module_id")] public string ModuleId { get; set; }="";
 		[JsonPropertyName("name")] public string Name { get; set; }="";
 		[JsonPropertyName("filename")] public string Filename { get; set; }="";
 		[JsonPropertyName("process_id")] public int ProcessId { get; set; }
 		[JsonPropertyName("runtime_guid")] public string RuntimeGuid { get; set; }="";
+		[JsonPropertyName("app_domain_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? AppDomainId { get; set; }
+		[JsonPropertyName("app_domain_name"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? AppDomainName { get; set; }
 		[JsonPropertyName("is_dynamic")] public bool IsDynamic { get; set; }
 		[JsonPropertyName("is_in_memory")] public bool IsInMemory { get; set; }
 		[JsonPropertyName("is_optimized"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? IsOptimized { get; set; }
@@ -413,7 +422,7 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("version"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Version { get; set; }
 		/// <summary>False for a module <c>set_il_breakpoint</c> cannot address, because it takes a module
 		/// path and this module has none. Reported per module rather than left to be discovered from a
-		/// breakpoint that never binds. Phase 6 owns in-memory module identity.</summary>
+		/// breakpoint that never binds. Use <see cref="ModuleId"/> to select an already loaded instance.</summary>
 		[JsonPropertyName("can_set_breakpoint")] public bool CanSetBreakpoint { get; set; }
 	}
 	/// <summary>A page of <see cref="ModuleInfo"/>. <c>list_modules</c> used to answer with a bare array of
@@ -427,11 +436,12 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
 	}
 	/// <summary>A type or member, identified the way a breakpoint takes it. Display text is never the
-	/// identity: module plus token is, so a caller never has to parse a name back into one.</summary>
+	/// identity: module_id plus token is, so a caller never has to parse a name back into one.</summary>
 	public sealed class SymbolInfo {
 		/// <summary><c>type</c>, <c>method</c>, <c>field</c>, <c>property</c> or <c>event</c>.</summary>
 		[JsonPropertyName("kind")] public string Kind { get; set; }="";
 		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("module_id")] public string ModuleId { get; set; }="";
 		/// <summary>Metadata token. For a method this is exactly what <c>set_il_breakpoint</c> takes.</summary>
 		[JsonPropertyName("method_token")] public uint MethodToken { get; set; }
 		[JsonPropertyName("name")] public string Name { get; set; }="";
@@ -446,6 +456,7 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("truncated")] public bool Truncated { get; set; }
 	}
 	public sealed class DocumentInfo {
+		[JsonPropertyName("module_id")] public string ModuleId { get; set; }="";
 		[JsonPropertyName("name")] public string Name { get; set; }="";
 		[JsonPropertyName("filename")] public string Filename { get; set; }="";
 		[JsonPropertyName("process_id")] public int ProcessId { get; set; }
@@ -477,6 +488,7 @@ namespace dgSpy.Protocol {
 	}
 	public sealed class MethodBodyInfo {
 		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("module_id")] public string ModuleId { get; set; }="";
 		[JsonPropertyName("method_token")] public uint MethodToken { get; set; }
 		[JsonPropertyName("full_name")] public string FullName { get; set; }="";
 		[JsonPropertyName("declaring_type"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? DeclaringType { get; set; }
@@ -491,12 +503,14 @@ namespace dgSpy.Protocol {
 	}
 	public sealed class DecompiledCode {
 		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("module_id")] public string ModuleId { get; set; }="";
 		[JsonPropertyName("name")] public string Name { get; set; }="";
 		[JsonPropertyName("language")] public string Language { get; set; }="";
 		[JsonPropertyName("code")] public string Code { get; set; }="";
 	}
 	public sealed class TextSearchHit {
 		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("module_id")] public string ModuleId { get; set; }="";
 		[JsonPropertyName("type")] public string Type { get; set; }="";
 		[JsonPropertyName("method_token")] public uint MethodToken { get; set; }
 		[JsonPropertyName("method")] public string Method { get; set; }="";
@@ -520,11 +534,12 @@ namespace dgSpy.Protocol {
 	/// <summary>One <c>search</c> hit. Every identifier here is round-trippable by design: <c>full_name</c>
 	/// is one of the strings the matcher itself tests, so passing it back as <c>pattern</c> re-finds this
 	/// symbol; <c>declaring_type</c> is what <c>list_members</c> and <c>get_csharp</c> take for
-	/// <c>type</c>; <c>token</c> plus <c>module</c> is what <c>get_il</c>, <c>find_references</c> and
+	/// <c>type</c>; <c>token</c> plus <c>module_id</c> is what <c>get_il</c>, <c>find_references</c> and
 	/// <c>set_il_breakpoint</c> take. Nothing here needs parsing.</summary>
 	public sealed class SearchHit {
 		[JsonPropertyName("kind")] public string Kind { get; set; }="";
 		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("module_id"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? ModuleId { get; set; }
 		[JsonPropertyName("module_path"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? ModulePath { get; set; }
 		/// <summary>False means the module is open in dnSpy's Assembly Explorer but is not loaded in the
 		/// debug session, so the session-scoped tools will answer <c>module_not_found</c> for it.</summary>
@@ -557,6 +572,7 @@ namespace dgSpy.Protocol {
 	}
 	public sealed class MetadataInfo {
 		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("module_id")] public string ModuleId { get; set; }="";
 		[JsonPropertyName("assembly_full_name"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? AssemblyFullName { get; set; }
 		[JsonPropertyName("mvid")] public string Mvid { get; set; }="";
 		[JsonPropertyName("runtime_version")] public string RuntimeVersion { get; set; }="";
@@ -571,6 +587,7 @@ namespace dgSpy.Protocol {
 	}
 	public sealed class RawModuleChunk {
 		[JsonPropertyName("module")] public string Module { get; set; }="";
+		[JsonPropertyName("module_id")] public string ModuleId { get; set; }="";
 		[JsonPropertyName("offset")] public int Offset { get; set; }
 		[JsonPropertyName("count")] public int Count { get; set; }
 		[JsonPropertyName("total_size")] public int TotalSize { get; set; }

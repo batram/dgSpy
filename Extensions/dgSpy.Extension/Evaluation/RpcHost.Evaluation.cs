@@ -63,7 +63,7 @@ namespace dgSpy.Extension {
 				var frame=frames[frameIndex];
 				return new CapturedFrame(frame,languages.GetCurrentLanguage(frame.Runtime.RuntimeKindGuid),new FrameInfo {
 					FrameId=$"{sessionId}:{stateVersion}:{selectedThreadId}:{frameIndex}",ThreadId=selectedThreadId,FrameIndex=frameIndex,
-					Module=frame.Module?.Filename ?? "",ModuleName=frame.Module?.Name ?? "",MethodToken=frame.FunctionToken,IlOffset=frame.FunctionOffset,
+					Module=frame.Module?.Filename ?? "",ModuleId=frame.Module is null ? null : ModuleIdOf(frame.Module),ModuleName=frame.Module?.Name ?? "",MethodToken=frame.FunctionToken,IlOffset=frame.FunctionOffset,
 				});
 			},cancellationToken).ConfigureAwait(false);
 		}
@@ -443,18 +443,19 @@ namespace dgSpy.Extension {
 			var namePattern=(string?)req.Arguments["name_pattern"];
 			var offset=Math.Max(0,(int?)req.Arguments["offset"] ?? 0);
 			var count=Math.Min(MaxModuleResults,Math.Max(1,(int?)req.Arguments["count"] ?? DefaultModuleResults));
-			var modules=await OnDebuggerAsync(()=>ScanModules(namePattern),cancellationToken).ConfigureAwait(false);
-			return await evaluations.RunAsync(()=>new ModuleList {
-				Modules=modules.Skip(offset).Take(count).Select(m=>new ModuleInfo {
-					Name=m.Name,Filename=m.Filename,ProcessId=m.Process.Id,RuntimeGuid=m.Runtime.Guid.ToString("D"),
+			var modules=await OnDebuggerAsync(()=>ScanModules(namePattern).Select(m=>new ModuleInfo {
+					ModuleId=ModuleIdOf(m),Name=m.Name,Filename=m.Filename,ProcessId=m.Process.Id,RuntimeGuid=m.Runtime.Guid.ToString("D"),
+					AppDomainId=m.AppDomain?.Id,AppDomainName=m.AppDomain?.Name,
 					IsDynamic=m.IsDynamic,IsInMemory=m.IsInMemory,IsOptimized=m.IsOptimized,Order=m.Order,
 					Address=m.Address,Size=m.Size,Version=m.Version,
 					// The engine-provided ModuleId includes the runtime discriminator needed by dynamic and
 					// in-memory modules; modules for which no provider supplies one remain explicitly false.
 					CanSetBreakpoint=CanCarryBreakpoint(m),
-				}).ToArray(),
+				}).ToArray(),cancellationToken).ConfigureAwait(false);
+			return new ModuleList {
+				Modules=modules.Skip(offset).Take(count).ToArray(),
 				Total=modules.Length,Offset=offset,Truncated=offset+count<modules.Length,
-			},cancellationToken).ConfigureAwait(false);
+			};
 		}
 	}
 }

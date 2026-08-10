@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,6 +27,7 @@ namespace dgSpy.Extension {
 		/// presented as something get_il will accept.</summary>
 		sealed class SearchModule {
 			public ModuleDef Metadata=null!;
+			public string? ModuleId;
 			public string Name="";
 			public string? Path;
 			public bool InSession;
@@ -79,7 +81,7 @@ namespace dgSpy.Extension {
 			// them, but it still has to answer in_session truthfully, and it cannot do that without knowing
 			// what the session holds. When nothing is being debugged this is an empty enumeration, which is
 			// what makes the scope usable with no session at all.
-			var sessionModules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules).ToArray(),cancellationToken).ConfigureAwait(false);
+			var sessionModules=await OnDebuggerAsync(()=>manager.Processes.SelectMany(p=>p.Runtimes).SelectMany(r=>r.Modules).Select(module=>(Module:module,ModuleId:ModuleIdOf(module),Name:module.Name,Filename:module.Filename,ProcessId:module.Process.Id,Runtime:module.Runtime.Guid,AppDomainId:module.AppDomain?.Id ?? -1,Order:module.Order)).ToArray(),cancellationToken).ConfigureAwait(false);
 
 			return await evaluations.RunAsync(()=>{
 				var modules=CollectSearchModules(scope,sessionModules,moduleFilter);
@@ -100,71 +102,70 @@ namespace dgSpy.Extension {
 			},cancellationToken).ConfigureAwait(false);
 		}
 
-		/// <summary>Resolves the requested scope to a stable, de-duplicated module list. Order must not vary
+		/// <summary>Resolves the requested scope to a stable module list. Loaded instances are retained;
+		/// only the Assembly Explorer copy is de-duplicated under <c>all</c>. Order must not vary
 		/// between two calls with the same arguments or the resume cursor is meaningless, so the union is
 		/// session-first and then sorted within each source.</summary>
-		List<SearchModule> CollectSearchModules(string scope,DbgModule[] sessionModules,string? moduleFilter) {
+		List<SearchModule> CollectSearchModules(string scope,(DbgModule Module,string ModuleId,string Name,string Filename,int ProcessId,Guid Runtime,int AppDomainId,int Order)[] sessionModules,string? moduleFilter) {
 			var result=new List<SearchModule>();
 			var seenInstances=new HashSet<ModuleDef>();
 			var seenMvids=new HashSet<Guid>();
-			var seenNames=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-			// Three keys, because no single one survives both views of the same module. The debugger's
+			// Reference identity and MVID survive the common views of the same code. A name deliberately
+			// does not participate: two unrelated assemblies called Helpers.dll must remain two modules.
+			// The debugger's
 			// metadata service and the Assembly Explorer hand back *different* ModuleDef instances for one
 			// module, so reference identity does not join them; and against a live Unity player the MVID
 			// does not join them either -- a `scope: "all"` search walked all 54 modules twice until the
 			// name key was added.
 			//
-			// The name key is the module name alone, deliberately not name+path: the two views do not
-			// reliably agree on a path either -- an in-memory module reports a bare assembly name as its
-			// filename -- and a key the two views disagree about is a key that does not dedup. The cost is
-			// that two genuinely distinct modules sharing a name (the same assembly loaded into two
-			// processes of one session) collapse to one entry. `modules_searched` reports exactly what was
-			// walked, so that is visible rather than silent.
-			//
-			// Both sets are always populated, never short-circuited, so a module that presents an MVID in
-			// one view and not the other still collapses on whichever key both views agree about.
-			bool IsNew(ModuleDef metadata,string name) {
+			bool IsNew(ModuleDef metadata) {
 				if (!seenInstances.Add(metadata)) return false;
 				var mvid=metadata.Mvid;
-				var mvidIsNew=!mvid.HasValue || mvid.Value==Guid.Empty || seenMvids.Add(mvid.Value);
-				var nameIsNew=seenNames.Add(name);
-				return mvidIsNew && nameIsNew;
+				return !mvid.HasValue || mvid.Value==Guid.Empty || seenMvids.Add(mvid.Value);
 			}
 			// Resolve the session's metadata once, before walking anything. Two things need it: the session
 			// branch below, and in_session, which is a fact about the module rather than about which loop
 			// happened to find it. Deriving the flag from the branch reported in_session:false under
 			// `scope: "documents"` for a module the session tools accept without complaint -- a tool saying
 			// a symbol is out of reach when it is not, which is the class of wrong answer this exists to end.
-			var resolvedSession=new List<(ModuleDef Metadata,string Name,string? Path)>();
-			foreach (var dbgModule in sessionModules.OrderBy(m=>m.Name,StringComparer.OrdinalIgnoreCase).ThenBy(m=>m.Filename,StringComparer.OrdinalIgnoreCase)) {
+			var resolvedSession=new List<(ModuleDef Metadata,string ModuleId,string Name,string? Path)>();
+			foreach (var selected in sessionModules.OrderBy(m=>m.Name,StringComparer.OrdinalIgnoreCase).ThenBy(m=>m.Filename,StringComparer.OrdinalIgnoreCase)
+				.ThenBy(m=>m.ProcessId).ThenBy(m=>m.Runtime).ThenBy(m=>m.AppDomainId).ThenBy(m=>m.Order)) {
+				var dbgModule=selected.Module;
 				ModuleDef? metadata=null;
 				try { metadata=metadataService.TryGetMetadata(dbgModule); } catch (Exception) { }
 				if (metadata is null) continue;
-				resolvedSession.Add((metadata,metadata.Name?.ToString() ?? dbgModule.Name,dbgModule.Filename));
+				resolvedSession.Add((metadata,selected.ModuleId,metadata.Name?.ToString() ?? selected.Name,selected.Filename));
 			}
-			// Same keys as the dedup, for the same reason: the two views agree on a name, and not reliably
-			// on anything else.
-			var sessionNames=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			var sessionPaths=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 			var sessionMvids=new HashSet<Guid>();
+			var sessionIdByPath=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+			var sessionIdByMvid=new Dictionary<Guid,string>();
 			foreach (var entry in resolvedSession) {
-				sessionNames.Add(entry.Name);
+				if (!string.IsNullOrEmpty(entry.Path)) { var path=NormalizePath(entry.Path!); sessionPaths.Add(path); if (!sessionIdByPath.ContainsKey(path)) sessionIdByPath[path]=entry.ModuleId; }
 				var mvid=entry.Metadata.Mvid;
-				if (mvid.HasValue && mvid.Value!=Guid.Empty) sessionMvids.Add(mvid.Value);
+				if (mvid.HasValue && mvid.Value!=Guid.Empty) { sessionMvids.Add(mvid.Value); if (!sessionIdByMvid.ContainsKey(mvid.Value)) sessionIdByMvid[mvid.Value]=entry.ModuleId; }
 			}
-			bool IsInSession(ModuleDef metadata,string name) {
-				if (sessionNames.Contains(name)) return true;
+			bool IsInSession(ModuleDef metadata,string? path) {
 				var mvid=metadata.Mvid;
-				return mvid.HasValue && mvid.Value!=Guid.Empty && sessionMvids.Contains(mvid.Value);
+				return (mvid.HasValue && mvid.Value!=Guid.Empty && sessionMvids.Contains(mvid.Value))
+					|| (!string.IsNullOrEmpty(path) && sessionPaths.Contains(NormalizePath(path!)));
+			}
+			string? SessionModuleId(ModuleDef metadata,string? path) {
+				var mvid=metadata.Mvid;
+				if (mvid.HasValue && mvid.Value!=Guid.Empty && sessionIdByMvid.TryGetValue(mvid.Value,out var byMvid)) return byMvid;
+				return !string.IsNullOrEmpty(path) && sessionIdByPath.TryGetValue(NormalizePath(path!),out var byPath) ? byPath : null;
 			}
 
 			if (scope is "session" or "all") {
 				foreach (var entry in resolvedSession) {
-					// Filter before claiming a dedup slot, so a module excluded here cannot suppress the
-					// other view's copy of itself.
 					if (!MatchesModuleFilter(entry.Name,entry.Path,moduleFilter)) continue;
-					if (!IsNew(entry.Metadata,entry.Name)) continue;
-					result.Add(new SearchModule { Metadata=entry.Metadata,Name=entry.Name,Path=entry.Path,InSession=true });
+					// Every loaded instance remains visible. Two app domains can carry the same MVID and
+					// path but have different module_id values, and collapsing those would recreate the
+					// ambiguity this identity is designed to remove.
+					result.Add(new SearchModule { Metadata=entry.Metadata,ModuleId=entry.ModuleId,Name=entry.Name,Path=entry.Path,InSession=true });
 				}
+				if(scope=="all") foreach(var entry in resolvedSession) { seenInstances.Add(entry.Metadata); var mvid=entry.Metadata.Mvid; if(mvid.HasValue && mvid.Value!=Guid.Empty) seenMvids.Add(mvid.Value); }
 			}
 			if (scope is "documents" or "all") {
 				foreach (var document in documentService.GetDocuments().OrderBy(d=>d.Filename,StringComparer.OrdinalIgnoreCase)) {
@@ -174,11 +175,15 @@ namespace dgSpy.Extension {
 					if (!MatchesModuleFilter(name,document.Filename,moduleFilter)) continue;
 					// Session first, so under `all` a shared module is walked once, as the session copy,
 					// carrying the identifiers the session-scoped tools actually accept.
-					if (!IsNew(metadata,name)) continue;
-					result.Add(new SearchModule { Metadata=metadata,Name=name,Path=document.Filename,InSession=IsInSession(metadata,name) });
+					if (!IsNew(metadata)) continue;
+					result.Add(new SearchModule { Metadata=metadata,ModuleId=SessionModuleId(metadata,document.Filename),Name=name,Path=document.Filename,InSession=IsInSession(metadata,document.Filename) });
 				}
 			}
 			return result;
+		}
+
+		static string NormalizePath(string path) {
+			try { return Path.GetFullPath(path); } catch { return path; }
 		}
 
 		// The same module-name rule the resolving tools use, so a name that get_csharp accepts also filters
@@ -344,7 +349,7 @@ namespace dgSpy.Extension {
 			Hit(module,kind,member.MDToken.ToUInt32(),member.Name,declaringType+"."+member.Name,declaringType,type.Namespace?.ToString(),declaringType,context);
 
 		static SearchHit Hit(SearchModule module,string kind,uint token,string name,string fullName,string? declaringType,string? ns,string? location,string? context) => new SearchHit {
-			Kind=kind,Module=module.Name,ModulePath=string.IsNullOrEmpty(module.Path) ? null : module.Path,InSession=module.InSession,
+			Kind=kind,Module=module.Name,ModuleId=module.ModuleId,ModulePath=string.IsNullOrEmpty(module.Path) ? null : module.Path,InSession=module.InSession,
 			Token=token,Name=name,FullName=fullName,DeclaringType=declaringType,
 			Namespace=string.IsNullOrEmpty(ns) ? null : ns,Location=string.IsNullOrEmpty(location) ? null : location,MatchContext=context,
 		};

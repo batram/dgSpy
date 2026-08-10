@@ -70,6 +70,10 @@ public sealed class ModuleNameMatchTests {
 		Assert.Equal(ModuleNameMatch.Exact,ModuleNameMatch.Rank("eval-1","","eval-1"));
 
 	[Fact]
+	public void An_in_memory_name_without_an_extension_accepts_the_metadata_filename() =>
+		Assert.Equal(ModuleNameMatch.Stemmed,ModuleNameMatch.Rank("5wje15qw","","5wje15qw.dll"));
+
+	[Fact]
 	public void Near_misses_name_candidates_instead_of_sending_the_caller_to_list_modules() {
 		var loaded=new (string?,string?)[] {
 			("Assembly-CSharp.dll",UnityPath),

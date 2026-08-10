@@ -39,7 +39,10 @@ namespace dgSpy.Extension {
 			if (string.IsNullOrEmpty(query)) return None;
 			var moduleName=name ?? ""; var path=filename ?? ""; var leaf=Leaf(path);
 			if (Same(moduleName,query)||Same(path,query)||Same(leaf,query)) return Exact;
-			if (Same(Stem(moduleName),query)||Same(Stem(leaf),query)) return Stemmed;
+			// Normalize both sides. In-memory Add-Type modules can report Name="abc" while metadata and
+			// get_il report "abc.dll"; stripping only the loaded side made that exact round trip impossible.
+			var queryStem=ManagedStem(Leaf(query));
+			if (Same(ManagedStem(moduleName),queryStem)||Same(ManagedStem(leaf),queryStem)) return Stemmed;
 			if (Contains(moduleName,query)||Contains(path,query)) return Substring;
 			return None;
 		}
@@ -80,6 +83,8 @@ namespace dgSpy.Extension {
 			return separator<0 ? path : path.Substring(separator+1);
 		}
 		public static string Stem(string value) { var dot=value.LastIndexOf('.'); return dot>0 ? value.Substring(0,dot) : value; }
+		static string ManagedStem(string value) => value.EndsWith(".dll",StringComparison.OrdinalIgnoreCase) || value.EndsWith(".exe",StringComparison.OrdinalIgnoreCase)
+			? value.Substring(0,value.Length-4) : value;
 
 		/// <summary>Lowercased, with every separator removed, so "Assembly-CSharp" and "AssemblyCSharp"
 		/// become the same string. Only ever used for suggesting near misses --- never for resolving one,

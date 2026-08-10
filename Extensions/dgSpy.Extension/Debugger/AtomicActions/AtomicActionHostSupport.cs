@@ -107,6 +107,7 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			var scoped=new RpcRequest { Operation=source.Operation,RequestId=source.RequestId,Arguments=(JsonObject)source.Arguments.DeepClone(),DeadlineUtc=source.DeadlineUtc };
 			scoped.Arguments["process_id"]=request.ProcessId;
 			if(!String.IsNullOrWhiteSpace(request.RuntimeId)) scoped.Arguments["runtime_id"]=request.RuntimeId;
+			if(!String.IsNullOrWhiteSpace(request.ModuleId)) scoped.Arguments["module_id"]=request.ModuleId;
 			return scoped;
 		}
 	}

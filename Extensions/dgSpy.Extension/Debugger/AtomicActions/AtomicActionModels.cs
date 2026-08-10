@@ -35,6 +35,8 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		public string AppDomainId { get; set; }="";
 		[JsonPropertyName("module")]
 		public string Module { get; set; }="";
+		[JsonPropertyName("module_id")]
+		public string ModuleId { get; set; }="";
 		[JsonPropertyName("method_token")]
 		public uint MethodToken { get; set; }
 		[JsonPropertyName("il_offset")]

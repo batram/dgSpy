@@ -224,7 +224,7 @@ public sealed class GatewayToolExecutor {
 		// own guards: both set_breakpoint and set_il_breakpoint require them, and BaseArgs carries neither.
 		// Without them every run_to_* attempt died on the host's "module is required" before the target
 		// ever ran, which read as a caller mistake because the caller had in fact passed module.
-		var setOperation=operation=="run_to_method"?"set_breakpoint":"set_il_breakpoint"; var breakpointArgs=BaseArgs(arguments); foreach(var name in new[]{"module","type","method","signature","method_token","il_offset","expected_breakpoints_version"}) if(arguments[name] is not null) breakpointArgs[name]=arguments[name]!.DeepClone();
+		var setOperation=operation=="run_to_method"?"set_breakpoint":"set_il_breakpoint"; var breakpointArgs=BaseArgs(arguments); foreach(var name in new[]{"module_id","module","type","method","signature","method_token","il_offset","expected_breakpoints_version"}) if(arguments[name] is not null) breakpointArgs[name]=arguments[name]!.DeepClone();
 		var created=await RouteAsync(setOperation,breakpointArgs,token); if(created.Error is not null) return created; var createdNode=ProtocolJson.ToNode(created.Result)!.AsObject(); var breakpointId=(int?)createdNode["breakpoint_id"] ?? throw new GatewayControlException("invalid_state","Host returned no temporary breakpoint id."); var cursor=(long?)createdNode["cursor_event_id"] ?? 0;
 		// Filled by the cleanup below. The vector the caller needs is the one after the temporary
 		// breakpoint came back out, not the one the wait saw: removing it moves breakpoints_version
