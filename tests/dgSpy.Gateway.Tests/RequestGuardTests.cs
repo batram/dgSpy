@@ -337,6 +337,20 @@ public class HostRegistryTests {
 	}
 
 	[Fact]
+	public async Task Outbound_call_forwards_a_relative_budget_that_does_not_depend_on_the_host_clock() {
+		var directory=CreateRegistryDirectory();
+		try {
+			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} }); var router=new HostRouter(HostRegistry.FromJson(json,directory));
+			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start(); using var remote=new TcpClient(); var accept=listener.AcceptTcpClientAsync(); await remote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var gateway=await accept;
+			Assert.True(router.TryRegister("host-a",gateway,new StreamReader(gateway.GetStream(),Encoding.UTF8,false,4096,true),new StreamWriter(gateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true},out _));
+			RpcRequest? forwarded=null; var responder=Task.Run(async ()=>{ var reader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true); var writer=new StreamWriter(remote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true}; forwarded=ProtocolJson.Deserialize<RpcRequest>((await reader.ReadLineAsync())!); await writer.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(forwarded!.RequestId,new { ok=true }))); });
+			var response=await router.CallAsync(new RpcRequest { Operation="get_host_info",Arguments=new JsonObject{{"host_id","host-a"}},DeadlineUtc=DateTime.UtcNow.AddSeconds(2) },default); await responder; listener.Stop();
+			Assert.Null(response.Error); Assert.InRange(forwarded!.TimeoutMs!.Value,1,2000);
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	[Fact]
 	public async Task Heartbeat_and_user_call_share_the_single_inflight_channel_without_losing_either_response() {
 		var directory=CreateRegistryDirectory();
 		try {

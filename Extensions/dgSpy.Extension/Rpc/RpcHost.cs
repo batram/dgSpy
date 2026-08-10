@@ -179,7 +179,7 @@ namespace dgSpy.Extension {
 			// its counters would leave state, process_ids, and terminal details from different instants.
 			if (response.Error is null && response.Result is SessionState && executionChangingOperations.Contains(req.Operation)) {
 				using var refreshCancellation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
-				var remaining=req.DeadlineUtc is DateTime deadline ? deadline-DateTime.UtcNow : TimeSpan.FromSeconds(8);
+				var remaining=RpcTimeout.Resolve(req.TimeoutMs,req.DeadlineUtc,DateTime.UtcNow,8000)-started.Elapsed;
 				refreshCancellation.CancelAfter(remaining>TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
 				try { response.Result=await OnDebuggerAsync(State,refreshCancellation.Token).ConfigureAwait(false); }
 				catch (OperationCanceledException) { response=RpcResponse.Failure(req.RequestId,"deadline_exceeded","The execution change was issued and may already have applied, but its final session state could not be refreshed before the deadline. Read get_session_state and do not repeat the mutation unless that state proves the intended change did not occur."); }
@@ -289,10 +289,9 @@ namespace dgSpy.Extension {
 			if (req.Version!=ProtocolVersion.Current) return RpcResponse.Failure(req.RequestId,"incompatible_protocol",$"Protocol {req.Version} is unsupported; expected {ProtocolVersion.Current}.");
 			var authenticationError=RpcRequestAuthenticator.Reject(req.Operation,req.HostId,req.AuthenticationToken,rpcSecurity.HostId,rpcSecurity.Token);
 			if (authenticationError is not null) return RpcResponse.Failure(req.RequestId,"unauthorized",authenticationError);
-			if (req.DeadlineUtc is DateTime deadline && deadline<=DateTime.UtcNow) return RpcResponse.Failure(req.RequestId,"deadline_exceeded","Request deadline has expired.");
 			CheckOperationVersion(req);
 			using var requestCancellation=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
-			if (req.DeadlineUtc is DateTime requestDeadline) requestCancellation.CancelAfter(requestDeadline-DateTime.UtcNow > TimeSpan.Zero ? requestDeadline-DateTime.UtcNow : TimeSpan.FromMilliseconds(1));
+			requestCancellation.CancelAfter(RpcTimeout.Resolve(req.TimeoutMs,req.DeadlineUtc,DateTime.UtcNow,8000));
 			await DemandActionLeaseAvailableAsync(req,requestCancellation.Token).ConfigureAwait(false);
 			switch (req.Operation) {
 			case "ping": return RpcResponse.Success(req.RequestId,new Handshake { ExtensionVersion=Version,HostId=rpcSecurity.HostId });

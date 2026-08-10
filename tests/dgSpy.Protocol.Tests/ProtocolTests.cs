@@ -52,6 +52,22 @@ public class RpcContractTests {
 	}
 
 	[Fact]
+	public void Relative_timeout_survives_a_round_trip_and_wins_over_clock_skew() {
+		var now=new DateTime(2026,8,10,12,0,0,DateTimeKind.Utc);
+		var json=ProtocolJson.Serialize(new RpcRequest { DeadlineUtc=now.AddYears(4),TimeoutMs=2500 });
+		var restored=ProtocolJson.Deserialize<RpcRequest>(json)!;
+		Assert.Equal(2500,restored.TimeoutMs);
+		Assert.Equal(TimeSpan.FromMilliseconds(2500),RpcTimeout.Resolve(restored.TimeoutMs,restored.DeadlineUtc,now,8000));
+	}
+
+	[Fact]
+	public void Legacy_absolute_deadlines_are_bounded_under_multi_year_skew() {
+		var gatewayNow=new DateTime(2026,8,10,12,0,0,DateTimeKind.Utc);
+		Assert.Equal(TimeSpan.FromSeconds(8),RpcTimeout.Resolve(null,gatewayNow.AddSeconds(5),gatewayNow.AddYears(-4),8000));
+		Assert.Equal(TimeSpan.FromMilliseconds(1),RpcTimeout.Resolve(null,gatewayNow.AddSeconds(5),gatewayNow.AddYears(4),8000));
+	}
+
+	[Fact]
 	public void Event_results_preserve_normalized_stop_and_cursor_metadata() {
 		var result=new WaitResult {
 			OldestEventId=9, OldestAvailableCursor=8, LastEventId=11, Truncated=true,

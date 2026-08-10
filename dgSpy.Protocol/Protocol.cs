@@ -12,7 +12,25 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("authentication_token"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? AuthenticationToken { get; set; }
 		[JsonPropertyName("operation")] public string Operation { get; set; } = "";
 		[JsonPropertyName("deadline_utc")] public DateTime? DeadlineUtc { get; set; }
+		[JsonPropertyName("timeout_ms"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? TimeoutMs { get; set; }
 		[JsonPropertyName("arguments")] public JsonObject Arguments { get; set; } = new JsonObject();
+	}
+	public static class RpcTimeout {
+		public const int MaximumMilliseconds=600000;
+		public static TimeSpan Resolve(int? timeoutMs,DateTime? deadlineUtc,DateTime nowUtc,int fallbackMilliseconds) {
+			if(timeoutMs is int relative) return TimeSpan.FromMilliseconds(Bound(relative));
+			if(deadlineUtc is DateTime absolute) {
+				var remaining=absolute.ToUniversalTime()-nowUtc.ToUniversalTime();
+				if(remaining<=TimeSpan.Zero) return TimeSpan.FromMilliseconds(1);
+				if(remaining<=TimeSpan.FromMilliseconds(MaximumMilliseconds)) return remaining;
+			}
+			return TimeSpan.FromMilliseconds(Bound(fallbackMilliseconds));
+		}
+		public static int RemainingMilliseconds(DateTime? deadlineUtc,DateTime nowUtc,int fallbackMilliseconds) {
+			var value=Resolve(null,deadlineUtc,nowUtc,fallbackMilliseconds).TotalMilliseconds;
+			return Bound((int)Math.Ceiling(value));
+		}
+		static int Bound(int value) => value<1 ? 1 : value>MaximumMilliseconds ? MaximumMilliseconds : value;
 	}
 	public sealed class RpcResponse {
 		[JsonPropertyName("version")] public int Version { get; set; } = ProtocolVersion.Current;

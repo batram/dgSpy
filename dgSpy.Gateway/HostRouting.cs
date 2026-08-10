@@ -267,11 +267,12 @@ sealed class RegisteredRpcClient : IHostRpcClient {
 	}
 	public async Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken) {
 		using var deadline=new CancellationTokenSource();
-		if(request.DeadlineUtc is DateTime deadlineUtc) deadline.CancelAfter(deadlineUtc-DateTime.UtcNow>TimeSpan.Zero ? deadlineUtc-DateTime.UtcNow : TimeSpan.FromMilliseconds(1));
+		if(request.DeadlineUtc is not null) deadline.CancelAfter(RpcTimeout.Resolve(null,request.DeadlineUtc,DateTime.UtcNow,RpcTimeout.MaximumMilliseconds));
 		using var linked=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,deadline.Token);
 		ReverseConnection? active; lock(sync) active=connection;
 		if (active is null || !active.IsAlive) throw new IOException($"Host '{endpoint.HostId}' is not connected.");
 		request.HostId=endpoint.HostId; request.AuthenticationToken=endpoint.Token;
+		request.TimeoutMs=RpcTimeout.RemainingMilliseconds(request.DeadlineUtc,DateTime.UtcNow,RpcTimeout.MaximumMilliseconds);
 		return await active.CallAsync(request,linked.Token);
 	}
 	public void Dispose() { lock(sync) { connection?.Dispose(); connection=null; } }
