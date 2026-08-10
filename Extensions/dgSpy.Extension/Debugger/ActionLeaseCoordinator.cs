@@ -69,18 +69,79 @@ namespace dgSpy.Extension.Debugger {
 			return lease;
 		}
 
-		public bool TryGetBlock(int? processId,string operation,out ActionLeaseInfo info) {
+		/// <summary>Answers for the calling thread's own authorization only. A thread that decides here and
+		/// mutates elsewhere must use <see cref="CaptureAuthorizedActionIds"/> and the overload below.</summary>
+		public bool TryGetBlock(int? processId,string operation,out ActionLeaseInfo info) =>
+			TryGetBlock(processId,operation,null,out info);
+
+		/// <summary>
+		/// The authoritative decision for a mutation whose authorization was captured on another thread.
+		/// <paramref name="authorizedActionIds"/> is what <see cref="CaptureAuthorizedActionIds"/> returned
+		/// there; it admits exactly the leases it names, so a capture taken under one lease never passes a
+		/// mutation blocked by a later, different one.
+		/// </summary>
+		public bool TryGetBlock(int? processId,string operation,IReadOnlyList<string>? authorizedActionIds,out ActionLeaseInfo info) {
+			// One volatile read of one immutable dictionary decides the whole question, including the
+			// process-less case, so no lease can be acquired "between" two reads and escape the check.
 			var current=snapshot;
 			var now=DateTime.UtcNow;
-			// An expired lease blocks nobody: it grants no new work, and its remaining authorization exists
-			// only so its own owner can finish cleanup.
 			if(processId.HasValue) {
-				if(current.TryGetValue(processId.Value,out var lease) && !lease.IsExpired && lease.Info.DeadlineUtc>now && !ReferenceEquals(currentAuthorization,lease.Authorization)) { info=lease.Info; return true; }
+				if(current.TryGetValue(processId.Value,out var lease) && Blocks(lease,now,authorizedActionIds)) { info=lease.Info; return true; }
 			}
 			else {
-				foreach(var lease in current.Values) if(!lease.IsExpired && lease.Info.DeadlineUtc>now && !ReferenceEquals(currentAuthorization,lease.Authorization)) { info=lease.Info; return true; }
+				// Breakpoint state is not owned by one process, so every active owner has to be consulted.
+				foreach(var lease in current.Values) if(Blocks(lease,now,authorizedActionIds)) { info=lease.Info; return true; }
 			}
 			info=null!; return false;
+		}
+
+		/// <summary>
+		/// A lease blocks an unauthorized caller for exactly as long as it owns the process - deadline
+		/// <em>and</em> bounded cleanup window - which is the same horizon <see cref="Acquire"/> refuses a
+		/// competing lease over. Expiry stops the lease granting new work; it does not stop it excluding
+		/// other callers, because the cleanup window is when the owner is releasing its breakpoints, rolling
+		/// back and resuming, and an external continue or detach landing there is precisely the concurrency
+		/// this coordinator exists to prevent. Only the owner passes, by thread authorization or by a capture
+		/// naming this lease.
+		/// </summary>
+		static bool Blocks(ActionLease lease,DateTime now,IReadOnlyList<string>? authorizedActionIds) {
+			if(lease.OwnershipEndsUtc<=now) return false;
+			if(ReferenceEquals(currentAuthorization,lease.Authorization)) return false;
+			return !Names(authorizedActionIds,lease.Info.ActionId);
+		}
+
+		static bool Names(IReadOnlyList<string>? actionIds,string actionId) {
+			if(actionIds is null) return false;
+			for(int i=0;i<actionIds.Count;i++) if(string.Equals(actionIds[i],actionId,StringComparison.Ordinal)) return true;
+			return false;
+		}
+
+		/// <summary>
+		/// Captures, for the calling thread, the identity of every lease it is currently authorized under -
+		/// null for a caller that owns nothing, which is every external and UI caller.
+		/// </summary>
+		/// <remarks>
+		/// Read straight from the live snapshot and the calling thread's authorization, in that order and
+		/// with no intermediate state of its own. There is therefore no mirror to prime and no
+		/// snapshot-then-subscribe window: a lease this thread is authorized under was necessarily published
+		/// into <c>snapshot</c> by <see cref="Acquire"/> before <see cref="Enter"/> could install its
+		/// authorization on this thread, so if this thread is authorized, the lease is in the snapshot this
+		/// call reads. A lease acquired by <em>another</em> thread after this read is not one this thread
+		/// owns, and the authoritative <see cref="TryGetBlock(int?,string,IReadOnlyList{string},out ActionLeaseInfo)"/>
+		/// on the mutating thread reads the snapshot again and refuses it.
+		/// </remarks>
+		public string[]? CaptureAuthorizedActionIds() {
+			var authorization=currentAuthorization;
+			if(authorization is null) return null;
+			var current=snapshot;
+			List<string>? owned=null;
+			foreach(var lease in current.Values) {
+				if(ReferenceEquals(authorization,lease.Authorization)) {
+					owned??=new List<string>();
+					owned.Add(lease.Info.ActionId);
+				}
+			}
+			return owned?.ToArray();
 		}
 
 		/// <summary>

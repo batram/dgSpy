@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
 
 namespace dgSpy.Extension.Debugger {
 	/// <summary>
@@ -23,107 +21,51 @@ namespace dgSpy.Extension.Debugger {
 	/// never passes a mutation blocked by a different, later one.
 	/// </para>
 	/// <para>
+	/// Both halves read the coordinator's own live state, and this type holds none of its own. An earlier
+	/// version mirrored ownership from <c>LeaseChanged</c> notifications, which made every answer depend on
+	/// this object having existed when the lease was acquired. It never does on the cold path: dnSpy
+	/// imports its guards as <c>Lazy&lt;DbgActionGuard&gt;</c> and first realizes them inside
+	/// <c>CaptureAuthorization()</c>, so the very first atomic action of a host's lifetime acquired its
+	/// lease with nothing subscribed, then built this bridge with an empty mirror - and the mutating
+	/// thread refused the owner's own mutation. Nothing here may derive current ownership from an event
+	/// stream; ask the coordinator.
+	/// </para>
+	/// <para>
 	/// This type is deliberately free of any dnSpy reference so the race can be tested directly against
 	/// the real coordinator and the real debugger dispatcher.
 	/// </para>
 	/// </remarks>
 	public sealed class ActionLeaseAuthorization : IDisposable {
-		/// <summary>Operation name used only to ask the coordinator a question; it is never reported.</summary>
-		const string authorizationProbe = "capture_action_authorization";
-
 		readonly ActionLeaseCoordinator coordinator;
-		// Which action currently owns each process, mirrored from the coordinator's own notifications.
-		// It answers "who would block an unauthorized caller", which TryGetBlock cannot report to the
-		// owner itself, and it is the enumeration used by a process-less mutation.
-		readonly ConcurrentDictionary<int, string> ownerByProcess = new ConcurrentDictionary<int, string>();
-		bool disposed;
 
-		public ActionLeaseAuthorization(ActionLeaseCoordinator coordinator) {
+		public ActionLeaseAuthorization(ActionLeaseCoordinator coordinator) =>
 			this.coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
-			coordinator.LeaseChanged += Coordinator_LeaseChanged;
-		}
-
-		void Coordinator_LeaseChanged(ActionLeaseInfo info, bool acquired) {
-			if (acquired)
-				ownerByProcess[info.ProcessId] = info.ActionId;
-			else {
-				// Remove only this action's own entry: an expiring lease and its replacement can report in
-				// either order, and clearing unconditionally would forget the live owner.
-				((ICollection<KeyValuePair<int, string>>)ownerByProcess).Remove(new KeyValuePair<int, string>(info.ProcessId, info.ActionId));
-			}
-		}
 
 		/// <summary>
 		/// Captures, on the calling thread, the identity of every lease this thread is currently authorized
 		/// under. Returns null for a caller that owns nothing, which is every external and UI caller.
 		/// </summary>
 		public object? Capture() {
-			List<string>? owned = null;
-			foreach (var pair in ownerByProcess) {
-				// A lease this thread is not authorized under blocks it, so a lease that does not block is
-				// one this thread owns.
-				if (!coordinator.TryGetBlock(pair.Key, authorizationProbe, out _)) {
-					if (owned is null)
-						owned = new List<string>();
-					owned.Add(pair.Value);
-				}
-			}
-			return owned is null ? null : new OwnedLeases(owned.ToArray());
+			var owned = coordinator.CaptureAuthorizedActionIds();
+			return owned is null ? null : new OwnedLeases(owned);
 		}
 
 		/// <summary>
 		/// The authoritative decision, made on the mutating thread immediately before the mutation.
 		/// <paramref name="authorization"/> is what <see cref="Capture"/> returned on the caller's thread.
+		/// A null process id means a mutation no single process owns - breakpoint state - and the
+		/// coordinator consults every active owner for it in one snapshot read.
 		/// </summary>
-		public bool TryGetBlock(int? processId, string operation, object? authorization, out ActionLeaseInfo info) {
-			if (processId.HasValue)
-				return Blocks(processId.Value, operation, authorization, out info);
-			// A process-less mutation - breakpoint state is not owned by one process - is blocked by any
-			// active lease, so every owner has to be consulted. The coordinator reports only the first
-			// lease that blocks this thread, and the captured authorization may name exactly that one
-			// while another lease still blocks; asking per process is what makes the answer complete.
-			if (coordinator.TryGetBlock(null, operation, out info) && !IsOwner(authorization, info))
-				return true;
-			foreach (var pair in ownerByProcess) {
-				if (Blocks(pair.Key, operation, authorization, out info))
-					return true;
-			}
-			info = null!;
-			return false;
-		}
+		public bool TryGetBlock(int? processId, string operation, object? authorization, out ActionLeaseInfo info) =>
+			coordinator.TryGetBlock(processId, operation, (authorization as OwnedLeases)?.ActionIds, out info);
 
-		bool Blocks(int processId, string operation, object? authorization, out ActionLeaseInfo info) {
-			if (!coordinator.TryGetBlock(processId, operation, out info))
-				return false;
-			if (IsOwner(authorization, info)) {
-				info = null!;
-				return false;
-			}
-			return true;
-		}
-
-		static bool IsOwner(object? authorization, ActionLeaseInfo info) =>
-			authorization is OwnedLeases capture && capture.Owns(info.ActionId);
-
-		public void Dispose() {
-			if (disposed)
-				return;
-			disposed = true;
-			coordinator.LeaseChanged -= Coordinator_LeaseChanged;
-			ownerByProcess.Clear();
-		}
+		/// <summary>Nothing to release: this bridge subscribes to nothing and caches nothing.</summary>
+		public void Dispose() { }
 
 		/// <summary>Opaque to every consumer; identity is compared, never inferred.</summary>
 		sealed class OwnedLeases {
-			readonly string[] actionIds;
-			internal OwnedLeases(string[] actionIds) => this.actionIds = actionIds;
-			internal bool Owns(string actionId) {
-				for (int i = 0; i < actionIds.Length; i++) {
-					if (String.Equals(actionIds[i], actionId, StringComparison.Ordinal))
-						return true;
-				}
-				return false;
-			}
+			internal string[] ActionIds { get; }
+			internal OwnedLeases(string[] actionIds) => ActionIds = actionIds;
 		}
 	}
 }

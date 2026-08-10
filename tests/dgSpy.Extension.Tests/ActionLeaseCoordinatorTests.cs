@@ -85,21 +85,32 @@ public sealed class ActionLeaseCoordinatorTests {
 		scope.Dispose();
 	}
 
+	/// <summary>
+	/// The deadline ends the lease's right to grant new work; it does not end its exclusion. Until the
+	/// owner releases or the bounded window elapses, the process is still owned - see
+	/// <see cref="An_expired_lease_still_excludes_everyone_but_its_owner"/> for why that matters.
+	/// </summary>
 	[Fact]
-	public async Task Deadline_self_releases() {
+	public async Task Deadline_expires_the_lease_without_ending_its_exclusion() {
 		using var coordinator=new ActionLeaseCoordinator();
 		using var lease=coordinator.Acquire(42,"short","action-8",DateTime.UtcNow.AddMilliseconds(80),"status","cancel");
 		Assert.True(coordinator.TryGetBlock(42,"continue",out _));
 		await Task.Delay(200);
+		Assert.True(lease.IsExpired);
+		Assert.True(coordinator.TryGetBlock(42,"continue",out _));
+		lease.Dispose();
 		Assert.False(coordinator.TryGetBlock(42,"continue",out _));
 	}
 
 	[Fact]
-	public void Owner_disconnect_releases_immediately() {
+	public void Owner_disconnect_expires_the_lease_without_ending_its_exclusion() {
 		using var coordinator=new ActionLeaseCoordinator();
 		using var disconnected=new CancellationTokenSource();
-		using var lease=Acquire(coordinator,ownerLifetime:disconnected.Token);
+		var lease=Acquire(coordinator,ownerLifetime:disconnected.Token);
 		disconnected.Cancel();
+		Assert.True(lease.IsExpired);
+		Assert.True(coordinator.TryGetBlock(42,"continue",out _));
+		lease.Dispose();
 		Assert.False(coordinator.TryGetBlock(42,"continue",out _));
 	}
 
@@ -115,10 +126,41 @@ public sealed class ActionLeaseCoordinatorTests {
 		using var lease=coordinator.Acquire(42,"short","action-9",DateTime.UtcNow.AddMilliseconds(80),"status","cancel");
 		await Task.Delay(250);
 		Assert.True(lease.IsExpired);
-		Assert.False(coordinator.TryGetBlock(42,"continue",out _));
 		var resumed=false;
 		lease.ExecuteMutation(()=>resumed=true);
 		Assert.True(resumed);
+	}
+
+	/// <summary>
+	/// This assertion used to be its own inverse: <c>TryGetBlock</c> short-circuited on <c>IsExpired</c>, so
+	/// for the whole five-second cleanup window an ordinary UI or RPC continue, detach or step was
+	/// <em>permitted</em> while the owner was still releasing its breakpoint, rolling back and resuming -
+	/// the most order-sensitive moment of the run, and exactly the concurrency the lease exists to exclude.
+	/// "Expiry stops granting new work" means no new <em>lease</em>. What it protects now: during cleanup
+	/// the lease still blocks everyone except its own owner, whose authorization - by thread or by a capture
+	/// naming this lease - is the only thing that passes.
+	/// </summary>
+	[Fact]
+	public async Task An_expired_lease_still_excludes_everyone_but_its_owner() {
+		using var coordinator=new ActionLeaseCoordinator();
+		using var authorization=new ActionLeaseAuthorization(coordinator);
+		using var lease=coordinator.Acquire(42,"short","action-12",DateTime.UtcNow.AddMilliseconds(80),"status","cancel");
+		await Task.Delay(250);
+		Assert.True(lease.IsExpired);
+
+		// An external caller, on its own thread and with no capture at all.
+		Assert.True(coordinator.TryGetBlock(42,"continue",out var owner));
+		Assert.Equal("action-12",owner.ActionId);
+		Assert.True(coordinator.TryGetBlock(null,"breakpoint_mutation",out _));
+		Assert.True(authorization.TryGetBlock(42,"continue",null,out _));
+
+		// The owner, both ways it can present itself: the thread-scoped authorization, and a capture taken
+		// under it and carried across the marshal to the debugger thread.
+		lease.ExecuteMutation(()=>Assert.False(coordinator.TryGetBlock(42,"continue",out _)));
+		var captured=lease.ExecuteMutation(()=>authorization.Capture());
+		Assert.NotNull(captured);
+		Assert.False(authorization.TryGetBlock(42,"continue",captured,out _));
+		Assert.False(authorization.TryGetBlock(null,"breakpoint_mutation",captured,out _));
 	}
 
 	[Fact]

@@ -235,7 +235,46 @@ public sealed class AtomicActionStateMachineTests {
 		Assert.Equal(InterruptionReason.none,result.Status.InterruptionReason);
 	}
 
-	static async Task<AtomicActionResult> Run(Host host,ActionImpl action,AtomicActionRequest request,CancellationToken client=default,TimeSpan? budget=null) { using var leases=new ActionLeaseCoordinator(); return await new AtomicActionStateMachine(leases,host,budget).RunAsync(request,action,client,CancellationToken.None); }
+	// "Bounded cleanup" was not bounded: both releases were passed CancellationToken.None, and
+	// OwnedBreakpoint.ReleaseAsync waits for the debugger's own removal callback. A wedged engine or
+	// dispatcher parked the machine before the action rollback, the final resume and the result itself, so
+	// run_atomic_action stayed in progress forever and permanently burned its action_id. Both fakes here
+	// ignore the token, which is the case that actually hangs and the only one that proves the bound.
+	[Fact] public async Task ABreakpointReleaseThatNeverCompletesStillProducesATerminalResult() {
+		var request=Request(); request.ResumePolicy=AtomicActionResumePolicy.resume;
+		var host=new Host(Stop()); host.Breakpoint.ReleaseHangs=true;
+		var action=new ActionImpl();
+		var started=DateTime.UtcNow;
+		var result=await Run(host,action,request,releaseBudget:TimeSpan.FromMilliseconds(150));
+		Assert.True(DateTime.UtcNow-started<TimeSpan.FromSeconds(10));
+		Assert.Equal(ActionOutcome.completed,result.Status.ActionOutcome);
+		Assert.Equal(CleanupOutcome.ambiguous,result.Status.CleanupOutcome);
+		Assert.Contains("owned breakpoint release did not finish",result.Error);
+		Assert.Equal(AtomicActionStateMachine.StatusOperation,result.Status.ReconciliationOperation);
+		// The reserves are what this bound buys: the rollback and the final resume still happen.
+		Assert.NotNull(action.CleanupSeen);
+		Assert.Equal(1,host.ResumeCalls); Assert.True(host.Resumed);
+	}
+
+	[Fact] public async Task AHandleReleaseThatNeverCompletesIsReportedRatherThanWaitedOut() {
+		var host=new Host(Stop()) { HandleReleaseHangs=true };
+		var result=await Run(host,new ActionImpl(),Request(),releaseBudget:TimeSpan.FromMilliseconds(150));
+		Assert.Equal(CleanupOutcome.ambiguous,result.Status.CleanupOutcome);
+		Assert.Contains("temporary-handle release did not finish",result.Error);
+	}
+
+	/// <summary>A release that overruns is ambiguous; a release that is known to have failed still reports
+	/// the stronger fact.</summary>
+	[Fact] public async Task AFailedReleaseIsStillStrongerThanAnOverrunOne() {
+		var host=new Host(Stop()) { HandleReleaseHangs=true }; host.Breakpoint.ReleaseError=new InvalidOperationException("engine cleanup");
+		var result=await Run(host,new ActionImpl(),Request(),releaseBudget:TimeSpan.FromMilliseconds(150));
+		Assert.Equal(CleanupOutcome.failed,result.Status.CleanupOutcome);
+	}
+
+	static async Task<AtomicActionResult> Run(Host host,ActionImpl action,AtomicActionRequest request,CancellationToken client=default,TimeSpan? budget=null,TimeSpan? releaseBudget=null) {
+		using var leases=new ActionLeaseCoordinator();
+		return await new AtomicActionStateMachine(leases,host,budget,releaseBudget).RunAsync(request,action,client,CancellationToken.None);
+	}
 
 	sealed class ActionImpl : IAtomicAction {
 		public string Kind=>"test"; public AtomicActionExecution Execution=new() { Completed=true,MayHaveExecuted=true,Evidence="executed" }; public AtomicActionVerification Verification=new() { Verified=true,Evidence="verified" }; public Exception? ExecuteError; public Exception? VerifyError;
@@ -252,9 +291,12 @@ public sealed class AtomicActionStateMachineTests {
 	}
 
 	sealed class Breakpoint : IAtomicActionBreakpoint {
-		public Guid OwnerToken { get; }=Guid.NewGuid(); public string? BindError=>null; public bool Released; public Exception? ReleaseError;
+		public Guid OwnerToken { get; }=Guid.NewGuid(); public string? BindError=>null; public bool Released; public Exception? ReleaseError; public bool ReleaseHangs;
 		public Task<bool> WaitBoundAsync(CancellationToken token)=>Task.FromResult(true);
-		public Task ReleaseAsync(CancellationToken token) { Released=true; return ReleaseError is null?Task.CompletedTask:Task.FromException(ReleaseError); }
+		// Deliberately ignores the token: OwnedBreakpoint.ReleaseAsync waits on the debugger's removal
+		// callback, and a wedged engine never delivers it, so honouring cancellation is exactly what cannot
+		// be assumed here. The machine's bound has to hold without the callee's cooperation.
+		public Task ReleaseAsync(CancellationToken token) { Released=true; if(ReleaseHangs) return new TaskCompletionSource<bool>().Task; return ReleaseError is null?Task.CompletedTask:Task.FromException(ReleaseError); }
 		public void Dispose() { }
 	}
 
@@ -269,7 +311,8 @@ public sealed class AtomicActionStateMachineTests {
 		// returned a canned slot is what made DeclaredNearbySlotIsRecorded vacuous while the production
 		// selector ignored the stop entirely and always named the first declared offset.
 		public Task<AtomicActionSlot?> SelectNearbySlotAsync(AtomicActionRequest request,AtomicActionStop? value,CancellationToken token)=>Task.FromResult(NearbySlotSelector.Select(request,value));
-		public Task ReleaseTemporaryHandlesAsync(CancellationToken token) { HandlesReleased=true; return Task.CompletedTask; }
+		public bool HandleReleaseHangs;
+		public Task ReleaseTemporaryHandlesAsync(CancellationToken token) { HandlesReleased=true; if(HandleReleaseHangs) return new TaskCompletionSource<bool>().Task; return Task.CompletedTask; }
 		// authorize() runs the machine's lease.ExecuteMutation, so a lease that released itself while its
 		// owner was still cleaning up surfaces here as an ObjectDisposedException, exactly as in production.
 		public Task ResumeAsync(Action<Action> authorize,CancellationToken token) { ResumeCalls++; if(ResumeError is not null) throw ResumeError; authorize(()=>Resumed=true); return Task.CompletedTask; }

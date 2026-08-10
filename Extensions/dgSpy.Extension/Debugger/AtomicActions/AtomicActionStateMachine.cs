@@ -11,13 +11,20 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		/// breakpoint release, the final resume and the final-state read - so an action that uses its whole
 		/// rollback budget cannot leave the target paused with no authorization left to resume it.</summary>
 		public static readonly TimeSpan MachineCleanupReserve=TimeSpan.FromSeconds(2);
+		/// <summary>Reserved out of the lease's cleanup window for the action's own rollback, so the
+		/// machine's owned-breakpoint and temporary-handle releases - which wait on the debugger's own
+		/// callbacks and can wait forever if the engine or dispatcher is wedged - cannot consume the whole
+		/// window and starve it.</summary>
+		public static readonly TimeSpan ActionCleanupReserve=TimeSpan.FromSeconds(1);
 		readonly ActionLeaseCoordinator leases;
 		readonly IAtomicActionHost host;
 		readonly TimeSpan actionCleanupBudget;
+		readonly TimeSpan releaseBudget;
 
-		public AtomicActionStateMachine(ActionLeaseCoordinator leases,IAtomicActionHost host,TimeSpan? actionCleanupBudget=null) {
+		public AtomicActionStateMachine(ActionLeaseCoordinator leases,IAtomicActionHost host,TimeSpan? actionCleanupBudget=null,TimeSpan? releaseBudget=null) {
 			this.leases=leases ?? throw new ArgumentNullException(nameof(leases)); this.host=host ?? throw new ArgumentNullException(nameof(host));
 			this.actionCleanupBudget=actionCleanupBudget ?? ActionLease.CleanupWindow-MachineCleanupReserve;
+			this.releaseBudget=releaseBudget ?? ActionLease.CleanupWindow-MachineCleanupReserve-ActionCleanupReserve;
 		}
 
 		public async Task<AtomicActionResult> RunAsync(AtomicActionRequest request,IAtomicAction action,CancellationToken clientLifetime,CancellationToken cancellationToken) {
@@ -102,10 +109,22 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			finally {
 				if(breakpoint is not null) {
 					var cleanupFailed=false;
-					try { await breakpoint.ReleaseAsync(CancellationToken.None).ConfigureAwait(false); }
-					catch(Exception ex) { cleanupFailed=true; result.Error=Combine(result.Error,"Breakpoint cleanup failed: "+ex.Message); }
-					try { await host.ReleaseTemporaryHandlesAsync(CancellationToken.None).ConfigureAwait(false); }
-					catch(Exception ex) { cleanupFailed=true; result.Error=Combine(result.Error,"Handle cleanup failed: "+ex.Message); }
+					// Both releases wait on the debugger, and both used to be passed CancellationToken.None:
+					// a wedged engine or dispatcher parked the machine here, before the action's rollback, the
+					// final resume and the result itself, and the lease timer removed authorization without
+					// cancelling anything - so run_atomic_action stayed in progress indefinitely and burned its
+					// action_id. They now share one bound that leaves the action's rollback and the machine's
+					// own resume their reserves, and an overrun is reported rather than waited out.
+					var releasesEnd=lease.OwnershipEndsUtc-MachineCleanupReserve-ActionCleanupReserve;
+					var releasesBudgetEnd=DateTime.UtcNow+releaseBudget;
+					if(releasesBudgetEnd<releasesEnd) releasesEnd=releasesBudgetEnd;
+					using var releases=new CancellationTokenSource(Remaining(releasesEnd));
+					var released=await RunBoundedAsync(token=>breakpoint.ReleaseAsync(token),releases).ConfigureAwait(false);
+					if(released.Result==CleanupStepResult.failed) { cleanupFailed=true; result.Error=Combine(result.Error,"Breakpoint cleanup failed: "+released.Error); }
+					else if(released.Result==CleanupStepResult.timedOut) { cleanup=Worse(cleanup,CleanupOutcome.ambiguous); result.Error=Combine(result.Error,"The owned breakpoint release did not finish inside the lease's bounded cleanup window; the breakpoint may still be installed."); }
+					var handles=await RunBoundedAsync(token=>host.ReleaseTemporaryHandlesAsync(token),releases).ConfigureAwait(false);
+					if(handles.Result==CleanupStepResult.failed) { cleanupFailed=true; result.Error=Combine(result.Error,"Handle cleanup failed: "+handles.Error); }
+					else if(handles.Result==CleanupStepResult.timedOut) { cleanup=Worse(cleanup,CleanupOutcome.ambiguous); result.Error=Combine(result.Error,"The temporary-handle release did not finish inside the lease's bounded cleanup window; temporary handles may still be held."); }
 					cleanup=Worse(cleanup,cleanupFailed ? CleanupOutcome.failed : CleanupOutcome.completed);
 				}
 				if(context is not null) {
@@ -151,6 +170,28 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		static int Severity(CleanupOutcome value) => value switch {
 			CleanupOutcome.not_required=>0,CleanupOutcome.completed=>1,CleanupOutcome.ambiguous=>2,CleanupOutcome.failed=>3,_=>0,
 		};
+
+		internal enum CleanupStepResult { completed,timedOut,failed }
+
+		/// <summary>
+		/// Runs one cleanup step under a hard bound. The token is passed in, so a well-behaved step ends
+		/// itself; the <see cref="Task.WhenAny(Task,Task)"/> is what makes the bound hold anyway for a step
+		/// that ignores it - which is the case that hangs, since these steps wait on the debugger's own
+		/// callbacks. An abandoned step is reported, never awaited.
+		/// </summary>
+		static async Task<(CleanupStepResult Result,string? Error)> RunBoundedAsync(Func<CancellationToken,Task> work,CancellationTokenSource bound) {
+			try {
+				var task=work(bound.Token);
+				if(!task.IsCompleted) {
+					var elapsed=Task.Delay(Timeout.Infinite,bound.Token);
+					if(!ReferenceEquals(await Task.WhenAny(task,elapsed).ConfigureAwait(false),task)) return (CleanupStepResult.timedOut,null);
+				}
+				await task.ConfigureAwait(false);
+				return (CleanupStepResult.completed,null);
+			}
+			catch(OperationCanceledException) when(bound.IsCancellationRequested) { return (CleanupStepResult.timedOut,null); }
+			catch(Exception ex) { return (CleanupStepResult.failed,ex.Message); }
+		}
 
 		static void Validate(AtomicActionRequest request,IAtomicAction action) {
 			if(request is null) throw new ArgumentNullException(nameof(request)); if(action is null) throw new ArgumentNullException(nameof(action));

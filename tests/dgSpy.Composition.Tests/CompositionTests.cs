@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using Microsoft.VisualStudio.Composition;
 using Xunit;
 
@@ -116,6 +117,57 @@ public class CompositionTests {
 		var configuration=PublishedHost.Instance.ComposeWithoutAssembly("dgSpy.Extension.x");
 		Assert.True(configuration.CompositionErrors.IsEmpty,
 			"Removing dgSpy.Extension.x must leave the optional ImportMany<DbgActionGuard> imports satisfied so stock dnSpy behavior is unchanged.");
+	}
+
+	/// <summary>
+	/// The cold path, through the real composition rather than a direct construction. dnSpy imports its
+	/// guards as <c>Lazy&lt;DbgActionGuard&gt;</c> and first realizes them inside
+	/// <c>CaptureActionAuthorization()</c>, so on a freshly started host nothing exists when the first
+	/// atomic action acquires its lease - the action's own mutation is what brings the guard into being.
+	/// A guard that derived ownership from <c>LeaseChanged</c> notifications therefore started blind and
+	/// refused its own owner's mutation, and every unit test missed it by constructing the guard first.
+	/// This realizes the export only after the lease exists, which is the order production actually uses.
+	/// </summary>
+	[Fact]
+	public void The_lazily_realized_action_guard_answers_for_a_lease_acquired_before_it_existed() {
+		RequirePublishedHost();
+		var host = PublishedHost.Instance;
+		var handle = host.Configuration.CreateExportProviderFactory().CreateExportProvider()
+			.GetExports(new ImportDefinition("dnSpy.Contracts.Debugger.DbgActionGuard", ImportCardinality.ZeroOrMore,
+				new Dictionary<string, object?>(), Array.Empty<IImportSatisfiabilityConstraint>()))
+			.Single();
+
+		// The coordinator lives in the host load context, so this suite cannot reference it statically.
+		var extension = host.Assemblies.First(a => a.GetName().Name == "dgSpy.Extension.x");
+		var coordinatorType = extension.GetType("dgSpy.Extension.Debugger.ActionLeaseCoordinator", throwOnError: true)!;
+		var shared = coordinatorType.GetProperty("Shared")!.GetValue(null)!;
+		var lease = coordinatorType.GetMethod("Acquire")!.Invoke(shared, new object?[] {
+			987654, "run_to", "composition-cold-lease", DateTime.UtcNow.AddSeconds(30),
+			"get_atomic_action_status", "cancel_atomic_action", CancellationToken.None })!;
+		var executeMutation = lease.GetType().GetMethods().First(m => m.Name == "ExecuteMutation" && !m.IsGenericMethod);
+		try {
+			// Realized only now, by the owner's own mutation, exactly as DbgManagerImpl realizes it.
+			var guard = handle.Value!;
+			Assert.Equal("dgSpy.Extension.Debugger.ActionLeaseGuard", guard.GetType().FullName);
+			var capture = guard.GetType().GetMethod("CaptureAuthorization")!;
+			var tryGetBlock = guard.GetType().GetMethods().First(m => m.Name == "TryGetBlock" && m.GetParameters().Length == 4);
+
+			object? captured = null;
+			executeMutation.Invoke(lease, new object?[] { (Action)(() => captured = capture.Invoke(guard, null)) });
+			Assert.NotNull(captured);
+
+			// A null process is the process-less (breakpoint) mutation, the one path this suite can reach
+			// without a live DbgProcess. The owner's capture passes it; an external caller's does not.
+			var owner = new object?[] { null, "continue", captured, null };
+			Assert.False((bool)tryGetBlock.Invoke(guard, owner)!,
+				"the lazily realized guard refused its own owner's captured mutation, which is the cold-start defect");
+			var external = new object?[] { null, "continue", null, null };
+			Assert.True((bool)tryGetBlock.Invoke(guard, external)!,
+				"the lazily realized guard admitted an external mutation while an atomic action owned the process");
+		}
+		finally {
+			lease.GetType().GetMethod("Dispose")!.Invoke(lease, null);
+		}
 	}
 
 	/// <summary>
