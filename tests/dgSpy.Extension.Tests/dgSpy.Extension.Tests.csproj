@@ -9,6 +9,12 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.6.3" />
     <PackageReference Include="xunit" Version="2.5.0" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.5.0" />
+    <!-- Three payload-resolver cases assert against REAL host layouts - a packed install, a Gateway
+         deployment, a build worktree - because a fixture-only test passes while the layout that
+         launch_local_host actually produces is broken. That evidence is worth having and it cannot
+         exist on a fresh CI runner. xunit 2.5 has no dynamic skip, so these report Skipped rather
+         than silently passing, which is the failure mode this suite exists to avoid. -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.4.13" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\..\Extensions\dgSpy.Extension\Identity\ProgramIdentity.cs" Link="Identity\ProgramIdentity.cs" />

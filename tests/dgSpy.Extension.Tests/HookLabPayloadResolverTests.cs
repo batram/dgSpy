@@ -22,10 +22,10 @@ public class HookLabPayloadResolverTests {
 	// Real layouts.
 	// ---------------------------------------------------------------------------------------------
 
-	[Fact]
+	[SkippableFact]
 	public void Resolves_from_a_real_packed_install_layout() {
 		var root = RealLayouts.PackedHostRoot();
-		Assert.True(root is not null, "No packed dgSpy install was found under %LOCALAPPDATA%\\Programs\\*\\cli. Run install-dgspy.ps1 to create one; this case must be proven against a real packed tree, not a simulated directory.");
+		Skip.If(root is null, "No packed dgSpy install under %LOCALAPPDATA%\\Programs\\*\\cli. Run install-dgspy.ps1. This case is proven against a real packed tree or not at all, so it skips rather than falling back to a simulated directory - which would pass while the real layout was broken.");
 		using var payload = HookLabPayloadResolver.OpenFrom(root!);
 		Assert.Equal(HookLabPayloadLayout.PackedInstall, payload.Layout);
 		Assert.Equal(HookLabPayloadCrossCheck.Verified, payload.CrossCheck);
@@ -34,10 +34,10 @@ public class HookLabPayloadResolverTests {
 		Assert.Equal(payload.Sha256, Sha256OfFile(payload.PayloadPath));
 	}
 
-	[Fact]
+	[SkippableFact]
 	public void Resolves_from_the_real_gateway_deployed_layout() {
 		var root = RealLayouts.GatewayDeployedHostRoot();
-		Assert.True(root is not null, "No active Gateway-deployed host root was found under the dgSpy install root. Run launch_local_host to create one; the Gateway-deployed layout is the one launch_local_host actually produces and must be proven against a real deployment.");
+		Skip.If(root is null, "No active Gateway-deployed host root under the dgSpy install root. Run launch_local_host. This is the layout launch_local_host actually produces, and a fixture standing in for it is exactly how a broken Gateway layout stayed green before.");
 		using var payload = HookLabPayloadResolver.OpenFrom(root!);
 		Assert.Equal(HookLabPayloadLayout.GatewayDeployment, payload.Layout);
 		Assert.Equal(HookLabPayloadCrossCheck.Verified, payload.CrossCheck);
@@ -45,10 +45,10 @@ public class HookLabPayloadResolverTests {
 		Assert.Equal(payload.Sha256, payload.IndependentRecordSha256, ignoreCase: true);
 	}
 
-	[Fact]
+	[SkippableFact]
 	public void Resolves_from_the_real_developer_worktree_and_says_the_cross_check_was_skipped() {
 		var root = RealLayouts.WorktreeHostRoot();
-		Assert.True(root is not null, "The dnSpy build output carries no staged HookLab payload. Run build-dgspy.ps1; the worktree layout must be proven against the real build output.");
+		Skip.If(root is null, "The dnSpy build output carries no staged HookLab payload. Run build-dgspy.ps1. The worktree layout is proven against real build output or not at all.");
 		using var payload = HookLabPayloadResolver.OpenFrom(root!);
 		Assert.Equal(HookLabPayloadLayout.DeveloperWorktree, payload.Layout);
 		Assert.Equal(HookLabPayloadCrossCheck.SkippedDeveloperWorktree, payload.CrossCheck);
