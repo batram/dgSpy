@@ -31,6 +31,13 @@ namespace HookLab.Bootstrap.Tests {
 		public string AppDomainId => inner != null ? inner.AppDomainId : AppDomain.CurrentDomain.Id.ToString(CultureInfo.InvariantCulture);
 
 		public string Start(string parameters) => inner != null ? inner.Start(parameters) : HookLabBootstrap.Start(parameters);
+		public string Prepare(string parameters) => inner != null ? inner.Prepare(parameters) : HookLabBootstrap.Prepare(parameters);
+		public string Commit() => inner != null ? inner.Commit() : HookLabBootstrap.Commit();
+		public string DrainEvents(int maximumCount) => inner != null ? inner.DrainEvents(maximumCount) : HookLabBootstrap.DrainEvents(maximumCount);
+		public int WorkerStarts => inner != null ? inner.WorkerStarts : ResidentLauncher.WorkerStarts;
+		public int[] CommitInstrumentation => inner != null ? inner.CommitInstrumentation : new[] {
+			ResidentLauncher.CommitFileIoCount, ResidentLauncher.CommitAssemblyLoadCount, ResidentLauncher.CommitPatchInstallCount };
+		public int PipeConstructions => inner != null ? inner.PipeConstructions : ProbeStartup.PipeConstructionCountForTest;
 
 		public string Shutdown() => inner != null ? inner.Shutdown() : HookLabBootstrap.Shutdown();
 
@@ -63,6 +70,14 @@ namespace HookLab.Bootstrap.Tests {
 			}
 			payloads.Insert(0, "results=" + string.Join(",", results.Select(r => r.ToString(CultureInfo.InvariantCulture))));
 			return payloads.ToArray();
+		}
+
+		public int[] InvokeFixture(int calls) {
+			if (inner != null) return inner.InvokeFixture(calls);
+			IFixtureWorker worker = new FixtureWorker();
+			var results = new int[calls];
+			for (var index = 0; index < calls; index++) results[index] = worker.Run(index + 1);
+			return results;
 		}
 
 		/// <summary>Byte-loads the bootstrap and drives it through reflection alone - the shape a debugger

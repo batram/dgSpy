@@ -39,6 +39,41 @@ namespace HookLab.Bootstrap {
 		/// a *failed* start, where <see cref="IsStarted"/> is false and says nothing about it.</summary>
 		public static bool CleanupRetryPossible => ProbeStartup.HasRetainedCleanup;
 
+		/// <summary>Irreversibly makes the stage-1 generation and payload graph resident, validates the target,
+		/// loads the backend, and pre-JITs <see cref="ResidentLauncher.Commit"/>. It installs no hook.</summary>
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		public static string Prepare(string parameters) {
+			lock (Gate) {
+				EmbeddedAssemblyResolver? installed = null;
+				try {
+					var parsed = BootstrapParameters.Parse(parameters);
+					if (parsed.Endpoint != "none") throw new ArgumentException("Prepare requires endpoint=none.", nameof(parameters));
+					installed = resolver ?? EmbeddedAssemblyResolver.FromEmbeddedManifest();
+					installed.Install(); resolver = installed;
+					var outcome = ProbeStartup.Prepare(parsed);
+					ResidentLauncher.Prepare(parsed);
+					installed.VerifyNoDiskProvenance(AppDomain.CurrentDomain.GetAssemblies());
+					return "status=ok\nresidency_commit=completed\nbehavior_commit=not_started\npayloads_resident=true\n" +
+						"generation_identity=" + ResidentLauncher.GenerationIdentity + "\nprototype_compromises=endpoint_none,identity_partly_self_asserted,no_residency_rollback\n";
+				}
+				catch (Exception ex) { return Error(ex.GetType().FullName ?? "Exception", ex.Message, installed != null && installed.LoadCount != 0); }
+			}
+		}
+
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		public static string Commit() => ResidentLauncher.Commit();
+
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		public static string DrainEvents(int max) => ProbeStartup.DrainEvents(max);
+
+		internal static string RunPrepared(BootstrapParameters parameters) {
+			var outcome = ProbeStartup.CommitPrepared(parameters);
+			startedResult = Describe(outcome, resolver!);
+			return startedResult;
+		}
+
+		internal static string WorkerError(Exception ex) => Error(ex.GetType().FullName ?? "Exception", ex.Message, true);
+
 		/// <summary>Installs the manifest-restricted resolver, byte-loads the probe and its contracts from
 		/// verified embedded bytes, and calls ProbeInitializer.Initialize. Returns a bounded, line-oriented
 		/// key/value report; it never throws, because a func-eval that faults tells the caller far less than
@@ -110,7 +145,8 @@ namespace HookLab.Bootstrap {
 		public static string Shutdown() {
 			lock (Gate) {
 				var wasStarted = startedResult != null;
-				if (!wasStarted && !ProbeStartup.HasRetainedCleanup)
+				var wasPrepared = ProbeStartup.Runtime != null;
+				if (!wasStarted && !wasPrepared && !ProbeStartup.HasRetainedCleanup)
 					return Error("not_started", "This bootstrap has not run in this AppDomain.", false);
 				var cleanup = ProbeStartup.Shutdown();
 				// The endpoint state is the persistent one, not just this attempt's: an attempt that only
@@ -125,7 +161,7 @@ namespace HookLab.Bootstrap {
 				// removing the handler that satisfies that payload's next bind is what Rollback exists to
 				// avoid - so the state is reported rather than forced.
 				var resolverInstalled = resolver != null;
-				if (clean && wasStarted) { resolver?.Uninstall(); startedResult = null; resolverInstalled = false; }
+				if (clean && (wasStarted || wasPrepared)) { resolver?.Uninstall(); startedResult = null; resolverInstalled = false; }
 				var lines = new List<string> {
 					"status=" + (clean ? "ok" : "partial"),
 					"payloads_resident=true",
@@ -138,6 +174,9 @@ namespace HookLab.Bootstrap {
 					// Read from the retention state rather than from this attempt's report, so that this line
 					// and the identical one on every refusal report can never disagree.
 					"cleanup_retry_possible=" + (ProbeStartup.HasRetainedCleanup ? "true" : "false"),
+					"residency_commit=completed",
+					"behavior_commit=" + (clean ? "stopped" : "cleanup_incomplete"),
+					"prototype_compromises=identity_partly_self_asserted,no_residency_rollback",
 				};
 				if (cleanup.RuntimeError != null) lines.Add("runtime_cleanup_error=" + Sanitize(cleanup.RuntimeError));
 				if (ProbeStartup.EndpointTeardownError != null) lines.Add("endpoint_teardown_error=" + Sanitize(ProbeStartup.EndpointTeardownError));
@@ -175,12 +214,13 @@ namespace HookLab.Bootstrap {
 				"backend_inventory_at_initialize=" + Sanitize(outcome.InventoryIdentities),
 				"hooks_version=" + outcome.HooksVersion.ToString(CultureInfo.InvariantCulture),
 				"pipe_name=" + outcome.PipeName,
-				"secret_base64=" + outcome.SecretBase64,
-				"endpoint_nonce_base64=" + outcome.EndpointNonceBase64,
 				"target_process_id=" + outcome.TargetProcessId.ToString(CultureInfo.InvariantCulture),
 				"target_image_path=" + Sanitize(outcome.TargetImagePath),
 				"payload_identities=" + string.Join(",", installed.ManifestIdentities),
 				"payload_load_count=" + installed.LoadCount.ToString(CultureInfo.InvariantCulture),
+				"residency_commit=completed",
+				"behavior_commit=" + (outcome.PatchId == null ? "not_started" : "completed"),
+				"prototype_compromises=" + (outcome.PipeName.Length == 0 ? "endpoint_none," : "") + "identity_partly_self_asserted,no_residency_rollback",
 			};
 			if (outcome.PatchId != null) lines.Add("patch_id=" + Sanitize(outcome.PatchId));
 			return Join(lines);
@@ -206,6 +246,9 @@ namespace HookLab.Bootstrap {
 				"command_quiescence=" + ProbeStartup.CommandQuiescenceState,
 				"endpoint_live=" + (ProbeStartup.EndpointMayBeLive ? "true" : "false"),
 				"cleanup_retry_possible=" + (ProbeStartup.HasRetainedCleanup ? "true" : "false"),
+				"residency_commit=" + (payloadsResident ? "completed" : "not_started"),
+				"behavior_commit=not_started",
+				"prototype_compromises=identity_partly_self_asserted,no_residency_rollback",
 			};
 			if (ProbeStartup.RuntimeCleanupError != null) lines.Add("runtime_cleanup_error=" + Sanitize(ProbeStartup.RuntimeCleanupError));
 			if (ProbeStartup.EndpointTeardownError != null) lines.Add("endpoint_teardown_error=" + Sanitize(ProbeStartup.EndpointTeardownError));

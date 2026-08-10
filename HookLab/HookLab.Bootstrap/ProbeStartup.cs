@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
@@ -113,6 +114,7 @@ namespace HookLab.Bootstrap {
 		/// really breaks. Null in production; the only writer is the bootstrap test project, through
 		/// InternalsVisibleTo.</summary>
 		internal static Action? StartupRollbackFaultForTest;
+		internal static int PipeConstructionCountForTest;
 
 		/// <summary>Test seam: wraps the pipe server the startup rollback is about to tear down, so that a
 		/// rollback whose endpoint teardown *also* fails can be exercised. The wrapper is what gets retained,
@@ -252,13 +254,13 @@ namespace HookLab.Bootstrap {
 			ProbePipeServer? pipe = null;
 			ProbeRuntime? probe = null;
 			try {
-				pipe = new ProbePipeServer(HandleCommand);
+				if (parameters.Endpoint == "pipe") { pipe = new ProbePipeServer(HandleCommand); PipeConstructionCountForTest++; }
 				var initialization = new ProbeInitialization(expected, provider, pipe, parameters.EventCapacity, parameters.ByteCapacity);
 				// T04 owns the ordering inside here: the target guard is validated before any Harmony type
 				// resolves, then the backend inventory runs. Nothing above may touch HarmonyLib.
 				probe = ProbeInitializer.Initialize(initialization);
 				lock (Gate) { runtime = probe; server = pipe; }
-				var endpoint = pipe.TakeInitialEndpoint();
+				var endpoint = pipe?.TakeInitialEndpoint();
 				var actual = provider.GetCurrentIdentity();
 				var outcome = new BootstrapOutcome {
 					ProbeInstanceId = probe.ProbeInstanceId,
@@ -266,9 +268,9 @@ namespace HookLab.Bootstrap {
 					BackendIdentity = probe.Inventory.SelectedIdentity,
 					BackendResident = probe.Inventory.UseResident,
 					InventoryIdentities = string.Join(";", probe.Inventory.LoadedIdentities.ToArray()),
-					PipeName = endpoint.PipeName,
-					SecretBase64 = Convert.ToBase64String(endpoint.Secret),
-					EndpointNonceBase64 = Convert.ToBase64String(endpoint.EndpointNonce),
+					PipeName = endpoint?.PipeName ?? "",
+					SecretBase64 = endpoint == null ? "" : Convert.ToBase64String(endpoint.Secret),
+					EndpointNonceBase64 = endpoint == null ? "" : Convert.ToBase64String(endpoint.EndpointNonce),
 					TargetProcessId = actual.ProcessId,
 					TargetImagePath = actual.ImagePath,
 				};
@@ -297,6 +299,62 @@ namespace HookLab.Bootstrap {
 				throw;
 			}
 		}
+
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		internal static BootstrapOutcome Prepare(BootstrapParameters parameters) {
+			if (parameters.Endpoint != "none") throw new InvalidOperationException("Prepare requires endpoint=none.");
+			var expected = new TargetIdentity(parameters.HostId, parameters.ImagePath, parameters.ProcessId,
+				new DateTime(parameters.ProcessCreationUtcTicks, DateTimeKind.Utc), parameters.Architecture,
+				parameters.RuntimeId, parameters.AppDomainId);
+			var provider = new LiveTargetIdentityProvider(parameters.HostId);
+			var probe = ProbeInitializer.Initialize(new ProbeInitialization(expected, provider, null, parameters.EventCapacity, parameters.ByteCapacity));
+			lock (Gate) { runtime = probe; server = null; }
+			var actual = provider.GetCurrentIdentity();
+			return Outcome(probe, actual);
+		}
+
+		internal static BootstrapOutcome CommitPrepared(BootstrapParameters parameters) {
+			ProbeRuntime probe;
+			lock (Gate) probe = runtime as ProbeRuntime ?? throw new InvalidOperationException("The probe is not prepared.");
+			var outcome = Outcome(probe, probe.GetState().Target);
+			if (parameters.HasHook) {
+				ResidentLauncher.NotePatchInstall();
+				var result = InstallHook(probe, parameters);
+				outcome.PatchId = result.PatchId;
+				outcome.HooksVersion = result.HooksVersion;
+			}
+			return outcome;
+		}
+
+		internal static string DrainEvents(int maximumCount) {
+			if (maximumCount <= 0) throw new ArgumentOutOfRangeException(nameof(maximumCount));
+			ProbeRuntime probe;
+			lock (Gate) probe = runtime as ProbeRuntime ?? throw new InvalidOperationException("The probe is not initialized yet.");
+			var events = probe.Events.Drain(maximumCount);
+			var lines = new List<string> {
+				"status=ok", "count=" + events.Count.ToString(CultureInfo.InvariantCulture),
+				"dropped=" + probe.Events.DroppedCount.ToString(CultureInfo.InvariantCulture),
+				"residency_commit=completed", "behavior_commit=" + (probe.HooksVersion == 0 ? "not_started" : "completed"),
+				"prototype_compromises=endpoint_none,identity_partly_self_asserted,no_residency_rollback"
+			};
+			for (var index = 0; index < events.Count; index++) {
+				var item = events[index];
+				lines.Add("event_" + index.ToString(CultureInfo.InvariantCulture) + "=" +
+					item.Sequence.ToString(CultureInfo.InvariantCulture) + "|" + item.PatchId + "|" + item.PayloadJson.Replace("\r", " ").Replace("\n", " "));
+			}
+			return string.Join("\n", lines.ToArray()) + "\n";
+		}
+
+		static BootstrapOutcome Outcome(ProbeRuntime probe, TargetIdentity actual) => new BootstrapOutcome {
+			ProbeInstanceId = probe.ProbeInstanceId,
+			ProtocolVersion = ProbeWireProtocol.ProtocolVersion,
+			BackendIdentity = probe.Inventory.SelectedIdentity,
+			BackendResident = probe.Inventory.UseResident,
+			InventoryIdentities = string.Join(";", probe.Inventory.LoadedIdentities.ToArray()),
+			HooksVersion = probe.HooksVersion,
+			TargetProcessId = actual.ProcessId,
+			TargetImagePath = actual.ImagePath,
+		};
 
 		/// <summary>Selects the hook target by the strongest identity the caller supplied - module MVID -
 		/// and resolves the method from the metadata token of that same module.

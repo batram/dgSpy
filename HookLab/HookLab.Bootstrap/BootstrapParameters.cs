@@ -17,7 +17,7 @@ namespace HookLab.Bootstrap {
 
 		static readonly string[] KnownKeys = {
 			"host_id", "image_path", "process_id", "process_creation_utc_ticks", "architecture", "runtime_id",
-			"appdomain_id", "event_capacity", "byte_capacity",
+			"appdomain_id", "event_capacity", "byte_capacity", "endpoint", "completion_path",
 			"hook_id", "hook_kind", "hook_assembly", "hook_type", "hook_method", "hook_module_mvid",
 			"hook_metadata_token", "hook_declaring_type", "hook_method_signature", "hook_il_sha256",
 		};
@@ -38,6 +38,8 @@ namespace HookLab.Bootstrap {
 		internal string Architecture => Values["architecture"];
 		internal string RuntimeId => Values["runtime_id"];
 		internal string AppDomainId => Values["appdomain_id"];
+		internal string Endpoint => Values["endpoint"];
+		internal string? CompletionPath => Values.TryGetValue("completion_path", out var value) ? value : null;
 		internal int EventCapacity => Optional("event_capacity", 1024);
 		internal long ByteCapacity => Values.TryGetValue("byte_capacity", out var value) ? long.Parse(value, CultureInfo.InvariantCulture) : 4L * 1024 * 1024;
 		internal bool HasHook => Values.ContainsKey("hook_id");
@@ -66,8 +68,12 @@ namespace HookLab.Bootstrap {
 				if (value.Length == 0) throw new ArgumentException("Empty initialization value for key: " + key, nameof(text));
 				values.Add(key, value);
 			}
-			foreach (var required in new[] { "host_id", "image_path", "process_id", "process_creation_utc_ticks", "architecture", "runtime_id", "appdomain_id" })
+			foreach (var required in new[] { "host_id", "image_path", "process_id", "process_creation_utc_ticks", "architecture", "runtime_id", "appdomain_id", "endpoint" })
 				if (!values.ContainsKey(required)) throw new ArgumentException("Missing required initialization key: " + required, nameof(text));
+			if (values["endpoint"] != "none" && values["endpoint"] != "pipe")
+				throw new ArgumentException("endpoint must be exactly 'none' or 'pipe'.", nameof(text));
+			if (values["endpoint"] == "none" && !values.ContainsKey("completion_path"))
+				throw new ArgumentException("Missing required initialization key for endpoint=none: completion_path", nameof(text));
 			// All or nothing: a half-specified hook would otherwise silently install with a guard field
 			// defaulted, which is the one thing a guard must never do.
 			var present = 0;

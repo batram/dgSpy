@@ -20,8 +20,8 @@ namespace HookLab.Bootstrap.Tests {
 				Assert.Equal("HookLab.Contracts,HookLab.Probe.CorDebug", report["payload_identities"]);
 				Assert.Equal("2", report["payload_load_count"]);
 				Assert.False(string.IsNullOrWhiteSpace(report["pipe_name"]));
-				Assert.Equal(32, Convert.FromBase64String(report["secret_base64"]).Length);
-				Assert.Equal(32, Convert.FromBase64String(report["endpoint_nonce_base64"]).Length);
+				Assert.DoesNotContain("secret_base64", report.Keys);
+				Assert.DoesNotContain("endpoint_nonce_base64", report.Keys);
 				Assert.Contains("fixture-hook", report["patch_id"], StringComparison.Ordinal);
 
 				// The whole graph is resident and file-less. 0Harmony arrives through the probe's own pinned

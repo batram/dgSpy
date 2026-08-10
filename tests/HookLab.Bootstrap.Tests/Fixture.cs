@@ -70,6 +70,7 @@ namespace HookLab.Bootstrap.Tests {
 				builder.values["architecture"] = IntPtr.Size == 8 ? "x64" : "x86";
 				builder.values["runtime_id"] = System.Runtime.InteropServices.RuntimeEnvironment.GetSystemVersion();
 				builder.values["appdomain_id"] = AppDomain.CurrentDomain.Id.ToString(CultureInfo.InvariantCulture);
+				builder.values["endpoint"] = "pipe";
 				return builder;
 			}
 		}
