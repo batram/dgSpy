@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>HookLab.Bootstrap</AssemblyName>
+    <!-- The bootstrap ships as one file. Everything it needs travels inside it as hash-verified bytes,
+         so nothing may be copied next to it: a loose payload DLL beside the bootstrap is a disk
+         provenance the resolver is specifically built to forbid. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Private="false" keeps these out of this project's output; PrivateAssets="all" stops them flowing
+         to whatever references the bootstrap. Both are required. Without the second, a consumer copies the
+         payloads next to itself as transitive references, the CLR binds them from disk before
+         AssemblyResolve is ever raised, and the resolver silently stops being the thing under test.
+         The host transport assembly must never appear here: it source-links the probe's wire codec, so
+         anything referencing both gets CS0433 on ProbeWireProtocol/ProbeAuthentication. -->
+    <ProjectReference Include="..\HookLab.Contracts\HookLab.Contracts.csproj" Private="false" PrivateAssets="all" />
+    <ProjectReference Include="..\HookLab.Probe.CorDebug\HookLab.Probe.CorDebug.csproj" Private="false" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="HookLab.Bootstrap.Tests" />
+  </ItemGroup>
+
+  <!-- Copies T04's proven embedding shape: the payload never exists as a loose file, and its digest is
+       pinned at build time rather than computed from whatever happens to be on disk at load time.
+       This has to land before AssignTargetPaths, not before PrepareResources: a target's DependsOnTargets
+       run ahead of its BeforeTargets, so by the time anything hooked to PrepareResources fires,
+       PrepareResourceNames has already split the resource items and a late addition is silently dropped -
+       the assembly builds clean and ships with no payload at all. -->
+  <Target Name="EmbedBootstrapPayloads" DependsOnTargets="ResolveReferences" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <BootstrapPayload Include="@(ReferencePath)" Condition="'%(Filename)' == 'HookLab.Contracts' Or '%(Filename)' == 'HookLab.Probe.CorDebug'" />
+    </ItemGroup>
+    <PropertyGroup>
+      <BootstrapPayloadNames>@(BootstrapPayload->'%(Filename)')</BootstrapPayloadNames>
+    </PropertyGroup>
+    <Error Condition="!$(BootstrapPayloadNames.Contains('HookLab.Contracts'))" Text="HookLab.Contracts was not resolved, so the bootstrap would ship without it. Resolved: $(BootstrapPayloadNames)" />
+    <Error Condition="!$(BootstrapPayloadNames.Contains('HookLab.Probe.CorDebug'))" Text="HookLab.Probe.CorDebug was not resolved, so the bootstrap would ship without it. Resolved: $(BootstrapPayloadNames)" />
+    <GetFileHash Files="@(BootstrapPayload)" Algorithm="SHA256" HashEncoding="hex">
+      <Output TaskParameter="Items" ItemName="BootstrapPayloadHash" />
+    </GetFileHash>
+    <WriteLinesToFile File="$(IntermediateOutputPath)hooklab-bootstrap-manifest.txt"
+                      Lines="@(BootstrapPayloadHash->'%(Filename)|HookLab.Bootstrap.Payloads.%(Filename).dll|%(FileHash)')"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <EmbeddedResource Include="@(BootstrapPayloadHash)">
+        <LogicalName>HookLab.Bootstrap.Payloads.%(Filename).dll</LogicalName>
+      </EmbeddedResource>
+      <EmbeddedResource Include="$(IntermediateOutputPath)hooklab-bootstrap-manifest.txt">
+        <LogicalName>HookLab.Bootstrap.Payloads.manifest.txt</LogicalName>
+      </EmbeddedResource>
+      <FileWrites Include="$(IntermediateOutputPath)hooklab-bootstrap-manifest.txt" />
+    </ItemGroup>
+  </Target>
+</Project>
