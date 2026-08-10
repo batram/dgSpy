@@ -195,6 +195,53 @@ public class HookLabPayloadResolverTests {
 		Assert.Equal(HookLabPayloadRefusal.PackageRecordUnreadable, Refusal(layout.HostRoot));
 	}
 
+	/// <summary>An independent record that exists but cannot be opened must refuse as <i>unreadable</i>, and in
+	/// particular must not be mistaken for absence.
+	///
+	/// <para>This is the case <c>File.Exists</c> got wrong. File.Exists answers "is there a readable file
+	/// here" and returns false for access and metadata errors as well as for absence, so an existing but
+	/// inaccessible <c>deployment-manifest.json</c> skipped the Gateway branch entirely - and a version
+	/// directory is neither named <c>cli</c> nor adjacent to <c>install-dgspy.ps1</c>, so classification fell
+	/// through to DeveloperWorktree and the cross-check was silently skipped. The assertion below is therefore
+	/// two-part on purpose: the refusal must be the unreadable one, and it must not be a successful resolution
+	/// that merely reports the cross-check as skipped.</para>
+	///
+	/// <para>A non-file entity at the record path is used because it is the privilege-free way to reproduce
+	/// it. Measured on this machine: a <c>FileShare.None</c> lock leaves File.Exists returning <b>true</b>, and
+	/// so does a Deny ACE on the file itself; only something that defeats the metadata query - here a directory
+	/// occupying the record's name - makes File.Exists answer false while an open attempt reports access
+	/// denied. The lock case is covered separately below, and does not discriminate this fix.</para></summary>
+	[Theory]
+	[InlineData(true)]
+	[InlineData(false)]
+	public void Refuses_an_unopenable_independent_record_and_never_downgrades_to_a_worktree(bool packed) {
+		using var layout = packed ? TestHostLayout.Packed() : TestHostLayout.GatewayDeployed();
+		File.Delete(layout.IndependentRecordPath);
+		Directory.CreateDirectory(layout.IndependentRecordPath);
+		Assert.False(File.Exists(layout.IndependentRecordPath), "The premise of this test is that File.Exists reports this record as absent; if it does not, the case no longer reproduces the fail-open.");
+
+		var refusal = AssertRefusedWithoutWorktreeDowngrade(layout.HostRoot);
+		Assert.Equal(HookLabPayloadRefusal.PackageRecordUnreadable, refusal);
+		Assert.NotEqual(HookLabPayloadRefusal.PackageRecordMissing, refusal);
+	}
+
+	/// <summary>The same property against a record held open <c>FileShare.None</c> by this process - the
+	/// resolver's own open then fails with <c>IOException</c>, which is precisely the unreadable case.
+	///
+	/// <para>Measured, and worth stating because it is counter-intuitive: this case does <b>not</b>
+	/// discriminate the File.Exists defect. <c>GetFileAttributesEx</c> is exempt from share-mode checks, so
+	/// File.Exists returns true for a locked file and the old code already reached the unreadable refusal here.
+	/// It is kept because it pins the behaviour for the most likely real-world unreadable record - one another
+	/// process is writing - not because it proves the fix.</para></summary>
+	[Theory]
+	[InlineData(true)]
+	[InlineData(false)]
+	public void Refuses_a_record_another_handle_holds_exclusively(bool packed) {
+		using var layout = packed ? TestHostLayout.Packed() : TestHostLayout.GatewayDeployed();
+		using var hold = new FileStream(layout.IndependentRecordPath, FileMode.Open, FileAccess.Read, FileShare.None);
+		Assert.Equal(HookLabPayloadRefusal.PackageRecordUnreadable, AssertRefusedWithoutWorktreeDowngrade(layout.HostRoot));
+	}
+
 	/// <summary>Deleting the packed record entirely must not downgrade the layout to "developer worktree",
 	/// which would skip the cross-check on the install most likely to have been tampered with.</summary>
 	[Fact]
@@ -265,7 +312,48 @@ public class HookLabPayloadResolverTests {
 		Assert.Equal(HookLabPayloadRefusal.PayloadMissing, Refusal(stray));
 	}
 
+	/// <summary>An ancestor is not a host root just because it contains a directory called <c>hooklab</c>.
+	/// Stopping at the first such ancestor let a nested tree or a host started from an unusual working
+	/// directory mask the real host root - and because the independent record is looked for relative to the
+	/// resolved root, masking the root also silently changes which record, if any, is cross-checked. The
+	/// resolution is followed through to a full verification here so the consequence is asserted, not just the
+	/// path.</summary>
+	[Fact]
+	public void Walks_past_an_ancestor_whose_hooklab_directory_holds_no_payload() {
+		using var layout = TestHostLayout.Packed();
+		var decoy = Path.Combine(layout.HostRoot, "bin", "decoy");
+		Directory.CreateDirectory(Path.Combine(decoy, "hooklab"));
+
+		Assert.Equal(layout.HostRoot, HookLabPayloadResolver.ResolveHostRoot(decoy));
+		using var payload = HookLabPayloadResolver.OpenFrom(HookLabPayloadResolver.ResolveHostRoot(decoy));
+		Assert.Equal(HookLabPayloadLayout.PackedInstall, payload.Layout);
+		Assert.Equal(HookLabPayloadCrossCheck.Verified, payload.CrossCheck);
+	}
+
+	/// <summary>A partial copy - the payload without its manifest - is not positive evidence either.</summary>
+	[Fact]
+	public void Walks_past_an_ancestor_whose_hooklab_directory_is_a_partial_copy() {
+		using var layout = TestHostLayout.Packed();
+		var decoy = Path.Combine(layout.HostRoot, "bin", "decoy");
+		var decoyPayloadDirectory = Path.Combine(decoy, "hooklab");
+		Directory.CreateDirectory(decoyPayloadDirectory);
+		File.Copy(layout.PayloadPath, Path.Combine(decoyPayloadDirectory, Path.GetFileName(layout.PayloadPath)));
+
+		Assert.Equal(layout.HostRoot, HookLabPayloadResolver.ResolveHostRoot(decoy));
+	}
+
 	// ---------------------------------------------------------------------------------------------
+
+	/// <summary>Asserts a refusal and, separately, that the resolver did not instead succeed by classifying the
+	/// tree as a developer worktree. Those are different failures: the second is the silent one.</summary>
+	static HookLabPayloadRefusal AssertRefusedWithoutWorktreeDowngrade(string hostRoot) {
+		ResolvedHookLabPayload? resolved = null;
+		try { resolved = HookLabPayloadResolver.OpenFrom(hostRoot); }
+		catch (HookLabPayloadRefusedException refused) { return refused.Refusal; }
+		finally { resolved?.Dispose(); }
+		Assert.Fail($"The resolver accepted a host root whose independent record could not be opened, reporting layout {resolved!.Layout} and cross-check {resolved.CrossCheck}. An unreadable record must refuse, never downgrade to a skipped cross-check.");
+		throw new InvalidOperationException();
+	}
 
 	static HookLabPayloadRefusal Refusal(string hostRoot) =>
 		Assert.Throws<HookLabPayloadRefusedException>(() => HookLabPayloadResolver.OpenFrom(hostRoot).Dispose()).Refusal;

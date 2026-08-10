@@ -144,16 +144,32 @@ namespace dgSpy.Extension.HookLab {
 		/// at the host root while the self-contained net10 layout puts it under <c>bin\</c>, so this walks up
 		/// a bounded number of levels looking for the <c>hooklab</c> directory rather than hardcoding either
 		/// depth. When nothing is found the base directory is returned unchanged, so the refusal is a
-		/// truthful "no payload at &lt;expected path&gt;" rather than a guess about the layout.</summary>
+		/// truthful "no payload at &lt;expected path&gt;" rather than a guess about the layout.
+		///
+		/// <para>An ancestor is accepted only on <b>positive evidence</b> - the payload file and its manifest
+		/// both present in that ancestor's <c>hooklab</c> directory. Accepting the first ancestor that merely
+		/// <i>contains a directory named hooklab</i> let a nested tree, a partial copy, or a host started from
+		/// an unusual working directory mask the real host root: resolution stopped at the decoy and every
+		/// later check - including the independent cross-check, which is keyed off the resolved root - then
+		/// described the wrong tree. Anything short of that evidence is walked past, not stopped at.</para></summary>
 		public static string ResolveHostRoot(string baseDirectory) {
 			if (string.IsNullOrWhiteSpace(baseDirectory)) throw new ArgumentException("A base directory is required.", nameof(baseDirectory));
 			var start = Normalize(baseDirectory);
 			var current = start;
 			for (var level = 0; level < HostRootSearchDepth && current is not null; level++) {
-				if (Directory.Exists(Path.Combine(current, PayloadDirectoryName))) return current;
+				if (CarriesPayload(current)) return current;
 				current = Parent(current);
 			}
 			return start;
+		}
+
+		/// <summary>Whether a candidate ancestor actually holds a payload, rather than merely a directory with
+		/// the right name. Both files are required: a <c>hooklab</c> directory carrying one without the other
+		/// is a partial copy, and stopping there would hide a complete host root further up.</summary>
+		static bool CarriesPayload(string candidate) {
+			var directory = Path.Combine(candidate, PayloadDirectoryName);
+			return File.Exists(Path.Combine(directory, PayloadFileName))
+				&& File.Exists(Path.Combine(directory, PayloadManifestFileName));
 		}
 
 		/// <summary>Resolves, verifies and hands back an open handle for an explicit host root.</summary>
@@ -246,43 +262,73 @@ namespace dgSpy.Extension.HookLab {
 		/// silently skips the cross-check on it, while still passing a packed-layout acceptance test.
 		///
 		/// The Gateway-deployed marker is checked first because a deployed tree is a copy of a packed host
-		/// root and could in principle carry either.</summary>
+		/// root and could in principle carry either.
+		///
+		/// <para><b>Absence is decided by an open attempt, never by <see cref="File.Exists"/>.</b> File.Exists
+		/// answers "is there a readable file here" and returns false for access and metadata errors as well as
+		/// for absence. Gating the Gateway branch on it meant an existing but inaccessible
+		/// <c>deployment-manifest.json</c> skipped that branch entirely; a version directory is normally
+		/// neither named <c>cli</c> nor adjacent to <c>install-dgspy.ps1</c>, so classification then fell
+		/// through to <see cref="HookLabPayloadLayout.DeveloperWorktree"/> and the independent cross-check was
+		/// silently skipped - the exact fail-open this method exists to prevent, reintroduced through
+		/// File.Exists semantics. The packed path had the same defect in a milder form, reporting an
+		/// inaccessible <c>..\manifest.json</c> as absent rather than unreadable.</para></summary>
 		static (HookLabPayloadLayout Layout, HookLabPayloadCrossCheck CrossCheck, string? Path, string? Sha) ReadIndependentRecord(string hostRoot) {
 			var deployment = SafeChild(hostRoot, DeploymentManifestFileName);
-			if (File.Exists(deployment)) {
-				RejectReparsePoint(deployment);
-				var packaged = ReadJson(deployment, HookLabPayloadRefusal.PackageRecordUnreadable);
-				using (packaged) {
-					if (packaged.RootElement.ValueKind != JsonValueKind.Object || !packaged.RootElement.TryGetProperty(PackagedSectionName, out var section) || section.ValueKind != JsonValueKind.Object)
-						throw Refuse(HookLabPayloadRefusal.PackageRecordMissing, $"'{deployment}' records no '{PackagedSectionName}' package manifest, so this deployment cannot prove what package it came from");
-					var sha = ReadDigest(section, deployment);
-					return (HookLabPayloadLayout.GatewayDeployment, HookLabPayloadCrossCheck.Verified, deployment, sha);
-				}
+			var deploymentText = TryReadRecord(deployment, HookLabPayloadRefusal.PackageRecordUnreadable);
+			if (deploymentText is not null) {
+				using var packaged = ParseRecord(deployment, deploymentText, HookLabPayloadRefusal.PackageRecordUnreadable);
+				if (packaged.RootElement.ValueKind != JsonValueKind.Object || !packaged.RootElement.TryGetProperty(PackagedSectionName, out var section) || section.ValueKind != JsonValueKind.Object)
+					throw Refuse(HookLabPayloadRefusal.PackageRecordMissing, $"'{deployment}' records no '{PackagedSectionName}' package manifest, so this deployment cannot prove what package it came from");
+				var packagedSha = ReadDigest(section, deployment);
+				return (HookLabPayloadLayout.GatewayDeployment, HookLabPayloadCrossCheck.Verified, deployment, packagedSha);
 			}
 
 			var parent = Parent(hostRoot);
 			var packageManifest = parent is null ? null : Path.Combine(parent, PackageManifestFileName);
+			// Read before classifying: an inaccessible manifest.json is itself evidence of a packed install
+			// that cannot be verified, and must refuse rather than fall through to "developer worktree".
+			var packageText = packageManifest is null ? null : TryReadRecord(packageManifest, HookLabPayloadRefusal.PackageRecordUnreadable);
 			// A packed install is recognised by more than the record itself, so deleting manifest.json
 			// downgrades to "packed install with a missing record" (a refusal) rather than to "developer
 			// worktree" (a skipped cross-check). install-dgspy.ps1 copies both the manifest and itself beside
 			// the 'cli' host root, so any one of the three surviving is enough to identify the layout.
-			var looksPacked = (packageManifest is not null && File.Exists(packageManifest))
+			var looksPacked = packageText is not null
 				|| (parent is not null && File.Exists(Path.Combine(parent, InstallerScriptName)))
 				|| string.Equals(Path.GetFileName(hostRoot), PackedHostRootName, StringComparison.OrdinalIgnoreCase);
 			if (looksPacked) {
-				if (packageManifest is null || !File.Exists(packageManifest))
+				if (packageText is null)
 					throw Refuse(HookLabPayloadRefusal.PackageRecordMissing, $"this is a packed or directly installed host root and its package manifest '{packageManifest ?? PackageManifestFileName}' is absent, so the independent digest record cannot be checked");
-				RejectReparsePoint(packageManifest);
-				var document = ReadJson(packageManifest, HookLabPayloadRefusal.PackageRecordUnreadable);
-				using (document) {
-					if (document.RootElement.ValueKind != JsonValueKind.Object)
-						throw Refuse(HookLabPayloadRefusal.PackageRecordUnreadable, $"'{packageManifest}' is not a JSON object");
-					var sha = ReadDigest(document.RootElement, packageManifest);
-					return (HookLabPayloadLayout.PackedInstall, HookLabPayloadCrossCheck.Verified, packageManifest, sha);
-				}
+				using var document = ParseRecord(packageManifest!, packageText, HookLabPayloadRefusal.PackageRecordUnreadable);
+				if (document.RootElement.ValueKind != JsonValueKind.Object)
+					throw Refuse(HookLabPayloadRefusal.PackageRecordUnreadable, $"'{packageManifest}' is not a JSON object");
+				var sha = ReadDigest(document.RootElement, packageManifest!);
+				return (HookLabPayloadLayout.PackedInstall, HookLabPayloadCrossCheck.Verified, packageManifest, sha);
 			}
 
 			return (HookLabPayloadLayout.DeveloperWorktree, HookLabPayloadCrossCheck.SkippedDeveloperWorktree, null, null);
+		}
+
+		/// <summary>Reads an independent record, returning null <b>only</b> when the file is genuinely absent.
+		/// Absence is what the open attempt says it is: <see cref="FileNotFoundException"/> and
+		/// <see cref="DirectoryNotFoundException"/> mean absent, while every other
+		/// <see cref="IOException"/> or <see cref="UnauthorizedAccessException"/> means the record is there and
+		/// unreadable, which refuses. The reparse-point guard is folded in here because it is the same
+		/// metadata query, and it must tolerate absence for the same reason.</summary>
+		static string? TryReadRecord(string path, HookLabPayloadRefusal unreadable) {
+			FileAttributes attributes;
+			try { attributes = File.GetAttributes(path); }
+			catch (FileNotFoundException) { return null; }
+			catch (DirectoryNotFoundException) { return null; }
+			catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+				{ throw Refuse(unreadable, $"the attributes of '{path}' could not be read ({ex.GetType().Name}: {ex.Message}), so whether an independent digest record is present cannot be established"); }
+			if ((attributes & FileAttributes.ReparsePoint) != 0)
+				throw Refuse(HookLabPayloadRefusal.ReparsePoint, $"'{path}' is a reparse point; the HookLab payload read path may not cross one");
+			try { return File.ReadAllText(path); }
+			catch (FileNotFoundException) { return null; }
+			catch (DirectoryNotFoundException) { return null; }
+			catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+				{ throw Refuse(unreadable, $"'{path}' exists but could not be read ({ex.GetType().Name}: {ex.Message})"); }
 		}
 
 		static string ReadDigest(JsonElement section, string path) {
@@ -291,11 +337,7 @@ namespace dgSpy.Extension.HookLab {
 			return value.GetString()!.Trim();
 		}
 
-		static JsonDocument ReadJson(string path, HookLabPayloadRefusal refusal) {
-			string text;
-			try { text = File.ReadAllText(path); }
-			catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
-				{ throw Refuse(refusal, $"'{path}' exists but could not be read ({ex.GetType().Name}: {ex.Message})"); }
+		static JsonDocument ParseRecord(string path, string text, HookLabPayloadRefusal refusal) {
 			try { return JsonDocument.Parse(text); }
 			catch (JsonException ex) { throw Refuse(refusal, $"'{path}' exists but is not valid JSON ({ex.Message}), so the independent digest record cannot be checked"); }
 		}
