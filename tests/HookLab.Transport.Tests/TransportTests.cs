@@ -225,6 +225,23 @@ public sealed class TransportTests {
 		finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); } }
 	}
 
+	// The quiescence test above holds a command inside the handler, which is the half a count can see. This one
+	// holds the listener between decoding a request and admitting it - work in hand that nothing counts - which
+	// is where TryQuiesce used to answer "quiesced" and the handler then ran anyway, after cleanup had already
+	// reported completed on the strength of that answer. Dispatch admission and quiescence observation have to
+	// be one decision under one lock; the harness proves a refused command never reaches the handler, and that
+	// the refusal is answered rather than dropped when the transport is still open.
+	[Fact]
+	public void ACommandDecodedBeforeShutdownIsRefusedRatherThanRunAfterAQuiescedAnswer() {
+		using var temporary = new TemporaryDirectory();
+		using var process = StartHarness("dispatch-gate", temporary.Path, 1);
+		try {
+			Assert.True(process.WaitForExit(60000), "dispatch-gate harness did not exit.");
+			Assert.True(process.ExitCode == 0, "dispatch-gate harness failed: exit " + process.ExitCode + "; " + HarnessReport(temporary.Path));
+		}
+		finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); } }
+	}
+
 	[Fact]
 	public void MutualAuthenticationDetectsPipeNameSquatting() {
 		var name = "dgspy-hooklab-squatter-" + Guid.NewGuid().ToString("N"); var nonce = ProbeAuthentication.CreateNonce(); var secret = ProbeAuthentication.CreateSecret();

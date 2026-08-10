@@ -42,6 +42,7 @@ internal static class Program {
 			if (mode == "dispose-bounded") return DisposeBounded(result, integrity, int.Parse(Optional(commandLine, "-Iterations") ?? "200"));
 			if (mode == "injected-secret") return InjectedSecret(result, integrity);
 			if (mode == "quiescence") return Quiescence(result, integrity);
+			if (mode == "dispatch-gate") return DispatchGate(result, integrity);
 			if (mode == "client") {
 				var record = Single(new ProbeDiscoveryStore(root).Discover(new CurrentTarget(), DateTime.UtcNow));
 				using (var connection = new ProbeConnection(record.PipeName, record.Secret, record.EndpointNonce)) {
@@ -199,6 +200,100 @@ internal static class Program {
 		using (var idle = new ProbePipeServer((operation, payload, expected, cancellation) => new ProbeCommandResult("{}", 0))) {
 			idle.Dispose();
 			if (!idle.TryQuiesce(0)) return 52;
+		}
+		File.WriteAllText(result, integrity + "|pass");
+		return 0;
+	}
+
+	// The quiescence mode above catches a handler already inside the handler. It structurally cannot catch the
+	// other half: a request the listener has already decoded but not yet admitted is work in hand that nothing
+	// counts, so a TryQuiesce landing there saw an idle count, answered quiesced, and the handler then started
+	// its side effects after the system had reported no probe work was running. The only observation point is
+	// inside Serve, hence the internal seam - the window is not reachable from a client.
+	//
+	// Every handler here deliberately ignores its cancellation token and does nothing but record that it ran.
+	// A cooperative handler would refuse the work on its own and hide whether the gate did anything, which is
+	// precisely the shape that made an earlier quiescence assertion vacuous.
+	static int DispatchGate(string result, string integrity) {
+		// Case 1: quiesce, then dispose - the rollback ordering. The decoded request must never reach the
+		// handler, because cleanup already reported completed on the strength of the quiesced answer.
+		var sideEffect = 0;
+		var decoded = new ManualResetEvent(false);
+		var release = new ManualResetEvent(false);
+		var server = new ProbePipeServer((operation, payload, expected, cancellation) => { Interlocked.Exchange(ref sideEffect, 1); return new ProbeCommandResult("{}", 0); });
+		server.DispatchAdmissionProbeForTest = () => { decoded.Set(); release.WaitOne(20000); };
+		var endpoint = server.TakeInitialEndpoint();
+		StartClient(endpoint.PipeName, endpoint.Secret, endpoint.EndpointNonce);
+		if (!decoded.WaitOne(10000)) return 60;
+		// The window is real: the listener holds a decoded request and the count says nothing is running.
+		if (server.InFlightCommands != 0) return 61;
+		// So the system answers quiesced, and a caller is entitled to call its cleanup completed.
+		if (!server.TryQuiesce(1000)) return 62;
+		server.Dispose();
+		release.Set();
+		// The listener now leaves the window. Waiting for it to unwind is what makes the next assertion mean
+		// "the handler never ran" rather than "the handler had not run yet".
+		if (!server.WaitForShutdown(10000)) return 63;
+		if (Volatile.Read(ref sideEffect) != 0) return 64;
+		if (server.InFlightCommands != 0) return 65;
+
+		// Case 2: quiesce without dispose. The transport is still open, so a refusal that silently dropped the
+		// request would leave the client waiting out its own timeout for a command that will never run. It is
+		// answered instead, and the answer names the shutdown rather than some incidental exception type.
+		var openEffect = 0;
+		var openDecoded = new ManualResetEvent(false);
+		var openRelease = new ManualResetEvent(false);
+		var answered = new ManualResetEvent(false);
+		var answer = "none";
+		var open = new ProbePipeServer((operation, payload, expected, cancellation) => { Interlocked.Exchange(ref openEffect, 1); return new ProbeCommandResult("{}", 0); });
+		open.DispatchAdmissionProbeForTest = () => { openDecoded.Set(); openRelease.WaitOne(20000); };
+		var openEndpoint = open.TakeInitialEndpoint();
+		var client = new Thread(() => {
+			try {
+				using (var connection = new ProbeConnection(openEndpoint.PipeName, openEndpoint.Secret, openEndpoint.EndpointNonce, timeoutMilliseconds: 5000)) {
+					var response = connection.Send(new ProbeMessage(1, ProbeMessageKind.Request, "refused", "mutate", "{}"));
+					answer = response.Operation + "|" + response.PayloadJson;
+				}
+			}
+			catch (Exception ex) { answer = "threw:" + ex.GetType().Name; }
+			finally { answered.Set(); }
+		}) { IsBackground = true };
+		client.Start();
+		if (!openDecoded.WaitOne(10000)) return 66;
+		if (!open.TryQuiesce(1000)) return 67;
+		openRelease.Set();
+		if (!answered.WaitOne(10000)) return 68;
+		if (answer != "error|{\"error\":\"probe_shutting_down\"}") { File.WriteAllText(result, integrity + "|answer=" + answer); return 69; }
+		if (Volatile.Read(ref openEffect) != 0) return 70;
+		open.Dispose();
+
+		// Case 3: dispose alone, with nobody asking for quiescence. Dispose's contract is that the endpoint is
+		// unreachable by the time it returns; a request already decoded would otherwise still be dispatched and
+		// start mutating the target after its caller was told the endpoint was gone. Closing the transport is
+		// not by itself an answer about work in hand - that is the same conflation TryQuiesce exists to fix.
+		var closingEffect = 0;
+		var closingDecoded = new ManualResetEvent(false);
+		var closingRelease = new ManualResetEvent(false);
+		var closing = new ProbePipeServer((operation, payload, expected, cancellation) => { Interlocked.Exchange(ref closingEffect, 1); return new ProbeCommandResult("{}", 0); });
+		closing.DispatchAdmissionProbeForTest = () => { closingDecoded.Set(); closingRelease.WaitOne(20000); };
+		var closingEndpoint = closing.TakeInitialEndpoint();
+		StartClient(closingEndpoint.PipeName, closingEndpoint.Secret, closingEndpoint.EndpointNonce);
+		if (!closingDecoded.WaitOne(10000)) return 72;
+		// Nothing calls TryQuiesce here, deliberately: it closes the gate too, and asking it would make this
+		// pass whether or not Dispose closed anything.
+		closing.Dispose();
+		closingRelease.Set();
+		if (!closing.WaitForShutdown(10000)) return 73;
+		if (Volatile.Read(ref closingEffect) != 0) return 74;
+
+		// And the gate is closed only by shutdown: an endpoint nobody has quiesced still serves commands, so a
+		// gate that refused everything could not pass here.
+		using (var serving = new ProbePipeServer((operation, payload, expected, cancellation) => new ProbeCommandResult("{\"status\":\"ready\"}", 3))) {
+			var servingEndpoint = serving.TakeInitialEndpoint();
+			using (var connection = new ProbeConnection(servingEndpoint.PipeName, servingEndpoint.Secret, servingEndpoint.EndpointNonce, timeoutMilliseconds: 5000)) {
+				var response = connection.Send(new ProbeMessage(1, ProbeMessageKind.Request, "admitted", "status", "{}"));
+				if (response.Operation != "status" || response.ExpectedHooksVersion != 3) return 71;
+			}
 		}
 		File.WriteAllText(result, integrity + "|pass");
 		return 0;

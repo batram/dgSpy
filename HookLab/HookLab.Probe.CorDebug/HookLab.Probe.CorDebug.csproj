@@ -7,6 +7,11 @@
     <AssemblyName>HookLab.Probe.CorDebug</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <!-- The transport harness needs a seam inside ProbePipeServer.Serve: the dispatch-admission race lives
+         between decoding a request and admitting it, and nothing outside the class can hold a listener there. -->
+    <InternalsVisibleTo Include="HookLab.Transport.Harness" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Lib.Harmony" Version="2.3.6" GeneratePathProperty="true" ExcludeAssets="runtime" />
     <ProjectReference Include="..\HookLab.Contracts\HookLab.Contracts.csproj" />
   </ItemGroup>

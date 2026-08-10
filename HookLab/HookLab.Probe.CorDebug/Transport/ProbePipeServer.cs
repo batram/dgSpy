@@ -48,7 +48,9 @@ namespace HookLab.Probe.CorDebug.Transport {
 		readonly int authenticationTimeoutMilliseconds;
 		readonly bool secretWasInjected;
 		readonly ManualResetEvent stopped = new ManualResetEvent(false);
-		/// <summary>Serializes the in-flight command count against <see cref="commandsIdle"/>.</summary>
+		/// <summary>Serializes the in-flight command count, the dispatch gate and <see cref="commandsIdle"/>
+		/// against each other. Admission and quiescence observation must be one atomic decision: see
+		/// <see cref="TryEnterCommand"/>.</summary>
 		readonly object commandGate = new object();
 		/// <summary>Set exactly while no command is inside the handler. Never disposed, for the same reason
 		/// <see cref="stopped"/> is not: a Set racing a Dispose would throw ObjectDisposedException out of the
@@ -59,6 +61,9 @@ namespace HookLab.Probe.CorDebug.Transport {
 		/// listener thread reads its Token, and a disposed source throws there.</summary>
 		readonly CancellationTokenSource commandCancellation = new CancellationTokenSource();
 		int inFlightCommands;
+		/// <summary>Guarded by <see cref="commandGate"/>. Once set, no further command is admitted to the
+		/// handler. Closed by <see cref="TryQuiesce"/> and <see cref="Dispose"/>.</summary>
+		bool commandGateClosed;
 		volatile bool disposed;
 		int endpointTaken;
 		byte[] secret;
@@ -173,12 +178,34 @@ namespace HookLab.Probe.CorDebug.Transport {
 				try { request = ProbeWireProtocol.Decode(ProbeWireProtocol.ReadFrame(pipe)); }
 				catch (EndOfStreamException) { return; }
 				if (request.Kind != ProbeMessageKind.Request) throw new InvalidDataException("Only request messages are accepted from clients.");
+				// Test-only seam. Decoding a request and admitting it are separate steps, and the whole point
+				// of the gate is what happens to a shutdown that lands between them - a window no test can
+				// reach from outside. Null in production; see the property.
+				DispatchAdmissionProbeForTest?.Invoke();
 				ProbeMessage response;
 				try {
 					// Counted around the handler, not around the read: quiescence is a question about the
 					// handler's side effects, and a listener parked waiting for the next request is idle by
 					// any definition a rollback cares about.
-					EnterCommand();
+					//
+					// Admission is a gate, not just a count. A request decoded before a shutdown began is work
+					// this thread already has in hand while nothing is counted, so a TryQuiesce running here
+					// would see commandsIdle set, answer quiesced, and let the handler start its side effects
+					// after the system reported that no probe work was running. TryEnterCommand closes that
+					// window from the other side: it and the gate-close happen under one lock, so a command
+					// either entered first - and quiescence waits for it - or is refused.
+					if (!TryEnterCommand()) {
+						// Answered rather than dropped. The refusal is a fact the caller needs: its command did
+						// not run, which is different from a command that ran and whose response was lost. When
+						// Dispose already closed the transport this write throws and the listener unwinds as it
+						// would have anyway, so naming the shutdown costs nothing and is the only thing a client
+						// on a still-open pipe (TryQuiesce without Dispose) ever gets instead of hanging to its
+						// own timeout.
+						try { lock (sendGate) ProbeWireProtocol.WriteFrame(pipe, ProbeWireProtocol.Encode(new ProbeMessage(ProbeWireProtocol.ProtocolVersion, ProbeMessageKind.Response, request.CorrelationId, "error", "{\"error\":\"probe_shutting_down\"}", null))); }
+						catch (IOException) { }
+						catch (ObjectDisposedException) { }
+						return;
+					}
 					ProbeCommandResult result;
 					try { result = commandHandler(request.Operation, request.PayloadJson, request.ExpectedHooksVersion, commandCancellation.Token); }
 					finally { ExitCommand(); }
@@ -244,9 +271,30 @@ namespace HookLab.Probe.CorDebug.Transport {
 			}
 		}
 
-		void EnterCommand() { lock (commandGate) { if (inFlightCommands++ == 0) commandsIdle.Reset(); } }
+		/// <summary>Admits one command to the handler, or refuses it because shutdown has begun. The count and
+		/// the gate flag are read and written under the same lock that <see cref="CloseCommandGate"/> takes, and
+		/// that is the whole invariant: an admitted command has already reset <see cref="commandsIdle"/> before
+		/// any close can observe it, and a command that finds the gate closed never runs at all. There is no
+		/// third outcome, so there is no interval in which a quiesced answer and a running handler coexist.</summary>
+		bool TryEnterCommand() {
+			lock (commandGate) {
+				if (commandGateClosed) return false;
+				if (inFlightCommands++ == 0) commandsIdle.Reset();
+				return true;
+			}
+		}
 
 		void ExitCommand() { lock (commandGate) { if (--inFlightCommands == 0) commandsIdle.Set(); } }
+
+		/// <summary>Refuses every command not already admitted. Idempotent, and deliberately one-way: both
+		/// callers are shutting the endpoint down, and an endpoint that resumed admitting commands after a
+		/// quiesced answer would make that answer retroactively false.</summary>
+		void CloseCommandGate() { lock (commandGate) commandGateClosed = true; }
+
+		/// <summary>Test-only seam, invoked on the listener thread after a request is decoded and before it is
+		/// offered to <see cref="TryEnterCommand"/>. Internal, never set in production, and the only way to hold
+		/// a listener inside the exact window this gate exists to close.</summary>
+		internal Action? DispatchAdmissionProbeForTest { get; set; }
 
 		/// <summary>How many client commands are inside the handler right now. Zero does not by itself mean
 		/// the endpoint is finished - use <see cref="TryQuiesce"/>, which cancels first and then observes.</summary>
@@ -262,11 +310,21 @@ namespace HookLab.Probe.CorDebug.Transport {
 		/// So "the endpoint is unreachable" and "no probe work is running" are different facts, and a
 		/// rollback that reported the first as the second was reporting a property it had not established.
 		///
-		/// Safe to call before, after, or instead of <see cref="Dispose"/>, and repeatedly: cancellation is
-		/// idempotent, and the wait observes rather than mutates.</summary>
+		/// It also permanently closes the dispatch gate, before observing anything. Cancelling and then looking
+		/// at an idle count is not enough on its own: a listener that had already decoded a request but not yet
+		/// entered the handler is work in hand that nothing counts, so the observation would answer quiesced and
+		/// the handler would start its side effects afterwards. Closing the gate under the same lock the count
+		/// is kept under removes that window rather than narrowing it. One-way by design - both callers are
+		/// tearing the endpoint down, and this method is only ever reached on a cleanup path.
+		///
+		/// Safe to call before, after, or instead of <see cref="Dispose"/>, and repeatedly: cancellation and the
+		/// gate close are idempotent, and the wait observes rather than mutates.</summary>
 		public bool TryQuiesce(int millisecondsTimeout) {
 			if (millisecondsTimeout < 0) throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout));
 			CancelCommands();
+			// Before the wait, necessarily: the wait is the observation, and an admission that could still
+			// succeed after it would be exactly the race this closes.
+			CloseCommandGate();
 			return commandsIdle.WaitOne(millisecondsTimeout);
 		}
 
@@ -302,6 +360,11 @@ namespace HookLab.Probe.CorDebug.Transport {
 			// actually left is what TryQuiesce answers, and this method deliberately does not wait for it -
 			// the caller can be the target's own thread inside a func-eval, and the bound belongs to them.
 			CancelCommands();
+			// And refuses any command not already admitted. Closing the transport does not stop a request the
+			// listener had already decoded: without this, that request would still be dispatched and would start
+			// mutating the target after Dispose returned and the caller reported the endpoint gone. Neither
+			// blocking nor unbounded - it is one lock acquisition.
+			CloseCommandGate();
 		}
 
 		/// <summary>Waits for the listener thread to finish unwinding. Nothing in production calls this - it
