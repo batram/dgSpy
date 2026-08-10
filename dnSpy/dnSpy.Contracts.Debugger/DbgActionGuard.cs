@@ -45,6 +45,28 @@ namespace dnSpy.Contracts.Debugger {
 		/// <param name="process">Affected process, or null for a mutation whose process is not known.</param>
 		public abstract bool TryGetBlock(DbgProcess? process, string operation, out DbgActionBlockInfo info);
 
+		/// <summary>
+		/// Captures whatever proves the <em>calling thread</em> is an authorized owner right now. Every
+		/// guarded mutation entry point is deferred to the debugger dispatcher, so the thread that decides
+		/// is never the thread that mutates: a caller that checked while no owner existed would otherwise
+		/// mutate freely after an owner appeared, and an owner whose authorization is thread-scoped would
+		/// have lost it by the time its own callback ran. Capture on the caller's thread, then pass the
+		/// result to <see cref="TryGetBlock(DbgProcess?, string, object?, out DbgActionBlockInfo)"/> on the
+		/// mutating thread. The value is opaque to the host and must be safe to read from another thread.
+		/// A guard with no notion of ownership returns null and keeps the default behavior.
+		/// </summary>
+		public virtual object? CaptureAuthorization() => null;
+
+		/// <summary>
+		/// The authoritative decision, made immediately before the mutation, for a caller whose
+		/// authorization was captured earlier by <see cref="CaptureAuthorization"/>. Implementations must
+		/// evaluate live ownership and admit <paramref name="authorization"/> only when it identifies the
+		/// very owner that would otherwise block: an authorization captured under one owner must not pass
+		/// a mutation that a different, later owner blocks.
+		/// </summary>
+		public virtual bool TryGetBlock(DbgProcess? process, string operation, object? authorization, out DbgActionBlockInfo info) =>
+			TryGetBlock(process, operation, out info);
+
 		/// <summary>Surfaces a refused unattributed mutation through the host's existing user-error path.</summary>
 		public abstract void ReportBlocked(in DbgActionBlockInfo info);
 	}

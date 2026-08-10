@@ -7,17 +7,26 @@ namespace dgSpy.Extension.Debugger {
 	sealed class ActionLeaseGuard : DbgActionGuard {
 		readonly DbgManager manager;
 		readonly ActionLeaseCoordinator coordinator;
+		readonly ActionLeaseAuthorization authorization;
 
 		[ImportingConstructor]
 		ActionLeaseGuard(DbgManager manager) {
 			this.manager=manager;
 			coordinator=ActionLeaseCoordinator.Shared;
+			authorization=new ActionLeaseAuthorization(coordinator);
 			coordinator.LeaseChanged+=Coordinator_LeaseChanged;
 			coordinator.ExternalDebuggerAction+=Coordinator_ExternalDebuggerAction;
 		}
 
-		public override bool TryGetBlock(DbgProcess? process,string operation,out DbgActionBlockInfo info) {
-			if(coordinator.TryGetBlock(process?.Id,operation,out var owner)) {
+		public override object? CaptureAuthorization() => authorization.Capture();
+
+		/// <summary>Advisory overload for a caller that decides and mutates on one thread. Anything that
+		/// marshals must capture first and use the overload below, on the thread that mutates.</summary>
+		public override bool TryGetBlock(DbgProcess? process,string operation,out DbgActionBlockInfo info) =>
+			TryGetBlock(process,operation,CaptureAuthorization(),out info);
+
+		public override bool TryGetBlock(DbgProcess? process,string operation,object? capturedAuthorization,out DbgActionBlockInfo info) {
+			if(authorization.TryGetBlock(process?.Id,operation,capturedAuthorization,out var owner)) {
 				info=new DbgActionBlockInfo(owner.ProcessId,owner.ActionName,owner.ActionId,owner.DeadlineUtc,owner.StatusOperation,owner.CancelOperation,owner.FormatBlockReason(operation));
 				return true;
 			}

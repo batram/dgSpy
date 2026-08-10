@@ -294,11 +294,34 @@ namespace dnSpy.Debugger.Impl {
 			new DelayedIsRunningHelper(this, InternalDispatcher, RaiseDelayedIsRunningChanged_DbgThread);
 		}
 
-		internal bool CanMutate(DbgProcess? process, string operation, out string? error) {
+		/// <summary>
+		/// Captures the calling thread's guard authorization so the authoritative check can run later, on
+		/// the debugger thread, immediately before the mutation. Every guarded entry point below marshals,
+		/// so deciding here and mutating there is not one decision: a lease acquired inside that window
+		/// would otherwise let the queued mutation through unguarded.
+		/// </summary>
+		internal object?[]? CaptureActionAuthorization() {
+			if (dbgActionGuards.Length == 0)
+				return null;
+			var authorization = new object?[dbgActionGuards.Length];
+			for (int i = 0; i < dbgActionGuards.Length; i++)
+				authorization[i] = dbgActionGuards[i].Value.CaptureAuthorization();
+			return authorization;
+		}
+
+		/// <summary>
+		/// Advisory convenience for callers that must answer synchronously and do not marshal. It captures
+		/// and checks on the same thread, so it is <em>not</em> an enforcement boundary for anything that
+		/// then defers: those call <see cref="CaptureActionAuthorization"/> and re-check inside the callback.
+		/// </summary>
+		internal bool CanMutate(DbgProcess? process, string operation, out string? error) =>
+			CanMutate(process, operation, CaptureActionAuthorization(), out error);
+
+		internal bool CanMutate(DbgProcess? process, string operation, object?[]? authorization, out string? error) {
 			var blocked = new List<(DbgActionGuard Guard, DbgActionBlockInfo Info)>();
-			foreach (var guard in dbgActionGuards) {
-				var value = guard.Value;
-				if (value.TryGetBlock(process, operation, out var info))
+			for (int i = 0; i < dbgActionGuards.Length; i++) {
+				var value = dbgActionGuards[i].Value;
+				if (value.TryGetBlock(process, operation, authorization is null ? null : authorization[i], out var info))
 					blocked.Add((value, info));
 			}
 			foreach (var block in blocked)
@@ -311,11 +334,11 @@ namespace dnSpy.Debugger.Impl {
 			return true;
 		}
 
-		bool CanMutateAll(string operation) {
+		bool CanMutateAll(string operation, object?[]? authorization) {
 			DbgProcess[] snapshot;
 			lock (lockObj)
 				snapshot = processes.ToArray();
-			return snapshot.All(process => CanMutate(process, operation, out _));
+			return snapshot.All(process => CanMutate(process, operation, authorization, out _));
 		}
 
 		// DbgManager thread
@@ -676,7 +699,10 @@ namespace dnSpy.Debugger.Impl {
 		}
 
 		public override void Restart() {
-			if (!CanMutateAll(PredefinedDbgActionOperations.Restart))
+			// Advisory. Restart does not reach an engine itself: it stops debugging through
+			// StopDebuggingAll(), which makes the authoritative check on the debugger thread, and then
+			// re-Starts, which is a new session rather than a mutation of a leased process.
+			if (!CanMutateAll(PredefinedDbgActionOperations.Restart, CaptureActionAuthorization()))
 				return;
 			lock (lockObj) {
 				if (!CanRestart)
@@ -706,7 +732,12 @@ namespace dnSpy.Debugger.Impl {
 		StopDebuggingHelper? stopDebuggingHelper;
 
 		public override void BreakAll() {
-			if (!CanMutateAll(PredefinedDbgActionOperations.Pause))
+			// BreakAll is the one guarded entry point that does not marshal: Start_NoLock calls
+			// Engine.Break() on this same thread, so the decision and the mutation are already on one
+			// thread and no re-check across a queue is needed. It is deliberately not moved inside
+			// lockObj: a refusal raises DbgManagerMessage synchronously, and reporting to arbitrary
+			// listeners while holding the engine lock buys nothing here and invites a lock order.
+			if (!CanMutateAll(PredefinedDbgActionOperations.Pause, CaptureActionAuthorization()))
 				return;
 			lock (lockObj) {
 				if (breakAllHelper is not null)
@@ -996,9 +1027,12 @@ namespace dnSpy.Debugger.Impl {
 		}
 
 		public override void RunAll() {
-			if (!CanMutateAll(PredefinedDbgActionOperations.Continue))
-				return;
-			DbgThread(() => RunAll_DbgThread());
+			var authorization = CaptureActionAuthorization();
+			DbgThread(() => {
+				if (!CanMutateAll(PredefinedDbgActionOperations.Continue, authorization))
+					return;
+				RunAll_DbgThread();
+			});
 		}
 
 		void RunAll_DbgThread() {
@@ -1012,8 +1046,9 @@ namespace dnSpy.Debugger.Impl {
 		public override void Run(DbgProcess process) {
 			if (process is null)
 				throw new ArgumentNullException(nameof(process));
-			if (!CanMutate(process, PredefinedDbgActionOperations.Continue, out _))
-				return;
+			// No check here: this method only picks which guarded entry point runs, and both of them
+			// capture on this thread and decide on the debugger thread. Checking here as well would be
+			// a second, earlier decision that no longer governs anything.
 			if (debuggerSettings.BreakAllProcesses)
 				RunAll();
 			else
@@ -1110,9 +1145,12 @@ namespace dnSpy.Debugger.Impl {
 		}
 
 		public override void StopDebuggingAll() {
-			if (!CanMutateAll(PredefinedDbgActionOperations.Terminate))
-				return;
-			DbgThread(() => StopDebuggingAll_DbgThread());
+			var authorization = CaptureActionAuthorization();
+			DbgThread(() => {
+				if (!CanMutateAll(PredefinedDbgActionOperations.Terminate, authorization))
+					return;
+				StopDebuggingAll_DbgThread();
+			});
 		}
 		void StopDebuggingAll_DbgThread() {
 			Dispatcher.VerifyAccess();
@@ -1128,9 +1166,12 @@ namespace dnSpy.Debugger.Impl {
 		}
 
 		public override void TerminateAll() {
-			if (!CanMutateAll(PredefinedDbgActionOperations.Terminate))
-				return;
-			DbgThread(() => TerminateAll_DbgThread());
+			var authorization = CaptureActionAuthorization();
+			DbgThread(() => {
+				if (!CanMutateAll(PredefinedDbgActionOperations.Terminate, authorization))
+					return;
+				TerminateAll_DbgThread();
+			});
 		}
 		void TerminateAll_DbgThread() {
 			Dispatcher.VerifyAccess();
@@ -1141,9 +1182,12 @@ namespace dnSpy.Debugger.Impl {
 		}
 
 		public override void DetachAll() {
-			if (!CanMutateAll(PredefinedDbgActionOperations.Detach))
-				return;
-			DbgThread(() => DetachAll_DbgThread());
+			var authorization = CaptureActionAuthorization();
+			DbgThread(() => {
+				if (!CanMutateAll(PredefinedDbgActionOperations.Detach, authorization))
+					return;
+				DetachAll_DbgThread();
+			});
 		}
 		void DetachAll_DbgThread() {
 			Dispatcher.VerifyAccess();
@@ -1166,9 +1210,12 @@ namespace dnSpy.Debugger.Impl {
 		}
 
 		internal void Detach(DbgProcessImpl process) {
-			if (!CanMutate(process, PredefinedDbgActionOperations.Detach, out _))
-				return;
-			DbgThread(() => Detach_DbgThread(process));
+			var authorization = CaptureActionAuthorization();
+			DbgThread(() => {
+				if (!CanMutate(process, PredefinedDbgActionOperations.Detach, authorization, out _))
+					return;
+				Detach_DbgThread(process);
+			});
 		}
 		void Detach_DbgThread(DbgProcessImpl process) {
 			Dispatcher.VerifyAccess();
@@ -1181,9 +1228,12 @@ namespace dnSpy.Debugger.Impl {
 		}
 
 		internal void Terminate(DbgProcessImpl process) {
-			if (!CanMutate(process, PredefinedDbgActionOperations.Terminate, out _))
-				return;
-			DbgThread(() => Terminate_DbgThread(process));
+			var authorization = CaptureActionAuthorization();
+			DbgThread(() => {
+				if (!CanMutate(process, PredefinedDbgActionOperations.Terminate, authorization, out _))
+					return;
+				Terminate_DbgThread(process);
+			});
 		}
 		void Terminate_DbgThread(DbgProcessImpl process) {
 			Dispatcher.VerifyAccess();
@@ -1196,9 +1246,12 @@ namespace dnSpy.Debugger.Impl {
 		}
 
 		internal void Break(DbgProcessImpl process) {
-			if (!CanMutate(process, PredefinedDbgActionOperations.Pause, out _))
-				return;
-			DbgThread(() => Break_DbgThread(process));
+			var authorization = CaptureActionAuthorization();
+			DbgThread(() => {
+				if (!CanMutate(process, PredefinedDbgActionOperations.Pause, authorization, out _))
+					return;
+				Break_DbgThread(process);
+			});
 		}
 		void Break_DbgThread(DbgProcessImpl process) {
 			Dispatcher.VerifyAccess();
@@ -1211,9 +1264,12 @@ namespace dnSpy.Debugger.Impl {
 		}
 
 		internal void Run(DbgProcessImpl process) {
-			if (!CanMutate(process, PredefinedDbgActionOperations.Continue, out _))
-				return;
-			DbgThread(() => Run_DbgThread(process));
+			var authorization = CaptureActionAuthorization();
+			DbgThread(() => {
+				if (!CanMutate(process, PredefinedDbgActionOperations.Continue, authorization, out _))
+					return;
+				Run_DbgThread(process);
+			});
 		}
 		void Run_DbgThread(DbgProcessImpl process) {
 			Dispatcher.VerifyAccess();

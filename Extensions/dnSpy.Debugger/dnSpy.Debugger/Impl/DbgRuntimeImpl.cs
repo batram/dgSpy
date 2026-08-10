@@ -256,9 +256,12 @@ namespace dnSpy.Debugger.Impl {
 
 		internal DbgStepper CreateStepper(DbgThreadImpl thread) => new DbgStepperImpl(owner, thread, Engine.CreateStepper(thread));
 		internal void SetIP(DbgThreadImpl thread, DbgCodeLocation location) {
-			if (!owner.CanMutate(Process, PredefinedDbgActionOperations.SetInstructionPointer, out _))
-				return;
-			Dispatcher.BeginInvoke(() => SetIP_DbgThread(thread, location));
+			var authorization = owner.CaptureActionAuthorization();
+			Dispatcher.BeginInvoke(() => {
+				if (!owner.CanMutate(Process, PredefinedDbgActionOperations.SetInstructionPointer, authorization, out _))
+					return;
+				SetIP_DbgThread(thread, location);
+			});
 		}
 		internal bool CanSetIP(DbgThreadImpl thread, DbgCodeLocation location) => Engine.CanSetIP(thread, location);
 

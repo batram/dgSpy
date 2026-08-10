@@ -66,11 +66,25 @@ namespace dnSpy.Debugger.Breakpoints.Code {
 		}
 
 		void Dbg(Action callback) => dbgDispatcherProvider.Dbg(callback);
-		bool CanMutate() {
+		/// <summary>
+		/// Captures the calling thread's guard authorization. Every public mutation below is applied on the
+		/// debugger thread, so the caller's thread is not the mutating thread and a decision made here does
+		/// not survive the marshal: it is re-made, authoritatively, inside the callback.
+		/// </summary>
+		object?[]? CaptureAuthorization() {
+			if (dbgActionGuards.Length == 0)
+				return null;
+			var authorization = new object?[dbgActionGuards.Length];
+			for (int i = 0; i < dbgActionGuards.Length; i++)
+				authorization[i] = dbgActionGuards[i].Value.CaptureAuthorization();
+			return authorization;
+		}
+
+		bool CanMutate(object?[]? authorization) {
 			var blocked = new List<(DbgActionGuard Guard, DbgActionBlockInfo Info)>();
-			foreach (var guard in dbgActionGuards) {
-				var value = guard.Value;
-				if (value.TryGetBlock(null, PredefinedDbgActionOperations.BreakpointMutation, out var info))
+			for (int i = 0; i < dbgActionGuards.Length; i++) {
+				var value = dbgActionGuards[i].Value;
+				if (value.TryGetBlock(null, PredefinedDbgActionOperations.BreakpointMutation, authorization is null ? null : authorization[i], out var info))
 					blocked.Add((value, info));
 			}
 			foreach (var block in blocked)
@@ -81,9 +95,12 @@ namespace dnSpy.Debugger.Breakpoints.Code {
 		public override void Modify(DbgCodeBreakpointAndSettings[] settings) {
 			if (settings is null)
 				throw new ArgumentNullException(nameof(settings));
-			if (!CanMutate())
-				return;
-			Dbg(() => ModifyCore(settings));
+			var authorization = CaptureAuthorization();
+			Dbg(() => {
+				if (!CanMutate(authorization))
+					return;
+				ModifyCore(settings);
+			});
 		}
 
 		void ModifyCore(DbgCodeBreakpointAndSettings[] settings) {
@@ -132,7 +149,13 @@ namespace dnSpy.Debugger.Breakpoints.Code {
 		public override DbgCodeBreakpoint[] Add(DbgCodeBreakpointInfo[] breakpoints) {
 			if (breakpoints is null)
 				throw new ArgumentNullException(nameof(breakpoints));
-			if (!CanMutate())
+			// Advisory, and the only guard check on this thread that earns its place: Add must answer
+			// synchronously, so a caller blocked before anything is created gets an empty array rather
+			// than handles to breakpoints AddCore will refuse. It is not the enforcement boundary -
+			// AddCore re-checks on the debugger thread and closes what this call created if a lease was
+			// taken in between.
+			var authorization = CaptureAuthorization();
+			if (!CanMutate(authorization))
 				return Array.Empty<DbgCodeBreakpoint>();
 			var bpImpls = new List<DbgCodeBreakpointImpl>(breakpoints.Length);
 			List<DbgObject>? objsToClose = null;
@@ -150,13 +173,24 @@ namespace dnSpy.Debugger.Breakpoints.Code {
 						bpImpls.Add(bp);
 					}
 				}
-				Dbg(() => AddCore(bpImpls, objsToClose));
+				Dbg(() => AddCore(bpImpls, objsToClose, authorization));
 			}
 			return bpImpls.ToArray();
 		}
 
-		void AddCore(List<DbgCodeBreakpointImpl> breakpoints, List<DbgObject>? objsToClose) {
+		void AddCore(List<DbgCodeBreakpointImpl> breakpoints, List<DbgObject>? objsToClose, object?[]? authorization) {
 			dbgDispatcherProvider.VerifyAccess();
+			if (!CanMutate(authorization)) {
+				// A lease was taken after Add() answered. Nothing has been added yet, so close everything
+				// that call created rather than leaking it and the locations it took ownership of.
+				foreach (var bp in breakpoints)
+					(objsToClose ??= new List<DbgObject>()).Add(bp);
+				if (objsToClose is not null) {
+					foreach (var obj in objsToClose)
+						obj.Close(dbgDispatcherProvider.Dispatcher);
+				}
+				return;
+			}
 			var added = new List<DbgCodeBreakpoint>(breakpoints.Count);
 			List<DbgCodeBreakpointImpl>? updatedBreakpoints = null;
 			lock (lockObj) {
@@ -197,9 +231,12 @@ namespace dnSpy.Debugger.Breakpoints.Code {
 		public override void Remove(DbgCodeBreakpoint[] breakpoints) {
 			if (breakpoints is null)
 				throw new ArgumentNullException(nameof(breakpoints));
-			if (!CanMutate())
-				return;
-			Dbg(() => RemoveCore(breakpoints));
+			var authorization = CaptureAuthorization();
+			Dbg(() => {
+				if (!CanMutate(authorization))
+					return;
+				RemoveCore(breakpoints);
+			});
 		}
 
 		void RemoveCore(DbgCodeBreakpoint[] breakpoints) {
@@ -237,9 +274,12 @@ namespace dnSpy.Debugger.Breakpoints.Code {
 		}
 
 		public override void Clear() {
-			if (!CanMutate())
-				return;
-			Dbg(() => RemoveCore(VisibleBreakpoints.ToArray()));
+			var authorization = CaptureAuthorization();
+			Dbg(() => {
+				if (!CanMutate(authorization))
+					return;
+				RemoveCore(VisibleBreakpoints.ToArray());
+			});
 		}
 
 		public override void UpdateIsDebugging_DbgThread(bool newIsDebugging) {

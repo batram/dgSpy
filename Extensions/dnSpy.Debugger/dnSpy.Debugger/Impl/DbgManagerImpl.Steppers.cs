@@ -28,11 +28,14 @@ using dnSpy.Debugger.Steppers;
 namespace dnSpy.Debugger.Impl {
 	sealed partial class DbgManagerImpl {
 		internal void Step(DbgStepperImpl stepper, object? stepperTag, DbgEngineStepKind step, bool singleProcess) {
-			if (!CanMutate(stepper.Process, PredefinedDbgActionOperations.Step, out var actionError)) {
-				DbgThread(() => RaiseStepperError_DbgThread(stepper, actionError!));
-				return;
-			}
-			DbgThread(() => Step_DbgThread(stepper, stepperTag, step, singleProcess));
+			var authorization = CaptureActionAuthorization();
+			DbgThread(() => {
+				if (!CanMutate(stepper.Process, PredefinedDbgActionOperations.Step, authorization, out var actionError)) {
+					RaiseStepperError_DbgThread(stepper, actionError!);
+					return;
+				}
+				Step_DbgThread(stepper, stepperTag, step, singleProcess);
+			});
 		}
 
 		void Step_DbgThread(DbgStepperImpl stepper, object? stepperTag, DbgEngineStepKind step, bool singleProcess) {
