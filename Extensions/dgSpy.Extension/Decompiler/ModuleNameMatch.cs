@@ -41,8 +41,15 @@ namespace dgSpy.Extension {
 			if (Same(moduleName,query)||Same(path,query)||Same(leaf,query)) return Exact;
 			// Normalize both sides. In-memory Add-Type modules can report Name="abc" while metadata and
 			// get_il report "abc.dll"; stripping only the loaded side made that exact round trip impossible.
-			var queryStem=ManagedStem(Leaf(query));
-			if (Same(ManagedStem(moduleName),queryStem)||Same(ManagedStem(leaf),queryStem)) return Stemmed;
+			var queryLeaf=Leaf(query);
+			var queryStem=ManagedStem(queryLeaf);
+			var queryExtension=ManagedExtension(queryLeaf);
+			var loadedExtension=ManagedExtension(leaf);
+			if (loadedExtension.Length==0) loadedExtension=ManagedExtension(moduleName);
+			// An explicit managed extension is meaningful when the loaded module exposes one. Keep the
+			// extensionless Add-Type round trip, but never turn an explicit tool.dll request into tool.exe.
+			var compatibleExtension=queryExtension.Length==0 || loadedExtension.Length==0 || Same(loadedExtension,queryExtension);
+			if (compatibleExtension && (Same(ManagedStem(moduleName),queryStem)||Same(ManagedStem(leaf),queryStem))) return Stemmed;
 			if (Contains(moduleName,query)||Contains(path,query)) return Substring;
 			return None;
 		}
@@ -85,6 +92,8 @@ namespace dgSpy.Extension {
 		public static string Stem(string value) { var dot=value.LastIndexOf('.'); return dot>0 ? value.Substring(0,dot) : value; }
 		static string ManagedStem(string value) => value.EndsWith(".dll",StringComparison.OrdinalIgnoreCase) || value.EndsWith(".exe",StringComparison.OrdinalIgnoreCase)
 			? value.Substring(0,value.Length-4) : value;
+		static string ManagedExtension(string value) => value.EndsWith(".dll",StringComparison.OrdinalIgnoreCase) ? ".dll"
+			: value.EndsWith(".exe",StringComparison.OrdinalIgnoreCase) ? ".exe" : "";
 
 		/// <summary>Lowercased, with every separator removed, so "Assembly-CSharp" and "AssemblyCSharp"
 		/// become the same string. Only ever used for suggesting near misses --- never for resolving one,

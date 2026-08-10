@@ -73,6 +73,13 @@ public sealed class ModuleNameMatchTests {
 	public void An_in_memory_name_without_an_extension_accepts_the_metadata_filename() =>
 		Assert.Equal(ModuleNameMatch.Stemmed,ModuleNameMatch.Rank("5wje15qw","","5wje15qw.dll"));
 
+	[Theory]
+	[InlineData("tool.exe",@"C:\Tools\tool.exe","tool.dll")]
+	[InlineData("tool.dll",@"C:\Tools\tool.dll","tool.exe")]
+	[InlineData("tool",@"C:\Tools\tool.exe","tool.dll")]
+	public void An_explicit_managed_extension_never_resolves_to_the_other_kind(string name,string filename,string query) =>
+		Assert.Equal(ModuleNameMatch.None,ModuleNameMatch.Rank(name,filename,query));
+
 	[Fact]
 	public void Near_misses_name_candidates_instead_of_sending_the_caller_to_list_modules() {
 		var loaded=new (string?,string?)[] {
