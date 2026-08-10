@@ -8,6 +8,18 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 	public enum AtomicActionInterruptionPolicy { cancel_on_disconnect, complete_on_disconnect }
 	public enum PatchedTargetState { unknown, not_patched, patched }
 
+	/// <summary>
+	/// Where an asynchronous action has got to. Monotonic: a record's phase only ever moves forward, so a
+	/// poller can compare two readings and never see the action go backwards.
+	///
+	/// <para><c>queued</c> is the phase <c>start_atomic_action</c> returns in. That boundary is the whole
+	/// point of the asynchronous shape: returning after *arming* would still block the caller's single host
+	/// connection while lease acquisition or breakpoint binding hung, which moves the uncancellable window
+	/// rather than removing it. Cancellation is accepted in every phase but <c>terminal</c>, including
+	/// <c>queued</c> and <c>arming</c>.</para>
+	/// </summary>
+	public enum AtomicActionPhase { queued, arming, armed, running, executing, verifying, cleaning_up, terminal }
+
 	public sealed class AtomicActionRequest {
 		[JsonPropertyName("schema_version")]
 		public int SchemaVersion { get; set; }=1;
@@ -98,6 +110,22 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		public DateTime EffectiveDeadlineUtc { get; set; }
 		[JsonPropertyName("patched_target_detection"),JsonConverter(typeof(JsonStringEnumConverter))]
 		public PatchedTargetState PatchedTargetDetection { get; set; }
+		/// <summary>What the evaluability preflight found at the owned stop. <c>none</c> is a preflight, not
+		/// a promise - see <see cref="AtomicActionEvaluationBlocker"/>. Left at <c>none</c> when the run
+		/// never reached a stop, which is why <c>action_outcome</c> and not this field says whether the
+		/// target was reached.</summary>
+		[JsonPropertyName("evaluation_blocker"),JsonConverter(typeof(JsonStringEnumConverter))]
+		public AtomicActionEvaluationBlocker EvaluationBlocker { get; set; }
+		[JsonPropertyName("evaluation_probe_stage"),JsonConverter(typeof(JsonStringEnumConverter))]
+		public AtomicActionEvaluationProbeStage EvaluationProbeStage { get; set; }
+		/// <summary>A stable exception category, never a serialized exception and never a stack trace.</summary>
+		[JsonPropertyName("evaluation_probe_error_category")]
+		public string? EvaluationProbeErrorCategory { get; set; }
+		/// <summary>A bounded, redacted detail - an HRESULT for a COM failure, otherwise a length-capped
+		/// message with every quoted run replaced, because that is where an evaluator puts the expression
+		/// and the target value it was working on.</summary>
+		[JsonPropertyName("evaluation_probe_error")]
+		public string? EvaluationProbeError { get; set; }
 		[JsonPropertyName("error")]
 		public string? Error { get; set; }
 		[JsonPropertyName("final_debugger_state")]
@@ -105,9 +133,9 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 	}
 
 	public sealed class AtomicActionStop {
-		public AtomicActionStop(string runtimeId,string appDomainId,int processId,string threadId,string module,uint methodToken,uint ilOffset,bool evaluable) {
+		public AtomicActionStop(string runtimeId,string appDomainId,int processId,string threadId,string module,uint methodToken,uint ilOffset,AtomicActionEvaluationProbe evaluation) {
 			RuntimeId=runtimeId; AppDomainId=appDomainId; ProcessId=processId; ThreadId=threadId; Module=module;
-			MethodToken=methodToken; IlOffset=ilOffset; Evaluable=evaluable;
+			MethodToken=methodToken; IlOffset=ilOffset; Evaluation=evaluation ?? throw new ArgumentNullException(nameof(evaluation));
 		}
 		public string RuntimeId { get; }
 		public string AppDomainId { get; }
@@ -116,7 +144,11 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		public string Module { get; }
 		public uint MethodToken { get; }
 		public uint IlOffset { get; }
-		public bool Evaluable { get; }
+		/// <summary>The evaluability preflight's verdict, carried whole rather than collapsed to a bool: the
+		/// terminal result has to name the real blocker, and a failed probe has to be distinguishable from a
+		/// clean one.</summary>
+		public AtomicActionEvaluationProbe Evaluation { get; }
+		public bool Evaluable => Evaluation.Evaluable;
 	}
 
 	public sealed class AtomicActionInterruptedException : OperationCanceledException {

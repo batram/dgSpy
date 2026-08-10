@@ -40,7 +40,18 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 		};
 		static readonly ReadOnlyCollection<DbgStateInfo> emptyState = new ReadOnlyCollection<DbgStateInfo>(Array.Empty<DbgStateInfo>());
 
-		public static ReadOnlyCollection<DbgStateInfo> GetState(CorDebugUserState state) {
+		static readonly ReadOnlyCollection<DbgStateInfo> unavailableState =
+			new ReadOnlyCollection<DbgStateInfo>(new[] { new DbgStateInfo(CorThreadUserStates.UserStateUnavailable) });
+
+		/// <summary>
+		/// <paramref name="available"/> false means ICorDebugThread::GetUserState failed. It is reported as
+		/// its own state rather than as the empty collection, because an empty collection is what a healthy
+		/// thread at a safe point produces - so anything deciding "no UnsafePoint flag, therefore evaluable"
+		/// was reading a failed probe as a safety guarantee.
+		/// </summary>
+		public static ReadOnlyCollection<DbgStateInfo> GetState(CorDebugUserState state, bool available = true) {
+			if (!available)
+				return unavailableState;
 			if (state == 0)
 				return emptyState;
 

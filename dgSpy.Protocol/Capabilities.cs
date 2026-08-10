@@ -227,6 +227,10 @@ namespace dgSpy.Protocol {
 			Op("pause",12000,mutates:true),
 			Op("continue",12000,mutates:true),
 			Op("run_atomic_action",65000,mutates:true,version:1),
+			// start_atomic_action returns after registration, not after the action - so its bound is the
+			// validate-and-schedule cost, not the action's deadline. Advertising the action's 65 s here would
+			// make every Gateway hold a minute-long deadline open for a call that answers in milliseconds.
+			Op("start_atomic_action",10000,mutates:true,version:1),
 			Op("get_atomic_action_status",5000,version:1),
 			Op("cancel_atomic_action",5000,mutates:true,version:1),
 			Op("set_il_breakpoint",10000,mutates:true),

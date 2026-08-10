@@ -31,6 +31,12 @@
          that used to be inlined in it shipped uncovered. -->
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\AtomicActionHostSupport.cs" Link="Debugger\AtomicActions\AtomicActionHostSupport.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\AtomicActionRecordStore.cs" Link="Debugger\AtomicActions\AtomicActionRecordStore.cs" />
+    <!-- T08c. The asynchronous shape and the typed blocker are both here rather than in
+         RpcHost.AtomicActions.cs for the reason above: the scheduler owns "start returns after
+         registration, not after arming", and the probe owns "a failed probe is not evidence of a safe
+         point" - neither is testable from a partial of a class no test can construct. -->
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\AtomicActionScheduler.cs" Link="Debugger\AtomicActions\AtomicActionScheduler.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\EvaluationProbe.cs" Link="Debugger\AtomicActions\EvaluationProbe.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcException.cs" Link="Rpc\RpcException.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcSecurity.cs" Link="Rpc\RpcSecurity.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\SymbolSearchQuery.cs" Link="Decompiler\SymbolSearchQuery.cs" />
@@ -48,6 +54,10 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\ProgramOutputAssembler.cs" Link="Events\ProgramOutputAssembler.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\ToolWindows\McpActivityLog.cs" Link="ToolWindows\McpActivityLog.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Policy\CapabilityPolicy.cs" Link="Policy\CapabilityPolicy.cs" />
+    <!-- BCL-only by construction: it resolves and verifies the shipped HookLab payload from the running
+         host's own tree, so it can be exercised here against real packed, Gateway-deployed and worktree
+         layouts rather than a stand-in for any of them. -->
+    <Compile Include="..\..\Extensions\dgSpy.Extension\HookLab\HookLabPayloadResolver.cs" Link="HookLab\HookLabPayloadResolver.cs" />
     <ProjectReference Include="..\..\dgSpy.Protocol\dgSpy.Protocol.csproj" />
     <ProjectReference Include="..\..\HookLab\HookLab.Contracts\HookLab.Contracts.csproj" />
   </ItemGroup>

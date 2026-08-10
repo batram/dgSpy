@@ -32,6 +32,13 @@ namespace dnSpy.Contracts.Debugger.DotNet.CorDebug {
 		public static readonly string Suspended = nameof(Suspended);
 		public static readonly string UnsafePoint = nameof(UnsafePoint);
 		public static readonly string ThreadPool = nameof(ThreadPool);
+		/// <summary>
+		/// ICorDebugThread::GetUserState failed, so no conclusion may be drawn from the absence of any other
+		/// state. Present instead of - not alongside - the real flags, because there are none to report.
+		/// Without it a failed probe produced an empty state collection, which reads exactly like a thread
+		/// that is running normally at a safe point.
+		/// </summary>
+		public static readonly string UserStateUnavailable = nameof(UserStateUnavailable);
 #pragma warning restore CS1591 // Missing XML comment for publicly visible type or member
 	}
 }

@@ -531,8 +531,94 @@
       }
     },
     {
+      "name": "start_atomic_action",
+      "description": "SIDE EFFECTING and audited. Start the same bounded natural-arrival workflow as run_atomic_action, but return as soon as the action is REGISTERED - before lease acquisition and before breakpoint binding - so the caller\u0027s single host connection stays free to poll status or cancel. Answers accepted, action_id, phase and recommended_poll_after_ms. Prefer this over run_atomic_action: a blocking run occupies the one channel for its whole budget, so nothing can reach the action while it runs. Poll get_atomic_action_status at the interval it recommends; there is deliberately no wait operation, because a wait would block the channel again. disconnect_policy is not accepted here - after acceptance the action is host-owned and ends only on its deadline or an explicit cancel_atomic_action.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "operation_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
+          "expected_stop_id": {
+            "type": "string",
+            "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60000
+          },
+          "action_kind": {
+            "type": "string",
+            "enum": [
+              "capture",
+              "assignment",
+              "method_invocation"
+            ]
+          },
+          "capture_path": {
+            "type": "string"
+          },
+          "assignment_target": {
+            "type": "string"
+          },
+          "serialized_value": {
+            "description": "A JSON null, boolean, number, or string."
+          },
+          "invocation_target": {
+            "type": "string"
+          },
+          "invocation_arguments": {
+            "type": "array",
+            "items": {
+              "description": "A JSON null, boolean, number, or string."
+            }
+          },
+          "verification_path": {
+            "type": "string"
+          },
+          "verification_expected": {
+            "description": "Optional expected JSON scalar."
+          },
+          "request": {
+            "type": "object",
+            "description": "Atomic action request schema v1: action_id, action_name, process_id, runtime_id, app_domain_id, module, method_token, il_offset, optional nearby_offsets, deadline_utc and resume_policy. disconnect_policy is rejected on this operation."
+          }
+        },
+        "required": [
+          "operation_version",
+          "session_id",
+          "process_id",
+          "expected_execution_version",
+          "expected_stop_id",
+          "action_kind",
+          "request"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
       "name": "get_atomic_action_status",
-      "description": "Read a versioned terminal or in-progress atomic-action record by action_id. This is the reconciliation operation named after an ambiguous cleanup or potentially side-effecting outcome, including after the debug session ended.",
+      "description": "Read a versioned terminal or in-progress atomic-action record by action_id. Reports phase (queued, arming, armed, running, executing, verifying, cleaning_up, terminal - monotonic), completed, cancel_requested, recommended_poll_after_ms, and the terminal result once there is one. This is also the reconciliation operation named after an ambiguous cleanup or potentially side-effecting outcome, including after the debug session ended.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -561,7 +647,7 @@
     },
     {
       "name": "cancel_atomic_action",
-      "description": "Request cancellation of a bounded atomic action. Cancellation runs the same ownership-scoped cleanup path and does not discard the terminal status record.",
+      "description": "Request cancellation of a bounded atomic action. Accepted in every non-terminal phase, including queued and arming. Cancellation runs the same ownership-scoped cleanup path and does not discard the terminal status record. Authorized by the record\u0027s captured session and process generation plus the exact action_id - it deliberately takes no expected_execution_version, because that counter was measured not to move during an action and a caller could never hold a fresh one in time to cancel. A terminal action answers cancel_requested=false with completed=true; an unknown id or an older generation answers action_not_found.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -578,17 +664,12 @@
           },
           "action_id": {
             "type": "string"
-          },
-          "expected_execution_version": {
-            "type": "integer",
-            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
           }
         },
         "required": [
           "operation_version",
           "session_id",
-          "action_id",
-          "expected_execution_version"
+          "action_id"
         ]
       },
       "annotations": {

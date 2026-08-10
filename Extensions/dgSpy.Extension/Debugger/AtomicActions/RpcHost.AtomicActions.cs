@@ -15,20 +15,38 @@ using dnSpy.Contracts.Debugger.DotNet.Code;
 namespace dgSpy.Extension {
 	sealed partial class RpcHost {
 		readonly AtomicActionRecordStore atomicActions=new AtomicActionRecordStore();
+		AtomicActionScheduler? atomicScheduler;
+		AtomicActionScheduler AtomicScheduler => atomicScheduler ??= new AtomicActionScheduler(atomicActions);
 
-		async Task<AtomicActionResult> RunAtomicActionAsync(RpcRequest req,CancellationToken cancellationToken) {
-			CheckSession(req);
-			RequireAtomicOperationVersion(req);
+		/// <summary>Everything an atomic action needs that can be decided without touching the debugger.
+		/// Both entry points validate through this, so a rejected request is rejected identically and, on the
+		/// asynchronous path, before any record exists to reconcile.</summary>
+		sealed class AtomicActionPlan {
+			public AtomicActionPlan(AtomicActionRequest request,IAtomicAction action,RpcRequest scoped) { Request=request; Action=action; Scoped=scoped; }
+			public AtomicActionRequest Request { get; }
+			public IAtomicAction Action { get; }
+			public RpcRequest Scoped { get; }
+		}
+
+		AtomicActionPlan PrepareAtomicAction(RpcRequest req) {
 			var request=ProtocolJson.FromNode<AtomicActionRequest>(req.Arguments["request"]) ?? throw new RpcException("invalid_arguments","request is required.");
 			AtomicActionRequestScope.ValidateProcessIds((int?)req.Arguments["process_id"],request.ProcessId);
 			request.DeadlineUtc=AtomicActionDeadline.Resolve(request.DeadlineUtc,(int?)req.Arguments["timeout_ms"],DateTime.UtcNow);
 			var kind=(string?)req.Arguments["action_kind"] ?? throw new RpcException("invalid_arguments","action_kind is required.");
 			var action=CreateAtomicAction(kind,req);
-			var record=atomicActions.TryStart(request.ActionId) ?? throw new RpcException("action_exists","An atomic action with this action_id already exists or is still retained for reconciliation.");
-			var host=new RpcAtomicActionHost(this,AtomicActionRequestScope.ScopeModuleSearch(req,request),request.ProcessId);
+			return new AtomicActionPlan(request,action,AtomicActionRequestScope.ScopeModuleSearch(req,request));
+		}
+
+		async Task<AtomicActionResult> RunAtomicActionAsync(RpcRequest req,CancellationToken cancellationToken) {
+			CheckSession(req);
+			RequireAtomicOperationVersion(req);
+			var plan=PrepareAtomicAction(req);
+			var request=plan.Request;
+			var record=atomicActions.TryStart(request.ActionId,CurrentAtomicGeneration(request.ProcessId)) ?? throw new RpcException("action_exists","An atomic action with this action_id already exists or is still retained for reconciliation.");
+			var host=new RpcAtomicActionHost(this,plan.Scoped,request.ProcessId);
 			try {
 				var machine=new AtomicActionStateMachine(actionLeases,host);
-				var result=await machine.RunAsync(request,action,cancellationToken,record.Cancelled.Token).ConfigureAwait(false);
+				var result=await machine.RunAsync(request,plan.Action,cancellationToken,record.Cancelled.Token,record.AdvanceToPhase).ConfigureAwait(false);
 				result.Status=AtomicActionInterruptions.RemapForShutdown(result.Status,shutdown.IsCancellationRequested);
 				atomicActions.Complete(record,result);
 				await SettleAtomicResumeAsync(request,result).ConfigureAwait(false);
@@ -40,6 +58,73 @@ namespace dgSpy.Extension {
 		}
 
 		/// <summary>
+		/// The asynchronous entry point. It validates synchronously, reserves the action id, creates the
+		/// retained record, schedules host-owned execution, and returns <c>accepted</c> - it does <b>not</b>
+		/// wait for lease acquisition or breakpoint binding. Waiting for "armed" was the first draft and was
+		/// the design-stopping flaw: a host connection reads one request and awaits its full dispatch before
+		/// reading the next, so a start that waits for arming still blocks the only channel the caller has,
+		/// and a hung bind is still uncancellable. Validation failure returns an RPC error and creates no
+		/// record; an arming failure later becomes a retained terminal record carrying the error.
+		/// </summary>
+		object StartAtomicAction(RpcRequest req) {
+			CheckSession(req);
+			RequireAtomicOperationVersion(req);
+			// disconnect_policy belongs to the blocking form only. Once this call deliberately returns, the
+			// request lifetime ends *normally*, so cancel_on_disconnect and complete_on_disconnect describe
+			// nothing: the action cannot read the success of its own start request as a client disconnect.
+			// Refused rather than ignored, because silently dropping a policy the caller asked for is how a
+			// caller ends up believing controller loss will cancel their target mutation.
+			var policy=AtomicActionRequestScope.ResolveAsyncDisconnectPolicy(req.Arguments["request"]);
+			var plan=PrepareAtomicAction(req);
+			var request=plan.Request;
+			request.DisconnectPolicy=policy;
+			var acceptance=AtomicScheduler.Start(request.ActionId,CurrentAtomicGeneration(request.ProcessId),
+				async record=>{
+					var host=new RpcAtomicActionHost(this,plan.Scoped,request.ProcessId);
+					try {
+						var machine=new AtomicActionStateMachine(actionLeases,host);
+						// CancellationToken.None as the client lifetime, deliberately: the run is host-owned
+						// from acceptance, and the only lifetime that may end it is its own deadline or an
+						// explicit cancel.
+						var result=await machine.RunAsync(request,plan.Action,CancellationToken.None,record.Cancelled.Token,record.AdvanceToPhase).ConfigureAwait(false);
+						result.Status=AtomicActionInterruptions.RemapForShutdown(result.Status,shutdown.IsCancellationRequested);
+						await SettleAtomicResumeAsync(request,result).ConfigureAwait(false);
+						return result;
+					}
+					finally { host.Dispose(); }
+				},
+				(reason,message)=>SynthesizeAtomicTerminal(request,reason,message));
+			return acceptance;
+		}
+
+		/// <summary>A terminal record for a run that never produced one - cancelled while queued, or ended by
+		/// host shutdown. It carries the requested slot and the effective deadline so the record is still a
+		/// reconcilable account rather than a bare error string.</summary>
+		static AtomicActionResult SynthesizeAtomicTerminal(AtomicActionRequest request,global::HookLab.Contracts.InterruptionReason reason,string message) =>
+			new AtomicActionResult {
+				RequestedSlot=new AtomicActionSlot(request.Module,request.MethodToken,request.IlOffset),
+				EffectiveDeadlineUtc=request.DeadlineUtc.ToUniversalTime(),
+				Error=message,
+				Status=new global::HookLab.Contracts.AtomicActionStatus(global::HookLab.Contracts.ActionOutcome.trigger_not_reached,reason,
+					global::HookLab.Contracts.CleanupOutcome.not_required,false,Guid.NewGuid().ToString("N"),null),
+			};
+
+		/// <summary>The session and process identity a record is bound to. A cancel has to match it, which is
+		/// what replaces <c>expected_execution_version</c>: measurement showed that counter did not move
+		/// during an action, and a value stamped onto the run's own response only reaches the caller once the
+		/// run is over, so it could never have guarded a cancellation.</summary>
+		AtomicActionGeneration CurrentAtomicGeneration(int processId) { lock(sync) return new AtomicActionGeneration(sessionId,processId,lifecycleVersion); }
+
+		/// <summary>Cancels every in-flight background action and forces a terminal record onto anything that
+		/// does not finish inside the bound. Returns how many had to be forced.</summary>
+		internal Task<int> ReconcileAtomicActionsForShutdown(TimeSpan bound) =>
+			AtomicScheduler.ShutdownAsync(bound,(reason,message)=>new AtomicActionResult {
+				Status=new global::HookLab.Contracts.AtomicActionStatus(global::HookLab.Contracts.ActionOutcome.trigger_not_reached,reason,
+					global::HookLab.Contracts.CleanupOutcome.ambiguous,false,Guid.NewGuid().ToString("N"),AtomicActionStateMachine.StatusOperation),
+				Error=message,
+			});
+
+		/// <summary>
 		/// run_atomic_action is version-stamped, so the vector on its response has to be the one after its
 		/// final resume applied. That resume is authorized on the debugger thread and its Continued event is
 		/// recorded afterwards, so composing the answer immediately would stamp the paused vector and the
@@ -49,7 +134,7 @@ namespace dgSpy.Extension {
 		/// </summary>
 		async Task SettleAtomicResumeAsync(AtomicActionRequest request,AtomicActionResult result) {
 			if(request.ResumePolicy!=AtomicActionResumePolicy.resume) return;
-			if(result.Status.InterruptionReason==HookLab.Contracts.InterruptionReason.external_debugger_action) return;
+			if(result.Status.InterruptionReason==global::HookLab.Contracts.InterruptionReason.external_debugger_action) return;
 			using var bound=CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
 			bound.CancelAfter(TimeSpan.FromMilliseconds(750));
 			while(true) {
@@ -68,16 +153,36 @@ namespace dgSpy.Extension {
 			if(!atomicActions.TryGet(id,out var record)) throw new RpcException("action_not_found","No atomic action has this action_id. Terminal records are retained for "+(int)AtomicActionRecordStore.TerminalRetention.TotalMinutes+" minutes.");
 			// A run that failed before it could produce a result reports why, rather than a bare
 			// completed=true with nothing in it.
-			return new { schema_version=1,action_id=id,completed=record.Completed,result=record.Result,
+			// Read completed *after* the phase, mirroring the order Complete writes them, so a status that
+			// reports completed=false can never carry the terminal phase and vice versa.
+			var phase=record.Phase;
+			return new { schema_version=1,action_id=id,phase=phase.ToString(),completed=record.Completed,
+				cancel_requested=record.CancelRequested,
+				// There is deliberately no wait_atomic_action. A blocking wait would recreate the defect the
+				// asynchronous shape removes: while the single registered channel waits, a cancel cannot
+				// overtake it. The caller polls at the interval below and chooses between the next read and
+				// a cancel.
+				recommended_poll_after_ms=record.RecommendedPollAfterMs,
+				result=record.Result,
 				error=record.ErrorCode is null ? null : new { code=record.ErrorCode,message=record.ErrorMessage } };
 		}
 
+		/// <summary>
+		/// Authorized by the record's captured session and process generation plus the exact action_id -
+		/// not by <c>expected_execution_version</c>, which measurement showed did not move during any
+		/// observed action, and which a canceller could not have obtained in time anyway: the run stamps its
+		/// vector onto its own response, which only arrives once there is nothing left to cancel. Controller
+		/// authority is enforced above this, by the Gateway's session controller.
+		/// </summary>
 		object CancelAtomicAction(RpcRequest req) {
 			RequireAtomicOperationVersion(req);
 			var id=(string?)req.Arguments["action_id"] ?? throw new RpcException("invalid_arguments","action_id is required.");
 			if(!atomicActions.TryGet(id,out var record)) throw new RpcException("action_not_found","No atomic action has this action_id.");
-			var requested=record.TryCancel();
-			return new { schema_version=1,action_id=id,cancel_requested=requested,completed=record.Completed };
+			if(!record.Generation.Authorizes(CurrentAtomicGeneration(record.Generation.ProcessId)))
+				throw new RpcException("action_not_found","This action_id belongs to an earlier session or process generation; there is nothing under it to cancel now.");
+			var requested=record.TryCancel(out var alreadyRequested);
+			return new { schema_version=1,action_id=id,cancel_requested=requested,already_requested=alreadyRequested,
+				completed=record.Completed,phase=record.Phase.ToString() };
 		}
 
 		IAtomicAction CreateAtomicAction(string kind,RpcRequest req) => kind switch {
@@ -116,7 +221,7 @@ namespace dgSpy.Extension {
 			/// second unrequested mutation rather than a rollback. So there is nothing to undo, and saying
 			/// <c>not_required</c> is the truthful answer rather than a stub.</summary>
 			public Task<AtomicActionCleanup> CleanupAsync(AtomicActionCleanupContext context,CancellationToken token) =>
-				Task.FromResult(new AtomicActionCleanup { Outcome=HookLab.Contracts.CleanupOutcome.not_required });
+				Task.FromResult(new AtomicActionCleanup { Outcome=global::HookLab.Contracts.CleanupOutcome.not_required });
 			public async Task<AtomicActionVerification> VerifyAsync(AtomicActionContext context,AtomicActionExecution execution,CancellationToken token) {
 				var expression=(string?)source.Arguments["verification_path"];
 				if(String.IsNullOrWhiteSpace(expression)) return new AtomicActionVerification { Verified=true,Evidence=execution.Evidence };
@@ -167,8 +272,11 @@ namespace dgSpy.Extension {
 				await SettleStopAsync(cancellationToken).ConfigureAwait(false);
 				return await owner.OnDebuggerAsync(()=>{
 					var thread=hit.Thread ?? throw AtomicActionInterruptions.MissingThread();
-					var states=thread.State.Select(value=>value.State).ToArray(); var evaluable=owner.EvaluationBlocker(thread,states) is null;
-					return new AtomicActionStop(runtime!.Guid.ToString("D"),module!.AppDomain?.Id.ToString(CultureInfo.InvariantCulture) ?? "default",process!.Id,ThreadId(thread),module.Filename,hit.Location.Token,hit.Location.Offset,evaluable);
+					// The whole probe, not `blocker is null`. Collapsing it lost which of three blockers had
+					// fired and hid a probe that had failed outright, and the state machine then printed one
+					// hardcoded unsafe-point sentence for all of them.
+					var states=thread.State.Select(value=>value.State).ToArray();
+					return new AtomicActionStop(runtime!.Guid.ToString("D"),module!.AppDomain?.Id.ToString(CultureInfo.InvariantCulture) ?? "default",process!.Id,ThreadId(thread),module.Filename,hit.Location.Token,hit.Location.Offset,owner.ProbeEvaluability(thread,states));
 				},cancellationToken).ConfigureAwait(false);
 			}
 			/// <summary>

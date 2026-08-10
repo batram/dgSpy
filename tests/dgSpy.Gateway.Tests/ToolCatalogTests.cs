@@ -53,6 +53,44 @@ public sealed class ToolCatalogTests {
 		Assert.Contains("operation_version",ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
 	}
 
+	// T08c.
+	[Fact]
+	public void Cancelling_an_atomic_action_demands_no_execution_version_it_could_not_hold() {
+		var cancel=ProtocolJson.ToNode(ToolCatalog.All.Single(value=>Name(value)=="cancel_atomic_action"))!.AsObject();
+		var required=ProtocolJson.FromNode<string[]>(cancel["inputSchema"]?["required"]) ?? Array.Empty<string>();
+		// Measured: execution_version did not move during any observed run_atomic_action, and a value the
+		// run stamps onto its own response only reaches the caller once the action is over - so the argument
+		// could never have guarded a cancellation. It must be gone from the schema, not merely optional.
+		Assert.DoesNotContain("expected_execution_version",required);
+		Assert.Null(cancel["inputSchema"]?["properties"]?["expected_execution_version"]);
+		Assert.Contains("operation_version",required);
+		Assert.Contains("session_id",required);
+		Assert.Contains("action_id",required);
+		Assert.False(MutationGuards.RequiresVersionGuard("cancel_atomic_action"));
+		// The exemption is exactly one operation wide: every other mutation still gets its guard injected.
+		Assert.True(MutationGuards.RequiresVersionGuard("run_atomic_action"));
+		Assert.True(MutationGuards.RequiresVersionGuard("continue"));
+	}
+
+	[Fact]
+	public void Starting_an_atomic_action_is_registered_versioned_and_keeps_its_own_guards() {
+		var start=CapabilityCatalog.Operations.Single(value=>value.Operation=="start_atomic_action");
+		Assert.True(start.MutatesSession);
+		Assert.Equal(1,start.OperationVersion);
+		// Its bound is the validate-and-schedule cost, not the action's, because it returns after
+		// registration - before lease acquisition and before breakpoint binding.
+		Assert.True(start.MaxDurationMs<CapabilityCatalog.BoundMs("run_atomic_action"));
+		Assert.True(MutationGuards.RequiresStop("start_atomic_action"));
+		Assert.False(MutationGuards.RequiresStop("cancel_atomic_action"));
+		var tool=ProtocolJson.ToNode(ToolCatalog.All.Single(value=>Name(value)=="start_atomic_action"))!.AsObject();
+		var required=ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>();
+		Assert.Contains("expected_execution_version",required);
+		Assert.Contains("expected_stop_id",required);
+		// run_atomic_action stays as the blocking version-1 compatibility operation; the asynchronous shape
+		// is a new operation beside it, not a silent change of meaning under the same version.
+		Assert.Equal(1,CapabilityCatalog.Operations.Single(value=>value.Operation=="run_atomic_action").OperationVersion);
+	}
+
 	[Fact]
 	public void Host_unavailable_recovery_directs_local_clients_to_the_launcher() {
 		var guidance=ToolCatalog.ErrorGuidance("host_unavailable");

@@ -118,10 +118,25 @@ namespace dndbg.Engine {
 			}
 		}
 
+		/// <summary>
+		/// Reads the thread's user state, reporting whether ICorDebugThread::GetUserState actually answered.
+		/// The distinction matters: a failed HRESULT converted to state 0 is indistinguishable from a thread
+		/// with no flags set, so a consumer asking "is USER_UNSAFE_POINT set?" reads a failed probe as
+		/// *safe*. Callers that only need the flags keep using <see cref="UserState"/>; callers that would
+		/// draw a safety conclusion from the absence of a flag must use this and treat false as unknown.
+		/// </summary>
+		public bool TryGetUserState(out CorDebugUserState state) {
+			int hr = obj.GetUserState(out state);
+			if (hr >= 0)
+				return true;
+			state = 0;
+			return false;
+		}
+
 		public CorDebugUserState UserState {
 			get {
-				int hr = obj.GetUserState(out var state);
-				return hr < 0 ? 0 : state;
+				TryGetUserState(out var state);
+				return state;
 			}
 		}
 

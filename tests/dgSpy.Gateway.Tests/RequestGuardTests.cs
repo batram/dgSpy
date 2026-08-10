@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.IO;
 using System.Linq;
@@ -164,6 +165,13 @@ public class SessionControlTests {
 				// The deprecated expected_state_version alias is gone: a dead parameter on every mutating
 				// schema taxes exactly the schema-budgeted blind-driving scenario this server exists for.
 				Assert.Null(tool["inputSchema"]?["properties"]?["expected_state_version"]);
+				// A deliberately unguarded mutation advertises no guard at all, rather than an optional one
+				// a caller would try to satisfy. T08c: cancel_atomic_action is the only member.
+				if(!MutationGuards.RequiresVersionGuard(operation.Operation)) {
+					Assert.Null(tool["inputSchema"]?["properties"]?[guard]);
+					Assert.DoesNotContain(guard,ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
+					continue;
+				}
 				Assert.NotNull(tool["inputSchema"]?["properties"]?[guard]);
 				Assert.Contains(guard,ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
 				if(MutationGuards.RequiresStop(operation.Operation)) Assert.Contains("expected_stop_id",ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
@@ -313,6 +321,42 @@ public class HostRegistryTests {
 			Assert.Equal("execution_version_required",(await executor.ExecuteAsync("pause",ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a" }),"client-a",default)).Error?.Code);
 			Assert.Equal("stale_execution",(await executor.ExecuteAsync("pause",ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a",expected_execution_version=2 }),"client-a",default)).Error?.Code);
 			Assert.Null((await executor.ExecuteAsync("pause",selection,"client-a",default)).Error); await responder; listener.Stop(); Assert.Contains("execution_version_required",File.ReadAllText(auditPath));
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	/// <summary>
+	/// T08c. Dropping the argument from the schema is not enough: the executor demands one at runtime for
+	/// every mutation, independently of the schema, and a live run found that gap after the schema test
+	/// passed. An unguarded mutation still needs a session and an active controller - only the version
+	/// comparison is skipped, because there is no value a canceller could hold that would guard anything.
+	/// </summary>
+	[Fact]
+	public async Task Cancelling_an_atomic_action_needs_a_controller_but_no_execution_version() {
+		var directory=CreateRegistryDirectory(); var auditPath=Path.Combine(directory,"audit.jsonl");
+		try {
+			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} }); var router=new HostRouter(HostRegistry.FromJson(json,directory));
+			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start(); using var remote=new TcpClient(); var accept=listener.AcceptTcpClientAsync(); await remote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var gateway=await accept;
+			var gatewayReader=new StreamReader(gateway.GetStream(),Encoding.UTF8,false,4096,true); var gatewayWriter=new StreamWriter(gateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true}; Assert.True(router.TryRegister("host-a",gateway,gatewayReader,gatewayWriter,out _));
+			var remoteReader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true); var remoteWriter=new StreamWriter(remote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true};
+			var seen=new List<RpcRequest>();
+			var responder=Task.Run(async ()=>{ for(var i=0;i<2;i++){ var request=ProtocolJson.Deserialize<RpcRequest>((await remoteReader.ReadLineAsync())!)!; lock(seen) seen.Add(request); object result=request.Operation=="launch" ? new SessionState { SessionId="session-a",State="paused",StateVersion=7,ExecutionVersion=3,LifecycleVersion=2,BreakpointsVersion=1,StopId="stop-1" } : new { schema_version=1,action_id="act-1",cancel_requested=true,completed=false }; await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,result))); } });
+			var clients=new McpClientSessions(TimeSpan.FromMinutes(5)); clients.Touch("client-a"); clients.Touch("client-b"); var controllers=new SessionControllers(clients);
+			var executor=new GatewayToolExecutor(router,controllers,new GatewayAccessPolicy("full-control"),new GatewayAuditLog(auditPath,4096));
+			Assert.Null((await executor.ExecuteAsync("launch",ProtocolJson.ToObject(new { host_id="host-a",filename="target.exe" }),"client-a",default)).Error);
+
+			var cancel=ProtocolJson.ToObject(new { host_id="host-a",session_id="session-a",operation_version=1,action_id="act-1" });
+			// Another client's cancel is still refused: dropping the version guard drops nothing else.
+			Assert.Equal("session_owned",(await executor.ExecuteAsync("cancel_atomic_action",cancel,"client-b",default)).Error?.Code);
+			var answered=await executor.ExecuteAsync("cancel_atomic_action",cancel,"client-a",default);
+			Assert.Null(answered.Error);
+			await responder; listener.Stop();
+			// And it reached the host without the gateway interposing a get_session_state to compare a
+			// version against - that read is exactly the round trip a canceller cannot afford.
+			lock(seen) {
+				Assert.Equal(new[]{"launch","cancel_atomic_action"},seen.Select(value=>value.Operation).ToArray());
+				Assert.Null(seen[1].Arguments["expected_execution_version"]);
+			}
 		}
 		finally { Directory.Delete(directory,true); }
 	}

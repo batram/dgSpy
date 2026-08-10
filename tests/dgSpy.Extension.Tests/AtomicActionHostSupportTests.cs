@@ -16,7 +16,7 @@ public sealed class AtomicActionHostSupportTests {
 		ActionId="a1",ActionName="test",ProcessId=42,RuntimeId="runtime-a",AppDomainId="domain",
 		Module="target.dll",MethodToken=0x06000001,IlOffset=3,NearbyOffsets=nearby,DeadlineUtc=DateTime.UtcNow.AddSeconds(5),
 	};
-	static AtomicActionStop Stop(uint offset,string module="target.dll",uint token=0x06000001) => new("runtime-a","domain",42,"thread",module,token,offset,true);
+	static AtomicActionStop Stop(uint offset,string module="target.dll",uint token=0x06000001) => new("runtime-a","domain",42,"thread",module,token,offset,AtomicActionEvaluationProbe.Clear);
 
 	[Fact] public void The_slot_reported_is_the_declared_offset_the_stop_actually_landed_on() {
 		var slot=NearbySlotSelector.Select(Request(4,9,15),Stop(9));
@@ -39,7 +39,7 @@ public sealed class AtomicActionHostSupportTests {
 		Assert.True(NearbySlotSelector.SameModule(@"C:\build\out\Milestone1Target.exe","Milestone1Target"));
 		Assert.True(NearbySlotSelector.SameModule("target.dll","target.dll"));
 		Assert.False(NearbySlotSelector.SameModule(@"C:\build\out\Milestone1Target.exe","Other.exe"));
-		var slot=NearbySlotSelector.Select(Request(4),new AtomicActionStop("runtime-a","domain",42,"thread",@"C:\build\out\target.dll",0x06000001,4,true));
+		var slot=NearbySlotSelector.Select(Request(4),new AtomicActionStop("runtime-a","domain",42,"thread",@"C:\build\out\target.dll",0x06000001,4,AtomicActionEvaluationProbe.Clear));
 		Assert.Equal((uint)4,slot!.IlOffset);
 	}
 

@@ -27,8 +27,14 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			this.releaseBudget=releaseBudget ?? ActionLease.CleanupWindow-MachineCleanupReserve-ActionCleanupReserve;
 		}
 
-		public async Task<AtomicActionResult> RunAsync(AtomicActionRequest request,IAtomicAction action,CancellationToken clientLifetime,CancellationToken cancellationToken) {
+		/// <param name="phase">Called as the run advances, so an asynchronous caller polling
+		/// <c>get_atomic_action_status</c> can see where it is. Never called with a phase earlier than one
+		/// already reported - the record enforces that too, but reporting them in order here is what makes
+		/// the record's guard a second line rather than the only one.</param>
+		public async Task<AtomicActionResult> RunAsync(AtomicActionRequest request,IAtomicAction action,CancellationToken clientLifetime,CancellationToken cancellationToken,Action<AtomicActionPhase>? phase=null) {
 			Validate(request,action);
+			var report=phase ?? (_=>{ });
+			report(AtomicActionPhase.arming);
 			var auditId=Guid.NewGuid().ToString("N");
 			var result=new AtomicActionResult { RequestedSlot=new AtomicActionSlot(request.Module,request.MethodToken,request.IlOffset),EffectiveDeadlineUtc=request.DeadlineUtc.ToUniversalTime() };
 			var actionOutcome=ActionOutcome.trigger_not_reached;
@@ -71,7 +77,9 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 					// reconciliation, and overwriting the error with the search verdict erased it.
 					if(breakpoint is null) { actionOutcome=ActionOutcome.nearby_slot_not_found; result.Error=Combine(result.Error,"No declared nearby slot bound."); return result; }
 				}
+				report(AtomicActionPhase.armed);
 				await host.ContinueAsync(mutation=>lease.ExecuteMutation(mutation),active.Token).ConfigureAwait(false);
+				report(AtomicActionPhase.running);
 				var stop=await host.WaitForOwnedStopAsync(breakpoint.OwnerToken,cursor,active.Token).ConfigureAwait(false);
 				EnsureIdentity(request,stop);
 				if(stop.MethodToken!=request.MethodToken || stop.IlOffset!=request.IlOffset || !NearbySlotSelector.SameModule(stop.Module,request.Module)) {
@@ -82,7 +90,17 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 					if(slot is null) { actionOutcome=ActionOutcome.nearby_slot_not_found; result.Error="The stop did not land on any declared nearby slot."; return result; }
 				}
 				result.UsedSlot=slot;
-				if(!stop.Evaluable) { actionOutcome=ActionOutcome.reached_not_evaluable; result.Error="The target was reached at a CorDebug-unsafe point."; return result; }
+				// The blocker is recorded whatever it is, including `none`: a caller comparing two runs
+				// needs to see that the preflight ran and found nothing, not infer it from an absent field.
+				result.EvaluationBlocker=stop.Evaluation.Blocker;
+				result.EvaluationProbeStage=stop.Evaluation.Stage;
+				result.EvaluationProbeErrorCategory=stop.Evaluation.ErrorCategory;
+				result.EvaluationProbeError=stop.Evaluation.Error;
+				// Every blocker gets its own sentence. The single hardcoded "CorDebug-unsafe point" line this
+				// replaces was false for no_frames and native_frame, and said nothing at all when the probe
+				// itself had failed.
+				if(!stop.Evaluable) { actionOutcome=ActionOutcome.reached_not_evaluable; result.Error=stop.Evaluation.Describe(); return result; }
+				report(AtomicActionPhase.executing);
 				context=new AtomicActionContext(request,stop,slot,auditId);
 				AtomicActionExecution execution;
 				// Cancellation inside ExecuteAsync reports action_failed with may_have_executed, because the
@@ -98,6 +116,7 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 				result.MutationAuditId=execution.MutationAuditId;
 				if(!execution.Completed) { actionOutcome=ActionOutcome.action_failed; result.Error=execution.Error; return result; }
 				actionOutcome=ActionOutcome.completed;
+				report(AtomicActionPhase.verifying);
 				AtomicActionVerification verification;
 				try { verification=await action.VerifyAsync(context,execution,active.Token).ConfigureAwait(false); }
 				catch(OperationCanceledException) { throw; }
@@ -115,6 +134,7 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			}
 			catch(Exception ex) { actionOutcome=ActionOutcome.action_failed; result.Error=ex.Message; }
 			finally {
+				report(AtomicActionPhase.cleaning_up);
 				if(breakpoint is not null) {
 					var cleanupFailed=false;
 					// Both releases wait on the debugger, and both used to be passed CancellationToken.None:

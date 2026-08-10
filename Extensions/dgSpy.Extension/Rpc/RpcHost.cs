@@ -13,6 +13,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using dgSpy.Extension.ToolWindows;
 using dgSpy.Extension.Debugger;
+using dgSpy.Extension.Debugger.AtomicActions;
 using dgSpy.Extension.Debugger.OwnedBreakpoints;
 using dgSpy.Protocol;
 using dnSpy.Contracts.Debugger;
@@ -310,6 +311,7 @@ namespace dgSpy.Extension {
 			case "pause": return RpcResponse.Success(req.RequestId,await PauseProcessAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "continue": return RpcResponse.Success(req.RequestId,await ContinueProcessAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "run_atomic_action": return RpcResponse.Success(req.RequestId,await RunAtomicActionAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "start_atomic_action": return RpcResponse.Success(req.RequestId,StartAtomicAction(req));
 			case "get_atomic_action_status": return RpcResponse.Success(req.RequestId,GetAtomicActionStatus(req));
 			case "cancel_atomic_action": return RpcResponse.Success(req.RequestId,CancelAtomicAction(req));
 			case "set_il_breakpoint": return RpcResponse.Success(req.RequestId,await SetBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
@@ -721,23 +723,40 @@ namespace dgSpy.Extension {
 		/// Mono frame fetch is the call a disappearing Unity thread can hang, and dnSpy's fork bounds it at
 		/// three seconds rather than never returning.</summary>
 		string? EvaluationBlocker(DbgThread thread,string[] states) {
+			var probe=ProbeEvaluability(thread,states);
+			return probe.Evaluable ? null : probe.Blocker.ToString();
+		}
+		/// <summary>
+		/// The typed form. Two changes from the string it replaced, both because the string was untruthful.
+		/// A failure anywhere in the stack walk used to be answered <c>no_frames</c> from a catch-all, which
+		/// reported a failed measurement as a fact about the target; it is now <c>probe_failed</c> carrying
+		/// the stage and a bounded, redacted category. And a thread whose <c>GetUserState</c> failed used to
+		/// arrive here as an empty state array - identical to a healthy thread at a safe point - so the
+		/// absence of <c>UnsafePoint</c> read as a safety guarantee; the CorDebug wrapper now publishes
+		/// <c>UserStateUnavailable</c> instead, and it is reported as <c>probe_failed</c> at stage
+		/// <c>user_state</c> rather than silently passing the preflight.
+		/// </summary>
+		AtomicActionEvaluationProbe ProbeEvaluability(DbgThread thread,string[] states) {
 			// Order mirrors the engine's own: it rejects a missing or native frame before it looks at the
 			// safe point, so a thread that is both reports the reason the caller would actually hit.
 			var walker=thread.CreateStackWalker();
 			try {
-				var probe=walker.GetNextStackFrames(1);
+				var frames=walker.GetNextStackFrames(1);
 				try {
-					if (probe.Length==0) return "no_frames";
+					if (frames.Length==0) return new AtomicActionEvaluationProbe(AtomicActionEvaluationBlocker.no_frames);
 					// A DbgStackWalker yields native frames too, so "has a frame" is not "has a managed frame".
 					// Only a managed frame carries a module, and evaluating against a native one fails with
 					// "Can't evaluate expressions when current stack frame is a native stack frame".
-					if (probe[0].Module is null) return "native_frame";
+					if (frames[0].Module is null) return new AtomicActionEvaluationProbe(AtomicActionEvaluationBlocker.native_frame);
 				}
-				finally { manager.Close(probe); }
+				finally { manager.Close(frames); }
 			}
-			catch (Exception ex) when (ex is not RpcException) { return "no_frames"; }
+			catch (Exception ex) when (ex is not RpcException) { return AtomicActionEvaluationProbe.FromStackWalkFailure(ex); }
 			finally { walker.Close(); }
-			return Array.IndexOf(states,CorThreadUserStates.UnsafePoint)>=0 ? "unsafe_point" : null;
+			if (Array.IndexOf(states,CorThreadUserStates.UserStateUnavailable)>=0) return AtomicActionEvaluationProbe.UserStateUnavailable;
+			return Array.IndexOf(states,CorThreadUserStates.UnsafePoint)>=0
+				? new AtomicActionEvaluationProbe(AtomicActionEvaluationBlocker.unsafe_point)
+				: AtomicActionEvaluationProbe.Clear;
 		}
 		async Task<FrameInfo[]> GetCallStackAsync(RpcRequest req,CancellationToken cancellationToken) {
 			CheckSession(req);
@@ -873,6 +892,11 @@ namespace dgSpy.Extension {
 		/// can. It does cover every orderly exit, which is the one an agent or a redeploy causes.
 		/// Bounded, and every failure is swallowed: an exit path must always reach the exit.</summary>
 		public void DetachTargetsBeforeExit(TimeSpan timeout) {
+			// Before the targets go, every host-owned background action has to reach a terminal record.
+			// An asynchronous action outlives the request that started it, so nothing else would ever close
+			// it out: it would stay non-terminal forever, holding its action_id, with no account of a
+			// mutation that may already have applied.
+			try { ReconcileAtomicActionsForShutdown(timeout).GetAwaiter().GetResult(); } catch { }
 			try {
 				if (!manager.IsDebugging) return;
 				// Not disposed on purpose: the callback may still be queued when the wait gives up, and

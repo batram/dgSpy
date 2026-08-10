@@ -245,7 +245,14 @@ namespace dgSpy.Extension {
 			if(req.Arguments["session_id"] is not null) CheckSession(req);
 			switch(req.Operation) {
 			case "detach": case "terminate": case "restart": CheckLifecycleVersion(req); break;
-			case "pause": case "continue": case "run_atomic_action": case "cancel_atomic_action": case "step_into": case "step_over": case "step_out": case "set_value": case "invoke_method": case "create_object": case "write_memory": case "set_instruction_pointer": case "create_object_id": case "release_object_id": case "write_value_export": CheckExecutionVersion(req); break;
+			// cancel_atomic_action is deliberately absent. Its expected_execution_version was measured not to
+			// guard what its own comment claimed: the counter did not move during any observed action, and if
+			// it had, the caller's value would be stale before they could cancel - the run only hands out a
+			// fresh vector on its own response, which arrives when there is nothing left to cancel. Cancel is
+			// authorized by the record's captured session and process generation instead.
+			// start_atomic_action keeps the guard: it is the call that initiates the mutation, and the caller
+			// does hold a current vector at that point.
+			case "pause": case "continue": case "run_atomic_action": case "start_atomic_action": case "step_into": case "step_over": case "step_out": case "set_value": case "invoke_method": case "create_object": case "write_memory": case "set_instruction_pointer": case "create_object_id": case "release_object_id": case "write_value_export": CheckExecutionVersion(req); break;
 			case "set_il_breakpoint": case "set_breakpoint": case "remove_breakpoint": case "clear_breakpoints": case "update_breakpoint": case "set_exception_breakpoint": case "set_module_breakpoint": case "update_module_breakpoint": case "remove_module_breakpoint": case "import_breakpoints": case "set_exception_policy": case "remove_exception_policy": case "restore_exception_defaults": CheckBreakpointsVersion(req); break;
 			}
 		}

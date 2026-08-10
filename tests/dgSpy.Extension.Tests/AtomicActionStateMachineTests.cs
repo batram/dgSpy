@@ -8,7 +8,7 @@ namespace dgSpy.Extension.Tests;
 
 public sealed class AtomicActionStateMachineTests {
 	static AtomicActionRequest Request() => new() { ActionId=Guid.NewGuid().ToString("N"),ActionName="test",ProcessId=42,RuntimeId="runtime",AppDomainId="domain",Module="target.dll",MethodToken=0x06000001,IlOffset=3,DeadlineUtc=DateTime.UtcNow.AddSeconds(10) };
-	static AtomicActionStop Stop(bool evaluable=true,uint offset=3) => new("runtime","domain",42,"thread","target.dll",0x06000001,offset,evaluable);
+	static AtomicActionStop Stop(AtomicActionEvaluationProbe? evaluation=null,uint offset=3) => new("runtime","domain",42,"thread","target.dll",0x06000001,offset,evaluation ?? AtomicActionEvaluationProbe.Clear);
 
 	[Fact] public async Task ExactSlotCompletesAndRecordsEvidence() {
 		var host=new Host(Stop()); var action=new ActionImpl();
@@ -29,7 +29,7 @@ public sealed class AtomicActionStateMachineTests {
 	}
 
 	[Fact] public async Task UnsafePointIsReachedNotEvaluable() {
-		var result=await Run(new Host(Stop(false)),new ActionImpl(),Request()); Assert.Equal(ActionOutcome.reached_not_evaluable,result.Status.ActionOutcome);
+		var result=await Run(new Host(Stop(new AtomicActionEvaluationProbe(AtomicActionEvaluationBlocker.unsafe_point))),new ActionImpl(),Request()); Assert.Equal(ActionOutcome.reached_not_evaluable,result.Status.ActionOutcome);
 	}
 
 	[Fact] public async Task UndeclaredNearbySlotIsRejected() {
@@ -110,7 +110,7 @@ public sealed class AtomicActionStateMachineTests {
 	}
 
 	[Fact] public async Task AppDomainReplacementIsClassifiedBeforeAction() {
-		var host=new Host(new AtomicActionStop("runtime","new-domain",42,"thread","target.dll",0x06000001,3,true)); var result=await Run(host,new ActionImpl(),Request());
+		var host=new Host(new AtomicActionStop("runtime","new-domain",42,"thread","target.dll",0x06000001,3,AtomicActionEvaluationProbe.Clear)); var result=await Run(host,new ActionImpl(),Request());
 		Assert.Equal(InterruptionReason.appdomain_unloaded,result.Status.InterruptionReason);
 	}
 
@@ -220,7 +220,7 @@ public sealed class AtomicActionStateMachineTests {
 
 	/// <summary>The stop names the module dnSpy resolved; the request names what the caller typed.</summary>
 	[Fact] public async Task AResolvedModulePathIsStillTheRequestedExactTarget() {
-		var host=new Host(new AtomicActionStop("runtime","domain",42,"thread",@"C:\build\out\target.dll",0x06000001,3,true));
+		var host=new Host(new AtomicActionStop("runtime","domain",42,"thread",@"C:\build\out\target.dll",0x06000001,3,AtomicActionEvaluationProbe.Clear));
 		var result=await Run(host,new ActionImpl(),Request());
 		Assert.Equal(ActionOutcome.completed,result.Status.ActionOutcome);
 		Assert.Equal((uint)3,result.UsedSlot!.IlOffset);

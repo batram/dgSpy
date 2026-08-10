@@ -30,8 +30,16 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 		public string? Name { get; }
 		public int SuspendedCount { get; }
 		public CorDebugUserState UserState { get; }
+		/// <summary>False when ICorDebugThread::GetUserState failed. <see cref="UserState"/> is then 0, which
+		/// is also a perfectly valid answer, so the two cases are only distinguishable through this flag.</summary>
+		public bool UserStateAvailable { get; }
 
-		public ThreadProperties(DbgAppDomain? appDomain, string kind, ulong id, ulong? managedId, string? name, int suspendedCount, CorDebugUserState userState) {
+		public ThreadProperties(DbgAppDomain? appDomain, string kind, ulong id, ulong? managedId, string? name, int suspendedCount, CorDebugUserState userState)
+			: this(appDomain, kind, id, managedId, name, suspendedCount, userState, userStateAvailable: true) {
+		}
+
+		public ThreadProperties(DbgAppDomain? appDomain, string kind, ulong id, ulong? managedId, string? name, int suspendedCount, CorDebugUserState userState, bool userStateAvailable) {
+			UserStateAvailable = userStateAvailable;
 			AppDomain = appDomain;
 			Kind = kind;
 			Id = id;
@@ -55,7 +63,7 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 				options |= DbgEngineThread.UpdateOptions.Name;
 			if (other?.SuspendedCount != SuspendedCount)
 				options |= DbgEngineThread.UpdateOptions.SuspendedCount;
-			if (other?.UserState != UserState)
+			if (other?.UserState != UserState || other?.UserStateAvailable != UserStateAvailable)
 				options |= DbgEngineThread.UpdateOptions.State;
 			return options;
 		}

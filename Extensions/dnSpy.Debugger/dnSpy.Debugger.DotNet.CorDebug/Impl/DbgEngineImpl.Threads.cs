@@ -82,9 +82,9 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 			var name = forceReadName ? GetThreadName(thread) : oldProperties?.Name;
 
 			int suspendedCount = thread.CorThread.IsSuspended ? 1 : 0;
-			var userState = thread.CorThread.UserState;
+			bool userStateAvailable = thread.CorThread.TryGetUserState(out var userState);
 			var kind = GetThreadKind(thread, isMainThread);
-			return new ThreadProperties(appDomain, kind, id, managedId, name, suspendedCount, userState);
+			return new ThreadProperties(appDomain, kind, id, managedId, name, suspendedCount, userState, userStateAvailable);
 		}
 
 		static CorValue? TryGetThreadObject(DnThread thread) {
@@ -200,7 +200,7 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 			debuggerThread.VerifyAccess();
 			ReadOnlyCollection<DbgStateInfo>? state = null;
 			if ((updateOptions & DbgEngineThread.UpdateOptions.State) != 0)
-				state = DnThreadUtils.GetState(props.UserState);
+				state = DnThreadUtils.GetState(props.UserState, props.UserStateAvailable);
 			engineThread.Update(updateOptions, appDomain: props.AppDomain, kind: props.Kind, id: props.Id, managedId: props.ManagedId, name: props.Name, suspendedCount: props.SuspendedCount, state: state);
 		}
 
@@ -230,7 +230,7 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 				bool isMainThread = IsMainThread(e.Thread);
 				var props = GetThreadProperties_CorDebug(e.Thread, null, isCreateThread: true, forceReadName: false, isMainThread: isMainThread);
 				var threadData = new DbgThreadData(e.Thread, isMainThread) { Last = props };
-				var state = DnThreadUtils.GetState(props.UserState);
+				var state = DnThreadUtils.GetState(props.UserState, props.UserStateAvailable);
 				e.ShouldPause = true;
 				var engineThread = objectFactory.CreateThread(props.AppDomain, props.Kind, props.Id, props.ManagedId, props.Name, props.SuspendedCount, state, GetMessageFlags(), data: threadData);
 				lock (lockObj)

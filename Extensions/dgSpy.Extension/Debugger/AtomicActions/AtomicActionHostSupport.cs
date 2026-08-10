@@ -76,6 +76,26 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		}
 
 		/// <summary>
+		/// Refuses <c>disconnect_policy</c> on the asynchronous start, and reports the resolved policy.
+		///
+		/// <para>The state machine takes the request/client lifetime token. Once <c>start_atomic_action</c>
+		/// deliberately returns, that request lifetime ends <em>normally</em> - so an asynchronous action
+		/// cannot read the successful completion of its own start request as a client disconnect, and
+		/// <c>cancel_on_disconnect</c>/<c>complete_on_disconnect</c> describe nothing there. The policy
+		/// therefore stays on blocking <c>run_atomic_action</c> only, and the asynchronous path is
+		/// host-owned after acceptance, requiring an explicit cancel.</para>
+		///
+		/// <para>Refused rather than ignored: controller loss silently cancelling a target mutation is a
+		/// policy that has not been designed or tested, and a caller who asked for it and was quietly given
+		/// the opposite would find out only when a mutation they expected to be cancelled had applied.</para>
+		/// </summary>
+		public static AtomicActionInterruptionPolicy ResolveAsyncDisconnectPolicy(JsonNode? suppliedRequest) {
+			if(suppliedRequest is JsonObject supplied && supplied["disconnect_policy"] is not null)
+				throw new RpcException("invalid_arguments","disconnect_policy applies to run_atomic_action only. An action started asynchronously is owned by the host after acceptance and ends only on its deadline or an explicit "+AtomicActionStateMachine.CancelOperation+".");
+			return AtomicActionInterruptionPolicy.complete_on_disconnect;
+		}
+
+		/// <summary>
 		/// Produces the request the shared module search sees, carrying the action's own process and
 		/// runtime. The search reads those two arguments at top level only, so without this the nested
 		/// <c>runtime_id</c> scoped nothing and a multi-runtime target answered <c>ambiguous_target</c>

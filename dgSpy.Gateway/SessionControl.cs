@@ -67,7 +67,18 @@ public sealed record SessionControllerInfo(string SessionId,string? HostId,strin
 public static class MutationGuards {
 	static readonly HashSet<string> Lifecycle=new(StringComparer.Ordinal) { "detach","terminate","restart" };
 	static readonly HashSet<string> Breakpoints=new(StringComparer.Ordinal) { "set_il_breakpoint","set_breakpoint","remove_breakpoint","clear_breakpoints","update_breakpoint","set_exception_breakpoint","set_module_breakpoint","update_module_breakpoint","remove_module_breakpoint","import_breakpoints","set_exception_policy","remove_exception_policy","restore_exception_defaults" };
-	static readonly HashSet<string> StopBound=new(StringComparer.Ordinal) { "run_atomic_action","step_into","step_over","step_out","set_value","invoke_method","create_object","set_instruction_pointer","create_object_id","write_value_export" };
+	// cancel_atomic_action is deliberately not stop-bound and carries no expected_execution_version: the
+	// action it cancels moves the stop underneath the caller, so any value they could supply is stale by
+	// construction. Its authorization is the record's captured session and process generation instead.
+	static readonly HashSet<string> StopBound=new(StringComparer.Ordinal) { "run_atomic_action","start_atomic_action","step_into","step_over","step_out","set_value","invoke_method","create_object","set_instruction_pointer","create_object_id","write_value_export" };
+	/// <summary>Mutations that deliberately carry no <c>expected_*_version</c>, because no value the caller
+	/// could hold would be guarding anything. <c>cancel_atomic_action</c> is the case: the action it cancels
+	/// is what moves execution_version and stop_id, and the run only hands out a fresh vector on its own
+	/// response - which arrives when there is nothing left to cancel. Measurement went further and found the
+	/// counter did not move during an observed action at all, so the guard was neither necessary nor
+	/// sufficient. Authorization there is the record's captured session and process generation instead.</summary>
+	static readonly HashSet<string> Unguarded=new(StringComparer.Ordinal) { "cancel_atomic_action" };
+	public static bool RequiresVersionGuard(string operation) => !Unguarded.Contains(operation);
 	public static string Scope(string operation) => Lifecycle.Contains(operation) ? "lifecycle" : Breakpoints.Contains(operation) ? "breakpoints" : "execution";
 	public static string Argument(string operation) => "expected_"+Scope(operation)+"_version";
 	public static string StateProperty(string operation) => Scope(operation)+"_version";
@@ -125,10 +136,17 @@ public sealed class GatewayToolExecutor {
 				if(operation is not ("attach" or "attach_endpoint" or "launch")) {
 					if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments",$"'{operation}' requires session_id.");
 					controllers.Authorize(sessionId,clientId);
-					if(!expected.HasValue) throw new GatewayControlException(MutationGuards.Scope(operation)+"_version_required",$"'{operation}' requires {guardArgument}.");
-					var state=await GetStateAsync(arguments,token); var legacy=arguments[guardArgument] is null; var property=legacy ? "state_version" : MutationGuards.StateProperty(operation); var current=Version(state,property);
-					if(expected.Value!=current) throw new GatewayControlException(legacy ? "stale_state" : "stale_"+MutationGuards.Scope(operation),$"Expected {property} {expected.Value}, current value is {current}.");
-					if(!legacy && MutationGuards.RequiresStop(operation)) { var expectedStop=(string?)arguments["expected_stop_id"]; var currentStop=(string?)ProtocolJson.ToNode(state)!["stop_id"]; if(string.IsNullOrWhiteSpace(expectedStop)) throw new GatewayControlException("stop_id_required",$"'{operation}' requires expected_stop_id from the current paused state."); if(expectedStop!=currentStop) throw new GatewayControlException("stale_stop",$"Expected stop '{expectedStop}', current stop is '{currentStop ?? "none"}'."); }
+					// Controller authority is demanded above for every mutation, including the deliberately
+					// unguarded ones. What an unguarded mutation skips is only the version comparison: there
+					// is no value the caller could hold that would be guarding anything, so demanding one
+					// would refuse every correct call. cancel_atomic_action is the case, and it authorizes on
+					// the record's captured session and process generation at the host instead.
+					if(MutationGuards.RequiresVersionGuard(operation)) {
+						if(!expected.HasValue) throw new GatewayControlException(MutationGuards.Scope(operation)+"_version_required",$"'{operation}' requires {guardArgument}.");
+						var state=await GetStateAsync(arguments,token); var legacy=arguments[guardArgument] is null; var property=legacy ? "state_version" : MutationGuards.StateProperty(operation); var current=Version(state,property);
+						if(expected.Value!=current) throw new GatewayControlException(legacy ? "stale_state" : "stale_"+MutationGuards.Scope(operation),$"Expected {property} {expected.Value}, current value is {current}.");
+						if(!legacy && MutationGuards.RequiresStop(operation)) { var expectedStop=(string?)arguments["expected_stop_id"]; var currentStop=(string?)ProtocolJson.ToNode(state)!["stop_id"]; if(string.IsNullOrWhiteSpace(expectedStop)) throw new GatewayControlException("stop_id_required",$"'{operation}' requires expected_stop_id from the current paused state."); if(expectedStop!=currentStop) throw new GatewayControlException("stale_stop",$"Expected stop '{expectedStop}', current stop is '{currentStop ?? "none"}'."); }
+					}
 				}
 			}
 			var response=await router.CallAsync(new RpcRequest { Operation=operation,Arguments=(JsonObject)arguments.DeepClone(),DeadlineUtc=DateTime.UtcNow.AddSeconds(ToolCatalog.DeadlineSeconds(operation)) },token);
