@@ -77,6 +77,38 @@ namespace HookLab.Bootstrap.Tests {
 			return (string)entry.GetMethod("Start", BindingFlags.Public | BindingFlags.Static)!.Invoke(null, new object[] { parameters })!;
 		}
 
+		/// <summary>Replaces the two shared cleanup handles with counting ones and disposes the live pair.
+		/// mode: runtime-fails-always, runtime-fails-once, server-fails-once, both-fail-always.</summary>
+		public string InstallFakeHandles(string mode) {
+			if (inner != null) return inner.InstallFakeHandles(mode);
+			FakeHandles.Install(mode);
+			return FakeHandles.State();
+		}
+
+		public string FakeHandleState() => inner != null ? inner.FakeHandleState() : FakeHandles.State();
+
+		/// <summary>Starts with the startup rollback's runtime disposal rigged to throw - a probe whose
+		/// unpatch fails. The report has to carry both that and the failure that refused the bootstrap.</summary>
+		public string StartWithFailingRollback(string parameters) {
+			if (inner != null) return inner.StartWithFailingRollback(parameters);
+			ProbeStartup.StartupRollbackFaultForTest = () => throw new InvalidOperationException("unpatch-failed-on-purpose");
+			try { return HookLabBootstrap.Start(parameters); }
+			finally { ProbeStartup.StartupRollbackFaultForTest = null; }
+		}
+
+		public string LoadDuplicateHookTargets(string mode) =>
+			inner != null ? inner.LoadDuplicateHookTargets(mode) : DuplicateHookTargets.Load(mode);
+
+		/// <summary>Starts against the duplicate-loaded target copy. An empty mvidOverride uses that copy's
+		/// real MVID; anything else asks for a module the caller names instead.</summary>
+		public string StartWithDuplicateHookTarget(string parameters, string hookId, string mvidOverride) {
+			if (inner != null) return inner.StartWithDuplicateHookTarget(parameters, hookId, mvidOverride);
+			return HookLabBootstrap.Start(parameters + DuplicateHookTargets.HookLines(hookId, mvidOverride));
+		}
+
+		public string InvokeCopiesAndDrain(int decoyCalls, int targetCalls) =>
+			inner != null ? inner.InvokeCopiesAndDrain(decoyCalls, targetCalls) : DuplicateHookTargets.InvokeCopies(decoyCalls, targetCalls);
+
 		/// <summary>Reads back a property of the live ProbeRuntime by name.</summary>
 		public string RuntimeProperty(string name) {
 			if (inner != null) return inner.RuntimeProperty(name);

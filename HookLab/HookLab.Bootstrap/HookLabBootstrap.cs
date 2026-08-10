@@ -22,9 +22,17 @@ namespace HookLab.Bootstrap {
 
 		public static bool IsStarted { get { lock (Gate) return startedResult != null; } }
 
-		/// <summary>Non-null when a refused bootstrap's deferred endpoint teardown failed. Runs after Start
-		/// has already returned, so a caller that cares has to read it rather than find it in the report.</summary>
+		/// <summary>Non-null when the last endpoint teardown failed, which means a listener may still be
+		/// accepting connections. Also reported in the Start and Shutdown reports.</summary>
 		public static string? EndpointTeardownError => ProbeStartup.EndpointTeardownError;
+
+		/// <summary>Non-null when the last runtime disposal failed, which means unpatching may be
+		/// incomplete. Carried beside the endpoint outcome, never instead of it.</summary>
+		public static string? RuntimeCleanupError => ProbeStartup.RuntimeCleanupError;
+
+		/// <summary>True while a known endpoint may still be live because its teardown failed. No report
+		/// may claim a clean stop while this is set.</summary>
+		public static bool EndpointMayBeLive => ProbeStartup.EndpointMayBeLive;
 
 		/// <summary>Installs the manifest-restricted resolver, byte-loads the probe and its contracts from
 		/// verified embedded bytes, and calls ProbeInitializer.Initialize. Returns a bounded, line-oriented
@@ -59,23 +67,43 @@ namespace HookLab.Bootstrap {
 
 		/// <summary>Releases the pipe endpoint and removes every hook this bootstrap installed. It cannot
 		/// unload what it loaded: a .NET Framework AppDomain has no mechanism for that, so the payload stays
-		/// resident and the report says so rather than implying a clean slate.</summary>
+		/// resident and the report says so rather than implying a clean slate.
+		///
+		/// An incomplete cleanup keeps this bootstrap started. Clearing the started state would make the
+		/// next Shutdown answer "not_started" while a listener was still up - a clean-looking report over an
+		/// unreachable live endpoint. Started state plus retained handles is what makes the retry possible,
+		/// and the report says which part is still outstanding.
+		///
+		/// What this report does *not* claim: that no probe work is still running. ProbePipeServer.Dispose
+		/// closes the endpoint without cancelling a command already inside the handler, so a successful
+		/// teardown means "not reachable from outside", not "quiesced". Distinguishing those needs a
+		/// cancellation contract on the command handler, which is scheduled work rather than something to
+		/// paper over here - and until it exists, no line in this report should be read as quiescence.</summary>
 		[MethodImpl(MethodImplOptions.NoInlining)]
 		public static string Shutdown() {
 			lock (Gate) {
 				if (startedResult == null) return Error("not_started", "This bootstrap has not run in this AppDomain.", false);
-				string? failure = null;
-				try { ProbeStartup.Shutdown(); }
-				catch (Exception ex) { failure = ex.GetType().FullName + ": " + ex.Message; }
-				resolver?.Uninstall();
-				startedResult = null;
+				var cleanup = ProbeStartup.Shutdown();
+				// The endpoint state is the persistent one, not just this attempt's: an attempt that only
+				// retried the runtime handle must not be allowed to report a clean stop over a listener an
+				// earlier attempt failed to tear down.
+				var clean = cleanup.Clean && !ProbeStartup.EndpointMayBeLive;
+				if (clean) { resolver?.Uninstall(); startedResult = null; }
 				var lines = new List<string> {
-					"status=" + (failure == null ? "ok" : "partial"),
+					"status=" + (clean ? "ok" : "partial"),
 					"payloads_resident=true",
-					"resolver_installed=false",
+					"resolver_installed=" + (clean ? "false" : "true"),
+					"endpoint_teardown=" + ProbeStartup.EndpointTeardownState,
+					"endpoint_live=" + (ProbeStartup.EndpointMayBeLive ? "true" : "false"),
+					"cleanup_retry_possible=" + (cleanup.RetryPossible ? "true" : "false"),
 				};
-				if (failure != null) lines.Add("error_message=" + Sanitize(failure));
+				if (cleanup.RuntimeError != null) lines.Add("runtime_cleanup_error=" + Sanitize(cleanup.RuntimeError));
 				if (ProbeStartup.EndpointTeardownError != null) lines.Add("endpoint_teardown_error=" + Sanitize(ProbeStartup.EndpointTeardownError));
+				if (ProbeStartup.EndpointListenerFailure != null) lines.Add("endpoint_listener_failure=" + Sanitize(ProbeStartup.EndpointListenerFailure));
+				if (!clean)
+					lines.Add("error_message=" + Sanitize("Cleanup was incomplete. " +
+						(cleanup.RuntimeError != null ? "Unpatching failed: " + cleanup.RuntimeError + " " : "") +
+						(cleanup.EndpointError != null ? "Endpoint teardown failed: " + cleanup.EndpointError : "")));
 				return Join(lines);
 			}
 		}
@@ -84,7 +112,10 @@ namespace HookLab.Bootstrap {
 		/// then would strand a resident payload with no way to satisfy its next bind, which is a worse state
 		/// than an idle handler.</summary>
 		static bool Rollback(EmbeddedAssemblyResolver? installed) {
-			try { ProbeStartup.Shutdown(); } catch (Exception) { }
+			// ProbeStartup.Run already cleaned up what it created and recorded the outcome; this call only
+			// retries whatever that attempt had to retain, and reports nothing new when there is nothing
+			// left. It cannot throw, so it cannot displace the startup failure this rollback runs under.
+			ProbeStartup.Shutdown();
 			if (installed == null) return false;
 			if (installed.LoadCount != 0) return true;
 			installed.Uninstall();
@@ -113,14 +144,24 @@ namespace HookLab.Bootstrap {
 			return Join(lines);
 		}
 
-		static string Error(string type, string message, bool payloadsResident) => Join(new List<string> {
-			"status=error",
-			"error_type=" + Sanitize(type),
-			"error_message=" + Sanitize(message),
-			"payloads_resident=" + (payloadsResident ? "true" : "false"),
-			"resolver_installed=" + (payloadsResident ? "true" : "false"),
-			"endpoint_teardown=" + (ProbeStartup.EndpointTeardownDeferred ? "deferred" : "not_required"),
-		});
+		/// <summary>The refusal report. It carries the failure that caused the refusal *and* what the
+		/// rollback managed to clean up - neither erases the other, and a rollback that left a listener up
+		/// has to be visible here rather than only in a property nobody reads.</summary>
+		static string Error(string type, string message, bool payloadsResident) {
+			var lines = new List<string> {
+				"status=error",
+				"error_type=" + Sanitize(type),
+				"error_message=" + Sanitize(message),
+				"payloads_resident=" + (payloadsResident ? "true" : "false"),
+				"resolver_installed=" + (payloadsResident ? "true" : "false"),
+				"endpoint_teardown=" + ProbeStartup.EndpointTeardownState,
+				"endpoint_live=" + (ProbeStartup.EndpointMayBeLive ? "true" : "false"),
+			};
+			if (ProbeStartup.RuntimeCleanupError != null) lines.Add("runtime_cleanup_error=" + Sanitize(ProbeStartup.RuntimeCleanupError));
+			if (ProbeStartup.EndpointTeardownError != null) lines.Add("endpoint_teardown_error=" + Sanitize(ProbeStartup.EndpointTeardownError));
+			if (ProbeStartup.EndpointListenerFailure != null) lines.Add("endpoint_listener_failure=" + Sanitize(ProbeStartup.EndpointListenerFailure));
+			return Join(lines);
+		}
 
 		static string Join(List<string> lines) {
 			var builder = new StringBuilder();

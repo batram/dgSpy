@@ -93,12 +93,19 @@ namespace HookLab.Bootstrap.Tests {
 			}
 		}
 
+		/// <summary>Every method-guard field still refuses on its own, and the refusal names the field.
+		///
+		/// Where it refuses moved, and deliberately: the MVID and the metadata token now drive selection and
+		/// lookup, so a wrong one is refused while choosing the module rather than after patching the wrong
+		/// candidate's look-alike method, and the declaring type is checked against the token's own method.
+		/// ProbeRuntime.Install re-validates all five regardless - the IL digest case proves that path is
+		/// still reached and still decides.</summary>
 		[Theory]
-		[InlineData("hook_il_sha256")]
-		[InlineData("hook_module_mvid")]
-		[InlineData("hook_metadata_token")]
-		[InlineData("hook_declaring_type")]
-		public void Each_method_guard_field_refuses_independently(string key) {
+		[InlineData("hook_il_sha256", "GuardMismatchException", "il_sha256")]
+		[InlineData("hook_module_mvid", "System.InvalidOperationException", "hook_module_mvid")]
+		[InlineData("hook_metadata_token", "System.InvalidOperationException", "hook_metadata_token")]
+		[InlineData("hook_declaring_type", "System.InvalidOperationException", "hook_declaring_type")]
+		public void Each_method_guard_field_refuses_independently(string key, string errorType, string mentioned) {
 			var wrong = key == "hook_module_mvid" ? Guid.Empty.ToString("D")
 				: key == "hook_metadata_token" ? "1"
 				: key == "hook_declaring_type" ? "Not.The.Declaring.Type"
@@ -106,7 +113,8 @@ namespace HookLab.Bootstrap.Tests {
 			using (var runner = BootstrapRunner.Create("bootstrap-method-guard-" + key)) {
 				var report = Report.Parse(runner.Start(Parameters(runner).WithHook().With(key, wrong).ToString()));
 				Assert.Equal("error", report["status"]);
-				Assert.Contains("GuardMismatchException", report["error_type"], StringComparison.Ordinal);
+				Assert.Contains(errorType, report["error_type"], StringComparison.Ordinal);
+				Assert.Contains(mentioned, report["error_message"], StringComparison.Ordinal);
 			}
 		}
 
