@@ -73,6 +73,9 @@ namespace HookLab.Bootstrap.Tests {
 				// The payload is resident because verification happens after load, which is the honest
 				// outcome on .NET Framework; the patch backend never loaded at all.
 				Assert.Equal("true", report["payloads_resident"]);
+				// A rollback that cleaned up completely retains nothing, so the refusal report says there is
+				// nothing left to retry. The field is on every refusal report, not only the ones with wreckage.
+				Assert.Equal("false", report["cleanup_retry_possible"]);
 				Assert.DoesNotContain("0Harmony|byte-loaded", runner.ResidentPayloads());
 				Assert.Null(HookLabBootstrapRuntimeOf(runner));
 			}

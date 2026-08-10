@@ -78,7 +78,7 @@ namespace HookLab.Bootstrap.Tests {
 		}
 
 		/// <summary>Replaces the two shared cleanup handles with counting ones and disposes the live pair.
-		/// mode: runtime-fails-always, runtime-fails-once, server-fails-once, both-fail-always.</summary>
+		/// mode: runtime-fails-always, runtime-fails-once, server-fails-once, both-fail-always, both-fail-once.</summary>
 		public string InstallFakeHandles(string mode) {
 			if (inner != null) return inner.InstallFakeHandles(mode);
 			FakeHandles.Install(mode);
@@ -95,6 +95,19 @@ namespace HookLab.Bootstrap.Tests {
 			try { return HookLabBootstrap.Start(parameters); }
 			finally { ProbeStartup.StartupRollbackFaultForTest = null; }
 		}
+
+		/// <summary>Starts with both startup-rollback disposals rigged to fail every time, so the start fails
+		/// after publishing the runtime and the endpoint and its rollback can clear neither. The seams are
+		/// removed before this returns: whatever the caller does next must be decided by the bootstrap's own
+		/// state, not by a rig that is still armed.</summary>
+		public string StartWithBothRollbackDisposalsFailing(string parameters) {
+			if (inner != null) return inner.StartWithBothRollbackDisposalsFailing(parameters);
+			RollbackFaults.InstallAlwaysFailing();
+			try { return HookLabBootstrap.Start(parameters); }
+			finally { RollbackFaults.Uninstall(); }
+		}
+
+		public string RollbackFaultState() => inner != null ? inner.RollbackFaultState() : RollbackFaults.State();
 
 		public string LoadDuplicateHookTargets(string mode) =>
 			inner != null ? inner.LoadDuplicateHookTargets(mode) : DuplicateHookTargets.Load(mode);

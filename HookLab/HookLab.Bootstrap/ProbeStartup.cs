@@ -20,8 +20,22 @@ namespace HookLab.Bootstrap {
 		static readonly object Gate = new object();
 		static object? runtime;
 		static IDisposable? server;
+		// Set when the handle in the corresponding field is there because its own Dispose failed, rather
+		// than because a start succeeded. The two states occupy the same fields and mean opposite things:
+		// one is a running bootstrap, the other is wreckage a retry still has to clear.
+		static bool runtimeRetained;
+		static bool serverRetained;
 
 		internal static object? Runtime { get { lock (Gate) return runtime; } }
+
+		/// <summary>True while a handle whose disposal failed is still held, so a retry has something to work
+		/// on - and so nothing may publish over it.
+		///
+		/// This has to be visible outside this type because retention can outlive a *failed* start, where
+		/// there is no started state to infer it from. Without it, HookLabBootstrap.Shutdown answered
+		/// "not_started" over a live listener and the next Start overwrote both handles, which orphaned a
+		/// partially patched runtime and an authenticated endpoint for the life of the AppDomain.</summary>
+		internal static bool HasRetainedCleanup { get { lock (Gate) return runtimeRetained || serverRetained; } }
 
 		/// <summary>What one cleanup attempt did. Every field is a primitive or a string, so HookLabBootstrap
 		/// can name this type without dragging a probe type into that frame.
@@ -78,6 +92,13 @@ namespace HookLab.Bootstrap {
 		/// InternalsVisibleTo.</summary>
 		internal static Action? StartupRollbackFaultForTest;
 
+		/// <summary>Test seam: wraps the pipe server the startup rollback is about to tear down, so that a
+		/// rollback whose endpoint teardown *also* fails can be exercised. The wrapper is what gets retained,
+		/// so a wrapper that keeps failing keeps the retention alive across retries - which is the state the
+		/// failed-start orphaning defect lived in. Null in production; the only writer is the bootstrap test
+		/// project, through InternalsVisibleTo.</summary>
+		internal static Func<IDisposable?, IDisposable?>? StartupRollbackServerFaultForTest;
+
 		/// <summary>Test seam: swaps the two shared handles and hands the previous pair back, so the cleanup
 		/// contract can be exercised with disposables that fail on demand and record their disposals.</summary>
 		internal static void ExchangeHandlesForTest(object? newRuntime, IDisposable? newServer, out object? oldRuntime, out IDisposable? oldServer) {
@@ -96,7 +117,13 @@ namespace HookLab.Bootstrap {
 		internal static CleanupReport Shutdown() {
 			object? currentRuntime;
 			IDisposable? currentServer;
-			lock (Gate) { currentRuntime = runtime; currentServer = server; runtime = null; server = null; }
+			lock (Gate) {
+				currentRuntime = runtime; currentServer = server;
+				runtime = null; server = null;
+				// Retention describes the handles now in hand. Cleanup sets it again for whichever fails
+				// this time; leaving it set here would report wreckage that has just been cleared.
+				runtimeRetained = false; serverRetained = false;
+			}
 			// Nothing to dispose says nothing about what an earlier attempt left behind, so the reporting
 			// fields are left exactly as that attempt set them.
 			if (currentRuntime == null && currentServer == null) return new CleanupReport { NothingToDo = true };
@@ -117,7 +144,7 @@ namespace HookLab.Bootstrap {
 			catch (Exception ex) {
 				report.RuntimeError = Describe(ex);
 				report.RetryPossible = true;
-				lock (Gate) runtime = runtime ?? runtimeHandle;
+				lock (Gate) { runtime = runtime ?? runtimeHandle; runtimeRetained = true; }
 			}
 			if (serverHandle != null) {
 				report.EndpointAttempted = true;
@@ -126,7 +153,7 @@ namespace HookLab.Bootstrap {
 					report.EndpointError = Describe(ex);
 					report.EndpointMayBeLive = true;
 					report.RetryPossible = true;
-					lock (Gate) server = server ?? serverHandle;
+					lock (Gate) { server = server ?? serverHandle; serverRetained = true; }
 				}
 				report.ListenerFailure = ListenerFailureOf(serverHandle);
 			}
@@ -208,9 +235,11 @@ namespace HookLab.Bootstrap {
 				// listener, which outran the func-eval timeout; that Dispose is bounded and non-blocking
 				// now (it closes the endpoint and returns without waiting for the listener thread), so the
 				// deferral has nothing left to buy and cost the caller a report it could act on.
-				lock (Gate) { runtime = null; server = null; }
+				lock (Gate) { runtime = null; server = null; runtimeRetained = false; serverRetained = false; }
 				var faulted = StartupRollbackFaultForTest;
-				Record(Cleanup(faulted == null ? (object?)probe : new FaultingHandle(faulted), pipe));
+				var wrapServer = StartupRollbackServerFaultForTest;
+				Record(Cleanup(faulted == null ? (object?)probe : new FaultingHandle(faulted),
+					wrapServer == null ? pipe : wrapServer(pipe)));
 				// The startup failure is what the caller asked about, so it is what leaves this frame. The
 				// cleanup outcome rides in the reporting fields instead of replacing it.
 				throw;

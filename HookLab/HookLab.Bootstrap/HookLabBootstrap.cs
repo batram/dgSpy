@@ -34,14 +34,34 @@ namespace HookLab.Bootstrap {
 		/// may claim a clean stop while this is set.</summary>
 		public static bool EndpointMayBeLive => ProbeStartup.EndpointMayBeLive;
 
+		/// <summary>True while a previous attempt's cleanup failed and its handles are still held. Reported as
+		/// <c>cleanup_retry_possible</c> on every report, refusal reports included: the retention can outlive
+		/// a *failed* start, where <see cref="IsStarted"/> is false and says nothing about it.</summary>
+		public static bool CleanupRetryPossible => ProbeStartup.HasRetainedCleanup;
+
 		/// <summary>Installs the manifest-restricted resolver, byte-loads the probe and its contracts from
 		/// verified embedded bytes, and calls ProbeInitializer.Initialize. Returns a bounded, line-oriented
 		/// key/value report; it never throws, because a func-eval that faults tells the caller far less than
-		/// a string that says exactly what refused.</summary>
+		/// a string that says exactly what refused.
+		///
+		/// A start is refused with <c>cleanup_pending</c> - distinct from <c>already_started</c>, because the
+		/// two need opposite responses - while an earlier attempt's runtime or endpoint is still unresolved.
+		/// Initializing over it would replace both shared handles and orphan whatever they pointed at: a
+		/// partially unpatched runtime, or an authenticated listener still accepting connections that no
+		/// later Shutdown could reach. The retained cleanup is retried first, so the refusal only stands when
+		/// the retry got nowhere.</summary>
 		[MethodImpl(MethodImplOptions.NoInlining)]
 		public static string Start(string parameters) {
 			lock (Gate) {
 				if (startedResult != null) return Error("already_started", "This bootstrap has already run in this AppDomain.", false);
+				if (ProbeStartup.HasRetainedCleanup) {
+					ProbeStartup.Shutdown();
+					if (ProbeStartup.HasRetainedCleanup)
+						return Error("cleanup_pending",
+							"A previous attempt's cleanup is still outstanding and retrying it did not clear it. Refusing to initialize " +
+							"over a runtime that may still be patched or an endpoint that may still be accepting connections.",
+							resolver != null && resolver.LoadCount != 0);
+				}
 				EmbeddedAssemblyResolver? installed = null;
 				try {
 					var parsed = BootstrapParameters.Parse(parameters);
@@ -78,24 +98,38 @@ namespace HookLab.Bootstrap {
 		/// closes the endpoint without cancelling a command already inside the handler, so a successful
 		/// teardown means "not reachable from outside", not "quiesced". Distinguishing those needs a
 		/// cancellation contract on the command handler, which is scheduled work rather than something to
-		/// paper over here - and until it exists, no line in this report should be read as quiescence.</summary>
+		/// paper over here - and until it exists, no line in this report should be read as quiescence.
+		///
+		/// It also runs when the bootstrap never started but a failed start left handles retained. Gating on
+		/// started state alone was the defect: a start that published the runtime and the endpoint and then
+		/// failed left both retained with no started state to go with them, so this method answered
+		/// "not_started" and retried nothing while a listener was still up.</summary>
 		[MethodImpl(MethodImplOptions.NoInlining)]
 		public static string Shutdown() {
 			lock (Gate) {
-				if (startedResult == null) return Error("not_started", "This bootstrap has not run in this AppDomain.", false);
+				var wasStarted = startedResult != null;
+				if (!wasStarted && !ProbeStartup.HasRetainedCleanup)
+					return Error("not_started", "This bootstrap has not run in this AppDomain.", false);
 				var cleanup = ProbeStartup.Shutdown();
 				// The endpoint state is the persistent one, not just this attempt's: an attempt that only
 				// retried the runtime handle must not be allowed to report a clean stop over a listener an
 				// earlier attempt failed to tear down.
 				var clean = cleanup.Clean && !ProbeStartup.EndpointMayBeLive;
-				if (clean) { resolver?.Uninstall(); startedResult = null; }
+				// The resolver is removed only when a bootstrap that actually started has stopped cleanly.
+				// Finishing a failed start's cleanup does not make the payload it already loaded go away, and
+				// removing the handler that satisfies that payload's next bind is what Rollback exists to
+				// avoid - so the state is reported rather than forced.
+				var resolverInstalled = resolver != null;
+				if (clean && wasStarted) { resolver?.Uninstall(); startedResult = null; resolverInstalled = false; }
 				var lines = new List<string> {
 					"status=" + (clean ? "ok" : "partial"),
 					"payloads_resident=true",
-					"resolver_installed=" + (clean ? "false" : "true"),
+					"resolver_installed=" + (resolverInstalled ? "true" : "false"),
 					"endpoint_teardown=" + ProbeStartup.EndpointTeardownState,
 					"endpoint_live=" + (ProbeStartup.EndpointMayBeLive ? "true" : "false"),
-					"cleanup_retry_possible=" + (cleanup.RetryPossible ? "true" : "false"),
+					// Read from the retention state rather than from this attempt's report, so that this line
+					// and the identical one on every refusal report can never disagree.
+					"cleanup_retry_possible=" + (ProbeStartup.HasRetainedCleanup ? "true" : "false"),
 				};
 				if (cleanup.RuntimeError != null) lines.Add("runtime_cleanup_error=" + Sanitize(cleanup.RuntimeError));
 				if (ProbeStartup.EndpointTeardownError != null) lines.Add("endpoint_teardown_error=" + Sanitize(ProbeStartup.EndpointTeardownError));
@@ -146,7 +180,11 @@ namespace HookLab.Bootstrap {
 
 		/// <summary>The refusal report. It carries the failure that caused the refusal *and* what the
 		/// rollback managed to clean up - neither erases the other, and a rollback that left a listener up
-		/// has to be visible here rather than only in a property nobody reads.</summary>
+		/// has to be visible here rather than only in a property nobody reads.
+		///
+		/// cleanup_retry_possible belongs here and not only in the shutdown report: a failed start is exactly
+		/// where retained handles have no started state to advertise them, so a caller reading only this
+		/// report had no way to learn that a Shutdown still had work to do.</summary>
 		static string Error(string type, string message, bool payloadsResident) {
 			var lines = new List<string> {
 				"status=error",
@@ -156,6 +194,7 @@ namespace HookLab.Bootstrap {
 				"resolver_installed=" + (payloadsResident ? "true" : "false"),
 				"endpoint_teardown=" + ProbeStartup.EndpointTeardownState,
 				"endpoint_live=" + (ProbeStartup.EndpointMayBeLive ? "true" : "false"),
+				"cleanup_retry_possible=" + (ProbeStartup.HasRetainedCleanup ? "true" : "false"),
 			};
 			if (ProbeStartup.RuntimeCleanupError != null) lines.Add("runtime_cleanup_error=" + Sanitize(ProbeStartup.RuntimeCleanupError));
 			if (ProbeStartup.EndpointTeardownError != null) lines.Add("endpoint_teardown_error=" + Sanitize(ProbeStartup.EndpointTeardownError));

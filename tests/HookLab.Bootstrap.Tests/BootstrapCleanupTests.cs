@@ -109,6 +109,93 @@ namespace HookLab.Bootstrap.Tests {
 				Assert.Contains("unpatch-failed-on-purpose", report["runtime_cleanup_error"], StringComparison.Ordinal);
 				Assert.Equal("completed", report["endpoint_teardown"]);
 				Assert.Equal("false", report["endpoint_live"]);
+				// The runtime handle was kept, and the refusal report says so - a caller who only ever sees
+				// this report has to be able to learn that a Shutdown still has work to do.
+				Assert.Equal("true", report["cleanup_retry_possible"]);
+			}
+		}
+
+		[Fact]
+		public void A_retry_that_succeeds_retains_nothing_so_the_bootstrap_can_be_started_again() {
+			using (var runner = BootstrapRunner.Create("bootstrap-cleanup-restart-after-successful-retry")) {
+				StartCleanly(runner);
+				runner.InstallFakeHandles("both-fail-once");
+				var first = Report.Parse(runner.Shutdown());
+				Assert.Equal("partial", first["status"]);
+				Assert.Equal("true", first["cleanup_retry_possible"]);
+				var shutdown = Report.Parse(runner.Shutdown());
+				Assert.Equal("ok", shutdown["status"]);
+				Assert.Equal("false", shutdown["cleanup_retry_possible"]);
+				// Retention is what refuses a restart, so a retention flag that outlived the handle it
+				// described would make cleanup_pending permanent for this AppDomain.
+				var restart = Report.Parse(runner.Start(Parameters(runner).ToString()));
+				Assert.NotEqual("cleanup_pending", restart.Get("error_type"));
+				Assert.True(restart["status"] == "ok", "Restart refused: " + restart.Get("error_type") + " " + restart.Get("error_message"));
+			}
+		}
+
+		/// <summary>The failed-start hole. Every retry case above starts *successfully* first, so the started
+		/// state that Shutdown was gated on is populated and the gate is invisible to them.
+		///
+		/// Here the start publishes both handles and then fails, and neither disposal can be made to work. The
+		/// bootstrap therefore holds a runtime that may still be patched and an endpoint that may still be
+		/// accepting connections, with no started state to advertise them. A Shutdown gated on started state
+		/// answered "not_started" and retried nothing.</summary>
+		static string StartFailingAfterBothHandlesPublished(BootstrapRunner runner) =>
+			// hook_il_sha256 is refused by ProbeRuntime.Install's own guard, which runs after the pipe server
+			// exists and after both shared handles were published - the window the rollback has to cope with.
+			runner.StartWithBothRollbackDisposalsFailing(
+				Parameters(runner).WithHook().With("hook_il_sha256", new string('0', 64)).ToString());
+
+		[Fact]
+		public void A_shutdown_after_a_failed_start_retries_the_retained_cleanup_instead_of_reporting_not_started() {
+			using (var runner = BootstrapRunner.Create("bootstrap-cleanup-failed-start-retry")) {
+				var start = Report.Parse(StartFailingAfterBothHandlesPublished(runner));
+				Assert.Equal("error", start["status"]);
+				Assert.Contains("GuardMismatchException", start["error_type"], StringComparison.Ordinal);
+				// Both cleanup failures are reported beside the startup failure, and none of the three erases
+				// the others.
+				Assert.Contains("unpatch-failed-on-purpose", start["runtime_cleanup_error"], StringComparison.Ordinal);
+				Assert.Contains("endpoint-teardown-failed-on-purpose", start["endpoint_teardown_error"], StringComparison.Ordinal);
+				Assert.Equal("failed", start["endpoint_teardown"]);
+				Assert.Equal("true", start["endpoint_live"]);
+				Assert.Equal("true", start["cleanup_retry_possible"]);
+				// Rollback already retried once: one attempt inside ProbeStartup.Run, one from the rollback.
+				Assert.Equal("runtime_disposals=2;server_disposals=2", runner.RollbackFaultState());
+
+				var shutdown = Report.Parse(runner.Shutdown());
+				// The point of the case: this is not a bootstrap that never ran.
+				Assert.NotEqual("not_started", shutdown.Get("error_type"));
+				Assert.Equal("partial", shutdown["status"]);
+				Assert.Equal("failed", shutdown["endpoint_teardown"]);
+				Assert.Equal("true", shutdown["endpoint_live"]);
+				Assert.Equal("true", shutdown["cleanup_retry_possible"]);
+				Assert.Contains("unpatch-failed-on-purpose", shutdown["runtime_cleanup_error"], StringComparison.Ordinal);
+				Assert.Contains("endpoint-teardown-failed-on-purpose", shutdown["endpoint_teardown_error"], StringComparison.Ordinal);
+				// It really retried the retained pair rather than merely describing it.
+				Assert.Equal("runtime_disposals=3;server_disposals=3", runner.RollbackFaultState());
+			}
+		}
+
+		[Fact]
+		public void A_start_over_an_unresolved_previous_attempt_is_refused_rather_than_orphaning_it() {
+			using (var runner = BootstrapRunner.Create("bootstrap-cleanup-failed-start-refuses-restart")) {
+				Assert.Equal("error", Report.Parse(StartFailingAfterBothHandlesPublished(runner))["status"]);
+				Assert.Equal("runtime_disposals=2;server_disposals=2", runner.RollbackFaultState());
+
+				// The rig is disarmed, so an unrefused start would create a real second runtime and a real
+				// second listener and overwrite both shared handles - which is exactly the orphaning.
+				var second = Report.Parse(runner.Start(Parameters(runner).WithHook().ToString()));
+				Assert.Equal("error", second["status"]);
+				// Distinguishable from already_started on purpose: the two need opposite responses - one says
+				// a bootstrap is running, the other says an old one has not finished dying.
+				Assert.Equal("cleanup_pending", second["error_type"]);
+				Assert.NotEqual("already_started", second["error_type"]);
+				Assert.Equal("true", second["endpoint_live"]);
+				Assert.Equal("true", second["cleanup_retry_possible"]);
+				// The refusal only stands because the retry it made first got nowhere; the retained pair is
+				// still the original one.
+				Assert.Equal("runtime_disposals=3;server_disposals=3", runner.RollbackFaultState());
 			}
 		}
 	}
