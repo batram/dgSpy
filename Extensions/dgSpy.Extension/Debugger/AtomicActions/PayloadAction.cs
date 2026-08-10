@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 using HookLab.Contracts;
 
 namespace dgSpy.Extension.Debugger.AtomicActions {
-	/// <summary>The three fixed operations a host drives to install a probe into a live target and read its
+	/// <summary>The four fixed operations a host drives to install a probe into a live target, read its
 	/// events. They are separate atomic actions on purpose, and the reason is measured rather than stylistic:
 	/// the target does <b>not</b> run between two evaluations held under one stop - two trivial evaluations
 	/// 300 ms apart produced one continuous 531.8 ms target freeze - so preparation and commit must be two
@@ -25,6 +25,8 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		commit,
 		/// <summary>Reads a bounded batch of hook events out of the resident probe.</summary>
 		drain,
+		/// <summary>Unpatches every installed hook while leaving the byte-loaded payload resident.</summary>
+		shutdown,
 	}
 
 	/// <summary>
@@ -87,6 +89,8 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			if(max<=0) throw new ArgumentOutOfRangeException(nameof(max));
 			return GuardedInvoke(generationIndex,"DrainEvents","new object[]{"+max.ToString(CultureInfo.InvariantCulture)+"}");
 		}
+
+		public static string Shutdown(int generationIndex) => GuardedInvoke(generationIndex,"Shutdown","null");
 
 		/// <summary>Reads <c>ResidentLauncher.GenerationIdentity</c> out of the assembly at the scanned index
 		/// and invokes the requested entry only if it matches. The identity check is the condition of a
@@ -263,13 +267,14 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		public static PayloadActionRequest Parse(JsonObject? arguments) {
 			if(arguments is null) throw new RpcException("invalid_arguments","payload_operation is required.");
 			var name=(string?)arguments["payload_operation"];
-			if(String.IsNullOrWhiteSpace(name)) throw new RpcException("invalid_arguments","payload_operation is required and must be prepare, commit, or drain.");
+			if(String.IsNullOrWhiteSpace(name)) throw new RpcException("invalid_arguments","payload_operation is required and must be prepare, commit, drain, or shutdown.");
 			PayloadOperation operation;
 			switch(name) {
 				case "prepare": operation=PayloadOperation.prepare; break;
 				case "commit": operation=PayloadOperation.commit; break;
 				case "drain": operation=PayloadOperation.drain; break;
-				default: throw new RpcException("invalid_arguments","payload_operation must be prepare, commit, or drain.");
+				case "shutdown": operation=PayloadOperation.shutdown; break;
+				default: throw new RpcException("invalid_arguments","payload_operation must be prepare, commit, drain, or shutdown.");
 			}
 			var drainMax=(int?)arguments["drain_max"] ?? DefaultDrainMax;
 			if(operation==PayloadOperation.drain && (drainMax<1 || drainMax>MaxDrainMax))
@@ -291,7 +296,7 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 				return parsed;
 			}
 			if(operation!=PayloadOperation.prepare)
-				throw new RpcException("invalid_arguments","payload_parameters applies to payload_operation=prepare only; commit and drain reuse what preparation installed.");
+				throw new RpcException("invalid_arguments","payload_parameters applies to payload_operation=prepare only; commit, drain, and shutdown reuse what preparation installed.");
 			if(node is not JsonObject supplied) throw new RpcException("invalid_arguments","payload_parameters must be an object of string values.");
 			var total=0;
 			var seen=new HashSet<string>(StringComparer.Ordinal);
@@ -372,7 +377,8 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 	}
 
 	/// <summary>
-	/// One atomic action with three fixed operations - <c>prepare</c>, <c>commit</c> and <c>drain</c> - that a
+	/// One atomic action with four fixed operations - <c>prepare</c>, <c>commit</c>, <c>drain</c> and
+	/// <c>shutdown</c> - that a
 	/// host drives to install a probe into a live target and read its events.
 	///
 	/// <para><b>The resident-generation guard lives here, and it cannot live anywhere else.</b> Every
@@ -476,11 +482,13 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 				return Refused(evidence,"This target carries "+scan.GenerationCount.ToString(CultureInfo.InvariantCulture)+" HookLab.Bootstrap generations, so the index this operation would reach is ambiguous. Refusing rather than picking one.");
 			var expression=request.Operation==PayloadOperation.commit
 				? PayloadExpressions.Commit(scan.FirstGenerationIndex)
-				: PayloadExpressions.Drain(scan.FirstGenerationIndex,request.DrainMax);
+				: request.Operation==PayloadOperation.shutdown
+					? PayloadExpressions.Shutdown(scan.FirstGenerationIndex)
+					: PayloadExpressions.Drain(scan.FirstGenerationIndex,request.DrainMax);
 			evidence["expression"]=expression;
 			var evaluated=await evaluator.EvaluateAsync(context,expression,request.EvaluationTimeoutMs,cancellationToken).ConfigureAwait(false);
 			var completed=Record(evidence,evaluated);
-			// The generation was already resident before this ran, so a commit or a drain adds no residency of
+			// The generation was already resident before this ran, so a commit, drain, or shutdown adds no residency of
 			// its own; what it may have done is start the worker, which is behaviour, not residency.
 			return new AtomicActionExecution { Completed=completed,MayHaveExecuted=evaluated.CompilerError!=true,Evidence=evidence.ToJsonString(),MutationAuditId=evaluated.AuditId,Error=evaluated.Error };
 		}
@@ -531,6 +539,10 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 				case PayloadOperation.commit:
 					if(report.Value("residency_commit")!="completed") return "Commit reported residency_commit="+report.Value("residency_commit")+", which means it did not reach a prepared generation.";
 					if(!report.Has("worker_started")) return "Commit did not report worker_started, so a first commit cannot be told from a repeat of one.";
+					return null;
+				case PayloadOperation.shutdown:
+					if(report.Value("payloads_resident")!="true") return "Shutdown reported payloads_resident="+(report.Value("payloads_resident") ?? "absent")+"; byte-loaded payloads cannot be unloaded.";
+					if(report.Value("behavior_commit")!="stopped") return "Shutdown reported behavior_commit="+(report.Value("behavior_commit") ?? "absent")+" rather than stopped.";
 					return null;
 				default:
 					// dropped is what makes a drain truthful: a count without it cannot distinguish "no events"

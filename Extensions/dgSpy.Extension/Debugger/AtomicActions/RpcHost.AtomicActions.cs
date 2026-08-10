@@ -192,7 +192,7 @@ namespace dgSpy.Extension {
 			"capture" => new RpcExpressionAction(this,req,kind,mutating:false),
 			"assignment" => new RpcExpressionAction(this,req,kind,mutating:true),
 			"method_invocation" => new RpcExpressionAction(this,req,kind,mutating:true),
-			// The payload action's three operations are separate runs on purpose: the target does not run
+			// The payload action's four operations are separate runs on purpose: the target does not run
 			// between two evaluations held under one stop, so preparation and commit need a real resume
 			// between them, which resume_policy=resume already provides.
 			"payload" => new PayloadAction(new RpcPayloadEvaluator(this,req),new HostHookLabPayloadSource(),PayloadActionRequest.Parse(req.Arguments)),

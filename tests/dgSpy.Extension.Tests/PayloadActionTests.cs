@@ -115,6 +115,7 @@ public sealed class PayloadActionRequestTests {
 	[Fact]
 	public void Commit_and_drain_accept_no_prepare_parameters() {
 		Assert.Equal(PayloadOperation.commit, PayloadActionRequest.Parse(new JsonObject { ["payload_operation"] = "commit" }).Operation);
+		Assert.Equal(PayloadOperation.shutdown, PayloadActionRequest.Parse(new JsonObject { ["payload_operation"] = "shutdown" }).Operation);
 		var drain = PayloadActionRequest.Parse(new JsonObject { ["payload_operation"] = "drain", ["drain_max"] = 17 });
 		Assert.Equal(17, drain.DrainMax);
 		AssertInvalid(new JsonObject { ["payload_operation"] = "commit", ["payload_parameters"] = new JsonObject() }, "prepare only");
@@ -228,6 +229,7 @@ public sealed class PayloadActionTests {
 	[Theory]
 	[InlineData("commit", "Commit")]
 	[InlineData("drain", "DrainEvents")]
+	[InlineData("shutdown", "Shutdown")]
 	public async Task Resident_operations_scan_then_invoke_one_fixed_entry(string operation, string method) {
 		var log = new List<string>();
 		var evaluator = new Evaluator(log, Evaluation(Inventory("HookLab.Bootstrap, Version=1")), Evaluation(Common + (operation == "commit" ? "worker_started=true\n" : "count=2\ndropped=0\n")));
@@ -300,7 +302,7 @@ public sealed class PayloadActionTests {
 		public List<string> Expressions { get; } = new();
 		public Task<PayloadEvaluation> EvaluateAsync(AtomicActionContext context, string expression, int timeoutMs, CancellationToken cancellationToken) {
 			Expressions.Add(expression);
-			var kind = expression == PayloadExpressions.ResidentGenerationScan() ? "scan" : expression.Contains("DrainEvents", StringComparison.Ordinal) ? "drain" : expression.Contains("GetMethod(\"Commit\")", StringComparison.Ordinal) ? "commit" : "prepare";
+			var kind = expression == PayloadExpressions.ResidentGenerationScan() ? "scan" : expression.Contains("DrainEvents", StringComparison.Ordinal) ? "drain" : expression.Contains("GetMethod(\"Shutdown\")", StringComparison.Ordinal) ? "shutdown" : expression.Contains("GetMethod(\"Commit\")", StringComparison.Ordinal) ? "commit" : "prepare";
 			log.Add("evaluate:" + kind);
 			return Task.FromResult(results.Dequeue());
 		}

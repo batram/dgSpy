@@ -138,6 +138,7 @@ try {
 		# dnSpy-facing half, which no test entered. This runs a real atomic action against the CorDebug
 		# fixture on whichever host framework the gate is exercising.
 		Invoke-Checked 'Atomic-action live smoke' { .\tests\run-atomic-action-smoke.ps1 -TargetFramework $TargetFramework }
+		Invoke-Checked 'HookLab install live smoke' { .\tests\run-hooklab-install-smoke.ps1 -TargetFramework $TargetFramework }
 	}
 	# Needs a listening uch-debug-target player, which this repo neither builds nor ships: it takes a
 	# Unity editor and a licence, which hosted runners do not have. Launch it first with the target
