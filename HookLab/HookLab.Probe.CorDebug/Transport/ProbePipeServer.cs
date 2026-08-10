@@ -399,16 +399,21 @@ namespace HookLab.Probe.CorDebug.Transport {
 		/// refused whether it reaches admission before, during or after this call. Closing the gate last left it
 		/// open across both of those steps, and a request decoded in that window still ran.</summary>
 		public void Dispose() {
-			if (disposed) return; disposed = true;
-			// First, and before anything that can take time or wake a thread: refuses any command not already
-			// admitted. Closing the transport does not stop a request the listener had already decoded, and
-			// closing the gate last left exactly that request admissible for the length of the two steps
-			// below - the listener could find the gate still open, enter the handler, and start mutating the
-			// target while this method was still running and after it returned. The order is the whole fix:
-			// once the gate is shut, no later step can re-open it, so every admission decision this Dispose
-			// races with resolves as a refusal. Neither blocking nor unbounded - it is one lock acquisition,
-			// against critical sections that only touch a counter and an event.
-			CloseCommandGate();
+			// Disposal begins and the gate shuts in ONE lock acquisition. Adjacent statements were not enough:
+			// with `disposed = true` set outside the lock, a listener that had decoded a request could be
+			// admitted in the gap between the two, enter the handler, and still be mutating the target after
+			// this returned. That window was two instructions wide and it was still a window - the third
+			// iteration of this same ordering defect, each previous fix having narrowed it rather than closed
+			// it. Making the two atomic is what actually establishes "no command not already admitted can
+			// start after disposal begins", because there is no longer an interval to race.
+			//
+			// Still neither blocking nor unbounded: one lock acquisition, against critical sections that only
+			// touch a counter and an event.
+			lock (commandGate) {
+				if (disposed) return;
+				disposed = true;
+				commandGateClosed = true;
+			}
 			NamedPipeServerStream? current;
 			lock (pipeGate) current = activePipe;
 			// Disposing the server stream both closes the endpoint and releases a listener already parked in
