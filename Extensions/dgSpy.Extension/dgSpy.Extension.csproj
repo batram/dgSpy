@@ -4,6 +4,7 @@
   <PropertyGroup><TargetFrameworks>net48;net10.0-windows</TargetFrameworks><AssemblyName>dgSpy.Extension.x</AssemblyName><RootNamespace>dgSpy.Extension</RootNamespace><Nullable>enable</Nullable><UseWPF>true</UseWPF></PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\dgSpy.Protocol\dgSpy.Protocol.csproj" />
+    <ProjectReference Include="..\..\HookLab\HookLab.Contracts\HookLab.Contracts.csproj" />
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.DnSpy\dnSpy.Contracts.DnSpy.csproj" />
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.Debugger\dnSpy.Contracts.Debugger.csproj" />
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.Debugger.DotNet\dnSpy.Contracts.Debugger.DotNet.csproj" />

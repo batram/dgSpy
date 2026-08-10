@@ -33,6 +33,8 @@ namespace dgSpy.Protocol {
 		[JsonPropertyName("operation")] public string Operation { get; set; }="";
 		[JsonPropertyName("max_duration_ms")] public int MaxDurationMs { get; set; }
 		[JsonPropertyName("mutates_session")] public bool MutatesSession { get; set; }
+		[JsonPropertyName("operation_version"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? OperationVersion { get; set; }
+		[JsonPropertyName("result_schema_version"), JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? ResultSchemaVersion { get; set; }
 	}
 	public sealed class CapabilityLimits {
 		[JsonPropertyName("max_frames")] public int MaxFrames { get; set; }
@@ -204,7 +206,7 @@ namespace dgSpy.Protocol {
 	/// drift: the gateway's per-tool deadline is computed from <see cref="BoundMs"/>, not guessed.</summary>
 	public static class CapabilityCatalog {
 		public const string HostId = "local";
-		static OperationBound Op(string operation,int maxDurationMs,bool mutates=false) => new OperationBound { Operation=operation, MaxDurationMs=maxDurationMs, MutatesSession=mutates };
+		static OperationBound Op(string operation,int maxDurationMs,bool mutates=false,int? version=null) => new OperationBound { Operation=operation, MaxDurationMs=maxDurationMs, MutatesSession=mutates, OperationVersion=version, ResultSchemaVersion=version };
 		/// <summary>Every operation the extension dispatches, with the extension's own worst case. The
 		/// values come from the waits in RpcHost: attach waits up to 10 s for the engine to enumerate
 		/// threads, attach_endpoint waits the Mono connection timeout (capped at 5 min) plus 5 s, the
@@ -224,6 +226,9 @@ namespace dgSpy.Protocol {
 			Op("restart",15000,mutates:true),
 			Op("pause",12000,mutates:true),
 			Op("continue",12000,mutates:true),
+			Op("run_atomic_action",65000,mutates:true,version:1),
+			Op("get_atomic_action_status",5000,version:1),
+			Op("cancel_atomic_action",5000,mutates:true,version:1),
 			Op("set_il_breakpoint",10000,mutates:true),
 			Op("list_breakpoints",5000),
 			Op("remove_breakpoint",5000,mutates:true),

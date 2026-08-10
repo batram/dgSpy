@@ -445,6 +445,159 @@
       }
     },
     {
+      "name": "run_atomic_action",
+      "description": "SIDE EFFECTING and audited. Versioned bounded natural-arrival workflow with an owned internal breakpoint, explicit action and verification, ownership-scoped cleanup, and independent action/interruption/cleanup outcomes. operation_version and request schema_version are currently 1. Initial action kinds are capture, assignment, and method_invocation; managed_payload arrives later through the same IAtomicAction extension point. Capture and assignment accept only addressable dotted paths; values and invocation arguments are JSON scalars, so this is not an open-ended expression program.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "operation_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          },
+          "expected_stop_id": {
+            "type": "string",
+            "description": "Opaque stop_id from get_session_state. Invalidated only when execution resumes or stops again."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60000
+          },
+          "action_kind": {
+            "type": "string",
+            "enum": [
+              "capture",
+              "assignment",
+              "method_invocation"
+            ]
+          },
+          "capture_path": {
+            "type": "string"
+          },
+          "assignment_target": {
+            "type": "string"
+          },
+          "serialized_value": {
+            "description": "A JSON null, boolean, number, or string."
+          },
+          "invocation_target": {
+            "type": "string"
+          },
+          "invocation_arguments": {
+            "type": "array",
+            "items": {
+              "description": "A JSON null, boolean, number, or string."
+            }
+          },
+          "verification_path": {
+            "type": "string"
+          },
+          "verification_expected": {
+            "description": "Optional expected JSON scalar."
+          },
+          "request": {
+            "type": "object",
+            "description": "Atomic action request schema v1: action_id, action_name, process_id, runtime_id, app_domain_id, module, method_token, il_offset, optional nearby_offsets, deadline_utc, resume_policy and disconnect_policy."
+          }
+        },
+        "required": [
+          "operation_version",
+          "session_id",
+          "process_id",
+          "expected_execution_version",
+          "expected_stop_id",
+          "action_kind",
+          "request"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "get_atomic_action_status",
+      "description": "Read a versioned terminal or in-progress atomic-action record by action_id. This is the reconciliation operation named after an ambiguous cleanup or potentially side-effecting outcome, including after the debug session ended.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "operation_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "action_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_version",
+          "action_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "cancel_atomic_action",
+      "description": "Request cancellation of a bounded atomic action. Cancellation runs the same ownership-scoped cleanup path and does not discard the terminal status record.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "operation_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "action_id": {
+            "type": "string"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          }
+        },
+        "required": [
+          "operation_version",
+          "session_id",
+          "action_id",
+          "expected_execution_version"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
       "name": "list_hosts",
       "description": "List registered debugger hosts and their current connection state.",
       "inputSchema": {

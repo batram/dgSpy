@@ -300,6 +300,9 @@ namespace dgSpy.Extension {
 			case "restart": return RpcResponse.Success(req.RequestId,await RestartAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "pause": return RpcResponse.Success(req.RequestId,await PauseProcessAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "continue": return RpcResponse.Success(req.RequestId,await ContinueProcessAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "run_atomic_action": return RpcResponse.Success(req.RequestId,await RunAtomicActionAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_atomic_action_status": return RpcResponse.Success(req.RequestId,GetAtomicActionStatus(req));
+			case "cancel_atomic_action": return RpcResponse.Success(req.RequestId,CancelAtomicAction(req));
 			case "set_il_breakpoint": return RpcResponse.Success(req.RequestId,await SetBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "list_breakpoints": return RpcResponse.Success(req.RequestId,await ListBreakpointsAsync(requestCancellation.Token).ConfigureAwait(false));
 			case "remove_breakpoint": return RpcResponse.Success(req.RequestId,await RemoveBreakpointAsync(req,requestCancellation.Token).ConfigureAwait(false));

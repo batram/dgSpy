@@ -74,6 +74,27 @@
       "mutates_session": true
     },
     {
+      "operation": "run_atomic_action",
+      "max_duration_ms": 65000,
+      "mutates_session": true,
+      "operation_version": 1,
+      "result_schema_version": 1
+    },
+    {
+      "operation": "get_atomic_action_status",
+      "max_duration_ms": 5000,
+      "mutates_session": false,
+      "operation_version": 1,
+      "result_schema_version": 1
+    },
+    {
+      "operation": "cancel_atomic_action",
+      "max_duration_ms": 5000,
+      "mutates_session": true,
+      "operation_version": 1,
+      "result_schema_version": 1
+    },
+    {
       "operation": "set_il_breakpoint",
       "max_duration_ms": 10000,
       "mutates_session": true

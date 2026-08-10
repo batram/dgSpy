@@ -19,6 +19,9 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\BreakpointSnapPolicy.cs" Link="Debugger\BreakpointSnapPolicy.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\OwnedBreakpoints\OwnedBreakpointStopLabel.cs" Link="Debugger\OwnedBreakpoints\OwnedBreakpointStopLabel.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\ActionLeaseCoordinator.cs" Link="Debugger\ActionLeaseCoordinator.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\AtomicActionModels.cs" Link="Debugger\AtomicActions\AtomicActionModels.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\AtomicActionAbstractions.cs" Link="Debugger\AtomicActions\AtomicActionAbstractions.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\AtomicActionStateMachine.cs" Link="Debugger\AtomicActions\AtomicActionStateMachine.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcException.cs" Link="Rpc\RpcException.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcSecurity.cs" Link="Rpc\RpcSecurity.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\SymbolSearchQuery.cs" Link="Decompiler\SymbolSearchQuery.cs" />
@@ -37,5 +40,6 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\ToolWindows\McpActivityLog.cs" Link="ToolWindows\McpActivityLog.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Policy\CapabilityPolicy.cs" Link="Policy\CapabilityPolicy.cs" />
     <ProjectReference Include="..\..\dgSpy.Protocol\dgSpy.Protocol.csproj" />
+    <ProjectReference Include="..\..\HookLab\HookLab.Contracts\HookLab.Contracts.csproj" />
   </ItemGroup>
 </Project>

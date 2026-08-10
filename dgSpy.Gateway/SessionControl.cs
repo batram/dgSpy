@@ -67,7 +67,7 @@ public sealed record SessionControllerInfo(string SessionId,string? HostId,strin
 public static class MutationGuards {
 	static readonly HashSet<string> Lifecycle=new(StringComparer.Ordinal) { "detach","terminate","restart" };
 	static readonly HashSet<string> Breakpoints=new(StringComparer.Ordinal) { "set_il_breakpoint","set_breakpoint","remove_breakpoint","clear_breakpoints","update_breakpoint","set_exception_breakpoint","set_module_breakpoint","update_module_breakpoint","remove_module_breakpoint","import_breakpoints","set_exception_policy","remove_exception_policy","restore_exception_defaults" };
-	static readonly HashSet<string> StopBound=new(StringComparer.Ordinal) { "step_into","step_over","step_out","set_value","invoke_method","create_object","set_instruction_pointer","create_object_id","write_value_export" };
+	static readonly HashSet<string> StopBound=new(StringComparer.Ordinal) { "run_atomic_action","step_into","step_over","step_out","set_value","invoke_method","create_object","set_instruction_pointer","create_object_id","write_value_export" };
 	public static string Scope(string operation) => Lifecycle.Contains(operation) ? "lifecycle" : Breakpoints.Contains(operation) ? "breakpoints" : "execution";
 	public static string Argument(string operation) => "expected_"+Scope(operation)+"_version";
 	public static string StateProperty(string operation) => Scope(operation)+"_version";

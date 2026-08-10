@@ -107,6 +107,8 @@ public class SessionControlTests {
 	[Theory]
 	[InlineData("detach","lifecycle","expected_lifecycle_version")]
 	[InlineData("continue","execution","expected_execution_version")]
+	[InlineData("run_atomic_action","execution","expected_execution_version")]
+	[InlineData("cancel_atomic_action","execution","expected_execution_version")]
 	[InlineData("set_value","execution","expected_execution_version")]
 	[InlineData("set_il_breakpoint","breakpoints","expected_breakpoints_version")]
 	public void Mutation_guards_are_scoped_to_the_affected_state(string operation,string scope,string argument) {

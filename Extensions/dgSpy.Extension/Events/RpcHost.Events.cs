@@ -245,7 +245,7 @@ namespace dgSpy.Extension {
 			if(req.Arguments["session_id"] is not null) CheckSession(req);
 			switch(req.Operation) {
 			case "detach": case "terminate": case "restart": CheckLifecycleVersion(req); break;
-			case "pause": case "continue": case "step_into": case "step_over": case "step_out": case "set_value": case "invoke_method": case "create_object": case "write_memory": case "set_instruction_pointer": case "create_object_id": case "release_object_id": case "write_value_export": CheckExecutionVersion(req); break;
+			case "pause": case "continue": case "run_atomic_action": case "cancel_atomic_action": case "step_into": case "step_over": case "step_out": case "set_value": case "invoke_method": case "create_object": case "write_memory": case "set_instruction_pointer": case "create_object_id": case "release_object_id": case "write_value_export": CheckExecutionVersion(req); break;
 			case "set_il_breakpoint": case "set_breakpoint": case "remove_breakpoint": case "clear_breakpoints": case "update_breakpoint": case "set_exception_breakpoint": case "set_module_breakpoint": case "update_module_breakpoint": case "remove_module_breakpoint": case "import_breakpoints": case "set_exception_policy": case "remove_exception_policy": case "restore_exception_defaults": CheckBreakpointsVersion(req); break;
 			}
 		}

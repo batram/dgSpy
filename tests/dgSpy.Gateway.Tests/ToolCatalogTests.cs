@@ -41,6 +41,18 @@ public sealed class ToolCatalogTests {
 	[Fact]
 	public void An_unknown_tool_still_gets_a_usable_deadline() => Assert.Equal(8, ToolCatalog.DeadlineSeconds("not_a_tool"));
 
+	[Theory]
+	[InlineData("run_atomic_action")]
+	[InlineData("get_atomic_action_status")]
+	[InlineData("cancel_atomic_action")]
+	public void Atomic_action_operations_and_results_are_explicitly_versioned(string operation) {
+		var capability=CapabilityCatalog.Operations.Single(value=>value.Operation==operation);
+		Assert.Equal(1,capability.OperationVersion); Assert.Equal(1,capability.ResultSchemaVersion);
+		var tool=ProtocolJson.ToNode(ToolCatalog.All.Single(value=>Name(value)==operation))!.AsObject();
+		Assert.Equal(1,(int?)tool["inputSchema"]?["properties"]?["operation_version"]?["const"]);
+		Assert.Contains("operation_version",ProtocolJson.FromNode<string[]>(tool["inputSchema"]?["required"]) ?? Array.Empty<string>());
+	}
+
 	[Fact]
 	public void Host_unavailable_recovery_directs_local_clients_to_the_launcher() {
 		var guidance=ToolCatalog.ErrorGuidance("host_unavailable");
