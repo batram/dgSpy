@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using dgSpy.Extension.HookLab;
+using dgSpy.Extension.PayloadDelivery;
 using Xunit;
 
 namespace dgSpy.Extension.Tests;

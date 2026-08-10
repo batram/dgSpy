@@ -4,7 +4,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
 
-namespace dgSpy.Extension.HookLab {
+namespace dgSpy.Extension.PayloadDelivery {
 	/// <summary>Which of the three supported host layouts the payload was resolved from. Detected from what
 	/// is present in and above the host root, never from a caller-supplied hint: a hint is exactly the thing
 	/// a damaged or substituted install would get wrong.</summary>
