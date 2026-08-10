@@ -174,3 +174,17 @@ Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/Impl/DbgEngineImpl.cs      
 # does not use reflection or expose general CorDebug internals.
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DgSpyOwnedBreakpointFacade.cs  owned internal breakpoint facade
 dnSpy/dnSpy.Contracts.Debugger.DotNet.CorDebug/DgSpyOwnedBreakpointService.cs                narrow owned-breakpoint contract for dgSpy consumers
+
+# ICorDebugThread::GetUserState returning a failed HRESULT was converted to state 0,
+# which is indistinguishable from a thread with no flags set. Anything asking "is
+# USER_UNSAFE_POINT set?" therefore read a *failed probe* as a safe point - and that
+# question decides whether an atomic action may run a func-eval, so a broken probe
+# silently became a green light. The fix keeps UserState's behaviour for callers that
+# only want flags, adds TryGetUserState for callers that would draw a safety
+# conclusion from an absent flag, and surfaces the failure as its own state rather
+# than as an empty set. See commit 825da4b96 (T08c).
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/dndbg/Engine/CorThread.cs           TryGetUserState reports whether the HRESULT answered
+dnSpy/dnSpy.Contracts.Debugger.DotNet.CorDebug/CorThreadUserStates.cs                        UserStateUnavailable, present instead of the real flags
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/ThreadProperties.cs            carry probe-failed through the thread property snapshot
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DnThreadUtils.cs               map an unavailable user state rather than dropping it
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DbgEngineImpl.Threads.cs       report the unavailable state to the debugger layer
