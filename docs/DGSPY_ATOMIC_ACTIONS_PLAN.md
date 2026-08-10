@@ -44,8 +44,11 @@ must not silently leave an internal breakpoint owner or unexpected pause behind.
 ## Specialized managed-payload action
 
 The payload action accepts a bounded bootstrap digest/identity, dependency manifest, initializer type
-and method, protocol version, and bounded initialization data. Files are staged in a configured
-hash-verified host cache. At an evaluatable managed frame the host loads one bootstrap assembly with
+and method, protocol version, and bounded initialization data. ~~Files are staged in a configured
+hash-verified host cache.~~ **Superseded by P01 and T09's decision D7: there is no host cache and no
+staging step.** The payload ships as one verified file inside the versioned deployment tree; not creating
+a writable cache removes the threat those protections were defending against. Read the payload from the
+running host's tree and verify its digest from an open handle. At an evaluatable managed frame the host loads one bootstrap assembly with
 `Assembly.Load(byte[])`. Its initializer has no static dependency on payload types, installs a resolver
 restricted to the manifest's exact assembly identities and embedded hash-verified bytes, then loads the
 probe and backend. It invokes the fixed initializer contract, verifies returned probe identity and

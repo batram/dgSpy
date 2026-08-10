@@ -58,8 +58,12 @@ Probe installation is one specialized debugger-host operation, not a client comp
 evaluation calls:
 
 1. Resolve and validate the exact target, runtime, AppDomain, module, and method guard.
-2. Stage a hash-verified bootstrap with an embedded dependency bundle beneath a configured host cache
-   using canonical-path and reparse-point protections.
+2. ~~Stage a hash-verified bootstrap with an embedded dependency bundle beneath a configured host cache
+   using canonical-path and reparse-point protections.~~ **Superseded by P01 and T09's decision D7: there
+   is no host cache and no staging step**, deliberately - not creating a writable cache removes the threat
+   those protections mitigate. The payload ships as one verified file inside the versioned deployment
+   tree. Read it from the running host's tree and verify the digest from an open handle held across the
+   evaluation. Nothing is staged, so nothing is deleted afterwards.
 3. Run naturally to a declared managed location and select an evaluatable managed frame, using only
    a declared bounded nearby-slot search when necessary.
 4. Execute a fixed `Assembly.Load(byte[])` bootstrap whose dependency-free initializer installs a
