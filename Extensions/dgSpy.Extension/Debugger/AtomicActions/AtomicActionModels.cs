@@ -49,6 +49,9 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		public bool MayHaveExecuted { get; set; }
 		public string? Evidence { get; set; }
 		public string? Error { get; set; }
+		/// <summary>The id the action's own audited mutation was written to the debugger log under, so the
+		/// audited line can be correlated with the reported action.</summary>
+		public string? MutationAuditId { get; set; }
 	}
 
 	public sealed class AtomicActionVerification {
@@ -82,6 +85,17 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		public AtomicActionSlot? UsedSlot { get; set; }
 		[JsonPropertyName("verification_evidence")]
 		public string? VerificationEvidence { get; set; }
+		/// <summary>What the action reported about undoing itself. Null when the action was never entered.</summary>
+		[JsonPropertyName("cleanup_evidence")]
+		public string? CleanupEvidence { get; set; }
+		/// <summary>The audit id of the action's own mutation in the debugger output log. <c>audit_id</c>
+		/// identifies the invocation; this identifies the audited line inside it.</summary>
+		[JsonPropertyName("mutation_audit_id")]
+		public string? MutationAuditId { get; set; }
+		/// <summary>The deadline actually enforced, which is the requested one clamped to the operation's
+		/// bound. Reported so a clamp is never silent.</summary>
+		[JsonPropertyName("effective_deadline_utc")]
+		public DateTime EffectiveDeadlineUtc { get; set; }
 		[JsonPropertyName("patched_target_detection"),JsonConverter(typeof(JsonStringEnumConverter))]
 		public PatchedTargetState PatchedTargetDetection { get; set; }
 		[JsonPropertyName("error")]

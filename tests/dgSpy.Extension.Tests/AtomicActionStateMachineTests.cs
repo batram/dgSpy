@@ -37,8 +37,21 @@ public sealed class AtomicActionStateMachineTests {
 	}
 
 	[Fact] public async Task DeclaredNearbySlotIsRecorded() {
-		var request=Request(); request.NearbyOffsets=new uint[]{4}; var host=new Host(Stop(offset:4)) { Nearby=new AtomicActionSlot("target.dll",0x06000001,4) };
+		var request=Request(); request.NearbyOffsets=new uint[]{4}; var host=new Host(Stop(offset:4));
 		var result=await Run(host,new ActionImpl(),request); Assert.Equal(ActionOutcome.completed,result.Status.ActionOutcome); Assert.Equal((uint)4,result.UsedSlot!.IlOffset);
+	}
+
+	/// <summary>The used slot is the one execution bound, not the first offset the caller declared.</summary>
+	[Fact] public async Task StopAtASecondDeclaredOffsetNamesThatOffset() {
+		var request=Request(); request.NearbyOffsets=new uint[]{4,9,15};
+		var result=await Run(new Host(Stop(offset:9)),new ActionImpl(),request);
+		Assert.Equal(ActionOutcome.completed,result.Status.ActionOutcome); Assert.Equal((uint)9,result.UsedSlot!.IlOffset);
+	}
+
+	[Fact] public async Task StopAtNoDeclaredOffsetIsNotAttributedToOne() {
+		var request=Request(); request.NearbyOffsets=new uint[]{4,9};
+		var result=await Run(new Host(Stop(offset:11)),new ActionImpl(),request);
+		Assert.Equal(ActionOutcome.nearby_slot_not_found,result.Status.ActionOutcome); Assert.Null(result.UsedSlot);
 	}
 
 	[Fact] public async Task ActionFailureCanBePotentiallySideEffecting() {
@@ -101,12 +114,141 @@ public sealed class AtomicActionStateMachineTests {
 		Assert.Equal(InterruptionReason.appdomain_unloaded,result.Status.InterruptionReason);
 	}
 
-	static async Task<AtomicActionResult> Run(Host host,ActionImpl action,AtomicActionRequest request,CancellationToken client=default) { using var leases=new ActionLeaseCoordinator(); return await new AtomicActionStateMachine(leases,host).RunAsync(request,action,client,CancellationToken.None); }
+	// Defect 1: the lease used to release itself at its deadline and at owner disconnect, so the machine's
+	// own cleanup-time resume threw ObjectDisposedException through a lease that was already gone. Both
+	// existing cleanup tests left ResumePolicy at preserve_stop, so neither could see it.
+	[Fact] public async Task TimeoutStillResumesTheTargetThroughItsOwnLease() {
+		var request=Request(); request.DeadlineUtc=DateTime.UtcNow.AddMilliseconds(120); request.ResumePolicy=AtomicActionResumePolicy.resume;
+		var host=new Host(Stop()) { WaitUntilCancellation=true };
+		var result=await Run(host,new ActionImpl(),request);
+		Assert.Equal(InterruptionReason.timeout,result.Status.InterruptionReason);
+		Assert.Equal(1,host.ResumeCalls); Assert.True(host.Resumed);
+		Assert.Equal(CleanupOutcome.completed,result.Status.CleanupOutcome);
+		Assert.True(result.FinalDebuggerState.IsRunning);
+	}
+
+	[Fact] public async Task DisconnectStillResumesTheTargetThroughItsOwnLease() {
+		using var disconnected=new CancellationTokenSource();
+		var request=Request(); request.ResumePolicy=AtomicActionResumePolicy.resume;
+		var host=new Host(Stop()) { OnContinue=disconnected.Cancel,WaitUntilCancellation=true };
+		var result=await Run(host,new ActionImpl(),request,disconnected.Token);
+		Assert.Equal(InterruptionReason.client_disconnected,result.Status.InterruptionReason);
+		Assert.Equal(1,host.ResumeCalls); Assert.True(host.Resumed);
+		Assert.Equal(CleanupOutcome.completed,result.Status.CleanupOutcome);
+	}
+
+	// Defect 7: under complete_on_disconnect the client lifetime is deliberately not linked, so a
+	// disconnected-then-timed-out action must not report the one classification that policy suppresses.
+	[Fact] public async Task DisconnectedThenTimedOutUnderCompleteOnDisconnectIsATimeout() {
+		using var disconnected=new CancellationTokenSource();
+		var request=Request(); request.DisconnectPolicy=AtomicActionInterruptionPolicy.complete_on_disconnect; request.DeadlineUtc=DateTime.UtcNow.AddMilliseconds(150);
+		var host=new Host(Stop()) { OnContinue=disconnected.Cancel,WaitUntilCancellation=true };
+		var result=await Run(host,new ActionImpl(),request,disconnected.Token);
+		Assert.True(disconnected.IsCancellationRequested);
+		Assert.Equal(InterruptionReason.timeout,result.Status.InterruptionReason);
+	}
+
+	// Defect 6: a genuine cleanup failure is the stronger fact and an unknown final state must not erase it.
+	[Fact] public async Task CleanupFailureSurvivesAFailedFinalStateRead() {
+		var host=new Host(Stop()); host.Breakpoint.ReleaseError=new InvalidOperationException("engine cleanup"); host.FinalStateError=new InvalidOperationException("state unknown");
+		var result=await Run(host,new ActionImpl(),Request());
+		Assert.Equal(CleanupOutcome.failed,result.Status.CleanupOutcome);
+		Assert.Contains("engine cleanup",result.Error); Assert.Contains("state unknown",result.Error);
+	}
+
+	// dispatcher_degraded's producer is the RpcException the dispatcher raises, not a fake throwing the
+	// interruption directly.
+	[Fact] public async Task UnavailableDispatcherIsReportedAsDispatcherDegraded() {
+		var host=new Host(Stop()) { WaitError=new RpcException("dispatcher_unavailable","The debugger thread is gone.") };
+		var result=await Run(host,new ActionImpl(),Request());
+		Assert.Equal(InterruptionReason.dispatcher_degraded,result.Status.InterruptionReason);
+		Assert.Equal(CleanupOutcome.completed,result.Status.CleanupOutcome);
+	}
+
+	// Item 10: an action can report on undoing itself, and that report merges by severity.
+	[Fact] public async Task ActionRollbackIsAskedForOnEveryPathThatEnteredTheAction() {
+		var action=new ActionImpl { Verification=new AtomicActionVerification { Verified=false,Error="mismatch" },Cleanup=new AtomicActionCleanup { Outcome=CleanupOutcome.completed,Evidence="unpatched" } };
+		var result=await Run(new Host(Stop()),action,Request());
+		Assert.Equal(ActionOutcome.verification_failed,result.Status.ActionOutcome);
+		Assert.True(action.CleanupSeen!.RollbackRecommended);
+		Assert.Equal(CleanupOutcome.completed,result.Status.CleanupOutcome);
+		Assert.Equal("unpatched",result.CleanupEvidence);
+	}
+
+	[Fact] public async Task ActionRollbackFailureIsVisibleInCleanupOutcome() {
+		var action=new ActionImpl { Cleanup=new AtomicActionCleanup { Outcome=CleanupOutcome.failed,Error="the probe is still resident" } };
+		var result=await Run(new Host(Stop()),action,Request());
+		Assert.Equal(ActionOutcome.completed,result.Status.ActionOutcome);
+		Assert.Equal(CleanupOutcome.failed,result.Status.CleanupOutcome);
+		Assert.Contains("the probe is still resident",result.Error);
+		Assert.Equal(AtomicActionStateMachine.StatusOperation,result.Status.ReconciliationOperation);
+	}
+
+	[Fact] public async Task ASuccessfulRollbackNeverMasksAFailedBreakpointRelease() {
+		var host=new Host(Stop()); host.Breakpoint.ReleaseError=new InvalidOperationException("engine cleanup");
+		var result=await Run(host,new ActionImpl { Cleanup=new AtomicActionCleanup { Outcome=CleanupOutcome.completed } },Request());
+		Assert.Equal(CleanupOutcome.failed,result.Status.CleanupOutcome);
+	}
+
+	[Fact] public async Task AnActionThatNeverRanIsNeverAskedToCleanUp() {
+		var action=new ActionImpl();
+		var result=await Run(new Host(Stop()) { Patched=true },action,Request());
+		Assert.Null(action.CleanupSeen);
+		Assert.Equal(CleanupOutcome.not_required,result.Status.CleanupOutcome);
+	}
+
+	[Fact] public async Task ARollbackThatOverrunsItsWindowIsAmbiguousRatherThanAbandoned() {
+		var action=new ActionImpl { CleanupHangs=true };
+		var result=await Run(new Host(Stop()),action,Request(),budget:TimeSpan.FromMilliseconds(120));
+		Assert.Equal(ActionOutcome.completed,result.Status.ActionOutcome);
+		Assert.Equal(CleanupOutcome.ambiguous,result.Status.CleanupOutcome);
+		Assert.Contains("bounded cleanup window",result.Error);
+	}
+
+	// Item 11: the action names the operation that reconciles what it left behind.
+	[Fact] public async Task AnActionSuppliesItsOwnReconciliationOperation() {
+		var action=new ActionImpl { ReconciliationOperation="get_probe_state",Execution=new AtomicActionExecution { Completed=false,MayHaveExecuted=true,Error="install failed" } };
+		var result=await Run(new Host(Stop()),action,Request());
+		Assert.Equal("get_probe_state",result.Status.ReconciliationOperation);
+	}
+
+	[Fact] public async Task ACleanupCanOverrideTheReconciliationOperation() {
+		var action=new ActionImpl { ReconciliationOperation="get_probe_state",Cleanup=new AtomicActionCleanup { Outcome=CleanupOutcome.ambiguous,ReconciliationOperation="check_probe_health" } };
+		var result=await Run(new Host(Stop()),action,Request());
+		Assert.Equal("check_probe_health",result.Status.ReconciliationOperation);
+	}
+
+	/// <summary>The stop names the module dnSpy resolved; the request names what the caller typed.</summary>
+	[Fact] public async Task AResolvedModulePathIsStillTheRequestedExactTarget() {
+		var host=new Host(new AtomicActionStop("runtime","domain",42,"thread",@"C:\build\out\target.dll",0x06000001,3,true));
+		var result=await Run(host,new ActionImpl(),Request());
+		Assert.Equal(ActionOutcome.completed,result.Status.ActionOutcome);
+		Assert.Equal((uint)3,result.UsedSlot!.IlOffset);
+	}
+
+	/// <summary>Nothing over RPC reports a runtime guid or an AppDomain id, so requiring both made a valid
+	/// request impossible to construct. Omitted means unconstrained; supplied still binds.</summary>
+	[Fact] public async Task AnOmittedRuntimeAndAppDomainAreUnconstrained() {
+		var request=Request(); request.RuntimeId=""; request.AppDomainId="";
+		var result=await Run(new Host(Stop()),new ActionImpl(),request);
+		Assert.Equal(ActionOutcome.completed,result.Status.ActionOutcome);
+		Assert.Equal(InterruptionReason.none,result.Status.InterruptionReason);
+	}
+
+	static async Task<AtomicActionResult> Run(Host host,ActionImpl action,AtomicActionRequest request,CancellationToken client=default,TimeSpan? budget=null) { using var leases=new ActionLeaseCoordinator(); return await new AtomicActionStateMachine(leases,host,budget).RunAsync(request,action,client,CancellationToken.None); }
 
 	sealed class ActionImpl : IAtomicAction {
 		public string Kind=>"test"; public AtomicActionExecution Execution=new() { Completed=true,MayHaveExecuted=true,Evidence="executed" }; public AtomicActionVerification Verification=new() { Verified=true,Evidence="verified" }; public Exception? ExecuteError; public Exception? VerifyError;
+		public string? ReconciliationOperation { get; set; }
+		public AtomicActionCleanup? Cleanup; public Exception? CleanupError; public bool CleanupHangs; public AtomicActionCleanupContext? CleanupSeen;
 		public Task<AtomicActionExecution> ExecuteAsync(AtomicActionContext context,CancellationToken token)=>ExecuteError is null?Task.FromResult(Execution):Task.FromException<AtomicActionExecution>(ExecuteError);
 		public Task<AtomicActionVerification> VerifyAsync(AtomicActionContext context,AtomicActionExecution execution,CancellationToken token)=>VerifyError is null?Task.FromResult(Verification):Task.FromException<AtomicActionVerification>(VerifyError);
+		public async Task<AtomicActionCleanup> CleanupAsync(AtomicActionCleanupContext context,CancellationToken token) {
+			CleanupSeen=context;
+			if(CleanupHangs) await Task.Delay(Timeout.Infinite,token);
+			if(CleanupError is not null) throw CleanupError;
+			return Cleanup ?? new AtomicActionCleanup();
+		}
 	}
 
 	sealed class Breakpoint : IAtomicActionBreakpoint {
@@ -117,15 +259,22 @@ public sealed class AtomicActionStateMachineTests {
 	}
 
 	sealed class Host : IAtomicActionHost {
-		readonly AtomicActionStop stop; public readonly Breakpoint Breakpoint=new(); public bool Patched; public AtomicActionSlot? Nearby; public Exception? WaitError; public bool WaitUntilCancellation; public Action? OnContinue; public Exception? ResumeError; public int ResumeCalls; public bool HandlesReleased; public TaskCompletionSource<bool> Continued=new(TaskCreationOptions.RunContinuationsAsynchronously);
+		readonly AtomicActionStop stop; public readonly Breakpoint Breakpoint=new(); public bool Patched; public Exception? WaitError; public bool WaitUntilCancellation; public Action? OnContinue; public Exception? ResumeError; public Exception? FinalStateError; public int ResumeCalls; public bool Resumed; public bool HandlesReleased; public TaskCompletionSource<bool> Continued=new(TaskCreationOptions.RunContinuationsAsynchronously);
 		public Host(AtomicActionStop stop)=>this.stop=stop; public long CaptureEventCursor()=>7;
 		public PatchedTargetState DetectPatchedTarget(AtomicActionSlot slot)=>Patched?PatchedTargetState.patched:PatchedTargetState.not_patched;
 		public Task<IAtomicActionBreakpoint> AddOwnedBreakpointAsync(AtomicActionSlot slot,Action<AtomicActionStop> hit,CancellationToken token)=>Task.FromResult<IAtomicActionBreakpoint>(Breakpoint);
 		public Task ContinueAsync(Action<Action> authorize,CancellationToken token) { authorize(()=>{}); OnContinue?.Invoke(); Continued.TrySetResult(true); return Task.CompletedTask; }
 		public async Task<AtomicActionStop> WaitForOwnedStopAsync(Guid owner,long cursor,CancellationToken token) { if(WaitError is not null) throw WaitError; if(WaitUntilCancellation) await Task.Delay(Timeout.Infinite,token); return stop; }
-		public Task<AtomicActionSlot?> SelectNearbySlotAsync(AtomicActionRequest request,AtomicActionStop? value,CancellationToken token)=>Task.FromResult(Nearby);
+		// The production host answers this from NearbySlotSelector, so the fake does too. A fake that
+		// returned a canned slot is what made DeclaredNearbySlotIsRecorded vacuous while the production
+		// selector ignored the stop entirely and always named the first declared offset.
+		public Task<AtomicActionSlot?> SelectNearbySlotAsync(AtomicActionRequest request,AtomicActionStop? value,CancellationToken token)=>Task.FromResult(NearbySlotSelector.Select(request,value));
 		public Task ReleaseTemporaryHandlesAsync(CancellationToken token) { HandlesReleased=true; return Task.CompletedTask; }
-		public Task ResumeAsync(Action<Action> authorize,CancellationToken token) { ResumeCalls++; if(ResumeError is not null) throw ResumeError; authorize(()=>{}); return Task.CompletedTask; }
-		public Task<AtomicActionFinalState> ReadFinalStateAsync(CancellationToken token)=>Task.FromResult(new AtomicActionFinalState { SessionActive=true,ProcessActive=true,IsPaused=true });
+		// authorize() runs the machine's lease.ExecuteMutation, so a lease that released itself while its
+		// owner was still cleaning up surfaces here as an ObjectDisposedException, exactly as in production.
+		public Task ResumeAsync(Action<Action> authorize,CancellationToken token) { ResumeCalls++; if(ResumeError is not null) throw ResumeError; authorize(()=>Resumed=true); return Task.CompletedTask; }
+		public Task<AtomicActionFinalState> ReadFinalStateAsync(CancellationToken token)=>FinalStateError is null
+			?Task.FromResult(new AtomicActionFinalState { SessionActive=true,ProcessActive=true,IsPaused=!Resumed,IsRunning=Resumed })
+			:Task.FromException<AtomicActionFinalState>(FinalStateError);
 	}
 }

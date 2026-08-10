@@ -124,12 +124,20 @@ try {
 
 	if ($Stage -in @('CorDebug','Full')) {
 		Invoke-Checked 'CorDebug live smoke' { .\tests\run-milestone1-smoke.ps1 -TargetFramework $TargetFramework }
+		# Nothing else builds the fixture in Release: run-milestone1-smoke.ps1 builds it Debug, and both
+		# live legs below require bin\Release\net48. It happens to exist on the machine this was written
+		# on, which is exactly why the gap was invisible until a clean clone hit the first Test-Path.
+		Invoke-Checked 'CorDebug fixture (Release)' { dotnet build tests\TestTargets\Milestone1Target\Milestone1Target.csproj -c Release -f net48 --nologo -v:minimal }
 		# T07's multiplex matrix uses the retained net48 CorDebug fixture and test controller. The net10
 		# CorDebug job still runs the general live smoke above; the dedicated net48 CI job makes this
 		# behavioral contract durable without rebuilding the deployment the gate already validated.
 		if ($TargetFramework -eq 'net48') {
 			Invoke-Checked 'Owned-breakpoint live matrix' { .\tests\run-owned-breakpoint-smoke.ps1 -TargetFramework $TargetFramework -SkipBuild }
 		}
+		# T08 shipped with no live leg: every one of the nine defects T08b fixes lived in the
+		# dnSpy-facing half, which no test entered. This runs a real atomic action against the CorDebug
+		# fixture on whichever host framework the gate is exercising.
+		Invoke-Checked 'Atomic-action live smoke' { .\tests\run-atomic-action-smoke.ps1 -TargetFramework $TargetFramework }
 	}
 	# Needs a listening uch-debug-target player, which this repo neither builds nor ships: it takes a
 	# Unity editor and a licence, which hosted runners do not have. Launch it first with the target

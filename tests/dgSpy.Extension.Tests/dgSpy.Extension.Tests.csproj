@@ -19,9 +19,18 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\BreakpointSnapPolicy.cs" Link="Debugger\BreakpointSnapPolicy.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\OwnedBreakpoints\OwnedBreakpointStopLabel.cs" Link="Debugger\OwnedBreakpoints\OwnedBreakpointStopLabel.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\ActionLeaseCoordinator.cs" Link="Debugger\ActionLeaseCoordinator.cs" />
+    <!-- Deliberately dnSpy-free: it carries the capture-then-recheck decision that closes the lease
+         check-to-dispatch race, so it can be exercised here against the real coordinator and the real
+         debugger dispatcher rather than a stand-in for either. -->
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\ActionLeaseAuthorization.cs" Link="Debugger\ActionLeaseAuthorization.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\AtomicActionModels.cs" Link="Debugger\AtomicActions\AtomicActionModels.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\AtomicActionAbstractions.cs" Link="Debugger\AtomicActions\AtomicActionAbstractions.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\AtomicActionStateMachine.cs" Link="Debugger\AtomicActions\AtomicActionStateMachine.cs" />
+    <!-- The dnSpy-facing half of an atomic action, kept dnSpy-free precisely so it can be reached from
+         here: RpcHost.AtomicActions.cs is a partial of a class no test can construct, and every decision
+         that used to be inlined in it shipped uncovered. -->
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\AtomicActionHostSupport.cs" Link="Debugger\AtomicActions\AtomicActionHostSupport.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\AtomicActionRecordStore.cs" Link="Debugger\AtomicActions\AtomicActionRecordStore.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcException.cs" Link="Rpc\RpcException.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcSecurity.cs" Link="Rpc\RpcSecurity.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\SymbolSearchQuery.cs" Link="Decompiler\SymbolSearchQuery.cs" />

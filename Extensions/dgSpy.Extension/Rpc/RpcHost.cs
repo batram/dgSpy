@@ -208,6 +208,11 @@ namespace dgSpy.Extension {
 			"detach","terminate","restart",
 			"pause","continue","step_into","step_over","step_out","set_value","invoke_method","create_object","write_memory","set_instruction_pointer","create_object_id","release_object_id","write_value_export",
 			"set_il_breakpoint","set_breakpoint","remove_breakpoint","clear_breakpoints","update_breakpoint","set_exception_breakpoint","set_module_breakpoint","update_module_breakpoint","remove_module_breakpoint","import_breakpoints","set_exception_policy","remove_exception_policy","restore_exception_defaults",
+			// run_atomic_action continues the target, stops it at an owned breakpoint and applies a resume
+			// policy, so it moves execution_version and stop_id like any other execution operation. Leaving
+			// it unstamped forced a get_session_state between it and the next guarded call, and made
+			// cancel_atomic_action's mandatory expected_execution_version racy against the action it cancels.
+			"run_atomic_action",
 		};
 		// Mutations which can invalidate an atomic action's captured process state. This deliberately
 		// includes evaluation-side effects and debugger policy changes in addition to engine transitions.
@@ -233,6 +238,10 @@ namespace dgSpy.Extension {
 		// handed the caller. That is worse than returning nothing: it looks authoritative and is wrong.
 		static readonly HashSet<string> executionChangingOperations=new HashSet<string>(StringComparer.Ordinal) {
 			"pause","continue","step_into","step_over","step_out",
+			// run_atomic_action is deliberately absent: this wait compares against the version captured
+			// before dispatch, and an atomic action has already moved it twice (continue, owned stop) by
+			// the time it composes an answer, so the wait would return immediately and prove nothing about
+			// the *final* resume. SettleAtomicResumeAsync waits for that specific transition instead.
 		};
 		/// <summary>Wait, boundedly, for the execution change this operation asked for to be recorded, so
 		/// the vector stamped onto the response is the one after it applied. Best effort by design: a step

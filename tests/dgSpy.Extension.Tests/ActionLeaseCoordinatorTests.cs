@@ -103,6 +103,70 @@ public sealed class ActionLeaseCoordinatorTests {
 		Assert.False(coordinator.TryGetBlock(42,"continue",out _));
 	}
 
+	/// <summary>
+	/// A lease that released itself at its deadline made its own owner's cleanup-time resume throw
+	/// ObjectDisposedException, so the target was left paused and the caller was told the resume was
+	/// ambiguous - for a resume that was never attempted. Expiry now stops granting new work and starts a
+	/// bounded window in which the owner keeps authorization and releases explicitly.
+	/// </summary>
+	[Fact]
+	public async Task An_expired_lease_still_authorizes_its_owners_cleanup() {
+		using var coordinator=new ActionLeaseCoordinator();
+		using var lease=coordinator.Acquire(42,"short","action-9",DateTime.UtcNow.AddMilliseconds(80),"status","cancel");
+		await Task.Delay(250);
+		Assert.True(lease.IsExpired);
+		Assert.False(coordinator.TryGetBlock(42,"continue",out _));
+		var resumed=false;
+		lease.ExecuteMutation(()=>resumed=true);
+		Assert.True(resumed);
+	}
+
+	[Fact]
+	public async Task An_expired_lease_still_authorizes_cleanup_after_an_owner_disconnect() {
+		using var coordinator=new ActionLeaseCoordinator();
+		using var disconnected=new CancellationTokenSource();
+		using var lease=Acquire(coordinator,ownerLifetime:disconnected.Token);
+		disconnected.Cancel();
+		await Task.Delay(50);
+		Assert.True(lease.IsExpired);
+		var resumed=false;
+		lease.ExecuteMutation(()=>resumed=true);
+		Assert.True(resumed);
+	}
+
+	/// <summary>An external engine transition during the cleanup window is still classified, because the
+	/// lease is still the process's owner until cleanup finishes.</summary>
+	[Fact]
+	public async Task An_external_debugger_action_during_the_cleanup_window_is_still_reported() {
+		using var coordinator=new ActionLeaseCoordinator();
+		using var lease=coordinator.Acquire(42,"short","action-10",DateTime.UtcNow.AddMilliseconds(80),"status","cancel");
+		await Task.Delay(250);
+		Assert.True(coordinator.ReportExternalDebuggerAction(42,"ui_continue"));
+		Assert.True(lease.ExternalActionCancellation.IsCancellationRequested);
+	}
+
+	/// <summary>The window is a bound, not a promise: an owner that overruns it loses authorization and
+	/// its next mutation fails loudly rather than being silently skipped.</summary>
+	[Fact]
+	public void An_owner_that_overruns_the_cleanup_window_loses_authorization() {
+		using var coordinator=new ActionLeaseCoordinator();
+		var lease=Acquire(coordinator);
+		lease.Dispose();
+		Assert.Throws<ObjectDisposedException>(()=>lease.ExecuteMutation(()=>{ }));
+	}
+
+	/// <summary>A second action cannot take the process while the previous owner is still cleaning up.</summary>
+	[Fact]
+	public async Task A_new_lease_waits_for_the_previous_owners_cleanup_window() {
+		using var coordinator=new ActionLeaseCoordinator();
+		var lease=coordinator.Acquire(42,"short","action-11",DateTime.UtcNow.AddMilliseconds(80),"status","cancel");
+		await Task.Delay(250);
+		Assert.Throws<ActionLeaseConflictException>(()=>Acquire(coordinator));
+		lease.Dispose();
+		using var next=Acquire(coordinator);
+		Assert.True(coordinator.TryGetBlock(42,"continue",out _));
+	}
+
 	[Fact]
 	public void Concurrent_acquire_has_one_winner() {
 		using var coordinator=new ActionLeaseCoordinator();

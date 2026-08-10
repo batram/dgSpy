@@ -52,14 +52,18 @@ namespace dgSpy.Extension.Debugger {
 			lock(sync) {
 				ThrowIfDisposed();
 				if(snapshot.TryGetValue(processId,out var existing)) {
-					if(existing.Info.DeadlineUtc>DateTime.UtcNow) throw new ActionLeaseConflictException(existing.Info,"acquire_action_lease");
+					// An expired lease still owns the process while its owner finishes cleanup: that owner is
+					// still resuming the target and releasing its handles, and granting a second lease during
+					// that window is exactly the double-ownership this coordinator exists to prevent. The
+					// window is bounded, so a crashed owner cannot hold the process indefinitely.
+					if(existing.OwnershipEndsUtc>DateTime.UtcNow) throw new ActionLeaseConflictException(existing.Info,"acquire_action_lease");
 					expired=existing;
 				}
 				lease=new ActionLease(this,new ActionLeaseInfo(processId,actionName,actionId,utcDeadline,statusOperation,cancelOperation),new object());
 				var next=new Dictionary<int,ActionLease>(snapshot) { [processId]=lease };
 				snapshot=next;
 			}
-			if(expired is not null) { expired.ReleaseResources(); LeaseChanged?.Invoke(expired.Info,false); }
+			if(expired is not null) { var announce=expired.MarkInactive(); expired.ReleaseResources(); if(announce) LeaseChanged?.Invoke(expired.Info,false); }
 			LeaseChanged?.Invoke(lease.Info,true);
 			lease.Initialize(ownerLifetime);
 			return lease;
@@ -68,11 +72,13 @@ namespace dgSpy.Extension.Debugger {
 		public bool TryGetBlock(int? processId,string operation,out ActionLeaseInfo info) {
 			var current=snapshot;
 			var now=DateTime.UtcNow;
+			// An expired lease blocks nobody: it grants no new work, and its remaining authorization exists
+			// only so its own owner can finish cleanup.
 			if(processId.HasValue) {
-				if(current.TryGetValue(processId.Value,out var lease) && lease.Info.DeadlineUtc>now && !ReferenceEquals(currentAuthorization,lease.Authorization)) { info=lease.Info; return true; }
+				if(current.TryGetValue(processId.Value,out var lease) && !lease.IsExpired && lease.Info.DeadlineUtc>now && !ReferenceEquals(currentAuthorization,lease.Authorization)) { info=lease.Info; return true; }
 			}
 			else {
-				foreach(var lease in current.Values) if(lease.Info.DeadlineUtc>now && !ReferenceEquals(currentAuthorization,lease.Authorization)) { info=lease.Info; return true; }
+				foreach(var lease in current.Values) if(!lease.IsExpired && lease.Info.DeadlineUtc>now && !ReferenceEquals(currentAuthorization,lease.Authorization)) { info=lease.Info; return true; }
 			}
 			info=null!; return false;
 		}
@@ -92,10 +98,25 @@ namespace dgSpy.Extension.Debugger {
 		internal IDisposable Enter(ActionLease lease) {
 			lock(sync) {
 				if(!snapshot.TryGetValue(lease.Info.ProcessId,out var active) || !ReferenceEquals(active,lease)) throw new ObjectDisposedException(nameof(ActionLease));
+				if(lease.OwnershipEndsUtc<=DateTime.UtcNow) throw new ObjectDisposedException(nameof(ActionLease),"The action lease's bounded cleanup window elapsed before this mutation was authorized.");
 			}
 			var previous=currentAuthorization;
 			currentAuthorization=lease.Authorization;
 			return new Scope(this,previous);
+		}
+
+		/// <summary>
+		/// Ends the lease's right to grant <em>new</em> work without ending its owner's authorization. The
+		/// owner keeps it for a bounded cleanup window and calls <see cref="Release"/> when cleanup finishes.
+		/// Releasing here instead is what made the owner's own final resume throw
+		/// <see cref="ObjectDisposedException"/> at exactly the moment it had to resume the target.
+		/// </summary>
+		internal void Expire(ActionLease lease) {
+			lock(sync) {
+				if(!snapshot.TryGetValue(lease.Info.ProcessId,out var active) || !ReferenceEquals(active,lease)) return;
+			}
+			if(!lease.BeginCleanupWindow(()=>Release(lease))) return;
+			LeaseChanged?.Invoke(lease.Info,false);
 		}
 
 		internal void Release(ActionLease lease) {
@@ -105,8 +126,9 @@ namespace dgSpy.Extension.Debugger {
 					var next=new Dictionary<int,ActionLease>(snapshot); next.Remove(lease.Info.ProcessId); snapshot=next; removed=true;
 				}
 			}
+			var announce=lease.MarkInactive();
 			lease.ReleaseResources();
-			if(removed) LeaseChanged?.Invoke(lease.Info,false);
+			if(removed && announce) LeaseChanged?.Invoke(lease.Info,false);
 		}
 
 		void ThrowIfDisposed() { if(disposed) throw new ObjectDisposedException(nameof(ActionLeaseCoordinator)); }
@@ -128,24 +150,41 @@ namespace dgSpy.Extension.Debugger {
 	}
 
 	public sealed class ActionLease : IDisposable {
+		/// <summary>
+		/// How long an expired lease's owner keeps authorization so it can finish cleanup - release its
+		/// owned breakpoint, let the action roll back, resume the target and read the final state. It is a
+		/// bound, not a promise: when it elapses the coordinator releases the lease itself, so a crashed or
+		/// wedged owner cannot hold the process, and the owner's next mutation fails loudly and is reported
+		/// as an ambiguous cleanup rather than being silently skipped.
+		/// </summary>
+		public static readonly TimeSpan CleanupWindow=TimeSpan.FromSeconds(5);
+
 		readonly ActionLeaseCoordinator owner;
 		readonly object resourceSync=new object();
 		Timer? expiryTimer;
+		Timer? cleanupTimer;
 		CancellationTokenRegistration lifetimeRegistration;
 		readonly CancellationTokenSource externalActionCancellation=new CancellationTokenSource();
 		readonly CancellationToken externalActionToken;
 		string? externalActionOperation;
 		bool resourcesReleased;
+		bool expired;
+		bool inactiveAnnounced;
+		DateTime cleanupEndsUtc;
 		internal object Authorization { get; }
 		public ActionLeaseInfo Info { get; }
 		public CancellationToken ExternalActionCancellation => externalActionToken;
 		public string? ExternalActionOperation => Volatile.Read(ref externalActionOperation);
+		/// <summary>True once the deadline passed or the owner's lifetime ended: no new work is granted.</summary>
+		public bool IsExpired { get { lock(resourceSync) return expired; } }
+		/// <summary>The instant the owner's authorization ends, cleanup window included.</summary>
+		public DateTime OwnershipEndsUtc { get { lock(resourceSync) return expired ? cleanupEndsUtc : Info.DeadlineUtc+CleanupWindow; } }
 
 		internal ActionLease(ActionLeaseCoordinator owner,ActionLeaseInfo info,object authorization) { this.owner=owner; Info=info; Authorization=authorization; externalActionToken=externalActionCancellation.Token; }
 		internal void Initialize(CancellationToken ownerLifetime) {
 			var due=Info.DeadlineUtc-DateTime.UtcNow;
-			var timer=new Timer(_=>owner.Release(this),null,due>TimeSpan.Zero?due:TimeSpan.Zero,Timeout.InfiniteTimeSpan);
-			var registration=ownerLifetime.CanBeCanceled ? ownerLifetime.Register(()=>owner.Release(this)) : default;
+			var timer=new Timer(_=>owner.Expire(this),null,due>TimeSpan.Zero?due:TimeSpan.Zero,Timeout.InfiniteTimeSpan);
+			var registration=ownerLifetime.CanBeCanceled ? ownerLifetime.Register(()=>owner.Expire(this)) : default;
 			lock(resourceSync) {
 				if(resourcesReleased) { timer.Dispose(); registration.Dispose(); }
 				else { expiryTimer=timer; lifetimeRegistration=registration; }
@@ -196,10 +235,25 @@ namespace dgSpy.Extension.Debugger {
 				return true;
 			}
 		}
+		/// <summary>Starts the bounded cleanup window. Returns false if the window is already open or the
+		/// lease is gone, so the deadline timer and an owner disconnect arriving together open one window.</summary>
+		internal bool BeginCleanupWindow(Action release) {
+			Timer timer;
+			lock(resourceSync) {
+				if(resourcesReleased || expired) return false;
+				expired=true;
+				cleanupEndsUtc=DateTime.UtcNow+CleanupWindow;
+				timer=new Timer(_=>release(),null,CleanupWindow,Timeout.InfiniteTimeSpan);
+				cleanupTimer=timer;
+			}
+			return MarkInactive();
+		}
+		/// <summary>Reports whether this call owns the one "no longer active" notification for this lease.</summary>
+		internal bool MarkInactive() { lock(resourceSync) { if(inactiveAnnounced) return false; inactiveAnnounced=true; return true; } }
 		internal void ReleaseResources() {
 			lock(resourceSync) {
 				if(resourcesReleased) return; resourcesReleased=true;
-				expiryTimer?.Dispose(); expiryTimer=null; lifetimeRegistration.Dispose(); externalActionCancellation.Dispose();
+				expiryTimer?.Dispose(); expiryTimer=null; cleanupTimer?.Dispose(); cleanupTimer=null; lifetimeRegistration.Dispose(); externalActionCancellation.Dispose();
 			}
 		}
 	}
