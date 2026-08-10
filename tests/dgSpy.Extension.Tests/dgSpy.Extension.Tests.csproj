@@ -43,6 +43,11 @@
          point" - neither is testable from a partial of a class no test can construct. -->
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\AtomicActionScheduler.cs" Link="Debugger\AtomicActions\AtomicActionScheduler.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\EvaluationProbe.cs" Link="Debugger\AtomicActions\EvaluationProbe.cs" />
+    <!-- S2. The payload action is dnSpy-free for the same reason as everything above it: the expressions it
+         composes, the resident-generation guard that decides whether a permanently unloadable generation may
+         be created, and the verification that reads the payload's own returned report are all decisions, and
+         a decision that only exists inside a partial of RpcHost ships uncovered. -->
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\AtomicActions\PayloadAction.cs" Link="Debugger\AtomicActions\PayloadAction.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcException.cs" Link="Rpc\RpcException.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcSecurity.cs" Link="Rpc\RpcSecurity.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\SymbolSearchQuery.cs" Link="Decompiler\SymbolSearchQuery.cs" />

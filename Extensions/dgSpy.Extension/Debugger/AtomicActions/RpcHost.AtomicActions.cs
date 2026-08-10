@@ -192,8 +192,58 @@ namespace dgSpy.Extension {
 			"capture" => new RpcExpressionAction(this,req,kind,mutating:false),
 			"assignment" => new RpcExpressionAction(this,req,kind,mutating:true),
 			"method_invocation" => new RpcExpressionAction(this,req,kind,mutating:true),
-			_ => throw new RpcException("invalid_arguments","action_kind must be capture, assignment, or method_invocation."),
+			// The payload action's three operations are separate runs on purpose: the target does not run
+			// between two evaluations held under one stop, so preparation and commit need a real resume
+			// between them, which resume_policy=resume already provides.
+			"payload" => new PayloadAction(new RpcPayloadEvaluator(this,req),new HostHookLabPayloadSource(),PayloadActionRequest.Parse(req.Arguments)),
+			_ => throw new RpcException("invalid_arguments","action_kind must be capture, assignment, method_invocation, or payload."),
 		};
+
+		/// <summary>Evaluates one host-composed payload expression on the owned stop's thread.
+		///
+		/// <para>It goes through <c>InvokeExpressionAsync</c> rather than <c>EvaluateAsync</c> because every
+		/// expression here needs a real func-eval and real side effects, and because that path audits the
+		/// expression it ran. <c>capture</c> is not a cheaper substitute for any of this: it sets
+		/// <c>allow_func_eval=false</c>, and a live sweep found 13 optimized offsets where a capture failed
+		/// while a func-eval at the same stop succeeded and returned a value.</para>
+		///
+		/// <para><c>timeout_ms</c> is always set explicitly, so the public <c>evaluate</c> tool's 1000 ms
+		/// argument default - which has been mistaken for a budget three times - never applies here.</para></summary>
+		sealed class RpcPayloadEvaluator : IPayloadEvaluator {
+			readonly RpcHost owner; readonly RpcRequest source;
+			public RpcPayloadEvaluator(RpcHost owner,RpcRequest source) { this.owner=owner; this.source=source; }
+			public async Task<PayloadEvaluation> EvaluateAsync(AtomicActionContext context,string expression,int timeoutMs,CancellationToken cancellationToken) {
+				var req=new RpcRequest { Operation=source.Operation,RequestId=source.RequestId,Arguments=(JsonObject)source.Arguments.DeepClone(),DeadlineUtc=source.DeadlineUtc };
+				req.Arguments["thread_id"]=context.Stop.ThreadId;
+				req.Arguments["frame_index"]=0;
+				req.Arguments["expression"]=expression;
+				req.Arguments["timeout_ms"]=timeoutMs;
+				var invoked=await owner.InvokeExpressionAsync(req,"payload_action",cancellationToken).ConfigureAwait(false);
+				return new PayloadEvaluation {
+					Completed=invoked.Completed,
+					// The raw string, not the formatted display text: the report is parsed, and dnSpy's
+					// formatting would quote and escape it.
+					Text=invoked.Value?.Value as string,
+					Error=invoked.Error,CompilerError=invoked.CompilerError,AuditId=invoked.AuditId,
+				};
+			}
+		}
+
+		/// <summary>The one shipped payload file, resolved from the running host's own tree and held open with
+		/// <c>FileShare.Read</c> for the whole evaluation.</summary>
+		sealed class HostHookLabPayloadSource : IPayloadSource {
+			public IPayloadHandle Open() => new HostHookLabPayloadHandle(dgSpy.Extension.PayloadDelivery.HookLabPayloadResolver.Open());
+		}
+
+		sealed class HostHookLabPayloadHandle : IPayloadHandle {
+			readonly dgSpy.Extension.PayloadDelivery.ResolvedHookLabPayload value;
+			public HostHookLabPayloadHandle(dgSpy.Extension.PayloadDelivery.ResolvedHookLabPayload value)=>this.value=value;
+			public string Path=>value.PayloadPath;
+			public string Sha256=>value.Sha256;
+			public long Length=>value.Length;
+			public string RehashFromHandle()=>value.RehashFromHandle();
+			public void Dispose()=>value.Dispose();
+		}
 		static void RequireAtomicOperationVersion(RpcRequest req) { if((int?)req.Arguments["operation_version"]!=1) throw new RpcException("incompatible_operation","operation_version 1 is required for this atomic-action operation."); }
 
 		sealed class RpcExpressionAction : IAtomicAction {
