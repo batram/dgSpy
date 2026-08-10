@@ -334,7 +334,107 @@ public sealed class DeploymentServiceTests : IDisposable {
 		var error=await Assert.ThrowsAsync<GatewayControlException>(()=>service.ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"},{"output_root",Path.Combine(root,"outside")}},router,default));
 		Assert.Equal("path_outside_package_root",error.Code);
 	}
-	string CreatePayload() { var path=Path.Combine(root,"payload"); foreach(var directory in new[]{"bin","bin\\Extensions\\dgSpy","launcher"}) Directory.CreateDirectory(Path.Combine(path,directory)); foreach(var file in new[]{"dnSpy.exe","bin\\dnSpy.dll","bin\\dnSpy.Contracts.DnSpy.dll","bin\\hostfxr.dll","bin\\hostpolicy.dll","bin\\coreclr.dll","bin\\clrjit.dll","bin\\Extensions\\dgSpy\\dgSpy.Extension.x.dll","launcher\\Start-dgSpyRemoteHost.ps1","launcher\\Start-dgSpyRemoteHost.cmd"}) File.WriteAllText(Path.Combine(path,file),file); return path; }
+	/// <summary>The HookLab payload ships with every install and is deployed with the tree, so an install
+	/// without it is incomplete in exactly the way this check exists to catch. Before this, an install
+	/// missing it passed doctor, launch_local_host, EnsureBundledLocalHost, DeploymentFreshness and
+	/// create_remote_host_package, and produced its first symptom inside a payload action -- where the
+	/// failure looks like the action's fault rather than the install's.</summary>
+	[Theory]
+	[InlineData(PayloadFile)]
+	[InlineData(PayloadManifestFile)]
+	public async Task An_install_without_the_hooklab_payload_fails_readiness_instead_of_the_first_action(string missing) {
+		var healthy=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("doctor",new JsonObject(),new HostRouter(),default)))!;
+		Assert.True((bool?)healthy["checks"]!.AsArray().Single(item=>(string?)item?["name"]=="bundled_host_payload")!["ok"]);
+
+		File.Delete(Path.Combine(PayloadRoot(),missing));
+		var doctor=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("doctor",new JsonObject(),new HostRouter(),default)))!;
+		var check=doctor["checks"]!.AsArray().Single(item=>(string?)item?["name"]=="bundled_host_payload")!;
+		Assert.False((bool?)check["ok"]);
+		Assert.Contains(missing,(string?)check["recovery"]);
+		// And every other entry point refuses for the same reason, rather than one of them letting the
+		// incomplete install through.
+		var error=await Assert.ThrowsAsync<GatewayControlException>(()=>new DeploymentService().ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"}},new HostRouter(),default));
+		Assert.Equal("installation_incomplete",error.Code); Assert.Contains(missing,error.Message);
+		Assert.Contains(missing,Assert.Throws<GatewayControlException>(()=>new DeploymentService().EnsureBundledLocalHost(default)).Message);
+	}
+
+	/// <summary>Adoption is decided from where the running process actually loaded its extension. A path of
+	/// any other shape is not a tree the Gateway can reason about, and unknown has to mean "no match":
+	/// adopting a host whose tree cannot be identified is the outcome the comparison exists to prevent.</summary>
+	[Fact]
+	public void The_running_host_tree_is_identified_from_the_extension_it_loaded() {
+		Assert.Equal(@"C:\hosts\v1",DeploymentService.RunningHostRoot(@"C:\hosts\v1\bin\Extensions\dgSpy\dgSpy.Extension.x.dll"));
+		// Case and separator variation come from the host, not from us.
+		Assert.Equal(@"C:\hosts\v1",DeploymentService.RunningHostRoot(@"C:\hosts\v1\BIN\extensions\DGSPY\DgSpy.Extension.X.dll"));
+		Assert.Equal(@"C:\hosts\v1",DeploymentService.RunningHostRoot(@"C:\hosts\v1\bin\Extensions\dgSpy\..\dgSpy\dgSpy.Extension.x.dll"));
+
+		foreach(var unknown in new string?[]{null,"","   ",@"C:\hosts\v1\bin\dgSpy.Extension.x.dll",@"C:\hosts\v1\bin\Extensions\dgSpy\dnSpy.dll",@"C:\dgSpy.Extension.x.dll"})
+			Assert.Null(DeploymentService.RunningHostRoot(unknown));
+	}
+
+	/// <summary>The gap: adoption compared one file, so a change confined to the HookLab payload directory
+	/// was invisible -- launch_local_host reported installed=false with the same active_version while doctor,
+	/// which whole-tree hashes, called the same deployment stale. The comparison now covers the tree.</summary>
+	[Fact]
+	public async Task A_change_confined_to_the_payload_directory_is_not_adopted_as_the_installed_payload() {
+		var service=new DeploymentService();
+		Assert.True(service.EnsureBundledLocalHost(default));
+		var deployed=DeployedRoot(root); var payload=PayloadRoot();
+		Assert.True(DeploymentService.RunningTreeMatchesPayload(deployed,payload,()=>StagedPayloadShaAsync().GetAwaiter().GetResult(),DeploymentService.DeployedTreePayloadSha));
+
+		File.WriteAllText(Path.Combine(payload,PayloadFile),"a rebuilt HookLab bootstrap that was never deployed");
+		Assert.False(DeploymentService.RunningTreeMatchesPayload(deployed,payload,()=>StagedPayloadShaAsync().GetAwaiter().GetResult(),DeploymentService.DeployedTreePayloadSha));
+
+		// Non-vacuity, asserted rather than claimed: the rule this replaced -- the extension digest the
+		// running host reports against the one in the payload -- still says these two trees are the same,
+		// so this test fails against that comparison and passes only against a tree-wide one.
+		Assert.Equal(FileSha(Path.Combine(deployed,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll")),FileSha(Path.Combine(payload,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll")));
+		// And doctor saw it all along, which is the disagreement that made this worth fixing.
+		var local=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("get_local_deployment",new JsonObject(),new HostRouter(),default)))!;
+		Assert.True((bool?)local["payload"]!["stale"]);
+	}
+
+	/// <summary>A deployment that cannot prove what it contains is not adopted. The manifest is the only
+	/// record tying a deployed tree to the payload it was copied from; without it the Gateway would be
+	/// adopting on the strength of a directory name.</summary>
+	[Fact]
+	public void A_running_tree_with_no_deployment_manifest_is_not_adopted() {
+		var service=new DeploymentService();
+		Assert.True(service.EnsureBundledLocalHost(default));
+		var deployed=DeployedRoot(root); var payload=PayloadRoot();
+		File.Delete(Path.Combine(deployed,"deployment-manifest.json"));
+		Assert.Null(DeploymentService.DeployedTreePayloadSha(deployed));
+		Assert.False(DeploymentService.RunningTreeMatchesPayload(deployed,payload,()=>StagedPayloadShaAsync().GetAwaiter().GetResult(),DeploymentService.DeployedTreePayloadSha));
+		// So is a tree the host never named, and one whose hash cannot be taken at all.
+		Assert.False(DeploymentService.RunningTreeMatchesPayload(null,payload,()=>throw new InvalidOperationException("must not be reached"),DeploymentService.DeployedTreePayloadSha));
+		Assert.False(DeploymentService.RunningTreeMatchesPayload(Path.Combine(root,"install","versions","bundled-000000000000"),payload,()=>throw new IOException("payload unreadable"),_=>"any recorded hash"));
+	}
+
+	/// <summary>A host running straight out of the installed payload -- the developer worktree case, where
+	/// the deployment and the payload are one directory -- is the same tree by construction, and must adopt
+	/// without a manifest it has no reason to carry.</summary>
+	[Fact]
+	public void A_host_running_out_of_the_payload_directory_itself_is_adopted() {
+		var payload=PayloadRoot();
+		Assert.False(File.Exists(Path.Combine(payload,"deployment-manifest.json")));
+		Assert.True(DeploymentService.RunningTreeMatchesPayload(payload,payload,()=>throw new InvalidOperationException("must not be reached"),_=>throw new InvalidOperationException("must not be reached")));
+		// Reached the way LaunchLocalAsync reaches it, from the path the host reports.
+		Assert.True(DeploymentService.RunningTreeMatchesPayload(DeploymentService.RunningHostRoot(Path.Combine(payload,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll")),payload,()=>"",_=>null));
+		Assert.True(DeploymentService.RunningTreeMatchesPayload(payload+Path.DirectorySeparatorChar,payload,()=>"",_=>null));
+	}
+
+	string CreatePayload() { var path=Path.Combine(root,"payload"); foreach(var directory in new[]{"bin","bin\\Extensions\\dgSpy","hooklab","launcher"}) Directory.CreateDirectory(Path.Combine(path,directory)); foreach(var file in new[]{"dnSpy.exe","bin\\dnSpy.dll","bin\\dnSpy.Contracts.DnSpy.dll","bin\\hostfxr.dll","bin\\hostpolicy.dll","bin\\coreclr.dll","bin\\clrjit.dll","bin\\Extensions\\dgSpy\\dgSpy.Extension.x.dll",PayloadFile,PayloadManifestFile,"launcher\\Start-dgSpyRemoteHost.ps1","launcher\\Start-dgSpyRemoteHost.cmd"}) File.WriteAllText(Path.Combine(path,file),file); return path; }
+	const string PayloadFile="hooklab\\hooklab-bootstrap.net48.payload";
+	const string PayloadManifestFile="hooklab\\hooklab-payload-manifest.json";
+	static string PayloadRoot() => Environment.GetEnvironmentVariable("DGSPY_REMOTE_PAYLOAD_ROOT")!;
+	/// <summary>The hash of the installed payload tree, read back from the Gateway's own freshness report so
+	/// the test never reimplements the hashing it is supposed to be checking against.</summary>
+	static async Task<string> StagedPayloadShaAsync() {
+		var local=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("get_local_deployment",new JsonObject(),new HostRouter(),default)))!;
+		return (string)local["payload"]!["staged_payload_sha256"]!;
+	}
+	static string DeployedRoot(string root) { var current=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"install","current.json")))!; return Path.Combine(root,"install","versions",(string)current["active_version"]!); }
+	static string FileSha(string path) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
 	void Set(string name,string value) { previous[name]=Environment.GetEnvironmentVariable(name); Environment.SetEnvironmentVariable(name,value); }
 	public void Dispose() { foreach(var item in previous) Environment.SetEnvironmentVariable(item.Key,item.Value); if(Directory.Exists(root)) Directory.Delete(root,true); }
 }

@@ -100,7 +100,12 @@ public sealed class DeploymentService {
 		var running=RunningManagedHosts();
 		if(running.Length>0) {
 			var live=await ConnectedLocalHostAsync(router,token,running.Select(process=>process.Id).ToArray());
-			var matches=live is not null && payloadExtensionSha is not null && string.Equals((string?)live["extension_sha256"],payloadExtensionSha,StringComparison.OrdinalIgnoreCase);
+			// Which tree the running host loaded from, taken from the host's own report rather than from
+			// active_version. An adopted host can be running a version the pointer no longer names, so
+			// anything resolved by active version -- a payload to inject, most of all -- could come from a
+			// tree the host is not running.
+			var runningRoot=live is null ? null : RunningHostRoot((string?)live["extension_path"]);
+			var matches=RunningTreeMatchesPayload(runningRoot,payloadRoot,()=>HashTreeCached(payloadRoot),DeployedTreePayloadSha);
 			// Adoption is the honest answer to "make sure the local host is running" when it already is,
 			// running the code we would have deployed. Reporting started=true for a process we did not
 			// start would be a lie the caller cannot check.
@@ -115,14 +120,15 @@ public sealed class DeploymentService {
 			if(matches && running.Length==1 && decision==RunningHostDecision.Adopt) {
 				var adoptedCurrent=ReadCurrent();
 				return new { started=false,adopted=true,installed=false,redeployed=false,replaced=false,active_version=(string?)adoptedCurrent?["active_version"],
-					extension_sha256=payloadExtensionSha,process_id=(int?)live!["dnspy_process_id"] ?? running[0].Id,connected=true,host_id=(string?)adoptedCurrent?["host_id"],
+					extension_sha256=payloadExtensionSha,host_root=runningRoot,process_id=(int?)live!["dnspy_process_id"] ?? running[0].Id,connected=true,host_id=(string?)adoptedCurrent?["host_id"],
 					elevated=runningElevation,recovery=(string?)null,detail="A local host already running this exact payload was adopted rather than duplicated." };
 			}
 			var describe=string.Join(", ",running.Select(process=>$"pid {process.Id}"));
 			var runningBuild=live is null ? "not answering RPC" : $"build {(string?)live["build_label"] ?? "unknown"}, extension {Shorten((string?)live["extension_sha256"])}";
+			var runningTree=live is null ? "" : runningRoot is null ? " The Gateway could not tell which tree it loaded its extension from, so it cannot be adopted." : $" It is running from '{runningRoot}'.";
 			if(!replace)
 				throw new GatewayControlException("host_already_running",
-					$"A managed dnSpy is already running ({describe}; {runningBuild}) and owns the RPC endpoint, but it is not the payload this deployment would install (extension {Shorten(payloadExtensionSha)}). Starting a second host would leave two processes contending for the endpoint, and every answer would keep coming from the old one while this call reported success. Call launch_local_host again with replace=true to detach its targets, close it, and start the installed payload -- that ends any debugging session it holds. To keep the session, finish with the running host instead.");
+					$"A managed dnSpy is already running ({describe}; {runningBuild}) and owns the RPC endpoint, but the tree it is running is not the payload this deployment would install (extension {Shorten(payloadExtensionSha)}).{runningTree} Starting a second host would leave two processes contending for the endpoint, and every answer would keep coming from the old one while this call reported success. Call launch_local_host again with replace=true to detach its targets, close it, and start the installed payload -- that ends any debugging session it holds. To keep the session, finish with the running host instead.");
 			await ReplaceRunningHostAsync(running,live,router,allowTerminate,token);
 		}
 
@@ -347,9 +353,47 @@ public sealed class DeploymentService {
 		if(allowTerminate) return Array.Empty<JsonObject>();
 		throw new GatewayControlException("replace_session_state_unknown","The running host returned a malformed session list, so the Gateway cannot prove that replacing it is safe. The host was left running. Retry after recovery, or pass allow_terminate=true to accept that killing it may destroy an attached target.");
 	}
+	/// <summary>The host tree a running process actually loaded its extension from, derived from the
+	/// extension_path it reports. dnSpy loads the extension from
+	/// <c>&lt;root&gt;\bin\Extensions\dgSpy\dgSpy.Extension.x.dll</c>, so the root is four levels up -- and a
+	/// path with any other shape is not a tree this Gateway can reason about. Unknown returns null, which
+	/// every caller must treat as "no match": adopting a host whose tree cannot be identified is exactly the
+	/// outcome the whole comparison exists to prevent.</summary>
+	internal static string? RunningHostRoot(string? extensionPath) {
+		if(string.IsNullOrWhiteSpace(extensionPath)) return null;
+		string full; try { full=Path.GetFullPath(extensionPath!); } catch { return null; }
+		var root=full;
+		for(var level=0;level<4;level++) { root=Path.GetDirectoryName(root)!; if(string.IsNullOrEmpty(root)) return null; }
+		var expected=Path.Combine("bin","Extensions","dgSpy","dgSpy.Extension.x.dll");
+		string relative; try { relative=Path.GetRelativePath(root,full); } catch { return null; }
+		return string.Equals(relative,expected,StringComparison.OrdinalIgnoreCase) ? Path.TrimEndingDirectorySeparator(root) : null;
+	}
+
+	/// <summary>Whether the tree a host is running is the payload this deployment would install. The
+	/// extension digest alone answered this while the extension assembly was the only thing that moved per
+	/// build; with the HookLab payload in the tree it is not, and a payload-only change was adopted as if
+	/// nothing had changed -- while doctor, which whole-tree hashes, called the same deployment stale. So
+	/// this compares whole trees too, rather than adding a second per-file case that the next file added to
+	/// the tree would need a third of.
+	///
+	/// Three ways to match, and everything else is a refusal: the host is running out of the installed
+	/// payload directory itself (a developer worktree, where the deployment is the payload); or the
+	/// deployment it is running recorded the payload hash it was copied from and that hash is the installed
+	/// one. A tree that cannot be identified, a deployment with no manifest, and a payload that cannot be
+	/// hashed all mean "cannot prove they are the same", which is not adoption.</summary>
+	internal static bool RunningTreeMatchesPayload(string? runningRoot,string payloadRoot,Func<string> installedTreeSha,Func<string,string?> deployedTreeSha) {
+		if(string.IsNullOrEmpty(runningRoot)) return false;
+		if(PathsEqual(runningRoot!,payloadRoot)) return true;
+		var recorded=deployedTreeSha(runningRoot!);
+		if(string.IsNullOrEmpty(recorded)) return false;
+		string installed; try { installed=installedTreeSha(); } catch { return false; }
+		return !string.IsNullOrEmpty(installed) && string.Equals(recorded,installed,StringComparison.OrdinalIgnoreCase);
+	}
+
 	/// <summary>Hash of the extension assembly under a payload or deployment root, which is what a
-	/// running host reports as extension_sha256. Comparing those two is the only way to tell "already
-	/// running the build I want" from "running something else" without trusting a version string.</summary>
+	/// running host reports as extension_sha256. It is kept for the reporting fields -- it is the identity a
+	/// human can check against a built file -- but it no longer decides adoption; see
+	/// <see cref="RunningTreeMatchesPayload"/>.</summary>
 	static string? ExtensionSha(string root) {
 		var path=Path.Combine(root,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll");
 		try { return File.Exists(path) ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant() : null; } catch { return null; }
@@ -424,8 +468,11 @@ public sealed class DeploymentService {
 
 	/// <summary>The payload hash a deployed version recorded for itself, or null when it predates the
 	/// field or was never fully written.</summary>
-	string? DeployedPayloadSha(string version) {
-		var manifest=Path.Combine(installRoot,"versions",version,"deployment-manifest.json");
+	string? DeployedPayloadSha(string version) => DeployedTreePayloadSha(Path.Combine(installRoot,"versions",version));
+	/// <summary>The same record read from a deployment root rather than a version name, because the tree a
+	/// host is running is known by its path and the active-version pointer may name a different one.</summary>
+	internal static string? DeployedTreePayloadSha(string root) {
+		var manifest=Path.Combine(root,"deployment-manifest.json");
 		if(!File.Exists(manifest)) return null;
 		try { return (string?)JsonNode.Parse(File.ReadAllText(manifest))?["payload_sha256"]; } catch { return null; }
 	}
@@ -458,8 +505,15 @@ public sealed class DeploymentService {
 		var shared=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..")); if(File.Exists(Path.Combine(shared,"dnSpy.exe"))) return shared;
 		return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"remote-host-payload","win-x64"));
 	}
+	/// <summary>The files without which an install is not usable. The HookLab payload belongs here for the
+	/// same reason the extension does: it is deployed with the tree, every readiness path runs through this
+	/// check, and leaving it out meant an install missing it passed doctor, launch_local_host,
+	/// EnsureBundledLocalHost, DeploymentFreshness and CreateRemoteAsync and failed only when a payload
+	/// action ran -- at which point the failure is attributed to the action rather than to the install.
+	/// Both files are required: the bootstrap without its manifest cannot have its digest verified, and the
+	/// verifier refuses to hand on bytes it cannot check.</summary>
 	static void ValidateRemotePayload(string payload) {
-		var required=new[]{"dnSpy.exe",Path.Combine("bin","dnSpy.dll"),Path.Combine("bin","dnSpy.Contracts.DnSpy.dll"),Path.Combine("bin","hostfxr.dll"),Path.Combine("bin","hostpolicy.dll"),Path.Combine("bin","coreclr.dll"),Path.Combine("bin","clrjit.dll"),Path.Combine("bin","Extensions","dgSpy","dgSpy.Extension.x.dll"),Path.Combine("launcher","Start-dgSpyRemoteHost.ps1"),Path.Combine("launcher","Start-dgSpyRemoteHost.cmd")};
+		var required=new[]{"dnSpy.exe",Path.Combine("bin","dnSpy.dll"),Path.Combine("bin","dnSpy.Contracts.DnSpy.dll"),Path.Combine("bin","hostfxr.dll"),Path.Combine("bin","hostpolicy.dll"),Path.Combine("bin","coreclr.dll"),Path.Combine("bin","clrjit.dll"),Path.Combine("bin","Extensions","dgSpy","dgSpy.Extension.x.dll"),Path.Combine("hooklab","hooklab-bootstrap.net48.payload"),Path.Combine("hooklab","hooklab-payload-manifest.json"),Path.Combine("launcher","Start-dgSpyRemoteHost.ps1"),Path.Combine("launcher","Start-dgSpyRemoteHost.cmd")};
 		var missing=required.Where(path=>!File.Exists(Path.Combine(payload,path))).ToArray(); if(missing.Length>0) throw new GatewayControlException("installation_incomplete",$"The installed remote-host payload is incomplete ({string.Join(", ",missing)}). Reinstall dgSpy from a complete release package; runtime builds are not supported.");
 	}
 	static bool RegistryContainsHost(string registry,string hostId) { if(!File.Exists(registry)) return false; var hosts=JsonNode.Parse(File.ReadAllText(registry))?["hosts"]?.AsArray(); return hosts?.Any(node=>(string?)node?["host_id"]==hostId)==true; }
