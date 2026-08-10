@@ -107,6 +107,43 @@ function Send-AndDisconnect([string]$Operation, [hashtable]$Arguments) {
     $client.Dispose()
 }
 
+# T08c. Sends two operations down ONE host connection, sequentially, reading each answer before
+# sending the next. That is the whole point: after the asynchronous change the two requests need not
+# overlap, because start_atomic_action returns as soon as the action is registered. Under the old
+# blocking shape the second line stayed unread until the first operation finished - HandleClientAsync
+# reads a request and awaits its full dispatch before reading the next - so a cancel sent 2 s in was
+# answered 18.8 s later, reporting cancel_requested=false, completed=true. A raw socket rather than
+# Invoke-DgSpyRpc because that helper opens and disposes a connection per call and therefore cannot
+# prove one connection was reused.
+function Invoke-SequentialOnOneConnection([string]$FirstOperation, [hashtable]$FirstArguments, [scriptblock]$SecondFactory) {
+    $rpcTokenPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'dgSpy\rpc.token'
+    $rpcToken = (Get-Content -LiteralPath $rpcTokenPath -Raw).Trim()
+    $client = [Net.Sockets.TcpClient]::new()
+    try {
+        $client.Connect('127.0.0.1', $RpcPort)
+        $stream = $client.GetStream()
+        $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8, $false, 4096, $true)
+        $writer = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false), 4096, $true)
+        $writer.AutoFlush = $true
+        $send = {
+            param($Operation, $Arguments, $HostIdentifier)
+            $envelope = @{ version=2; request_id=[Guid]::NewGuid().ToString('N'); authentication_token=$rpcToken; operation=$Operation; arguments=$Arguments; deadline_utc=[DateTime]::UtcNow.AddSeconds(60).ToString('O') }
+            if ($HostIdentifier) { $envelope.host_id = $HostIdentifier }
+            $writer.WriteLine(($envelope | ConvertTo-Json -Compress -Depth 8))
+            $reader.ReadLine() | ConvertFrom-Json
+        }
+        $ping = & $send 'ping' @{} $null
+        if ($ping.error) { throw "ping failed: $($ping.error.code)" }
+        $started = [Diagnostics.Stopwatch]::StartNew()
+        $first = & $send $FirstOperation $FirstArguments $ping.result.host_id
+        $firstMs = $started.ElapsedMilliseconds
+        $secondArguments = & $SecondFactory $first
+        $second = & $send $secondArguments.operation $secondArguments.arguments $ping.result.host_id
+        return [pscustomobject]@{ First=$first; Second=$second; FirstMs=$firstMs; TotalMs=$started.ElapsedMilliseconds }
+    }
+    finally { try { $client.Close(); $client.Dispose() } catch { } }
+}
+
 function Wait-ActionRecord([string]$ActionId, [int]$TimeoutSeconds = 40) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
@@ -284,6 +321,88 @@ try {
         Check 'complete_on_disconnect reports the timeout, not the disconnect' ($disconnected.result.interruption_reason -eq 'timeout') ("interruption=" + $disconnected.result.interruption_reason)
         Check 'a disconnected action still resumed the target' ($disconnected.result.final_debugger_state.is_running -eq $true) ("running=" + $disconnected.result.final_debugger_state.is_running)
         Check 'a disconnected action still cleaned up' ($disconnected.result.cleanup_outcome -eq 'completed') ("cleanup=" + $disconnected.result.cleanup_outcome + " error=" + $disconnected.result.error)
+    }
+
+    Say 'T08c: start_atomic_action returns after registration, and a cancel actually interrupts'
+    Ensure-Paused $sessionId
+    # disconnect_policy has no coherent meaning once the start request ends normally, so it is refused
+    # rather than silently ignored.
+    $policyArguments = ActionArguments $sessionId $neverCalledToken 0 'resume'
+    $policyError = $null
+    try { $null = Rpc 'start_atomic_action' $policyArguments 30 } catch { $policyError = $_.Exception.Message }
+    Check 'start refuses disconnect_policy instead of silently dropping it' ($policyError -like '*invalid_arguments*' -and $policyError -like '*disconnect_policy*') ("error=" + $policyError)
+
+    # A slot the fixture never reaches, so the action can only end by its deadline or by a cancel. The
+    # deadline is deliberately far away, so a terminal record arriving quickly can only be the cancel.
+    Ensure-Paused $sessionId
+    $asyncArguments = ActionArguments $sessionId $neverCalledToken 0 'resume'
+    $asyncArguments.request.Remove('disconnect_policy') | Out-Null
+    $asyncArguments.timeout_ms = 45000
+    $asyncActionId = $asyncArguments.request.action_id
+    $sequential = Invoke-SequentialOnOneConnection 'start_atomic_action' $asyncArguments {
+        param($accepted)
+        # Deliberately no expected_execution_version: the schema no longer carries one, and the action
+        # being cancelled is what moves it.
+        @{ operation='cancel_atomic_action'; arguments=@{ operation_version=1; session_id=$sessionId; action_id=$accepted.result.action_id } }
+    }
+    $accepted = $sequential.First
+    Check 'start is answered without waiting for arming' ($accepted.error -eq $null -and $accepted.result.accepted -eq $true) ("error=" + ($accepted.error | ConvertTo-Json -Compress))
+    if (-not $accepted.error) {
+        Check 'start answers in well under the action bound' ($sequential.FirstMs -lt 5000) ("ms=" + $sequential.FirstMs)
+        Check 'the acceptance names the action and its phase' ($accepted.result.action_id -eq $asyncActionId -and $accepted.result.phase) ("id=" + $accepted.result.action_id + " phase=" + $accepted.result.phase)
+        Check 'the acceptance recommends a poll interval instead of a wait operation' ([int]$accepted.result.recommended_poll_after_ms -gt 0) ("poll=" + $accepted.result.recommended_poll_after_ms)
+        Check 'the acceptance names its status and cancel operations' ($accepted.result.status_operation -eq 'get_atomic_action_status' -and $accepted.result.cancel_operation -eq 'cancel_atomic_action') ("status=" + $accepted.result.status_operation)
+    }
+    $cancelled = $sequential.Second
+    Check 'a cancel sent on the SAME host connection is answered' ($cancelled.error -eq $null) ("error=" + ($cancelled.error | ConvertTo-Json -Compress))
+    if (-not $cancelled.error) {
+        # The old blocking shape answered this cancel only after the action was over, with
+        # cancel_requested=false and completed=true. Both fields are the regression.
+        Check 'the cancel is accepted while the action is still running' ($cancelled.result.cancel_requested -eq $true -and $cancelled.result.completed -eq $false) ("requested=" + $cancelled.result.cancel_requested + " completed=" + $cancelled.result.completed)
+        Check 'both requests were answered far inside the action bound' ($sequential.TotalMs -lt 15000) ("ms=" + $sequential.TotalMs)
+    }
+    $cancelledRecord = Wait-ActionRecord $asyncActionId 30
+    Check 'the cancelled action reaches a terminal record' ($cancelledRecord.completed -eq $true) ("phase=" + $cancelledRecord.phase)
+    Check 'the terminal phase is reported' ($cancelledRecord.phase -eq 'terminal') ("phase=" + $cancelledRecord.phase)
+    Check 'status reports the cancel that was requested' ($cancelledRecord.cancel_requested -eq $true) ("cancel_requested=" + $cancelledRecord.cancel_requested)
+    if ($cancelledRecord.result) {
+        Check 'the interruption is the cancellation, not the deadline' ($cancelledRecord.result.interruption_reason -eq 'cancelled') ("interruption=" + $cancelledRecord.result.interruption_reason)
+        Check 'a cancelled action still cleaned up' ($cancelledRecord.result.cleanup_outcome -ne 'failed') ("cleanup=" + $cancelledRecord.result.cleanup_outcome + " error=" + $cancelledRecord.result.error)
+    }
+    Check 'a cancelled action left no user-visible breakpoint behind' (@(Rpc 'list_breakpoints' @{}).Count -eq 0) $asyncActionId
+    $idempotent = Rpc 'cancel_atomic_action' @{ operation_version=1; session_id=$sessionId; action_id=$asyncActionId }
+    Check 'cancel after terminal completion is truthful rather than an error' ($idempotent.cancel_requested -eq $false -and $idempotent.completed -eq $true) ("requested=" + $idempotent.cancel_requested + " completed=" + $idempotent.completed)
+    $unknownCancel = $null
+    try { $null = Rpc 'cancel_atomic_action' @{ operation_version=1; session_id=$sessionId; action_id='never-started' } } catch { $unknownCancel = $_.Exception.Message }
+    Check 'cancelling an unknown action is action_not_found' ($unknownCancel -like '*action_not_found*') ("error=" + $unknownCancel)
+
+    Say 'T08c: the same shape through the gateway, which serializes every host call'
+    Ensure-Paused $sessionId
+    # The Gateway holds its own SemaphoreSlim(1,1) per host connection, so a blocking run occupies that
+    # route for its whole budget too. Start and cancel through it, in that order.
+    $routedArguments = ActionArguments $sessionId $neverCalledToken 0 'resume'
+    $routedArguments.request.Remove('disconnect_policy') | Out-Null
+    $routedArguments.timeout_ms = 45000
+    $routedActionId = $routedArguments.request.action_id
+    $routedArguments.Remove('session_id') | Out-Null
+    $routedAccepted = $null
+    $routedError = $null
+    try { $routedAccepted = Invoke-MutatingTool -Name 'start_atomic_action' -Arguments (@{ session_id=$sessionId } + $routedArguments) } catch { $routedError = $_.Exception.Message }
+    Check 'start_atomic_action is reachable through the gateway with its declared guards' ($routedAccepted -ne $null -and $routedAccepted.accepted -eq $true) ("error=" + $routedError)
+    if ($routedAccepted) {
+        $routedCancel = $null
+        $routedCancelError = $null
+        try { $routedCancel = Invoke-Tool -Name 'cancel_atomic_action' -Arguments @{ operation_version=1; session_id=$sessionId; action_id=$routedActionId } } catch { $routedCancelError = $_.Exception.Message }
+        Check 'the routed cancel is accepted while the routed action is still running' ($routedCancel -ne $null -and $routedCancel.cancel_requested -eq $true -and $routedCancel.completed -eq $false) ("requested=" + $routedCancel.cancel_requested + " completed=" + $routedCancel.completed + " error=" + $routedCancelError)
+        if ($routedCancel) {
+            $routedRecord = Wait-ActionRecord $routedActionId 30
+            Check 'the routed action ends by cancellation rather than by its deadline' ($routedRecord.result -ne $null -and $routedRecord.result.interruption_reason -eq 'cancelled') ("interruption=" + $routedRecord.result.interruption_reason)
+        }
+        else {
+            # Leave nothing running behind a failed leg: the action still holds the process lease.
+            try { $null = Rpc 'cancel_atomic_action' @{ operation_version=1; session_id=$sessionId; action_id=$routedActionId } } catch { }
+            $null = Wait-ActionRecord $routedActionId 60
+        }
     }
 
     Ensure-Paused $sessionId
