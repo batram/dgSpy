@@ -86,8 +86,9 @@ dgSpy-remote-host-win11-clean.zip
 ```
 
 The same provisioning operation adds the expected `host_id` and credential to `gateway-hosts.json`.
-Start the Gateway with `DGSPY_HOSTS_FILE`, `DGSPY_REMOTE_ADDRESS`, and `DGSPY_REMOTE_PORT` pointing at
-that configuration and the dedicated host-listener bind address. The remote user only extracts the ZIP and runs:
+It also persists and activates the dedicated host listener in the running Gateway. An ordinary later
+`dgspy start` reads that listener configuration from the registry automatically; no Gateway restart or
+manual `DGSPY_REMOTE_*` environment is required. The remote user only extracts the ZIP and runs:
 
 ```powershell
 .\launcher\Start-dgSpyRemoteHost.cmd
@@ -102,6 +103,11 @@ On startup, the extension connects outward, authenticates, registers, and become
 `list_hosts`. Unknown identities, invalid credentials, duplicate live connections, protocol mismatch,
 and a certificate/identity mismatch fail closed. Disconnect uses bounded reconnect backoff and never
 implicitly resumes, detaches, or terminates a paused target.
+
+Creating a replacement package rotates the host credential and immediately closes any connection using
+the previous registration. The old credential is rejected from that point onward. Revocation likewise
+removes the live route and closes an existing connection immediately; retained credential files are left
+for deliberate operator cleanup and cannot authenticate after revocation.
 
 ## Minimal mutual TLS
 

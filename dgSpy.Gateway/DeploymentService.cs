@@ -13,8 +13,10 @@ public sealed class DeploymentService {
 	readonly string stateRoot;
 	readonly string installRoot;
 	readonly string packageRoot;
+	readonly RemoteHostListener? remoteListener;
 	internal static string DefaultStateRoot() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy");
-	public DeploymentService() {
+	public DeploymentService(RemoteHostListener? remoteListener=null) {
+		this.remoteListener=remoteListener;
 		stateRoot=Environment.GetEnvironmentVariable("DGSPY_STATE_ROOT") ?? DefaultStateRoot();
 		installRoot=Environment.GetEnvironmentVariable("DGSPY_INSTALL_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","dgSpy");
 		packageRoot=Path.GetFullPath(Environment.GetEnvironmentVariable("DGSPY_PACKAGE_ROOT") ?? Path.Combine(stateRoot,"packages"));
@@ -30,9 +32,9 @@ public sealed class DeploymentService {
 		"launch_local_host" => await LaunchLocalAsync(args,router,token),
 		"rollback_local_deployment" => Rollback(args),
 		"uninstall_local_deployment" => Uninstall(args),
-		"create_remote_host_package" => await CreateRemoteAsync(args,token),
+		"create_remote_host_package" => await CreateRemoteAsync(args,router,token),
 		"get_remote_host_readiness" => await RemoteReadinessAsync((string?)args["host_id"],router,token),
-		"revoke_remote_host" => RevokeRemote(args),
+		"revoke_remote_host" => RevokeRemote(args,router),
 		_ => throw new GatewayControlException("unknown_tool",$"Unknown Gateway operation '{operation}'.")
 	};
 
@@ -438,7 +440,7 @@ public sealed class DeploymentService {
 	object Rollback(JsonObject args) { RequireConfirm(args); var current=ReadCurrent() ?? throw new GatewayControlException("local_not_installed","No managed local deployment exists."); var previous=(string?)current["previous_version"] ?? throw new GatewayControlException("rollback_unavailable","No previous local version is retained."); var active=(string)current["active_version"]!; if(!Directory.Exists(Path.Combine(installRoot,"versions",previous))) throw new GatewayControlException("rollback_unavailable","The retained previous version directory is missing."); current["active_version"]=previous; current["previous_version"]=active; current["updated_utc"]=DateTime.UtcNow; WriteCurrent(current); WriteCurrentLauncher(); return new { rolled_back=true,active_version=previous,previous_version=active }; }
 	object Uninstall(JsonObject args) { RequireConfirm(args); if(Directory.Exists(installRoot)) Directory.Delete(installRoot,true); foreach(var shortcut in new[]{Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"dgSpy.cmd"),Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),"Programs","dgSpy.cmd")}) if(File.Exists(shortcut)&&File.ReadAllText(shortcut).Contains(installRoot,StringComparison.OrdinalIgnoreCase)) File.Delete(shortcut); if((bool?)args["remove_settings"]==true && Directory.Exists(stateRoot)) Directory.Delete(stateRoot,true); return new { uninstalled=true,settings_preserved=(bool?)args["remove_settings"]!=true }; }
 
-	async Task<object> CreateRemoteAsync(JsonObject args,CancellationToken token) {
+	async Task<object> CreateRemoteAsync(JsonObject args,HostRouter router,CancellationToken token) {
 		var hostId=SafeSegment((string?)args["host_id"] ?? throw new GatewayControlException("invalid_arguments","host_id is required."));
 		var address=((string?)args["gateway_address"] ?? throw new GatewayControlException("invalid_arguments","gateway_address is required.")).Trim();
 		if(string.IsNullOrWhiteSpace(address)) throw new GatewayControlException("invalid_arguments","gateway_address is required.");
@@ -470,12 +472,14 @@ public sealed class DeploymentService {
 			ZipFile.CreateFromDirectory(staging,temporaryArchive,CompressionLevel.Optimal,false);
 			File.WriteAllText(Path.Combine(packageRoot,hostId+".token"),credential,new UTF8Encoding(false));
 			if(useTls) { File.WriteAllBytes(Path.Combine(packageRoot,"gateway-server.pfx"),serverPfx!); File.WriteAllBytes(Path.Combine(packageRoot,"gateway-server.cer"),serverCer!); File.WriteAllText(Path.Combine(packageRoot,"gateway-server.password"),serverPassword!,new UTF8Encoding(false)); File.WriteAllBytes(Path.Combine(packageRoot,hostId+"-client.cer"),clientCer!); }
-			UpdateRemoteRegistry(registry,hostId,gatewayHost,useTls); File.Move(temporaryArchive,archive,true);
-			await Task.CompletedTask; return new { host_id=hostId,archive_path=archive,sha256=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archive))),transport=useTls?"mutual_tls":"authenticated_plaintext",replaced_existing_host=replacing,launch_command=@".\launcher\Start-dgSpyRemoteHost.cmd",transferred=false,executed=false,gateway_restart_required=true,restart_command="dgspy stop; dgspy start" };
+			UpdateRemoteRegistry(registry,hostId,address,gatewayHost,useTls); File.Move(temporaryArchive,archive,true);
+			var updated=HostRegistry.Load(registry,includeLocal:true); var listener=remoteListener ?? throw new GatewayControlException("listener_unavailable","The running Gateway does not expose its remote listener lifecycle service.");
+			var listenerReadiness=listener.EnsureConfigured(registry); router.Reload(updated);
+			await Task.CompletedTask; return new { host_id=hostId,archive_path=archive,sha256=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archive))),transport=useTls?"mutual_tls":"authenticated_plaintext",replaced_existing_host=replacing,launch_command=@".\launcher\Start-dgSpyRemoteHost.cmd",transferred=false,executed=false,gateway_restart_required=false,gateway_ready=true,listener=listenerReadiness };
 		} finally { if(Directory.Exists(staging)) Directory.Delete(staging,true); if(File.Exists(temporaryArchive)) File.Delete(temporaryArchive); }
 	}
 	async Task<object> RemoteReadinessAsync(string? hostId,HostRouter router,CancellationToken token) { if(string.IsNullOrWhiteSpace(hostId)) throw new GatewayControlException("invalid_arguments","host_id is required."); var hosts=await router.ListHostsAsync(token); var selected=hosts.Select(item=>System.Text.Json.JsonSerializer.Serialize(item)).FirstOrDefault(json=>json.Contains($"\"host_id\":\"{hostId}\"",StringComparison.Ordinal)); return new { host_id=hostId,registered=selected is not null,connected=selected?.Contains("\"state\":\"connected\"",StringComparison.Ordinal)==true,hosts }; }
-	object RevokeRemote(JsonObject args) { RequireConfirm(args); var hostId=(string?)args["host_id"] ?? throw new GatewayControlException("invalid_arguments","host_id is required."); var registry=Environment.GetEnvironmentVariable("DGSPY_HOSTS_FILE") ?? Path.Combine(packageRoot,"gateway-hosts.json"); if(!File.Exists(registry)) return new { host_id=hostId,revoked=false,already_absent=true }; var root=JsonNode.Parse(File.ReadAllText(registry))!.AsObject(); var hosts=root["hosts"]!.AsArray(); var removed=hosts.Where(node=>(string?)node?["host_id"]==hostId).ToArray(); foreach(var node in removed) hosts.Remove(node); AtomicWrite(registry,root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })); return new { host_id=hostId,revoked=removed.Length>0,credentials_retained=true,gateway_restart_required=removed.Length>0,recovery="Restart the Gateway to apply revocation, then delete retained credential files after confirming no rollback is required." }; }
+	object RevokeRemote(JsonObject args,HostRouter router) { RequireConfirm(args); var hostId=(string?)args["host_id"] ?? throw new GatewayControlException("invalid_arguments","host_id is required."); var registry=Environment.GetEnvironmentVariable("DGSPY_HOSTS_FILE") ?? Path.Combine(packageRoot,"gateway-hosts.json"); if(!File.Exists(registry)) return new { host_id=hostId,revoked=false,already_absent=true }; var root=JsonNode.Parse(File.ReadAllText(registry))!.AsObject(); var hosts=root["hosts"]!.AsArray(); var removed=hosts.Where(node=>(string?)node?["host_id"]==hostId).ToArray(); foreach(var node in removed) hosts.Remove(node); AtomicWrite(registry,root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })); if(removed.Length>0) { var updated=HostRegistry.Load(registry,includeLocal:true); var listener=remoteListener ?? throw new GatewayControlException("listener_unavailable","The running Gateway does not expose its remote listener lifecycle service."); listener.EnsureConfigured(registry); router.Reload(updated); } return new { host_id=hostId,revoked=removed.Length>0,already_absent=removed.Length==0,credentials_retained=true,gateway_restart_required=false,recovery=removed.Length>0?"The live connection was closed and the old credential is no longer accepted. Delete retained credential files after confirming no rollback is required.":null }; }
 
 	// The deployment identity must be derived from everything that can change, because anything it leaves
 	// out is a code change the gateway will deploy over silently. This once hashed dnSpy.exe alone — an
@@ -626,9 +630,12 @@ public sealed class DeploymentService {
 		static GatewayControlException Corrupt(string detail) => new GatewayControlException("installation_incomplete",$"The installed HookLab payload cannot be verified: {detail}. Reinstall dgSpy from a complete release package; runtime builds are not supported.");
 	}
 	static bool RegistryContainsHost(string registry,string hostId) { if(!File.Exists(registry)) return false; var hosts=JsonNode.Parse(File.ReadAllText(registry))?["hosts"]?.AsArray(); return hosts?.Any(node=>(string?)node?["host_id"]==hostId)==true; }
-	static void UpdateRemoteRegistry(string registry,string hostId,JsonObject gatewayHost,bool useTls) {
+	static void UpdateRemoteRegistry(string registry,string hostId,string gatewayAddress,JsonObject gatewayHost,bool useTls) {
 		var root=File.Exists(registry)?JsonNode.Parse(File.ReadAllText(registry))!.AsObject():new JsonObject { ["hosts"]=new JsonArray() }; var hosts=root["hosts"]?.AsArray() ?? new JsonArray(); root["hosts"]=hosts;
-		foreach(var existing in hosts.Where(node=>(string?)node?["host_id"]==hostId).ToArray()) hosts.Remove(existing); hosts.Add(gatewayHost);
+		foreach(var existing in hosts.Where(node=>(string?)node?["host_id"]==hostId).ToArray()) hosts.Remove(existing);
+		var listener=root["listener"]?.AsObject(); if(hosts.Count>0 && listener is not null && !string.Equals((string?)listener["address"],gatewayAddress,StringComparison.OrdinalIgnoreCase)) throw new GatewayControlException("listener_address_conflict",$"The Gateway already provisions remote hosts through '{(string?)listener["address"]}', not '{gatewayAddress}'. Reuse the existing Gateway address or revoke every other remote host first.");
+		hosts.Add(gatewayHost);
+		listener ??= new JsonObject { ["address"]=gatewayAddress }; listener["address"]=gatewayAddress; if(!useTls) listener["plaintext_port"]=7352; root["listener"]=listener;
 		if(useTls) root["tls"]=new JsonObject { ["server_certificate_file"]="gateway-server.pfx",["server_certificate_password_file"]="gateway-server.password",["port"]=7353 };
 		AtomicWrite(registry,root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true }));
 	}

@@ -24,18 +24,41 @@ public sealed class DeploymentServiceTests : IDisposable {
 	}
 	[Fact]
 	public async Task Remote_package_is_created_from_bundled_payload_without_a_plan_or_source_build() {
-		var service=new DeploymentService(); var router=new HostRouter();
+		var router=new HostRouter(); using var listener=new RemoteHostListener(router); var service=new DeploymentService(listener);
 		var result=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await service.ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"},{"use_tls",false}},router,default)))!;
-		var archive=(string)result["archive_path"]!; Assert.True(File.Exists(archive)); Assert.Equal("authenticated_plaintext",(string?)result["transport"]);
-		var registry=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"state","packages","gateway-hosts.json")))!; Assert.Equal("remote-a",(string?)registry["hosts"]?[0]?["host_id"]);
+		var archive=(string)result["archive_path"]!; Assert.True(File.Exists(archive)); Assert.Equal("authenticated_plaintext",(string?)result["transport"]); Assert.True((bool?)result["gateway_ready"]); Assert.False((bool?)result["gateway_restart_required"]);
+		var registry=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"state","packages","gateway-hosts.json")))!; Assert.Equal("remote-a",(string?)registry["hosts"]?[0]?["host_id"]); Assert.Equal("127.0.0.1",(string?)registry["listener"]?["address"]); Assert.Equal(7352,(int?)registry["listener"]?["plaintext_port"]);
+		Assert.True(router.IsRegistered("remote-a"));
 	}
 	[Fact]
 	public async Task Remote_package_defaults_to_mutual_tls_and_can_replace_the_same_host() {
-		var service=new DeploymentService(); var router=new HostRouter(); var request=new JsonObject{{"host_id","remote-tls"},{"gateway_address","192.168.2.115"}};
+		var router=new HostRouter(); using var listener=new RemoteHostListener(router); var service=new DeploymentService(listener); var request=new JsonObject{{"host_id","remote-tls"},{"gateway_address","127.0.0.1"}};
 		var first=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await service.ExecuteAsync("create_remote_host_package",request,router,default)))!;
 		var second=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await service.ExecuteAsync("create_remote_host_package",request,router,default)))!;
 		Assert.Equal("mutual_tls",(string?)first["transport"]); Assert.True((bool?)second["replaced_existing_host"]); Assert.True(File.Exists(Path.Combine(root,"state","packages","remote-tls-client.cer")));
 		var registry=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"state","packages","gateway-hosts.json")))!; Assert.Single(registry["hosts"]!.AsArray()); Assert.Equal(7353,(int?)registry["tls"]?["port"]);
+	}
+	[Fact]
+	public async Task Replacing_and_revoking_a_remote_host_take_effect_in_the_live_router() {
+		var router=new HostRouter(); using var listener=new RemoteHostListener(router); var service=new DeploymentService(listener); var request=new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"},{"use_tls",false}};
+		await service.ExecuteAsync("create_remote_host_package",request,router,default); var tokenPath=Path.Combine(root,"state","packages","remote-a.token"); var firstToken=File.ReadAllText(tokenPath);
+		Assert.True(router.TryAuthenticate("remote-a",firstToken,false,null,out _));
+		var socketListener=new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback,0); socketListener.Start(); using var firstRemote=new System.Net.Sockets.TcpClient(); var firstAccept=socketListener.AcceptTcpClientAsync(); await firstRemote.ConnectAsync(System.Net.IPAddress.Loopback,((System.Net.IPEndPoint)socketListener.LocalEndpoint).Port); using var firstGateway=await firstAccept; Assert.True(router.TryRegister("remote-a",firstGateway,new StreamReader(firstGateway.GetStream(),Encoding.UTF8,false,4096,true),new StreamWriter(firstGateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true},out _));
+
+		await service.ExecuteAsync("create_remote_host_package",request,router,default); var secondToken=File.ReadAllText(tokenPath);
+		Assert.NotEqual(firstToken,secondToken); Assert.False(router.TryAuthenticate("remote-a",firstToken,false,null,out _)); Assert.True(router.TryAuthenticate("remote-a",secondToken,false,null,out _)); Assert.Equal(0,await ReadAfterClose(firstRemote));
+		using var secondRemote=new System.Net.Sockets.TcpClient(); var secondAccept=socketListener.AcceptTcpClientAsync(); await secondRemote.ConnectAsync(System.Net.IPAddress.Loopback,((System.Net.IPEndPoint)socketListener.LocalEndpoint).Port); using var secondGateway=await secondAccept; Assert.True(router.TryRegister("remote-a",secondGateway,new StreamReader(secondGateway.GetStream(),Encoding.UTF8,false,4096,true),new StreamWriter(secondGateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true},out _));
+
+		var revoked=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await service.ExecuteAsync("revoke_remote_host",new JsonObject{{"host_id","remote-a"},{"confirm",true}},router,default)))!;
+		Assert.True((bool?)revoked["revoked"]); Assert.False((bool?)revoked["gateway_restart_required"]); Assert.False(router.TryAuthenticate("remote-a",secondToken,false,null,out _)); Assert.Equal(0,await ReadAfterClose(secondRemote)); socketListener.Stop();
+		static async Task<int> ReadAfterClose(System.Net.Sockets.TcpClient client) { var buffer=new byte[1]; using var timeout=new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(2)); return await client.GetStream().ReadAsync(buffer,timeout.Token); }
+	}
+	[Fact]
+	public async Task Ordinary_gateway_start_consumes_the_persisted_listener_configuration() {
+		var provisioningRouter=new HostRouter(); using(var provisioningListener=new RemoteHostListener(provisioningRouter)) await new DeploymentService(provisioningListener).ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"},{"use_tls",false}},provisioningRouter,default);
+		var registry=Path.Combine(root,"state","packages","gateway-hosts.json"); Set("DGSPY_HOSTS_FILE",registry); Set("DGSPY_INCLUDE_LOCAL_HOST","true");
+		var restartedRouter=new HostRouter(); using var restartedListener=new RemoteHostListener(restartedRouter); await restartedListener.StartAsync(default);
+		using var connection=new System.Net.Sockets.TcpClient(); await connection.ConnectAsync(System.Net.IPAddress.Loopback,7352); Assert.True(connection.Connected); await restartedListener.StopAsync(default);
 	}
 	[Fact]
 	public void Local_host_is_installed_directly_from_the_bundled_payload_and_reused() {

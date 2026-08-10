@@ -37,14 +37,19 @@ public sealed class HostRegistry {
 	public static HostRegistry Load() {
 		var path=Environment.GetEnvironmentVariable("DGSPY_HOSTS_FILE");
 		if(string.IsNullOrWhiteSpace(path)) return Local();
-		var configured=FromJson(File.ReadAllText(path),Path.GetDirectoryName(Path.GetFullPath(path))!);
-		if(!string.Equals(Environment.GetEnvironmentVariable("DGSPY_INCLUDE_LOCAL_HOST"),"true",StringComparison.OrdinalIgnoreCase)) return configured;
+		return Load(path,string.Equals(Environment.GetEnvironmentVariable("DGSPY_INCLUDE_LOCAL_HOST"),"true",StringComparison.OrdinalIgnoreCase));
+	}
+
+	internal static HostRegistry Load(string path,bool includeLocal) {
+		var configured=FromJsonCore(File.ReadAllText(path),Path.GetDirectoryName(Path.GetFullPath(path))!,allowEmpty:includeLocal);
+		if(!includeLocal) return configured;
 		var combined=configured.Endpoints.ToList(); var local=Local().Endpoints.Single(); if(combined.Any(endpoint=>endpoint.HostId==local.HostId)) throw new InvalidOperationException($"Configured host_id '{local.HostId}' conflicts with the managed local host."); combined.Add(local); return new HostRegistry(combined);
 	}
 
-	public static HostRegistry FromJson(string json,string baseDirectory) {
+	public static HostRegistry FromJson(string json,string baseDirectory) => FromJsonCore(json,baseDirectory,allowEmpty:false);
+	static HostRegistry FromJsonCore(string json,string baseDirectory,bool allowEmpty) {
 		var document=ProtocolJson.Deserialize<HostRegistryDocument>(json) ?? throw new InvalidOperationException("The host registry is invalid JSON.");
-		if (document.Hosts.Length==0) throw new InvalidOperationException("The host registry contains no hosts.");
+		if (!allowEmpty && document.Hosts.Length==0) throw new InvalidOperationException("The host registry contains no hosts.");
 		var endpoints=new List<HostEndpoint>();
 		var ids=new HashSet<string>(StringComparer.Ordinal);
 		foreach (var host in document.Hosts) {
@@ -117,33 +122,53 @@ public sealed class HostRegistry {
 }
 
 public sealed class HostRouter {
-	readonly HostRegistry registry;
-	readonly Dictionary<string,IHostRpcClient> clients;
+	readonly object sync=new(); HostRegistry registry;
+	Dictionary<string,IHostRpcClient> clients;
 	public HostRouter() : this(HostRegistry.Load()) { }
 	internal HostRouter(HostRegistry registry) {
 		this.registry=registry;
-		clients=registry.Endpoints.ToDictionary(endpoint=>endpoint.HostId,endpoint=>endpoint.IsOutbound ? (IHostRpcClient)new RegisteredRpcClient(endpoint) : new EndpointRpcClient(endpoint),StringComparer.Ordinal);
+		clients=CreateClients(registry);
+	}
+	static Dictionary<string,IHostRpcClient> CreateClients(HostRegistry registry) => registry.Endpoints.ToDictionary(endpoint=>endpoint.HostId,CreateClient,StringComparer.Ordinal);
+	static IHostRpcClient CreateClient(HostEndpoint endpoint) => endpoint.IsOutbound ? new RegisteredRpcClient(endpoint) : new EndpointRpcClient(endpoint);
+	internal bool IsRegistered(string hostId) { lock(sync) return registry.TryGet(hostId,out _); }
+	internal void Reload(HostRegistry updated) {
+		Dictionary<string,IHostRpcClient> previous,next;
+		lock(sync) {
+			previous=clients; next=new Dictionary<string,IHostRpcClient>(StringComparer.Ordinal);
+			foreach(var endpoint in updated.Endpoints) {
+				if(previous.TryGetValue(endpoint.HostId,out var existing) && existing.Matches(endpoint)) next.Add(endpoint.HostId,existing);
+				else next.Add(endpoint.HostId,CreateClient(endpoint));
+			}
+			registry=updated; clients=next;
+		}
+		foreach(var retired in previous.Values.Where(client=>!next.Values.Contains(client))) retired.Dispose();
 	}
 	internal bool TryAuthenticate(string hostId,string token,bool isTls,byte[]? clientCertificateHash,out string error) {
-		if (!registry.TryGet(hostId,out var endpoint) || !endpoint.IsOutbound) { error="Unknown outbound host."; return false; }
+		HostEndpoint endpoint; lock(sync) if (!registry.TryGet(hostId,out endpoint!) || !endpoint.IsOutbound) { error="Unknown outbound host."; return false; }
 		if (endpoint.RequiresTls!=isTls) { error=$"Host '{hostId}' requires {(endpoint.RequiresTls ? "TLS" : "plaintext")}."; return false; }
 		if (endpoint.RequiresTls && (clientCertificateHash is null || endpoint.ClientCertificateHash is null || !RpcCredential.FixedTimeEquals(clientCertificateHash,endpoint.ClientCertificateHash))) { error="Client certificate does not match host_id."; return false; }
 		if (!RpcCredential.FixedTimeEquals(token,endpoint.Token)) { error="Invalid host credential."; return false; }
 		error=""; return true;
 	}
-	internal bool IsKnownClientCertificate(byte[] hash) => registry.Endpoints.Any(endpoint=>endpoint.RequiresTls && endpoint.ClientCertificateHash is not null && RpcCredential.FixedTimeEquals(hash,endpoint.ClientCertificateHash));
+	internal bool IsKnownClientCertificate(byte[] hash) { lock(sync) return registry.Endpoints.Any(endpoint=>endpoint.RequiresTls && endpoint.ClientCertificateHash is not null && RpcCredential.FixedTimeEquals(hash,endpoint.ClientCertificateHash)); }
 	internal bool TryRegister(string hostId,TcpClient client,StreamReader reader,StreamWriter writer,out string error) {
-		if (!clients.TryGetValue(hostId,out var value) || value is not RegisteredRpcClient registered) { error="Unknown outbound host."; return false; }
-		return registered.TryRegister(client,reader,writer,out error);
+		if(!TryPrepareRegistration(hostId,client,reader,writer,out var activate,out error)) return false;
+		activate(); return true;
+	}
+	internal bool TryPrepareRegistration(string hostId,TcpClient client,StreamReader reader,StreamWriter writer,out Action activate,out string error) {
+		IHostRpcClient? value; lock(sync) clients.TryGetValue(hostId,out value);
+		if (value is not RegisteredRpcClient registered) { activate=()=>{ }; error="Unknown outbound host."; return false; }
+		return registered.TryPrepareRegistration(client,reader,writer,out activate,out error);
 	}
 
 	public async Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken) {
 		HostEndpoint? endpoint=null;
 		try {
 			var requestedHostId=(string?)request.Arguments["host_id"];
-			endpoint=registry.Select(requestedHostId);
+			IHostRpcClient client; lock(sync) { endpoint=registry.Select(requestedHostId); client=clients[endpoint.HostId]; }
 			request.Arguments.Remove("host_id");
-			return await clients[endpoint.HostId].CallAsync(request,cancellationToken);
+			return await client.CallAsync(request,cancellationToken);
 		}
 		catch (HostRoutingException ex) { return RpcResponse.Failure(request.RequestId,ex.Code,ex.Message); }
 		catch (OperationCanceledException) {
@@ -159,9 +184,10 @@ public sealed class HostRouter {
 
 	public async Task<object[]> ListHostsAsync(CancellationToken cancellationToken) {
 		var hosts=new List<object>();
-		foreach (var endpoint in registry.Endpoints.OrderBy(endpoint=>endpoint.HostId,StringComparer.Ordinal)) {
+		(HostEndpoint Endpoint,IHostRpcClient Client)[] snapshot; lock(sync) snapshot=registry.Endpoints.Select(endpoint=>(endpoint,clients[endpoint.HostId])).OrderBy(item=>item.endpoint.HostId,StringComparer.Ordinal).ToArray();
+		foreach (var item in snapshot) { var endpoint=item.Endpoint;
 			try {
-				var response=await clients[endpoint.HostId].CallAsync(new RpcRequest { Operation="get_host_info",DeadlineUtc=DateTime.UtcNow.AddSeconds(5) },cancellationToken);
+				var response=await item.Client.CallAsync(new RpcRequest { Operation="get_host_info",DeadlineUtc=DateTime.UtcNow.AddSeconds(5) },cancellationToken);
 				var info=response.Error is null ? ProtocolJson.ToObject(response.Result!) : null;
 				var state=response.Error is null ? (string?)info?["connection_state"] ?? "connected" : "error";
 				hosts.Add(new { host_id=endpoint.HostId,display_name=endpoint.DisplayName,state,host=response.Result,error=response.Error });
@@ -174,7 +200,8 @@ public sealed class HostRouter {
 	}
 
 	public async Task SendHeartbeatAsync(CancellationToken cancellationToken) {
-		await Task.WhenAll(clients.Values.Select(client=>SendHeartbeatAsync(client,cancellationToken)));
+		IHostRpcClient[] snapshot; lock(sync) snapshot=clients.Values.ToArray();
+		await Task.WhenAll(snapshot.Select(client=>SendHeartbeatAsync(client,cancellationToken)));
 	}
 	static async Task SendHeartbeatAsync(IHostRpcClient client,CancellationToken cancellationToken) {
 		try { await client.CallAsync(new RpcRequest { Operation="gateway_heartbeat",DeadlineUtc=DateTime.UtcNow.AddSeconds(3) },cancellationToken); }
@@ -194,11 +221,13 @@ public sealed class GatewayHeartbeat : BackgroundService {
 	}
 }
 
-interface IHostRpcClient { Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken); }
+interface IHostRpcClient : IDisposable { bool Matches(HostEndpoint endpoint); Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken); }
 
 sealed class EndpointRpcClient : IHostRpcClient {
 	readonly HostEndpoint endpoint;
 	public EndpointRpcClient(HostEndpoint endpoint) { this.endpoint=endpoint; }
+	public bool Matches(HostEndpoint candidate) => !candidate.IsOutbound && endpoint.HostId==candidate.HostId && endpoint.Address.Equals(candidate.Address) && endpoint.Port==candidate.Port && RpcCredential.FixedTimeEquals(endpoint.Token,candidate.Token);
+	public void Dispose() { }
 
 	public async Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken) {
 		using var deadline=new CancellationTokenSource();
@@ -228,24 +257,32 @@ sealed class EndpointRpcClient : IHostRpcClient {
 sealed class RegisteredRpcClient : IHostRpcClient {
 	readonly HostEndpoint endpoint; readonly object sync=new(); ReverseConnection? connection;
 	public RegisteredRpcClient(HostEndpoint endpoint) { this.endpoint=endpoint; }
-	public bool TryRegister(TcpClient client,StreamReader reader,StreamWriter writer,out string error) {
+	public bool Matches(HostEndpoint candidate) => candidate.IsOutbound && endpoint.HostId==candidate.HostId && endpoint.RequiresTls==candidate.RequiresTls && RpcCredential.FixedTimeEquals(endpoint.Token,candidate.Token) && CertificateEquals(endpoint.ClientCertificateHash,candidate.ClientCertificateHash);
+	static bool CertificateEquals(byte[]? left,byte[]? right) => left is null ? right is null : right is not null && RpcCredential.FixedTimeEquals(left,right);
+	public bool TryPrepareRegistration(TcpClient client,StreamReader reader,StreamWriter writer,out Action activate,out string error) {
 		lock(sync) {
-			if (connection is { IsAlive:true }) { error=$"Host '{endpoint.HostId}' already has a live connection."; return false; }
-			connection?.Dispose(); connection=new ReverseConnection(client,reader,writer); error=""; return true;
+			if (connection is { SocketAlive:true }) { activate=()=>{ }; error=$"Host '{endpoint.HostId}' already has a live connection."; return false; }
+			connection?.Dispose(); var pending=new ReverseConnection(client,reader,writer); connection=pending; activate=pending.Activate; error=""; return true;
 		}
 	}
-	public Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken) {
+	public async Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken) {
+		using var deadline=new CancellationTokenSource();
+		if(request.DeadlineUtc is DateTime deadlineUtc) deadline.CancelAfter(deadlineUtc-DateTime.UtcNow>TimeSpan.Zero ? deadlineUtc-DateTime.UtcNow : TimeSpan.FromMilliseconds(1));
+		using var linked=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,deadline.Token);
 		ReverseConnection? active; lock(sync) active=connection;
 		if (active is null || !active.IsAlive) throw new IOException($"Host '{endpoint.HostId}' is not connected.");
 		request.HostId=endpoint.HostId; request.AuthenticationToken=endpoint.Token;
-		return active.CallAsync(request,cancellationToken);
+		return await active.CallAsync(request,linked.Token);
 	}
+	public void Dispose() { lock(sync) { connection?.Dispose(); connection=null; } }
 }
 
 sealed class ReverseConnection : IDisposable {
-	readonly TcpClient client; readonly StreamReader reader; readonly StreamWriter writer; readonly SemaphoreSlim calls=new(1,1);
-	public bool IsAlive { get { try { return client.Connected && !(client.Client.Poll(0,SelectMode.SelectRead) && client.Available==0); } catch { return false; } } }
+	readonly TcpClient client; readonly StreamReader reader; readonly StreamWriter writer; readonly SemaphoreSlim calls=new(1,1); volatile bool active;
+	public bool SocketAlive { get { try { return client.Connected && !(client.Client.Poll(0,SelectMode.SelectRead) && client.Available==0); } catch { return false; } } }
+	public bool IsAlive => active && SocketAlive;
 	public ReverseConnection(TcpClient client,StreamReader reader,StreamWriter writer) { this.client=client; this.reader=reader; this.writer=writer; }
+	public void Activate() => active=true;
 	public async Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken) {
 		await calls.WaitAsync(cancellationToken);
 		try {
@@ -258,31 +295,63 @@ sealed class ReverseConnection : IDisposable {
 }
 
 public sealed class RemoteHostListener : BackgroundService {
-	readonly HostRouter router; TcpListener? listener;
+	readonly HostRouter router; readonly object sync=new(); readonly Dictionary<string,ListenerState> listeners=new(StringComparer.Ordinal); readonly CancellationTokenSource shutdown=new(); int disposed;
 	public RemoteHostListener(HostRouter router) { this.router=router; }
 	protected override async Task ExecuteAsync(CancellationToken stoppingToken) {
-		var addressText=Environment.GetEnvironmentVariable("DGSPY_REMOTE_ADDRESS");
-		if (string.IsNullOrWhiteSpace(addressText)) return;
-		if (!IPAddress.TryParse(addressText,out var address)) throw new InvalidOperationException("DGSPY_REMOTE_ADDRESS must be an IP address.");
-		var tasks=new List<Task>();
-		if (!string.Equals(Environment.GetEnvironmentVariable("DGSPY_REMOTE_DISABLE_PLAINTEXT"),"true",StringComparison.OrdinalIgnoreCase)) { var port=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_REMOTE_PORT"),out var configured) ? configured : 7352; tasks.Add(ListenAsync(address,port,false,null,stoppingToken)); }
-		if (int.TryParse(Environment.GetEnvironmentVariable("DGSPY_REMOTE_TLS_PORT"),out var tlsPort)) { var certificateFile=Environment.GetEnvironmentVariable("DGSPY_GATEWAY_SERVER_CERTIFICATE_FILE"); var passwordFile=Environment.GetEnvironmentVariable("DGSPY_GATEWAY_SERVER_CERTIFICATE_PASSWORD_FILE"); if(string.IsNullOrWhiteSpace(certificateFile) || string.IsNullOrWhiteSpace(passwordFile)) throw new InvalidOperationException("The Gateway TLS certificate and password files are required for the TLS listener."); if(!File.Exists(certificateFile) || !File.Exists(passwordFile)) throw new InvalidOperationException("A configured Gateway TLS certificate or password file does not exist."); var password=File.ReadAllText(passwordFile).Trim(); tasks.Add(ListenAsync(address,tlsPort,true,new X509Certificate2(certificateFile,password,X509KeyStorageFlags.DefaultKeySet),stoppingToken)); }
-		await Task.WhenAll(tasks);
+		using var registration=stoppingToken.Register(shutdown.Cancel);
+		var configured=RemoteListenerConfiguration.Load(); if(configured is not null) EnsureListening(configured);
+		try { await Task.Delay(Timeout.Infinite,stoppingToken); } catch(OperationCanceledException) { }
 	}
-	async Task ListenAsync(IPAddress address,int port,bool useTls,X509Certificate2? serverCertificate,CancellationToken token) { var localListener=new TcpListener(address,port); if(!useTls) listener=localListener; localListener.Start(16); try { while(!token.IsCancellationRequested) { var client=await localListener.AcceptTcpClientAsync(token); _=RegisterAsync(client,useTls,serverCertificate,token); } } finally { localListener.Stop(); } }
+	internal object EnsureConfigured(string registryPath) { var configured=RemoteListenerConfiguration.FromRegistry(registryPath); EnsureListening(configured); lock(sync) return new { address=configured.Address.ToString(),plaintext_port=configured.PlaintextPort,tls_port=configured.TlsPort,listening=listeners.Keys.OrderBy(value=>value,StringComparer.Ordinal).ToArray() }; }
+	void EnsureListening(RemoteListenerConfiguration configured) {
+		var required=new HashSet<string>(StringComparer.Ordinal);
+		if(configured.PlaintextPort is int plaintext) Ensure(configured.Address,plaintext,false,null,required);
+		if(configured.TlsPort is int tls) Ensure(configured.Address,tls,true,configured.LoadCertificate(),required);
+		KeyValuePair<string,ListenerState>[] retired; lock(sync) { retired=listeners.Where(pair=>!required.Contains(pair.Key)).ToArray(); foreach(var item in retired) listeners.Remove(item.Key); }
+		foreach(var item in retired) item.Value.Dispose();
+	}
+	void Ensure(IPAddress address,int port,bool useTls,X509Certificate2? certificate,HashSet<string> required) {
+		var key=$"{address}:{port}:{useTls}"; required.Add(key); lock(sync) { if(listeners.ContainsKey(key)) { certificate?.Dispose(); return; } var listener=new TcpListener(address,port); listener.Start(16); var state=new ListenerState(listener,certificate); listeners.Add(key,state); state.Task=ListenAsync(state,useTls,shutdown.Token); }
+	}
+	async Task ListenAsync(ListenerState state,bool useTls,CancellationToken token) { try { while(!token.IsCancellationRequested) { var client=await state.Listener.AcceptTcpClientAsync(token); _=RegisterAsync(client,useTls,state.Certificate,token); } } catch(OperationCanceledException) when(token.IsCancellationRequested) { } catch(ObjectDisposedException) { } }
 	async Task RegisterAsync(TcpClient client,bool useTls,X509Certificate2? serverCertificate,CancellationToken token) {
 		try {
 			Stream stream=client.GetStream(); byte[]? clientCertificateHash=null;
 			if(useTls) { var tls=new SslStream(stream,false,(_,certificate,__,___)=>certificate is not null && router.IsKnownClientCertificate(certificate.GetCertHash())); await tls.AuthenticateAsServerAsync(serverCertificate!,true,SslProtocols.Tls12,false); stream=tls; clientCertificateHash=tls.RemoteCertificate?.GetCertHash(); }
 			var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true); var writer=new StreamWriter(stream,new UTF8Encoding(false),4096,true){AutoFlush=true};
 			var line=await reader.ReadLineAsync(token); var request=line is null ? null : ProtocolJson.Deserialize<RpcRequest>(line); string error="Invalid registration.";
-			if (request is null || request.Operation!="register_host" || request.Version!=ProtocolVersion.Current || string.IsNullOrWhiteSpace(request.HostId) || !router.TryAuthenticate(request.HostId,request.AuthenticationToken ?? "",useTls,clientCertificateHash,out error) || !router.TryRegister(request.HostId,client,reader,writer,out error)) {
+			if (request is null || request.Operation!="register_host" || request.Version!=ProtocolVersion.Current || string.IsNullOrWhiteSpace(request.HostId) || !router.TryAuthenticate(request.HostId,request.AuthenticationToken ?? "",useTls,clientCertificateHash,out error) || !router.TryPrepareRegistration(request.HostId,client,reader,writer,out var activate,out error)) {
 				await writer.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Failure(request?.RequestId ?? "","registration_rejected",error))); client.Dispose(); return;
 			}
 			await writer.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,new HostRegistration { HostId=request.HostId })));
+			activate();
 		} catch { client.Dispose(); }
 	}
-	public override void Dispose() { listener?.Stop(); base.Dispose(); }
+	public override void Dispose() { if(Interlocked.Exchange(ref disposed,1)!=0) return; ListenerState[] active; lock(sync) active=listeners.Values.ToArray(); foreach(var item in active) item.Dispose(); try { shutdown.Cancel(); } catch(ObjectDisposedException) { } catch(AggregateException ex) when(ex.InnerExceptions.All(inner=>inner is ObjectDisposedException)) { } base.Dispose(); }
+	sealed class ListenerState : IDisposable { public TcpListener Listener { get; } public X509Certificate2? Certificate { get; } public Task? Task { get; set; } public ListenerState(TcpListener listener,X509Certificate2? certificate) { Listener=listener; Certificate=certificate; } public void Dispose() { Listener.Stop(); Certificate?.Dispose(); } }
+}
+
+sealed class RemoteListenerConfiguration {
+	public IPAddress Address { get; } public int? PlaintextPort { get; } public int? TlsPort { get; } readonly string? certificateFile,passwordFile;
+	RemoteListenerConfiguration(IPAddress address,int? plaintextPort,int? tlsPort,string? certificateFile,string? passwordFile) { Address=address; PlaintextPort=plaintextPort; TlsPort=tlsPort; this.certificateFile=certificateFile; this.passwordFile=passwordFile; }
+	public static RemoteListenerConfiguration? Load() {
+		var addressText=Environment.GetEnvironmentVariable("DGSPY_REMOTE_ADDRESS");
+		if(!string.IsNullOrWhiteSpace(addressText)) return FromEnvironment(addressText);
+		var registry=Environment.GetEnvironmentVariable("DGSPY_HOSTS_FILE"); return string.IsNullOrWhiteSpace(registry) || !File.Exists(registry) ? null : FromRegistry(registry);
+	}
+	static RemoteListenerConfiguration FromEnvironment(string addressText) {
+		var address=ParseAddress(addressText); int? plaintext=string.Equals(Environment.GetEnvironmentVariable("DGSPY_REMOTE_DISABLE_PLAINTEXT"),"true",StringComparison.OrdinalIgnoreCase) ? null : int.TryParse(Environment.GetEnvironmentVariable("DGSPY_REMOTE_PORT"),out var port) ? port : 7352;
+		var tls=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_REMOTE_TLS_PORT"),out var tlsPort) ? tlsPort : (int?)null;
+		return new RemoteListenerConfiguration(address,plaintext,tls,Environment.GetEnvironmentVariable("DGSPY_GATEWAY_SERVER_CERTIFICATE_FILE"),Environment.GetEnvironmentVariable("DGSPY_GATEWAY_SERVER_CERTIFICATE_PASSWORD_FILE"));
+	}
+	public static RemoteListenerConfiguration FromRegistry(string path) {
+		var root=JsonNode.Parse(File.ReadAllText(path))!.AsObject(); var listener=root["listener"]?.AsObject() ?? throw new InvalidOperationException("The host registry has outbound hosts but no persisted listener configuration.");
+		var address=ParseAddress((string?)listener["address"] ?? ""); var hosts=root["hosts"]?.AsArray() ?? new JsonArray(); int? plaintext=hosts.Any(node=>(string?)node?["transport"]=="outbound") ? (int?)listener["plaintext_port"] ?? 7352 : null; var hasTls=hosts.Any(node=>(string?)node?["transport"]=="outbound_tls"); var tlsNode=root["tls"]?.AsObject(); int? tls=hasTls ? (int?)tlsNode?["port"] ?? 7353 : null; var baseDirectory=Path.GetDirectoryName(Path.GetFullPath(path))!;
+		return new RemoteListenerConfiguration(address,plaintext,tls,Resolve(baseDirectory,(string?)tlsNode?["server_certificate_file"]),Resolve(baseDirectory,(string?)tlsNode?["server_certificate_password_file"]));
+	}
+	public X509Certificate2 LoadCertificate() { if(TlsPort is null) throw new InvalidOperationException("TLS is not configured."); if(string.IsNullOrWhiteSpace(certificateFile)||string.IsNullOrWhiteSpace(passwordFile)||!File.Exists(certificateFile)||!File.Exists(passwordFile)) throw new InvalidOperationException("The Gateway TLS certificate and password files are required for the TLS listener."); return new X509Certificate2(certificateFile,File.ReadAllText(passwordFile).Trim(),X509KeyStorageFlags.DefaultKeySet); }
+	static IPAddress ParseAddress(string value) => IPAddress.TryParse(value,out var address) ? address : throw new InvalidOperationException("The persisted remote listener address must be an IP address assigned to this Gateway.");
+	static string? Resolve(string root,string? value) => string.IsNullOrWhiteSpace(value) ? null : Path.IsPathRooted(value) ? value : Path.Combine(root,value);
 }
 
 static class RpcCredential {

@@ -12,7 +12,8 @@ builder.Services.AddSingleton<GatewayAccessPolicy>();
 builder.Services.AddSingleton<GatewayAuditLog>();
 builder.Services.AddSingleton<GatewayToolExecutor>();
 builder.Services.AddSingleton<DeploymentService>();
-builder.Services.AddHostedService<RemoteHostListener>();
+builder.Services.AddSingleton<RemoteHostListener>();
+builder.Services.AddHostedService(services=>services.GetRequiredService<RemoteHostListener>());
 builder.Services.AddHostedService<GatewayHeartbeat>();
 var app = builder.Build();
 
