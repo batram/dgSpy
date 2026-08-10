@@ -105,7 +105,7 @@ public sealed class DeploymentService {
 			// anything resolved by active version -- a payload to inject, most of all -- could come from a
 			// tree the host is not running.
 			var runningRoot=live is null ? null : RunningHostRoot((string?)live["extension_path"]);
-			var matches=RunningTreeMatchesPayload(runningRoot,payloadRoot,()=>HashTreeCached(payloadRoot),DeployedTreePayloadSha);
+			var matches=RunningTreeMatchesPayload(runningRoot,(string?)live?["extension_sha256"],payloadRoot,()=>HashTreeCached(payloadRoot),DeployedTreePayloadSha,ExtensionSha,HashDeployedTreeCached);
 			// Adoption is the honest answer to "make sure the local host is running" when it already is,
 			// running the code we would have deployed. Reporting started=true for a process we did not
 			// start would be a lie the caller cannot check.
@@ -125,7 +125,12 @@ public sealed class DeploymentService {
 			}
 			var describe=string.Join(", ",running.Select(process=>$"pid {process.Id}"));
 			var runningBuild=live is null ? "not answering RPC" : $"build {(string?)live["build_label"] ?? "unknown"}, extension {Shorten((string?)live["extension_sha256"])}";
-			var runningTree=live is null ? "" : runningRoot is null ? " The Gateway could not tell which tree it loaded its extension from, so it cannot be adopted." : $" It is running from '{runningRoot}'.";
+			// A tree rebuilt in place is the case that used to adopt, so name it: the paths agree and the
+			// bytes do not, and "the tree it is running is not the payload" alone would read as a bug.
+			var rebuiltInPlace=runningRoot is not null && PathsEqual(runningRoot,payloadRoot) && !string.Equals((string?)live?["extension_sha256"],ExtensionSha(runningRoot),StringComparison.OrdinalIgnoreCase);
+			var runningTree=live is null ? "" : runningRoot is null ? " The Gateway could not tell which tree it loaded its extension from, so it cannot be adopted."
+				: rebuiltInPlace ? $" It is running from '{runningRoot}', which is this payload directory, but that directory has been rebuilt since the host loaded its extension: the process holds extension {Shorten((string?)live["extension_sha256"])} while the directory now supplies {Shorten(ExtensionSha(runningRoot))}, so the host and the HookLab payload it would inject come from different generations."
+				: $" It is running from '{runningRoot}'.";
 			if(!replace)
 				throw new GatewayControlException("host_already_running",
 					$"A managed dnSpy is already running ({describe}; {runningBuild}) and owns the RPC endpoint, but the tree it is running is not the payload this deployment would install (extension {Shorten(payloadExtensionSha)}).{runningTree} Starting a second host would leave two processes contending for the endpoint, and every answer would keep coming from the old one while this call reported success. Call launch_local_host again with replace=true to detach its targets, close it, and start the installed payload -- that ends any debugging session it holds. To keep the session, finish with the running host instead.");
@@ -369,32 +374,63 @@ public sealed class DeploymentService {
 		return string.Equals(relative,expected,StringComparison.OrdinalIgnoreCase) ? Path.TrimEndingDirectorySeparator(root) : null;
 	}
 
-	/// <summary>Whether the tree a host is running is the payload this deployment would install. The
-	/// extension digest alone answered this while the extension assembly was the only thing that moved per
-	/// build; with the HookLab payload in the tree it is not, and a payload-only change was adopted as if
-	/// nothing had changed -- while doctor, which whole-tree hashes, called the same deployment stale. So
-	/// this compares whole trees too, rather than adding a second per-file case that the next file added to
-	/// the tree would need a third of.
+	/// <summary>Whether the tree a host is running is the payload this deployment would install, and whether
+	/// the process is actually running the code that is in that tree now. Both halves are needed, and the two
+	/// earlier answers each had only one of them.
 	///
-	/// Three ways to match, and everything else is a refusal: the host is running out of the installed
-	/// payload directory itself (a developer worktree, where the deployment is the payload); or the
-	/// deployment it is running recorded the payload hash it was copied from and that hash is the installed
-	/// one. A tree that cannot be identified, a deployment with no manifest, and a payload that cannot be
-	/// hashed all mean "cannot prove they are the same", which is not adoption.</summary>
-	internal static bool RunningTreeMatchesPayload(string? runningRoot,string payloadRoot,Func<string> installedTreeSha,Func<string,string?> deployedTreeSha) {
+	/// The extension digest alone answered this while the extension assembly was the only thing that moved
+	/// per build; with the HookLab payload in the tree it is not, and a payload-only change was adopted as if
+	/// nothing had changed. Replacing it with a tree comparison then lost the other half: both of those paths
+	/// answer *where the bytes came from*, not *what the bytes are now*. Path equality adopted on the path;
+	/// the manifest branch compared a recorded provenance field written at deployment time.
+	///
+	/// So there are two gates, in cost order.
+	///
+	/// **The loaded-extension digest, always.** The host reports the SHA-256 of the assembly this process
+	/// loaded; we hash the assembly that is at that path now. A tree rebuilt or edited in place after dnSpy
+	/// loaded its extension fails here -- the process holds the old extension while the directory supplies a
+	/// newer HookLab payload, which is exactly the cross-generation host/payload pairing the whole comparison
+	/// exists to prevent. This is one file hash, not a tree read, and it is the *only* content check available
+	/// for the payload-root case: there the deployment and the payload are one directory, so hashing the tree
+	/// would compare it with itself and always agree. A digest the host could not compute (it reports
+	/// "unknown") means no match, per the rule that unknown is never adoption.
+	///
+	/// **Then, for a deployed tree, the bytes.** The recorded <c>payload_sha256</c> is kept as a cheap
+	/// pre-filter -- a deployment that never claimed to be this payload is refused without reading a quarter
+	/// of a gigabyte -- but a claim is not proof, so when it does claim to match, the deployed tree is hashed
+	/// and compared with the installed payload's hash. That is the cost decision: the tree read is paid only
+	/// on the path that is about to answer "yes", it is metadata-stamp cached like the payload hash, and the
+	/// alternative is adopting a version directory that was altered after deployment without its manifest
+	/// being touched. The deployment manifest is excluded from that hash because it is written into the tree
+	/// after the copy and therefore is not part of what was copied. This relies on the deployed tree being
+	/// immutable while it runs: dnSpy writes its settings to %APPDATA%\dnSpy unless a dnSpy.xml already sits
+	/// beside the binaries, and no packaged tree ships one. If that ever changes, this fails closed -- a
+	/// refusal to adopt, not a false adoption.
+	///
+	/// Known residual: a change confined to the HookLab payload inside a *developer worktree* root, with the
+	/// extension assembly untouched, still adopts. There is nothing left to compare it against -- the running
+	/// tree is the installed payload -- and closing it needs the host to report the payload digest it resolved,
+	/// which it does not yet.</summary>
+	internal static bool RunningTreeMatchesPayload(string? runningRoot,string? runningExtensionSha,string payloadRoot,Func<string> installedTreeSha,Func<string,string?> recordedPayloadSha,Func<string,string?> extensionSha,Func<string,string?> deployedTreeSha) {
 		if(string.IsNullOrEmpty(runningRoot)) return false;
+		if(string.IsNullOrWhiteSpace(runningExtensionSha) || string.Equals(runningExtensionSha,"unknown",StringComparison.OrdinalIgnoreCase)) return false;
+		string? loaded; try { loaded=extensionSha(runningRoot!); } catch { return false; }
+		if(string.IsNullOrEmpty(loaded) || !string.Equals(loaded,runningExtensionSha,StringComparison.OrdinalIgnoreCase)) return false;
 		if(PathsEqual(runningRoot!,payloadRoot)) return true;
-		var recorded=deployedTreeSha(runningRoot!);
+		var recorded=recordedPayloadSha(runningRoot!);
 		if(string.IsNullOrEmpty(recorded)) return false;
 		string installed; try { installed=installedTreeSha(); } catch { return false; }
-		return !string.IsNullOrEmpty(installed) && string.Equals(recorded,installed,StringComparison.OrdinalIgnoreCase);
+		if(string.IsNullOrEmpty(installed) || !string.Equals(recorded,installed,StringComparison.OrdinalIgnoreCase)) return false;
+		string? actual; try { actual=deployedTreeSha(runningRoot!); } catch { return false; }
+		return !string.IsNullOrEmpty(actual) && string.Equals(actual,installed,StringComparison.OrdinalIgnoreCase);
 	}
 
 	/// <summary>Hash of the extension assembly under a payload or deployment root, which is what a
-	/// running host reports as extension_sha256. It is kept for the reporting fields -- it is the identity a
-	/// human can check against a built file -- but it no longer decides adoption; see
+	/// running host reports as extension_sha256. It no longer decides adoption on its own -- a payload-only
+	/// change moved past it -- but it is half of the decision again, as the gate that ties the running process
+	/// to the bytes at that path now rather than to the bytes it was deployed from. See
 	/// <see cref="RunningTreeMatchesPayload"/>.</summary>
-	static string? ExtensionSha(string root) {
+	internal static string? ExtensionSha(string root) {
 		var path=Path.Combine(root,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll");
 		try { return File.Exists(path) ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant() : null; } catch { return null; }
 	}
@@ -461,7 +497,7 @@ public sealed class DeploymentService {
 			var unique=2; while(Directory.Exists(destination+"-"+unique)) unique++;
 			version=version+"-"+unique; destination=Path.Combine(installRoot,"versions",version);
 		}
-		if(!Directory.Exists(destination)) { var staging=destination+".staging-"+Guid.NewGuid().ToString("N"); try { CopyTree(payload,staging,token); ValidateDnSpy(staging); File.WriteAllText(Path.Combine(staging,"deployment-manifest.json"),System.Text.Json.JsonSerializer.Serialize(new { version,host_id=hostId,created_utc=DateTime.UtcNow,source="bundled_payload",payload_sha256=payloadSha,packaged=ReadStagedManifest(),sha256=HashTree(staging) })); Directory.Move(staging,destination); } catch { if(Directory.Exists(staging)) Directory.Delete(staging,true); throw; } }
+		if(!Directory.Exists(destination)) { var staging=destination+".staging-"+Guid.NewGuid().ToString("N"); try { CopyTree(payload,staging,token); ValidateDnSpy(staging); File.WriteAllText(Path.Combine(staging,DeploymentManifestName),System.Text.Json.JsonSerializer.Serialize(new { version,host_id=hostId,created_utc=DateTime.UtcNow,source="bundled_payload",payload_sha256=payloadSha,packaged=ReadStagedManifest(),sha256=HashTree(staging) })); Directory.Move(staging,destination); } catch { if(Directory.Exists(staging)) Directory.Delete(staging,true); throw; } }
 		Directory.CreateDirectory(stateRoot); EnsureSecret(Path.Combine(stateRoot,"gateway.token")); EnsureSecret(Path.Combine(stateRoot,"rpc.token")); File.WriteAllText(Path.Combine(stateRoot,"host.id"),hostId);
 		WriteCurrent(new JsonObject { ["active_version"]=version,["previous_version"]=active,["host_id"]=hostId,["updated_utc"]=DateTime.UtcNow }); WriteCurrentLauncher(); return true;
 	}
@@ -472,7 +508,7 @@ public sealed class DeploymentService {
 	/// <summary>The same record read from a deployment root rather than a version name, because the tree a
 	/// host is running is known by its path and the active-version pointer may name a different one.</summary>
 	internal static string? DeployedTreePayloadSha(string root) {
-		var manifest=Path.Combine(root,"deployment-manifest.json");
+		var manifest=Path.Combine(root,DeploymentManifestName);
 		if(!File.Exists(manifest)) return null;
 		try { return (string?)JsonNode.Parse(File.ReadAllText(manifest))?["payload_sha256"]; } catch { return null; }
 	}
@@ -513,8 +549,70 @@ public sealed class DeploymentService {
 	/// Both files are required: the bootstrap without its manifest cannot have its digest verified, and the
 	/// verifier refuses to hand on bytes it cannot check.</summary>
 	static void ValidateRemotePayload(string payload) {
-		var required=new[]{"dnSpy.exe",Path.Combine("bin","dnSpy.dll"),Path.Combine("bin","dnSpy.Contracts.DnSpy.dll"),Path.Combine("bin","hostfxr.dll"),Path.Combine("bin","hostpolicy.dll"),Path.Combine("bin","coreclr.dll"),Path.Combine("bin","clrjit.dll"),Path.Combine("bin","Extensions","dgSpy","dgSpy.Extension.x.dll"),Path.Combine("hooklab","hooklab-bootstrap.net48.payload"),Path.Combine("hooklab","hooklab-payload-manifest.json"),Path.Combine("launcher","Start-dgSpyRemoteHost.ps1"),Path.Combine("launcher","Start-dgSpyRemoteHost.cmd")};
+		var required=new[]{"dnSpy.exe",Path.Combine("bin","dnSpy.dll"),Path.Combine("bin","dnSpy.Contracts.DnSpy.dll"),Path.Combine("bin","hostfxr.dll"),Path.Combine("bin","hostpolicy.dll"),Path.Combine("bin","coreclr.dll"),Path.Combine("bin","clrjit.dll"),Path.Combine("bin","Extensions","dgSpy","dgSpy.Extension.x.dll"),HookLabPayloadRelativePath,HookLabManifestRelativePath,Path.Combine("launcher","Start-dgSpyRemoteHost.ps1"),Path.Combine("launcher","Start-dgSpyRemoteHost.cmd")};
 		var missing=required.Where(path=>!File.Exists(Path.Combine(payload,path))).ToArray(); if(missing.Length>0) throw new GatewayControlException("installation_incomplete",$"The installed remote-host payload is incomplete ({string.Join(", ",missing)}). Reinstall dgSpy from a complete release package; runtime builds are not supported.");
+		VerifyHookLabPayload(payload,PackagedHookLabSha(payload));
+	}
+
+	internal static readonly string HookLabPayloadRelativePath=Path.Combine("hooklab","hooklab-bootstrap.net48.payload");
+	internal static readonly string HookLabManifestRelativePath=Path.Combine("hooklab","hooklab-payload-manifest.json");
+	const string HookLabPayloadFileName="hooklab-bootstrap.net48.payload";
+	const string HookLabPayloadEntryId="hooklab_bootstrap";
+
+	/// <summary>The independent digest record the packaging step writes into the package manifest beside the
+	/// payload root, or null when there is none (an unpackaged worktree, or a package predating the field).
+	/// Absent is not a failure; disagreeing is, because rewriting one record must not be enough.</summary>
+	static string? PackagedHookLabSha(string payloadRoot) {
+		var parent=Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(payloadRoot)));
+		if(string.IsNullOrEmpty(parent)) return null;
+		var manifest=Path.Combine(parent!,"manifest.json");
+		if(!File.Exists(manifest)) return null;
+		try { return (string?)JsonNode.Parse(File.ReadAllText(manifest))?["hooklab_payload_sha256"]; } catch { return null; }
+	}
+
+	/// <summary>Verifies the staged HookLab payload the way a consumer must, and at the moment readiness is
+	/// reported rather than at the moment an action needs it.
+	///
+	/// Checking that the two filenames exist was the whole of this test before, so an empty payload, a
+	/// truncated one, a malformed manifest and a digest mismatch all stayed healthy through doctor, deployment
+	/// and remote-package creation and produced their first symptom inside a payload action -- where the
+	/// failure reads as the action's fault rather than the install's. That is precisely the late failure the
+	/// required-files entry was added to eliminate, surviving one layer down.
+	///
+	/// This mirrors <c>Test-HookLabPayload</c> in <c>packaging\HookLabPayload.ps1</c>: parse the manifest,
+	/// take the single hooklab_bootstrap entry, compare size, recompute SHA-256 over the bytes, and compare
+	/// against the package manifest's independent record when there is one. It deliberately does not repeat
+	/// that script's reachable-copy scan, which walks every file of a self-contained publish and belongs to
+	/// packaging and install rather than to a per-call readiness check.
+	///
+	/// Cost: one read of a payload measured in hundreds of kilobytes, against the quarter-gigabyte tree hash
+	/// these same paths already pay (and cache). Not cached here on purpose -- a stale "the payload is fine"
+	/// is the answer that has no value.</summary>
+	internal static void VerifyHookLabPayload(string payloadRoot,string? packagedSha) {
+		var payloadFile=Path.Combine(payloadRoot,HookLabPayloadRelativePath);
+		var manifestFile=Path.Combine(payloadRoot,HookLabManifestRelativePath);
+		JsonNode? manifest;
+		try { manifest=JsonNode.Parse(File.ReadAllText(manifestFile)); }
+		catch(Exception ex) { throw Corrupt($"its manifest '{manifestFile}' could not be read ({ex.GetType().Name}: {ex.Message})"); }
+		var entries=(manifest?["payloads"] as JsonArray)?.OfType<JsonObject>().Where(entry=>(string?)entry["id"]==HookLabPayloadEntryId).ToArray() ?? Array.Empty<JsonObject>();
+		if(entries.Length!=1) throw Corrupt($"its manifest '{manifestFile}' does not carry exactly one '{HookLabPayloadEntryId}' entry ({entries.Length} found)");
+		var entry=entries[0];
+		var named=(string?)entry["file"];
+		if(!string.Equals(named,HookLabPayloadFileName,StringComparison.OrdinalIgnoreCase)) throw Corrupt($"its manifest names the file '{named ?? "(absent)"}' while this layout stages '{HookLabPayloadFileName}'");
+		long? recordedSize; try { recordedSize=(long?)entry["size"]; } catch { recordedSize=null; }
+		var recordedSha=(string?)entry["sha256"];
+		if(recordedSize is null || string.IsNullOrWhiteSpace(recordedSha)) throw Corrupt($"its manifest entry records no usable size and digest");
+		byte[] bytes;
+		try { bytes=File.ReadAllBytes(payloadFile); }
+		catch(Exception ex) { throw Corrupt($"'{payloadFile}' could not be read ({ex.GetType().Name}: {ex.Message})"); }
+		if(bytes.LongLength!=recordedSize) throw Corrupt($"'{payloadFile}' is {bytes.LongLength} bytes and its manifest records {recordedSize}, so it is truncated, empty or was modified");
+		var actual=Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+		if(!string.Equals(actual,recordedSha!.Trim(),StringComparison.OrdinalIgnoreCase)) throw Corrupt($"'{payloadFile}' hashes to {actual} and its manifest records {recordedSha}, so the bytes are not the ones that were packaged");
+		// The second, independent record. A payload and its own manifest rewritten together agree with each
+		// other and disagree with this, which is the only reason it is worth reading.
+		if(!string.IsNullOrWhiteSpace(packagedSha) && !string.Equals(actual,packagedSha!.Trim(),StringComparison.OrdinalIgnoreCase))
+			throw Corrupt($"'{payloadFile}' hashes to {actual} while the package manifest records {packagedSha}, so the payload and its own manifest were replaced together or come from another package");
+		static GatewayControlException Corrupt(string detail) => new GatewayControlException("installation_incomplete",$"The installed HookLab payload cannot be verified: {detail}. Reinstall dgSpy from a complete release package; runtime builds are not supported.");
 	}
 	static bool RegistryContainsHost(string registry,string hostId) { if(!File.Exists(registry)) return false; var hosts=JsonNode.Parse(File.ReadAllText(registry))?["hosts"]?.AsArray(); return hosts?.Any(node=>(string?)node?["host_id"]==hostId)==true; }
 	static void UpdateRemoteRegistry(string registry,string hostId,JsonObject gatewayHost,bool useTls) {
@@ -568,14 +666,23 @@ public sealed class DeploymentService {
 	// diagnostics slow enough that people stop running them. The stamp is metadata-only (no file reads)
 	// and changes whenever any file is added, removed, resized or rewritten, so a hit is safe.
 	readonly object hashCacheSync=new object();
-	(string Stamp,string Hash)? hashCache;
-	string HashTreeCached(string root) {
+	// Keyed rather than a single slot: adoption now hashes the deployed tree as well as the installed
+	// payload, and one slot shared by two roots would miss on every call and read half a gigabyte per
+	// launch_local_host.
+	readonly Dictionary<string,(string Stamp,string Hash)> hashCache=new(StringComparer.OrdinalIgnoreCase);
+	string HashTreeCached(string root) => HashTreeCached(root,null,"payload|"+root);
+	/// <summary>The content hash of a deployed tree, taken from the files themselves rather than from the
+	/// provenance its manifest recorded. The manifest is excluded because it is written after the copy, so
+	/// it is not part of what was copied and the result is directly comparable with the payload's hash.</summary>
+	internal string HashDeployedTreeCached(string root) => HashTreeCached(root,DeploymentManifestName,"deployed|"+root);
+	string HashTreeCached(string root,string? exclude,string key) {
 		var stamp=TreeStamp(root);
-		lock(hashCacheSync) { if(hashCache is { } cached && cached.Stamp==stamp) return cached.Hash; }
-		var hash=HashTree(root);
-		lock(hashCacheSync) hashCache=(stamp,hash);
+		lock(hashCacheSync) { if(hashCache.TryGetValue(key,out var cached) && cached.Stamp==stamp) return cached.Hash; }
+		var hash=HashTree(root,exclude);
+		lock(hashCacheSync) hashCache[key]=(stamp,hash);
 		return hash;
 	}
+	internal const string DeploymentManifestName="deployment-manifest.json";
 	static string TreeStamp(string root) {
 		var count=0L; var bytes=0L; var newest=0L;
 		foreach(var file in Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories)) {
@@ -584,7 +691,8 @@ public sealed class DeploymentService {
 		}
 		return $"{root}|{count}|{bytes}|{newest}";
 	}
-	static string HashTree(string root) { using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256); foreach(var file in Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories).OrderBy(path=>path,StringComparer.OrdinalIgnoreCase)) { var relative=Encoding.UTF8.GetBytes(Path.GetRelativePath(root,file).Replace('\\','/')); hash.AppendData(relative); hash.AppendData(File.ReadAllBytes(file)); } return Convert.ToHexString(hash.GetHashAndReset()); }
+	static string HashTree(string root) => HashTree(root,null);
+	static string HashTree(string root,string? excludeRelative) { using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256); foreach(var file in Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories).OrderBy(path=>path,StringComparer.OrdinalIgnoreCase)) { var relative=Path.GetRelativePath(root,file).Replace('\\','/'); if(excludeRelative is not null && string.Equals(relative,excludeRelative,StringComparison.OrdinalIgnoreCase)) continue; hash.AppendData(Encoding.UTF8.GetBytes(relative)); hash.AppendData(File.ReadAllBytes(file)); } return Convert.ToHexString(hash.GetHashAndReset()); }
 	static void EnsureSecret(string path) { if(File.Exists(path)&&!string.IsNullOrWhiteSpace(File.ReadAllText(path))) return; Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllText(path,Convert.ToHexString(RandomNumberGenerator.GetBytes(32))); }
 	static string SafeSegment(string value) { value=value.Trim(); if(string.IsNullOrWhiteSpace(value)||value.IndexOfAny(Path.GetInvalidFileNameChars())>=0||value is "." or "..") throw new GatewayControlException("invalid_name",$"'{value}' is not a safe identifier."); return value; }
 	string DefaultHostId() { var path=Path.Combine(stateRoot,"host.id"); if(File.Exists(path)&&!string.IsNullOrWhiteSpace(File.ReadAllText(path))) return File.ReadAllText(path).Trim(); var value=$"{Environment.MachineName}\\{Environment.UserName}"; return "local-"+Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).Substring(0,12).ToLowerInvariant(); }

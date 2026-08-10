@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Text;
 using System.Text.Json.Nodes;
 using dgSpy.Protocol;
 using Xunit;
@@ -380,10 +381,10 @@ public sealed class DeploymentServiceTests : IDisposable {
 		var service=new DeploymentService();
 		Assert.True(service.EnsureBundledLocalHost(default));
 		var deployed=DeployedRoot(root); var payload=PayloadRoot();
-		Assert.True(DeploymentService.RunningTreeMatchesPayload(deployed,payload,()=>StagedPayloadShaAsync().GetAwaiter().GetResult(),DeploymentService.DeployedTreePayloadSha));
+		Assert.True(Matches(service,deployed,ExtensionShaOf(deployed),payload));
 
-		File.WriteAllText(Path.Combine(payload,PayloadFile),"a rebuilt HookLab bootstrap that was never deployed");
-		Assert.False(DeploymentService.RunningTreeMatchesPayload(deployed,payload,()=>StagedPayloadShaAsync().GetAwaiter().GetResult(),DeploymentService.DeployedTreePayloadSha));
+		StageHookLabPayload(payload,"a rebuilt HookLab bootstrap that was never deployed");
+		Assert.False(Matches(service,deployed,ExtensionShaOf(deployed),payload));
 
 		// Non-vacuity, asserted rather than claimed: the rule this replaced -- the extension digest the
 		// running host reports against the one in the payload -- still says these two trees are the same,
@@ -402,12 +403,81 @@ public sealed class DeploymentServiceTests : IDisposable {
 		var service=new DeploymentService();
 		Assert.True(service.EnsureBundledLocalHost(default));
 		var deployed=DeployedRoot(root); var payload=PayloadRoot();
+		// A payload that cannot be hashed at all, taken first because it needs a tree that is otherwise
+		// adoptable -- an unreadable payload must refuse a match that everything else would have granted.
+		Assert.False(Matches(service,deployed,ExtensionShaOf(deployed),payload,()=>throw new IOException("payload unreadable")));
+
 		File.Delete(Path.Combine(deployed,"deployment-manifest.json"));
 		Assert.Null(DeploymentService.DeployedTreePayloadSha(deployed));
-		Assert.False(DeploymentService.RunningTreeMatchesPayload(deployed,payload,()=>StagedPayloadShaAsync().GetAwaiter().GetResult(),DeploymentService.DeployedTreePayloadSha));
-		// So is a tree the host never named, and one whose hash cannot be taken at all.
-		Assert.False(DeploymentService.RunningTreeMatchesPayload(null,payload,()=>throw new InvalidOperationException("must not be reached"),DeploymentService.DeployedTreePayloadSha));
-		Assert.False(DeploymentService.RunningTreeMatchesPayload(Path.Combine(root,"install","versions","bundled-000000000000"),payload,()=>throw new IOException("payload unreadable"),_=>"any recorded hash"));
+		Assert.False(Matches(service,deployed,ExtensionShaOf(deployed),payload));
+		// So is a tree the host never named.
+		Assert.False(Matches(service,null,ExtensionShaOf(deployed),payload,()=>throw new InvalidOperationException("must not be reached")));
+	}
+
+	/// <summary>The P1 the path branch carried. A host running out of the payload root was adopted on the
+	/// path alone, so rebuilding or editing that directory after dnSpy had loaded its extension left the
+	/// process holding the old extension while the directory supplied a newer HookLab payload -- the
+	/// cross-generation host/payload pairing the comparison exists to prevent, and the one case the
+	/// extension-digest rule it replaced would have caught. The digest the host reports for the assembly it
+	/// loaded is now compared with the assembly at that path now.</summary>
+	[Fact]
+	public void A_payload_root_rebuilt_after_the_host_loaded_its_extension_is_not_adopted() {
+		var service=new DeploymentService(); var payload=PayloadRoot();
+		var loaded=ExtensionShaOf(payload);
+		Assert.True(Matches(service,payload,loaded,payload,()=>throw new InvalidOperationException("must not be reached")));
+
+		// The rebuild: a new extension on disk, and a new HookLab payload beside it. The running process
+		// still reports the digest it loaded, because that is what it is still executing.
+		File.WriteAllText(Path.Combine(payload,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll"),"a rebuilt extension the running host never loaded");
+		StageHookLabPayload(payload,"a newer HookLab bootstrap from that same rebuild");
+		Assert.NotEqual(loaded,ExtensionShaOf(payload));
+		Assert.False(Matches(service,payload,loaded,payload,()=>throw new InvalidOperationException("must not be reached")));
+		// Non-vacuity in the other direction: the paths still agree, which is all the previous rule looked at.
+		Assert.Equal(Path.TrimEndingDirectorySeparator(payload),DeploymentService.RunningHostRoot(Path.Combine(payload,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll")),ignoreCase:true);
+		// A host that restarted against the rebuilt tree reports the new digest and is adopted again.
+		Assert.True(Matches(service,payload,ExtensionShaOf(payload),payload,()=>throw new InvalidOperationException("must not be reached")));
+	}
+
+	/// <summary>Unknown is never adoption, and the extension digest is no exception. A host that could not
+	/// hash its own assembly reports "unknown"; adopting on that would be adopting on nothing.</summary>
+	[Fact]
+	public void A_host_that_cannot_report_what_it_loaded_is_not_adopted() {
+		var service=new DeploymentService(); var payload=PayloadRoot();
+		foreach(var reported in new string?[]{null,"","   ","unknown","UNKNOWN","0000000000000000000000000000000000000000000000000000000000000000"})
+			Assert.False(Matches(service,payload,reported,payload,()=>throw new InvalidOperationException("must not be reached")));
+	}
+
+	/// <summary>The P1 the manifest branch carried. <c>payload_sha256</c> records where a deployed tree's
+	/// bytes came from, not what they are now, so a version directory altered after deployment -- without its
+	/// manifest being touched -- still adopted as matching. The deployed tree is now hashed.</summary>
+	[Fact]
+	public void A_deployed_tree_altered_after_deployment_is_not_adopted() {
+		var service=new DeploymentService();
+		Assert.True(service.EnsureBundledLocalHost(default));
+		var deployed=DeployedRoot(root); var payload=PayloadRoot();
+		Assert.True(Matches(service,deployed,ExtensionShaOf(deployed),payload));
+
+		// Mutate the deployed tree only, and leave every record alone. This is the shape a hand-patched
+		// install has, and it is invisible to anything that reads the manifest.
+		File.WriteAllText(Path.Combine(deployed,PayloadFile),"a HookLab payload swapped into the deployment after the fact");
+		// A fresh service, so this proves the comparison rather than the cache-invalidation stamp.
+		Assert.False(Matches(new DeploymentService(),deployed,ExtensionShaOf(deployed),payload));
+
+		// Non-vacuity, asserted rather than claimed: the recorded provenance the previous rule compared is
+		// untouched and still equals the installed payload's hash, so the old comparison still says "match".
+		Assert.Equal(DeploymentService.DeployedTreePayloadSha(deployed),StagedPayloadShaAsync().GetAwaiter().GetResult());
+	}
+
+	/// <summary>And the same for a file whose contents changed without changing anything the manifest
+	/// records -- the extension the host is not currently running, replaced in the deployed tree.</summary>
+	[Fact]
+	public void A_deployed_tree_whose_files_were_edited_in_place_is_not_adopted() {
+		var service=new DeploymentService();
+		Assert.True(service.EnsureBundledLocalHost(default));
+		var deployed=DeployedRoot(root); var payload=PayloadRoot();
+		Assert.True(Matches(service,deployed,ExtensionShaOf(deployed),payload));
+		File.WriteAllText(Path.Combine(deployed,"bin","dnSpy.dll"),"a dnSpy.dll patched inside the deployed tree");
+		Assert.False(Matches(new DeploymentService(),deployed,ExtensionShaOf(deployed),payload));
 	}
 
 	/// <summary>A host running straight out of the installed payload -- the developer worktree case, where
@@ -415,18 +485,100 @@ public sealed class DeploymentServiceTests : IDisposable {
 	/// without a manifest it has no reason to carry.</summary>
 	[Fact]
 	public void A_host_running_out_of_the_payload_directory_itself_is_adopted() {
-		var payload=PayloadRoot();
+		var service=new DeploymentService(); var payload=PayloadRoot(); var loaded=ExtensionShaOf(payload);
 		Assert.False(File.Exists(Path.Combine(payload,"deployment-manifest.json")));
-		Assert.True(DeploymentService.RunningTreeMatchesPayload(payload,payload,()=>throw new InvalidOperationException("must not be reached"),_=>throw new InvalidOperationException("must not be reached")));
+		Assert.True(Matches(service,payload,loaded,payload,()=>throw new InvalidOperationException("must not be reached")));
 		// Reached the way LaunchLocalAsync reaches it, from the path the host reports.
-		Assert.True(DeploymentService.RunningTreeMatchesPayload(DeploymentService.RunningHostRoot(Path.Combine(payload,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll")),payload,()=>"",_=>null));
-		Assert.True(DeploymentService.RunningTreeMatchesPayload(payload+Path.DirectorySeparatorChar,payload,()=>"",_=>null));
+		Assert.True(Matches(service,DeploymentService.RunningHostRoot(Path.Combine(payload,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll")),loaded,payload,()=>""));
+		Assert.True(Matches(service,payload+Path.DirectorySeparatorChar,loaded,payload,()=>""));
 	}
 
-	string CreatePayload() { var path=Path.Combine(root,"payload"); foreach(var directory in new[]{"bin","bin\\Extensions\\dgSpy","hooklab","launcher"}) Directory.CreateDirectory(Path.Combine(path,directory)); foreach(var file in new[]{"dnSpy.exe","bin\\dnSpy.dll","bin\\dnSpy.Contracts.DnSpy.dll","bin\\hostfxr.dll","bin\\hostpolicy.dll","bin\\coreclr.dll","bin\\clrjit.dll","bin\\Extensions\\dgSpy\\dgSpy.Extension.x.dll",PayloadFile,PayloadManifestFile,"launcher\\Start-dgSpyRemoteHost.ps1","launcher\\Start-dgSpyRemoteHost.cmd"}) File.WriteAllText(Path.Combine(path,file),file); return path; }
+	/// <summary>The P2. ValidateRemotePayload checked filenames, so an empty payload, a truncated one, a
+	/// malformed manifest and a digest mismatch all stayed healthy through doctor, deployment and
+	/// remote-package creation, and produced their first symptom inside a payload action -- exactly the late
+	/// failure the required-files entry was added to eliminate, one layer down. Each case is driven through
+	/// doctor (which must stop reporting healthy) and through EnsureBundledLocalHost (which must refuse to
+	/// deploy it), because the value of the check is that every readiness path shares it.</summary>
+	[Theory]
+	[InlineData("empty")]
+	[InlineData("truncated")]
+	[InlineData("digest_mismatch")]
+	[InlineData("malformed_manifest")]
+	[InlineData("manifest_without_entry")]
+	[InlineData("manifest_names_another_file")]
+	[InlineData("manifest_without_digest")]
+	public async Task A_payload_that_is_present_but_unverifiable_fails_readiness_instead_of_the_first_action(string corruption) {
+		var payload=PayloadRoot();
+		var healthy=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("doctor",new JsonObject(),new HostRouter(),default)))!;
+		Assert.True((bool?)healthy["checks"]!.AsArray().Single(item=>(string?)item?["name"]=="bundled_host_payload")!["ok"]);
+
+		var file=Path.Combine(payload,PayloadFile); var recorded=new FileInfo(file).Length; var sha=FileSha(file);
+		switch(corruption) {
+			// The manifest keeps describing the payload that was staged; only the bytes moved.
+			case "empty": File.WriteAllText(file,"",new UTF8Encoding(false)); break;
+			case "truncated": File.WriteAllText(file,"a HookLab bootstrap payl",new UTF8Encoding(false)); break;
+			// Same length, different bytes: size alone cannot see this one.
+			case "digest_mismatch": File.WriteAllText(file,new string('x',(int)recorded),new UTF8Encoding(false)); break;
+			case "malformed_manifest": File.WriteAllText(Path.Combine(payload,PayloadManifestFile),"{\"format_version\":1,\"payloads\":[",new UTF8Encoding(false)); break;
+			case "manifest_without_entry": WriteHookLabManifest(payload,recorded,sha,id:"something_else"); break;
+			case "manifest_names_another_file": WriteHookLabManifest(payload,recorded,sha,file:"hooklab-bootstrap.net8.payload"); break;
+			case "manifest_without_digest": File.WriteAllText(Path.Combine(payload,PayloadManifestFile),"{\"format_version\":1,\"payloads\":[{\"id\":\"hooklab_bootstrap\",\"file\":\"hooklab-bootstrap.net48.payload\"}]}",new UTF8Encoding(false)); break;
+		}
+
+		var doctor=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("doctor",new JsonObject(),new HostRouter(),default)))!;
+		var check=doctor["checks"]!.AsArray().Single(item=>(string?)item?["name"]=="bundled_host_payload")!;
+		Assert.False((bool?)check["ok"]);
+		Assert.False((bool?)doctor["healthy"]);
+		Assert.Contains("HookLab payload cannot be verified",(string?)check["recovery"]);
+		// Every other readiness path refuses for the same reason rather than one of them letting it through.
+		var error=await Assert.ThrowsAsync<GatewayControlException>(()=>new DeploymentService().ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"}},new HostRouter(),default));
+		Assert.Equal("installation_incomplete",error.Code); Assert.Contains("HookLab payload cannot be verified",error.Message);
+		Assert.Contains("HookLab payload cannot be verified",Assert.Throws<GatewayControlException>(()=>new DeploymentService().EnsureBundledLocalHost(default)).Message);
+	}
+
+	/// <summary>A payload and its own manifest rewritten together agree with each other, which is why the
+	/// package manifest's independent record is read as well: rewriting one record is not enough. Absent is
+	/// not a failure -- an unpackaged worktree has no package manifest -- but disagreeing is.</summary>
+	[Fact]
+	public async Task A_payload_rewritten_together_with_its_own_manifest_is_caught_by_the_package_record() {
+		var payload=PayloadRoot();
+		// The package manifest sits beside the payload root, which is where the Gateway already reads the
+		// packaged provenance it records into every deployment.
+		File.WriteAllText(Path.Combine(root,"manifest.json"),"{\"format_version\":1,\"hooklab_payload_sha256\":\""+FileSha(Path.Combine(payload,PayloadFile))+"\"}",new UTF8Encoding(false));
+		var healthy=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("doctor",new JsonObject(),new HostRouter(),default)))!;
+		Assert.True((bool?)healthy["checks"]!.AsArray().Single(item=>(string?)item?["name"]=="bundled_host_payload")!["ok"]);
+
+		// Both records under the payload root rewritten consistently: the manifest check below passes and
+		// only the independent one can tell.
+		StageHookLabPayload(payload,"a substituted HookLab bootstrap, staged with a manifest that describes it");
+		var doctor=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("doctor",new JsonObject(),new HostRouter(),default)))!;
+		var check=doctor["checks"]!.AsArray().Single(item=>(string?)item?["name"]=="bundled_host_payload")!;
+		Assert.False((bool?)check["ok"]);
+		Assert.Contains("the package manifest records",(string?)check["recovery"]);
+	}
+
+	string CreatePayload() { var path=Path.Combine(root,"payload"); foreach(var directory in new[]{"bin","bin\\Extensions\\dgSpy","hooklab","launcher"}) Directory.CreateDirectory(Path.Combine(path,directory)); foreach(var file in new[]{"dnSpy.exe","bin\\dnSpy.dll","bin\\dnSpy.Contracts.DnSpy.dll","bin\\hostfxr.dll","bin\\hostpolicy.dll","bin\\coreclr.dll","bin\\clrjit.dll","bin\\Extensions\\dgSpy\\dgSpy.Extension.x.dll","launcher\\Start-dgSpyRemoteHost.ps1","launcher\\Start-dgSpyRemoteHost.cmd"}) File.WriteAllText(Path.Combine(path,file),file); StageHookLabPayload(path,"a HookLab bootstrap payload"); return path; }
 	const string PayloadFile="hooklab\\hooklab-bootstrap.net48.payload";
 	const string PayloadManifestFile="hooklab\\hooklab-payload-manifest.json";
+	/// <summary>Writes the payload and a manifest that describes it, which is what a real staging step does.
+	/// Rewriting only one of the two is a corruption case, and it gets its own tests below.</summary>
+	static void StageHookLabPayload(string payloadRoot,string content) {
+		var file=Path.Combine(payloadRoot,PayloadFile); Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+		File.WriteAllText(file,content,new UTF8Encoding(false));
+		WriteHookLabManifest(payloadRoot,new FileInfo(file).Length,FileSha(file));
+	}
+	static void WriteHookLabManifest(string payloadRoot,long size,string sha256,string file="hooklab-bootstrap.net48.payload",string id="hooklab_bootstrap") =>
+		File.WriteAllText(Path.Combine(payloadRoot,PayloadManifestFile),
+			"{\"format_version\":1,\"payloads\":[{\"id\":\""+id+"\",\"file\":\""+file+"\",\"assembly_name\":\"HookLab.Bootstrap\",\"target_framework\":\"net48\",\"architecture\":\"x64\",\"delivery\":\"bytes_only\",\"size\":"+size+",\"sha256\":\""+sha256+"\"}]}\n",
+			new UTF8Encoding(false));
 	static string PayloadRoot() => Environment.GetEnvironmentVariable("DGSPY_REMOTE_PAYLOAD_ROOT")!;
+	static string ExtensionShaOf(string root) => FileSha(Path.Combine(root,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll"));
+	/// <summary>The adoption comparison, wired the way <c>LaunchLocalAsync</c> wires it, so a test never
+	/// exercises a combination of delegates production does not use.</summary>
+	static bool Matches(DeploymentService service,string? runningRoot,string? reportedExtensionSha,string payloadRoot,Func<string>? installedTreeSha=null) =>
+		DeploymentService.RunningTreeMatchesPayload(runningRoot,reportedExtensionSha,payloadRoot,
+			installedTreeSha ?? (()=>StagedPayloadShaAsync().GetAwaiter().GetResult()),
+			DeploymentService.DeployedTreePayloadSha,DeploymentService.ExtensionSha,service.HashDeployedTreeCached);
 	/// <summary>The hash of the installed payload tree, read back from the Gateway's own freshness report so
 	/// the test never reimplements the hashing it is supposed to be checking against.</summary>
 	static async Task<string> StagedPayloadShaAsync() {
