@@ -26,11 +26,15 @@ namespace HookLab.Probe.CorDebug.Transport {
 	public sealed class ProbePipeServer : IDisposable, IHookEventConsumer {
 		readonly object secretGate = new object();
 		readonly object sendGate = new object();
+		/// <summary>Serializes publication of <see cref="activePipe"/> against <see cref="Dispose"/>. See
+		/// the comment on <see cref="Listen"/> for why a plain assignment inside the loop body was not enough.</summary>
+		readonly object pipeGate = new object();
 		readonly ProbeCommandHandler commandHandler;
 		readonly byte[] endpointNonce;
 		readonly string pipeName;
 		readonly Thread listener;
 		readonly int authenticationTimeoutMilliseconds;
+		readonly bool secretWasInjected;
 		readonly ManualResetEvent stopped = new ManualResetEvent(false);
 		volatile bool disposed;
 		int endpointTaken;
@@ -38,34 +42,94 @@ namespace HookLab.Probe.CorDebug.Transport {
 		NamedPipeServerStream? activePipe;
 		volatile Stream? authenticatedPipe;
 
-		public ProbePipeServer(ProbeCommandHandler commandHandler, int authenticationTimeoutMilliseconds = 5000) {
+		/// <param name="injectedSecret">When supplied, the endpoint credential the host has already generated,
+		/// so it never has to travel outward from the target and there is nothing downstream to redact. Must be
+		/// exactly <see cref="ProbeAuthentication.SecretBytes"/> bytes and not a single repeated byte value. The
+		/// array is copied, so the caller may clear its own. When null (the default) the probe generates its own
+		/// secret and hands it out once through <see cref="TakeInitialEndpoint"/>, which is the behaviour every
+		/// pre-existing caller gets.</param>
+		public ProbePipeServer(ProbeCommandHandler commandHandler, int authenticationTimeoutMilliseconds = 5000, byte[]? injectedSecret = null) {
 			this.commandHandler = commandHandler ?? throw new ArgumentNullException(nameof(commandHandler));
 			if (authenticationTimeoutMilliseconds <= 0) throw new ArgumentOutOfRangeException(nameof(authenticationTimeoutMilliseconds));
 			this.authenticationTimeoutMilliseconds = authenticationTimeoutMilliseconds;
-			secret = ProbeAuthentication.CreateSecret(); endpointNonce = ProbeAuthentication.CreateNonce();
+			secretWasInjected = injectedSecret != null;
+			secret = injectedSecret == null ? ProbeAuthentication.CreateSecret() : ValidateInjectedSecret(injectedSecret);
+			endpointNonce = ProbeAuthentication.CreateNonce();
 			pipeName = "dgspy-hooklab-" + Guid.NewGuid().ToString("N");
 			listener = new Thread(Listen) { IsBackground = true, Name = "HookLab probe pipe" }; listener.Start();
 		}
 
+		/// <summary>The endpoint the host connects to. Not a credential: knowing it without the secret proves nothing.</summary>
+		public string PipeName => pipeName;
+
+		/// <summary>The per-endpoint nonce mixed into every challenge proof. Not a credential either - it is an
+		/// HMAC input, and without the secret it does not let anyone compute a proof - so unlike the secret it
+		/// may be reported outward. Returned as a copy so a caller cannot mutate the live value.</summary>
+		public byte[] EndpointNonce => (byte[])endpointNonce.Clone();
+
+		/// <summary>True when the host supplied the secret, in which case it was never generated here and
+		/// <see cref="TakeInitialEndpoint"/> refuses rather than sending a known value back out.</summary>
+		public bool SecretWasInjected => secretWasInjected;
+
+		/// <summary>Set when the listener thread ended on an exception rather than on shutdown. Null is the
+		/// normal case; a non-null value means the endpoint stopped accepting connections without being disposed.</summary>
+		public string? ListenerFailure { get; private set; }
+
 		public ProbeEndpoint TakeInitialEndpoint() {
+			if (secretWasInjected) throw new InvalidOperationException("The probe secret was injected by the host, which already holds it; it is deliberately not returned outward.");
 			if (Interlocked.Exchange(ref endpointTaken, 1) != 0) throw new InvalidOperationException("The initial probe credential has already been returned.");
 			lock (secretGate) return new ProbeEndpoint(pipeName, secret, endpointNonce);
+		}
+
+		static byte[] ValidateInjectedSecret(byte[] injectedSecret) {
+			if (injectedSecret.Length != ProbeAuthentication.SecretBytes) throw new ArgumentException("The injected probe secret must be exactly " + ProbeAuthentication.SecretBytes + " bytes.", nameof(injectedSecret));
+			// An all-zero or otherwise uniform buffer is what an uninitialized or truncated caller produces, and
+			// it is the one weakness this side can detect without keeping a history of past secrets.
+			var difference = 0; for (var index = 0; index < injectedSecret.Length; index++) difference |= injectedSecret[index] ^ injectedSecret[0];
+			if (difference == 0) throw new ArgumentException("The injected probe secret is weak: every byte has the same value.", nameof(injectedSecret));
+			return (byte[])injectedSecret.Clone();
 		}
 
 		void Listen() {
 			try {
 				while (!disposed) {
-					using (var pipe = CreatePipe()) {
+					NamedPipeServerStream pipe;
+					// Publish under the gate and re-check disposed inside it. Assigning activePipe after
+					// CreatePipe() returned left a window in which a Dispose saw a null activePipe, disposed
+					// nothing, and left this thread parked in WaitForConnection() on a pipe nobody would ever
+					// connect to. Measured, not reasoned: 180 of 400 construct-then-dispose cycles wedged.
+					lock (pipeGate) {
+						if (disposed) return;
+						pipe = CreatePipe();
 						activePipe = pipe;
-						try { pipe.WaitForConnection(); if (!disposed) Serve(pipe); }
-						catch (Exception) when (disposed) { }
-						catch (IOException) { }
-						catch (UnauthorizedAccessException) { }
-						catch (InvalidDataException) { }
-						finally { authenticatedPipe = null; activePipe = null; }
+					}
+					try {
+						// If Dispose ran between the gate release and here it has already disposed this pipe,
+						// so WaitForConnection throws instead of parking. Measured on net48: disposing the
+						// server stream releases a thread already parked in WaitForConnection in 0 ms, with
+						// IOException "The pipe has been ended" - no client connect is needed to wake it.
+						pipe.WaitForConnection(); if (!disposed) Serve(pipe);
+					}
+					catch (Exception) when (disposed) { }
+					catch (IOException) { }
+					catch (UnauthorizedAccessException) { }
+					catch (InvalidDataException) { }
+					finally {
+						authenticatedPipe = null;
+						lock (pipeGate) activePipe = null;
+						try { pipe.Dispose(); } catch { }
 					}
 				}
 			}
+			// Nothing may escape this delegate. An unhandled exception on a Thread terminates the process on
+			// .NET Framework, and this process is the debuggee - measured, by exactly that route. It is recorded
+			// rather than discarded, for the same reason ProbeRuntime counts consumer dispatch failures: a
+			// listener that died looks identical to one that shut down cleanly otherwise.
+			catch (Exception ex) { ListenerFailure = ex.GetType().FullName + ": " + ex.Message; }
+			// Never disposed by Dispose(): a Dispose that stopped owning this handle while the listener may
+			// still reach this line would make Set() throw ObjectDisposedException out of a thread delegate,
+			// which terminates the process on .NET Framework - and that process is the debuggee. Measured.
+			// The SafeWaitHandle finalizer reclaims the handle.
 			finally { stopped.Set(); }
 		}
 
@@ -151,10 +215,31 @@ namespace HookLab.Probe.CorDebug.Transport {
 			}
 		}
 
+		/// <summary>Bounded and non-blocking: it closes the listening endpoint and returns. It deliberately does
+		/// not wait for the listener thread and does not dispose <c>stopped</c>.
+		///
+		/// The caller can be the target's own thread inside a debugger func-eval, where the previous two-second
+		/// wait outran the evaluation timeout and destroyed a correct in-target guard report on its way out. The
+		/// endpoint stops accepting connections before this returns, so a rollback path does not leave an
+		/// externally usable endpoint behind; only the thread's own unwind is unobserved, and
+		/// <see cref="WaitForShutdown"/> exists for tests that need to observe it.</summary>
 		public void Dispose() {
 			if (disposed) return; disposed = true;
-			try { activePipe?.Dispose(); } catch { }
-			stopped.WaitOne(TimeSpan.FromSeconds(2)); stopped.Dispose();
+			NamedPipeServerStream? current;
+			lock (pipeGate) current = activePipe;
+			// Disposing the server stream both closes the endpoint and releases a listener already parked in
+			// WaitForConnection. Taking the gate first is what guarantees there is something here to dispose:
+			// either the listener published its pipe and this sees it, or it has not reached the gate yet and
+			// will observe disposed and exit without creating one.
+			try { current?.Dispose(); } catch { }
+		}
+
+		/// <summary>Waits for the listener thread to finish unwinding. Nothing in production calls this - it
+		/// exists so tests can assert the thread exited without any caller paying for the wait. Returns false on
+		/// timeout rather than throwing.</summary>
+		public bool WaitForShutdown(int millisecondsTimeout) {
+			if (millisecondsTimeout < 0) throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout));
+			return stopped.WaitOne(millisecondsTimeout);
 		}
 
 		static string Escape(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"");

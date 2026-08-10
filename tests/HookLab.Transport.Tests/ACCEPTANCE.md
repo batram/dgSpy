@@ -50,6 +50,38 @@ so rotation never locks them out. Reading pipe traffic already requires same-use
 design does not claim to defend against, and a discovery record leaked on its own cannot be advanced
 without the challenges. Recorded so rotation is not later cited as a mitigation for a disclosed secret.
 
+## Bounded endpoint teardown, and the two defects behind it (2026-08-10)
+
+`ProbePipeServer.Dispose()` used to block up to two seconds on its listener thread. Three defects, all
+measured against the real assembly on net48 x64, not reasoned from the source:
+
+- **The wait was reachable and common, not a corner case.** `activePipe` was published *after*
+  `CreatePipe()` returned, so a `Dispose` landing in that window disposed nothing and left the listener
+  parked in `WaitForConnection()` on a pipe nobody would ever connect to. 180 of 400 rapid
+  construct-then-dispose cycles wedged for the full two seconds.
+- **A wedged teardown could kill the debuggee.** On the timeout path `stopped.Dispose()` ran while the
+  listener was still alive. Waking that listener afterwards made its `finally { stopped.Set(); }` throw
+  `ObjectDisposedException` out of a thread delegate, which on .NET Framework terminates the process -
+  reproduced end to end from `ProbePipeServer.Listen`, exit code `0xE0434352`.
+- **No client connect is needed to wake a parked listener.** Disposing the server stream releases a
+  thread already parked in `WaitForConnection()` in 0 ms with `IOException: The pipe has been ended`. A
+  bounded `NamedPipeClientStream.Connect(50)` also works, in 0 ms, but is redundant once the pipe is
+  published under a gate, so it is deliberately not in the fix.
+
+`Dispose` now closes the endpoint under `pipeGate` and returns without waiting and without disposing
+`stopped`; `WaitForShutdown(int)` exists for tests only. Same sweep after the fix: worst dispose 2 ms
+over 400 cycles, zero wedged listeners, zero endpoints still connectable.
+
+## Host-injected endpoint secret
+
+The host may generate the 32-byte secret and pass it to `ProbePipeServer` rather than receiving one
+back, so the credential never has to travel outward from the target into a report string, an activity
+log, an action record, the RPC wire, or an MCP transcript. There is no redaction facility in the tree,
+so not emitting it is the only available answer. Self-generation stays the default and every
+pre-existing caller is unaffected. The pipe name and endpoint nonce still travel outward and are not
+credentials: the nonce is only an HMAC input, and without the secret it does not let anyone compute a
+proof.
+
 ## Harness incidents
 
 The first integrity run exposed two harness defects, not transport defects:

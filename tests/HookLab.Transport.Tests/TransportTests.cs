@@ -116,6 +116,34 @@ public sealed class TransportTests {
 		finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); } }
 	}
 
+	// T09 disposes the probe endpoint on its rollback path, on the target's own thread inside a func-eval whose
+	// evaluation timeout is shorter than the two seconds the old Dispose could burn. The harness sweeps the
+	// pipe-creation window and requires that every cycle disposes promptly, that the listener thread exits, and
+	// that no endpoint is left connectable - a lingering listener is the externally usable endpoint T09 forbids.
+	[Fact]
+	public void ProbeDisposeIsBoundedAndLeavesNoUsableEndpoint() {
+		using var temporary = new TemporaryDirectory();
+		using var process = StartHarness("dispose-bounded", temporary.Path, 1);
+		try {
+			Assert.True(process.WaitForExit(60000), "dispose-bounded harness did not exit.");
+			Assert.True(process.ExitCode == 0, "dispose-bounded harness failed: exit " + process.ExitCode + "; " + HarnessReport(temporary.Path));
+		}
+		finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); } }
+	}
+
+	// The host generates the secret and hands it in, so it never crosses the debugger boundary outward and
+	// never reaches an activity log, an action record, the RPC wire or an MCP transcript.
+	[Fact]
+	public void InjectedSecretAuthenticatesIsNotReturnedAndRejectsWeakValues() {
+		using var temporary = new TemporaryDirectory();
+		using var process = StartHarness("injected-secret", temporary.Path, 1);
+		try {
+			Assert.True(process.WaitForExit(60000), "injected-secret harness did not exit.");
+			Assert.True(process.ExitCode == 0, "injected-secret harness failed: exit " + process.ExitCode + "; " + HarnessReport(temporary.Path));
+		}
+		finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); } }
+	}
+
 	[Fact]
 	public void MutualAuthenticationDetectsPipeNameSquatting() {
 		var name = "dgspy-hooklab-squatter-" + Guid.NewGuid().ToString("N"); var nonce = ProbeAuthentication.CreateNonce(); var secret = ProbeAuthentication.CreateSecret();
@@ -149,5 +177,6 @@ public sealed class TransportTests {
 		var start = new ProcessStartInfo(executable, $"-Mode {mode} -StateRoot \"{root}\" -Seconds {seconds}") { UseShellExecute = false, CreateNoWindow = true };
 		return Process.Start(start) ?? throw new InvalidOperationException("Harness did not start.");
 	}
+	static string HarnessReport(string root) { var path = Path.Combine(root, "harness-result.txt"); return File.Exists(path) ? File.ReadAllText(path) : "(no harness report written)"; }
 	static void WaitFor(string path) { var deadline = DateTime.UtcNow.AddSeconds(5); while (!File.Exists(path) && DateTime.UtcNow < deadline) Thread.Sleep(25); Assert.True(File.Exists(path), "Harness readiness file was not created."); }
 }

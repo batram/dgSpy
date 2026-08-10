@@ -39,6 +39,8 @@ internal static class Program {
 				}
 				File.WriteAllText(result, integrity + "|pass"); return 0;
 			}
+			if (mode == "dispose-bounded") return DisposeBounded(result, integrity, int.Parse(Optional(commandLine, "-Iterations") ?? "200"));
+			if (mode == "injected-secret") return InjectedSecret(result, integrity);
 			if (mode == "client") {
 				var record = Single(new ProbeDiscoveryStore(root).Discover(new CurrentTarget(), DateTime.UtcNow));
 				using (var connection = new ProbeConnection(record.PipeName, record.Secret, record.EndpointNonce)) {
@@ -64,6 +66,80 @@ internal static class Program {
 			return 0;
 		} catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
 	}
+
+	// T09 calls Dispose on its rollback path, on the target's own thread inside a func-eval. Three things must
+	// hold on every cycle: Dispose returns promptly, the listener thread actually exits, and no endpoint is left
+	// connectable. The spin sweeps the window between pipe creation and its publication, which is where a
+	// Dispose used to dispose nothing and leave the listener parked in WaitForConnection for good.
+	static int DisposeBounded(string result, string integrity, int iterations) {
+		const int boundMilliseconds = 250;
+		long worst = 0; var wedged = 0; var failures = 0; var names = new System.Collections.Generic.List<string>();
+		for (var index = 0; index < iterations; index++) {
+			var server = new ProbePipeServer((operation, payload, expected) => new ProbeCommandResult("{}", 0));
+			names.Add(server.PipeName);
+			Thread.SpinWait(index % 200 * 8);
+			var watch = Stopwatch.StartNew();
+			server.Dispose();
+			var elapsed = watch.ElapsedMilliseconds;
+			if (elapsed > worst) worst = elapsed;
+			if (!server.WaitForShutdown(3000)) wedged++;
+			if (server.ListenerFailure != null) { failures++; Console.Error.WriteLine(server.ListenerFailure); }
+		}
+		var connectable = 0;
+		foreach (var name in names) {
+			try { using (var client = new NamedPipeClientStream(".", name, PipeDirection.InOut)) { client.Connect(20); connectable++; } }
+			catch (Exception) { }
+		}
+		File.WriteAllText(result, integrity + "|worst_ms=" + worst + "|wedged=" + wedged + "|listener_failures=" + failures + "|connectable=" + connectable);
+		if (worst > boundMilliseconds) return 10;
+		if (wedged != 0) return 11;
+		if (failures != 0) return 12;
+		if (connectable != 0) return 13;
+		return 0;
+	}
+
+	// The host generates the secret and passes it in, so it never travels outward and there is nothing
+	// downstream to redact. Proves the injected credential authenticates, that the probe refuses to hand it
+	// back, that the array is copied, and that a weak or wrong-sized secret is rejected at construction.
+	static int InjectedSecret(string result, string integrity) {
+		var hostSecret = ProbeAuthentication.CreateSecret();
+		var handed = (byte[])hostSecret.Clone();
+		using (var server = new ProbePipeServer((operation, payload, expected) => new ProbeCommandResult("{\"status\":\"ready\"}", 7), 5000, handed)) {
+			if (!server.SecretWasInjected) return 20;
+			try { server.TakeInitialEndpoint(); return 21; } catch (InvalidOperationException) { }
+			// The probe must have copied it: clearing the caller's array cannot break authentication.
+			Array.Clear(handed, 0, handed.Length);
+			using (var connection = new ProbeConnection(server.PipeName, hostSecret, server.EndpointNonce, timeoutMilliseconds: 2000)) {
+				var response = connection.Send(new ProbeMessage(1, ProbeMessageKind.Request, "injected", "status", "{}"));
+				if (response.Operation != "status" || response.ExpectedHooksVersion != 7) return 22;
+			}
+			var wrong = (byte[])hostSecret.Clone(); wrong[0] ^= 0xff;
+			try { new ProbeConnection(server.PipeName, wrong, server.EndpointNonce, timeoutMilliseconds: 2000).Dispose(); return 23; }
+			catch (UnauthorizedAccessException) { }
+		}
+		if (!RejectsSecret(new byte[0])) return 24;
+		if (!RejectsSecret(new byte[ProbeAuthentication.SecretBytes - 1])) return 25;
+		if (!RejectsSecret(new byte[ProbeAuthentication.SecretBytes + 1])) return 26;
+		if (!RejectsSecret(new byte[ProbeAuthentication.SecretBytes])) return 27;                 // right length, all zero
+		if (!RejectsSecret(Uniform(ProbeAuthentication.SecretBytes, 0xab))) return 28;            // right length, uniform
+		// Self-generation stays the default, so every pre-existing caller is unaffected.
+		using (var server = new ProbePipeServer((operation, payload, expected) => new ProbeCommandResult("{}", 0))) {
+			if (server.SecretWasInjected) return 29;
+			var endpoint = server.TakeInitialEndpoint();
+			if (endpoint.Secret.Length != ProbeAuthentication.SecretBytes) return 30;
+			using (var connection = new ProbeConnection(endpoint.PipeName, endpoint.Secret, endpoint.EndpointNonce, timeoutMilliseconds: 2000))
+				if (connection.Send(new ProbeMessage(1, ProbeMessageKind.Request, "self", "status", "{}")).Operation != "status") return 31;
+		}
+		File.WriteAllText(result, integrity + "|pass");
+		return 0;
+	}
+
+	static bool RejectsSecret(byte[] candidate) {
+		try { new ProbePipeServer((operation, payload, expected) => new ProbeCommandResult("{}", 0), 5000, candidate).Dispose(); return false; }
+		catch (ArgumentException) { return true; }
+	}
+
+	static byte[] Uniform(int length, byte value) { var buffer = new byte[length]; for (var index = 0; index < length; index++) buffer[index] = value; return buffer; }
 
 	static ProbeDiscoveryRecord Record(byte[] secret, byte[] nonce, string pipe) {
 		var process = Process.GetCurrentProcess();
