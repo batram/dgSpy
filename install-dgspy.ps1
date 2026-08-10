@@ -11,6 +11,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 [void][Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem')
+# Both a repository checkout and an extracted release carry this beside the installer: pack-dgspy.ps1
+# copies it into the package root. One verifier, so the installed tree is checked the same way the
+# package was staged.
+$hookLabPayloadHelper = Join-Path $PSScriptRoot 'packaging\HookLabPayload.ps1'
+if (-not (Test-Path -LiteralPath $hookLabPayloadHelper -PathType Leaf)) {
+	throw "This installer is missing packaging\HookLabPayload.ps1 beside it, so it cannot verify the HookLab payload: $hookLabPayloadHelper"
+}
+. $hookLabPayloadHelper
 $temporaryRoot = $null
 $sourceRoot = $PSScriptRoot
 $packageBuiltHere = $false
@@ -133,6 +141,13 @@ try {
 			$sourceFile = Join-Path $sourceRoot $file
 			if (Test-Path -LiteralPath $sourceFile -PathType Leaf) { Copy-Item -LiteralPath $sourceFile -Destination $staging }
 		}
+		# Carried into the installation so the copy of install-dgspy.ps1 that lands there can still verify
+		# the payload if it is ever re-run in place.
+		$sourcePackaging = Join-Path $sourceRoot 'packaging\HookLabPayload.ps1'
+		if (Test-Path -LiteralPath $sourcePackaging -PathType Leaf) {
+			New-Item -ItemType Directory -Path (Join-Path $staging 'packaging') -Force | Out-Null
+			Copy-Item -LiteralPath $sourcePackaging -Destination (Join-Path $staging 'packaging')
+		}
 		Write-InstallTiming 'installation staging copy'
 		# A process exiting does not mean Windows has released its handle on the directory yet, so the swap
 		# can fail for a moment after a successful -Force kill. Retry briefly rather than failing an install
@@ -193,6 +208,14 @@ try {
 				throw "The installed payload is incomplete: $($installedFiles.Count) files / $installedBytes bytes, packaged $($manifest.file_count) / $($manifest.payload_bytes)."
 			}
 		}
+		# The HookLab payload is the file whose absence would only surface when a payload action tried to
+		# inject it. Verify it here, from the bytes rather than from the record: the installed manifest and
+		# the payload manifest are separate records, so a tampered payload has to defeat both.
+		if ($manifest.PSObject.Properties.Name -contains 'hooklab_payload_sha256' -and $manifest.hooklab_payload_sha256) {
+			$payloadSha = Test-HookLabPayload -HostRoot (Join-Path $resolvedInstall 'cli') -ExpectedSha256 $manifest.hooklab_payload_sha256
+			Write-Host "Verified installed HookLab payload $($payloadSha.Substring(0,12)) - delivered as bytes, not reachable from any extension search path"
+		}
+		else { Write-Warning 'This package carries no HookLab payload: runtime hooking has nothing to inject. Repackage with a current pack-dgspy.ps1.' }
 		$provenance = "commit $(if ($manifest.git_commit) { $manifest.git_commit.Substring(0,12) } else { 'unknown' })"
 		if ($manifest.git_dirty) { $provenance += ' (built from a dirty tree)' }
 		Write-Host "Verified installed extension $($actual.Substring(0,12)) - $provenance"

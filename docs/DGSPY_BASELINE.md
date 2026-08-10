@@ -34,6 +34,7 @@ require the debugger to share the target's runtime.
 | `Extensions/dgSpy.Extension` | `net10.0-windows` (default), `net48` | The net10 target is the default everywhere and is what `pack-dgspy.ps1` ships; net48 is the retained fallback. Output is `dgSpy.Extension.x.dll` — dnSpy's scanner only loads `*.x.dll`. |
 | `dgSpy.Cli` | `net10.0` | Console entrypoint, packaged with the Gateway in one shared self-contained runtime. |
 | `dgSpy.Gateway` | `net10.0` | Standalone process, packaged with the CLI in one shared self-contained runtime. |
+| `HookLab/HookLab.Bootstrap` | `net48`, x64 | The injected payload, and the one project that is built but never deployed beside a host. It ships as a single file with the probe and `HookLab.Contracts` embedded as digest-verified resources, staged as `<host root>\hooklab\hooklab-bootstrap.net48.payload`. `net48` regardless of the host framework: it is loaded into a CLR v4 target, not by dnSpy. See the HookLab payload section below. |
 | `tests/TestTargets/NoPdbTarget` | `net48`, x64 | Built with `DebugType=none`. Shipped game assemblies almost never carry a PDB, so decompiled debug info is the normal case in the wild; this fixture keeps that path covered, including across a rebuild under one long-lived dnSpy. |
 | `tests/TestTargets/Milestone1Target` | `net48`, x64 | Stays .NET Framework permanently: it is a *debuggee*, and CorDebug `CLR v4` is an in-scope engine that needs a Framework process to debug. CorDebug smoke target; the project pins `PlatformTarget=x64` and the smoke test verifies dnSpy reports `X64`. |
 
@@ -208,6 +209,43 @@ The rules that follow from it:
   incident, exercised as a negative case by `tests/TestSupport/PackagingScripts.Tests.ps1`.
 - A guard that only runs after deployment reports damage rather than preventing it. Keep the pre-build
   check.
+
+### The HookLab payload lives in `<host root>\hooklab`, and it is one file
+
+The payload a runtime-hooking action injects is `HookLab.Bootstrap.dll`, and it is **one file**. It
+embeds `HookLab.Probe.CorDebug` and `HookLab.Contracts` as resources whose SHA-256 digests are pinned at
+build time and verified when its resolver loads them, so nothing downstream assembles a bundle. It is
+`net48` whatever the host targets: it is injected into a CLR v4 target, never loaded by the host.
+
+Where it goes, and why nowhere else:
+
+- **Staged as `<host root>\hooklab\hooklab-bootstrap.net48.payload`**, beside
+  `hooklab-payload-manifest.json`. `pack-dgspy.ps1` stages it inside `cli\`, `pack-remote-host.ps1` into
+  the bundle root, and `build-dgspy.ps1` into the deployed dnSpy tree, so a developer worktree, an
+  installed host, and a remote bundle all have one layout and the payload action needs one resolution
+  rule.
+- **Never under `bin\`, `bin\Extensions\`, `bin\Extensions\*`, or the host root.** Those are the
+  directories dnSpy scans for `*.x.dll` and, under net10, adds to the assembly loader's search path; the
+  host root is app-base probed. A file named `HookLab.Bootstrap.dll` in any of them could be bound by
+  name into the dnSpy process, which is exactly the disk provenance the bootstrap's resolver refuses
+  (`EmbeddedAssemblyResolver.VerifyNoDiskProvenance`). The `.payload` extension means no assembly probe
+  can ask for it even by accident.
+- **No host cache, and no staging step.** The plan's "staged in a configured hash-verified host cache"
+  with canonical-path and reparse-point protections does not earn its place for a single immutable file:
+  a writable cache outside the deployment tree is a new attack surface to defend rather than one to
+  mitigate, and it is the one thing `rollback_local_deployment` could not roll back, because the Gateway
+  versions whole trees (`installRoot\versions\<hash>`) and switches `active_version` between them. Inside
+  the tree, each version carries its own payload by construction. The target never sees a path either
+  way: the payload is delivered as bytes through a func-eval.
+- **The digest is verified from the bytes, never trusted from a record.** `packaging\HookLabPayload.ps1`
+  is the one verifier: it recomputes SHA-256 over the file it is about to hand on, compares it with the
+  payload manifest, and — in `install-dgspy.ps1` — additionally with `hooklab_payload_sha256` in the
+  package manifest, so rewriting one record is not enough. It also asserts that no copy of the payload,
+  under its own name or any other, is reachable from a directory dnSpy scans. `pack-dgspy.ps1` copies
+  that script into the package, because an extracted release has no repository beside it.
+- `tests/TestSupport/PackagingScripts.Tests.ps1` exercises the guards against the real built bootstrap
+  bytes, including altered bytes, a payload and manifest rewritten together, truncation, absence, and
+  four reachable-copy locations.
 
 ### Do not substitute `dotnet build` for the dnSpy baseline
 

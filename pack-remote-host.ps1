@@ -14,6 +14,7 @@ param(
 $ErrorActionPreference = 'Stop'
 # See build.ps1: keep MSBuild from leaving reusable worker nodes holding bin/obj handles.
 $env:MSBUILDDISABLENODEREUSE = '1'
+. (Join-Path $PSScriptRoot 'packaging\HookLabPayload.ps1')
 function New-RandomSecret {
 	$bytes=[byte[]]::new(32); $generator=[Security.Cryptography.RandomNumberGenerator]::Create()
 	try { $generator.GetBytes($bytes); [Convert]::ToBase64String($bytes) } finally { $generator.Dispose() }
@@ -24,6 +25,10 @@ $bundleName = "dgSpy-remote-host-$HostId-win-x64"
 $bundleDirectory = Join-Path $OutputDirectory $bundleName
 $archivePath = [IO.Path]::GetFullPath((Join-Path $OutputDirectory "$bundleName.zip"))
 $extensionProject = Join-Path $PSScriptRoot 'Extensions\dgSpy.Extension\dgSpy.Extension.csproj'
+$bootstrapProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Bootstrap\HookLab.Bootstrap.csproj'
+# The bootstrap is net48 whatever the host targets: the payload is injected into a CLR v4 target, not
+# loaded by the host. It ships as one file that embeds and verifies its own dependencies.
+$bootstrapAssembly = Join-Path $PSScriptRoot "HookLab\HookLab.Bootstrap\bin\$Configuration\net48\HookLab.Bootstrap.dll"
 $extensionOutput = Join-Path $PSScriptRoot "Extensions\dgSpy.Extension\bin\$Configuration\$targetFramework"
 
 if (-not $SkipBuild) {
@@ -31,6 +36,8 @@ if (-not $SkipBuild) {
 	if ($LASTEXITCODE) { throw "Self-contained dnSpy publish failed with exit code $LASTEXITCODE." }
 	dotnet build $extensionProject -c $Configuration -f $targetFramework --nologo -v:minimal
 	if ($LASTEXITCODE) { throw "dgSpy extension build failed with exit code $LASTEXITCODE." }
+	dotnet build $bootstrapProject -c $Configuration --nologo -v:minimal
+	if ($LASTEXITCODE) { throw "HookLab bootstrap build failed with exit code $LASTEXITCODE." }
 }
 
 $requiredHostFiles = @('dnSpy.exe', 'bin\dnSpy.dll', 'bin\dnSpy.Contracts.DnSpy.dll', 'bin\hostfxr.dll', 'bin\hostpolicy.dll', 'bin\coreclr.dll', 'bin\clrjit.dll')
@@ -43,6 +50,7 @@ $extensionFiles = @('dgSpy.Extension.x.dll', 'dgSpy.Extension.x.pdb', 'dgSpy.Pro
 foreach ($fileName in $extensionFiles) {
 	if (-not (Test-Path -LiteralPath (Join-Path $extensionOutput $fileName) -PathType Leaf)) { throw "Extension output is missing: $fileName." }
 }
+if (-not (Test-Path -LiteralPath $bootstrapAssembly -PathType Leaf)) { throw "HookLab bootstrap output is missing: $bootstrapAssembly. Build without -SkipBuild." }
 
 $resolvedOutput = [IO.Path]::GetFullPath($OutputDirectory)
 $resolvedBundle = [IO.Path]::GetFullPath($bundleDirectory)
@@ -58,6 +66,11 @@ New-Item -ItemType Directory -Path $launcherDirectory -Force | Out-Null
 foreach ($launcher in 'Start-dgSpyRemoteHost.ps1', 'Start-dgSpyRemoteHost.cmd') {
 	Copy-Item -LiteralPath (Join-Path $PSScriptRoot "packaging\remote-host\$launcher") -Destination $launcherDirectory
 }
+# The HookLab payload, staged into the bundle root the same way pack-dgspy.ps1 stages it into cli\: one
+# file under hooklab\, never beside the extension, with its digest recorded twice - once in the payload
+# manifest and once in this bundle's own per-file manifest below.
+$bootstrapSha = Write-HookLabPayload -BootstrapAssembly $bootstrapAssembly -HostRoot $resolvedBundle
+Write-Host "HookLab payload $($bootstrapSha.Substring(0,12)) staged at hooklab\$script:HookLabPayloadFileName"
 $stateDirectory = Join-Path $resolvedBundle 'state'
 New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
 $credentialBytes = [byte[]]::new(32)
@@ -116,6 +129,11 @@ $manifestFiles = Get-ChildItem -LiteralPath $resolvedBundle -File -Recurse |
 $manifest = [pscustomobject][ordered]@{ format_version = 1; bundle = $bundleName; target_framework = $targetFramework; runtime_identifier = $runtimeIdentifier; self_contained = $true; files = @($manifestFiles) }
 $manifestJson = $manifest | ConvertTo-Json -Depth 4
 [IO.File]::WriteAllText((Join-Path $resolvedBundle 'manifest.json'), $manifestJson + "`n", [Text.UTF8Encoding]::new($false))
+
+# Re-verified from the staged bytes after everything else has been written, so a later step that
+# disturbed the payload fails the package instead of shipping.
+$verifiedSha = Test-HookLabPayload -HostRoot $resolvedBundle -ExpectedSha256 $bootstrapSha
+Write-Host "Verified bundled HookLab payload $($verifiedSha.Substring(0,12))"
 
 if (Test-Path -LiteralPath $archivePath) { Remove-Item -LiteralPath $archivePath -Force }
 Push-Location $resolvedBundle

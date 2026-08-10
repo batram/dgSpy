@@ -35,6 +35,7 @@ $extensionContractsProject = Join-Path $PSScriptRoot 'dgSpy.ExtensionContracts\d
 $hookLabContractsProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Contracts\HookLab.Contracts.csproj'
 $hookLabProbeProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Probe.CorDebug\HookLab.Probe.CorDebug.csproj'
 $hookLabHostTransportProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Host.Transport\HookLab.Host.Transport.csproj'
+$hookLabBootstrapProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Bootstrap\HookLab.Bootstrap.csproj'
 
 if (-not (Test-Path $DnSpyDir)) {
 	throw "dnSpy directory not found: $DnSpyDir. Build dnSpy first ($hostBuildCommand) or pass -DnSpyDir."
@@ -62,6 +63,12 @@ if ($LASTEXITCODE) { throw "HookLab probe build failed with exit code $LASTEXITC
 
 dotnet build $hookLabHostTransportProject -c $Configuration --nologo -v:minimal
 if ($LASTEXITCODE) { throw "HookLab host transport build failed with exit code $LASTEXITCODE" }
+
+# Not deployed: the bootstrap is delivered into a target as bytes, never copied beside anything. It is
+# built here so a change that breaks its embedded-payload target fails the build instead of shipping an
+# assembly whose bundle is silently empty.
+dotnet build $hookLabBootstrapProject -c $Configuration --nologo -v:minimal
+if ($LASTEXITCODE) { throw "HookLab bootstrap build failed with exit code $LASTEXITCODE" }
 
 dotnet build $extensionProject -c $Configuration -f $TargetFramework --nologo -v:minimal -p:BuildProjectReferences=false
 if ($LASTEXITCODE) { throw "Extension build failed with exit code $LASTEXITCODE" }
@@ -115,7 +122,8 @@ New-Item -ItemType Directory -Path $deployDir -Force | Out-Null
 # Remove the obsolete Newtonsoft payload left by earlier dgSpy deployments.
 $obsoleteNewtonsoft = Join-Path $deployDir 'Newtonsoft.Json.dll'
 if (Test-Path -LiteralPath $obsoleteNewtonsoft) { Remove-Item -LiteralPath $obsoleteNewtonsoft -Force }
-$deployFiles = @('dgSpy.Extension.x.dll', 'dgSpy.Extension.x.pdb', 'dgSpy.Protocol.dll', 'dgSpy.Protocol.pdb')
+$deployFiles = @('dgSpy.Extension.x.dll', 'dgSpy.Extension.x.pdb', 'dgSpy.Protocol.dll', 'dgSpy.Protocol.pdb',
+	'HookLab.Contracts.dll', 'HookLab.Contracts.pdb')
 if ($TargetFramework -eq 'net48') {
 	# dgSpy.Protocol targets netstandard2.0, so under net48 its System.Text.Json compatibility
 	# assemblies must sit beside the extension in the LoadFrom context. Copy only these dependencies,
@@ -132,3 +140,13 @@ foreach ($file in $deployFiles) {
 
 Write-Host "Deployed dgSpy extension to $deployDir"
 & (Join-Path $PSScriptRoot 'tools\Test-DgSpyPackagedHostLayout.ps1') -HostRoot $DnSpyDir -TargetFramework $TargetFramework
+
+# P01: stage the HookLab payload the same way pack-dgspy.ps1 does, so a developer worktree and an
+# installed host have one layout and the payload action needs one resolution rule rather than two. The
+# payload is one file under <host root>\hooklab - never under bin\ or bin\Extensions\, which dnSpy scans
+# and adds to the assembly loader's search path. Test-HookLabPayload asserts that unreachability, so a
+# copy that leaked into a scanned directory fails the build here.
+. (Join-Path $PSScriptRoot 'packaging\HookLabPayload.ps1')
+$bootstrapAssembly = Join-Path $PSScriptRoot "HookLab\HookLab.Bootstrap\bin\$Configuration\net48\HookLab.Bootstrap.dll"
+$payloadSha = Write-HookLabPayload -BootstrapAssembly $bootstrapAssembly -HostRoot $DnSpyDir
+Write-Host "Staged HookLab payload $($payloadSha.Substring(0,12)) at $(Get-HookLabPayloadDirectory $DnSpyDir)"
