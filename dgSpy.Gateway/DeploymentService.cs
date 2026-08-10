@@ -551,7 +551,7 @@ public sealed class DeploymentService {
 	static void ValidateRemotePayload(string payload) {
 		var required=new[]{"dnSpy.exe",Path.Combine("bin","dnSpy.dll"),Path.Combine("bin","dnSpy.Contracts.DnSpy.dll"),Path.Combine("bin","hostfxr.dll"),Path.Combine("bin","hostpolicy.dll"),Path.Combine("bin","coreclr.dll"),Path.Combine("bin","clrjit.dll"),Path.Combine("bin","Extensions","dgSpy","dgSpy.Extension.x.dll"),HookLabPayloadRelativePath,HookLabManifestRelativePath,Path.Combine("launcher","Start-dgSpyRemoteHost.ps1"),Path.Combine("launcher","Start-dgSpyRemoteHost.cmd")};
 		var missing=required.Where(path=>!File.Exists(Path.Combine(payload,path))).ToArray(); if(missing.Length>0) throw new GatewayControlException("installation_incomplete",$"The installed remote-host payload is incomplete ({string.Join(", ",missing)}). Reinstall dgSpy from a complete release package; runtime builds are not supported.");
-		VerifyHookLabPayload(payload,PackagedHookLabSha(payload));
+		var packaged=PackagedHookLabRecord(payload); VerifyHookLabPayload(payload,packaged.Sha,packaged.Readable);
 	}
 
 	internal static readonly string HookLabPayloadRelativePath=Path.Combine("hooklab","hooklab-bootstrap.net48.payload");
@@ -560,14 +560,21 @@ public sealed class DeploymentService {
 	const string HookLabPayloadEntryId="hooklab_bootstrap";
 
 	/// <summary>The independent digest record the packaging step writes into the package manifest beside the
-	/// payload root, or null when there is none (an unpackaged worktree, or a package predating the field).
-	/// Absent is not a failure; disagreeing is, because rewriting one record must not be enough.</summary>
-	static string? PackagedHookLabSha(string payloadRoot) {
+	/// payload root. Absent is not a failure; disagreeing is, because rewriting one record must not be
+	/// enough. <b>Unreadable is also a failure</b>, and the distinction is the whole point of returning a
+	/// readability flag rather than just the value: collapsing "cannot read it" into "there isn't one"
+	/// fails open, so a malformed manifest would silently disable the only cross-check that catches a
+	/// payload and its own manifest replaced together.
+	///
+	/// A manifest that parses but carries no digest is still allowed - that is a package predating the
+	/// field, not a damaged one.</summary>
+	static (bool Readable,string? Sha) PackagedHookLabRecord(string payloadRoot) {
 		var parent=Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(payloadRoot)));
-		if(string.IsNullOrEmpty(parent)) return null;
+		if(string.IsNullOrEmpty(parent)) return (true,null);
 		var manifest=Path.Combine(parent!,"manifest.json");
-		if(!File.Exists(manifest)) return null;
-		try { return (string?)JsonNode.Parse(File.ReadAllText(manifest))?["hooklab_payload_sha256"]; } catch { return null; }
+		if(!File.Exists(manifest)) return (true,null);
+		try { return (true,(string?)JsonNode.Parse(File.ReadAllText(manifest))?["hooklab_payload_sha256"]); }
+		catch { return (false,null); }
 	}
 
 	/// <summary>Verifies the staged HookLab payload the way a consumer must, and at the moment readiness is
@@ -588,7 +595,11 @@ public sealed class DeploymentService {
 	/// Cost: one read of a payload measured in hundreds of kilobytes, against the quarter-gigabyte tree hash
 	/// these same paths already pay (and cache). Not cached here on purpose -- a stale "the payload is fine"
 	/// is the answer that has no value.</summary>
-	internal static void VerifyHookLabPayload(string payloadRoot,string? packagedSha) {
+	internal static void VerifyHookLabPayload(string payloadRoot,string? packagedSha,bool packageRecordReadable=true) {
+		// A package manifest that exists and cannot be read is not the same as one that is not there, and
+		// treating it as absent would quietly turn the independent cross-check off for exactly the install
+		// most likely to be damaged.
+		if(!packageRecordReadable) throw Corrupt("the package manifest beside the payload root exists but could not be read, so the independent digest record cannot be checked");
 		var payloadFile=Path.Combine(payloadRoot,HookLabPayloadRelativePath);
 		var manifestFile=Path.Combine(payloadRoot,HookLabManifestRelativePath);
 		JsonNode? manifest;

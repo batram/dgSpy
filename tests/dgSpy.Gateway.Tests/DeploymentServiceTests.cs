@@ -557,6 +557,21 @@ public sealed class DeploymentServiceTests : IDisposable {
 		Assert.Contains("the package manifest records",(string?)check["recovery"]);
 	}
 
+	/// <summary>A package manifest that exists and cannot be parsed must refuse, not fall back to the
+	/// unpackaged-worktree path. Reading it is the only check that catches a payload and its own manifest
+	/// rewritten together, so treating unreadable as absent turns that check off for precisely the install
+	/// most likely to be damaged - and does it silently, while readiness still reports healthy.</summary>
+	[Fact]
+	public async Task A_package_manifest_that_cannot_be_read_refuses_rather_than_skipping_the_independent_check() {
+		var payload=CreatePayload();
+		Environment.SetEnvironmentVariable("DGSPY_PAYLOAD_ROOT",payload);
+		File.WriteAllText(Path.Combine(root,"manifest.json"),"{\"format_version\":1,\"hooklab_payload_sha256\": \"unterminated",new UTF8Encoding(false));
+		var doctor=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("doctor",new JsonObject(),new HostRouter(),default)))!;
+		var check=doctor["checks"]!.AsArray().Single(item=>(string?)item?["name"]=="bundled_host_payload")!;
+		Assert.False((bool?)check["ok"]);
+		Assert.Contains("could not be read",(string?)check["recovery"]);
+	}
+
 	string CreatePayload() { var path=Path.Combine(root,"payload"); foreach(var directory in new[]{"bin","bin\\Extensions\\dgSpy","hooklab","launcher"}) Directory.CreateDirectory(Path.Combine(path,directory)); foreach(var file in new[]{"dnSpy.exe","bin\\dnSpy.dll","bin\\dnSpy.Contracts.DnSpy.dll","bin\\hostfxr.dll","bin\\hostpolicy.dll","bin\\coreclr.dll","bin\\clrjit.dll","bin\\Extensions\\dgSpy\\dgSpy.Extension.x.dll","launcher\\Start-dgSpyRemoteHost.ps1","launcher\\Start-dgSpyRemoteHost.cmd"}) File.WriteAllText(Path.Combine(path,file),file); StageHookLabPayload(path,"a HookLab bootstrap payload"); return path; }
 	const string PayloadFile="hooklab\\hooklab-bootstrap.net48.payload";
 	const string PayloadManifestFile="hooklab\\hooklab-payload-manifest.json";
