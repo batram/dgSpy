@@ -93,6 +93,70 @@ namespace HookLab.Bootstrap.Tests {
 			}
 		}
 
+		/// <summary>The ordinary path, against the real pipe server rather than a double. ProbeStartup asks
+		/// the endpoint for its quiescence reflectively - it must not name a probe type on a path that runs
+		/// when the payload never loaded - so a rename or a signature change on the probe side would silently
+		/// degrade every report to not_required and no other test would notice.</summary>
+		[Fact]
+		public void A_clean_shutdown_reports_the_real_endpoint_as_quiesced() {
+			using (var runner = BootstrapRunner.Create("bootstrap-cleanup-real-endpoint-quiesced")) {
+				StartCleanly(runner);
+				var shutdown = Report.Parse(runner.Shutdown());
+				Assert.Equal("ok", shutdown["status"]);
+				Assert.Equal("completed", shutdown["endpoint_teardown"]);
+				Assert.Equal("quiesced", shutdown["command_quiescence"]);
+			}
+		}
+
+		/// <summary>The state the teardown result cannot express on its own: the endpoint is down and
+		/// unreachable, and a command is still inside the handler, possibly still mutating the target.
+		/// Reporting that as a clean stop is what would let T09d's rollback answer
+		/// cleanup_outcome=completed over a probe that is still patching.</summary>
+		[Fact]
+		public void A_command_still_inside_the_handler_is_not_a_clean_stop() {
+			using (var runner = BootstrapRunner.Create("bootstrap-cleanup-command-in-flight")) {
+				StartCleanly(runner);
+				runner.InstallFakeHandles("server-in-flight-once");
+				var first = Report.Parse(runner.Shutdown());
+				// The endpoint really is down - this is not a failed teardown wearing a different name.
+				Assert.Equal("completed", first["endpoint_teardown"]);
+				Assert.Equal("false", first["endpoint_live"]);
+				Assert.Equal("", first.Get("endpoint_teardown_error"));
+				// And it is still not a clean stop, because the probe has not stopped working.
+				Assert.Equal("in_flight", first["command_quiescence"]);
+				Assert.Equal("partial", first["status"]);
+				Assert.Equal("true", first["cleanup_retry_possible"]);
+				Assert.Equal("true", first["resolver_installed"]);
+
+				// The retry re-asks the endpoint rather than trusting what the last attempt recorded.
+				var second = Report.Parse(runner.Shutdown());
+				Assert.Equal("quiesced", second["command_quiescence"]);
+				Assert.Equal("ok", second["status"]);
+				Assert.Equal("false", second["cleanup_retry_possible"]);
+				Assert.Equal("runtime_disposals=1;server_disposals=2", runner.FakeHandleState());
+			}
+		}
+
+		[Fact]
+		public void A_start_over_a_probe_that_is_still_running_a_command_is_refused() {
+			using (var runner = BootstrapRunner.Create("bootstrap-cleanup-command-in-flight-refuses-restart")) {
+				StartCleanly(runner);
+				runner.InstallFakeHandles("server-in-flight-always");
+				Assert.Equal("partial", Report.Parse(runner.Shutdown())["status"]);
+				// Initializing over it would publish a second runtime and a second endpoint while the first
+				// probe is still mutating the target, and orphan whatever the running command was doing.
+				var restart = Report.Parse(runner.Start(Parameters(runner).ToString()));
+				Assert.Equal("error", restart["status"]);
+				// already_started rather than cleanup_pending: an incomplete stop leaves this bootstrap
+				// started, and that check comes first. Either refusal is correct here - what matters is that
+				// a caller reading only this report can see why, and that the refusal is not conditional on
+				// the started state, which a failed start does not have (see the failed-start cases below).
+				Assert.Equal("already_started", restart["error_type"]);
+				Assert.Equal("in_flight", restart["command_quiescence"]);
+				Assert.Equal("true", restart["cleanup_retry_possible"]);
+			}
+		}
+
 		[Fact]
 		public void A_startup_failure_survives_a_rollback_whose_unpatch_also_fails() {
 			using (var runner = BootstrapRunner.Create("bootstrap-cleanup-startup-rollback")) {
@@ -160,6 +224,10 @@ namespace HookLab.Bootstrap.Tests {
 				Assert.Equal("failed", start["endpoint_teardown"]);
 				Assert.Equal("true", start["endpoint_live"]);
 				Assert.Equal("true", start["cleanup_retry_possible"]);
+				// This rig's endpoint has no quiescence contract at all, and an absent question is not an
+				// answer to it: not_required rather than quiesced, and the endpoint_live line above is what
+				// keeps the report honest here.
+				Assert.Equal("not_required", start["command_quiescence"]);
 				// Rollback already retried once: one attempt inside ProbeStartup.Run, one from the rollback.
 				Assert.Equal("runtime_disposals=2;server_disposals=2", runner.RollbackFaultState());
 

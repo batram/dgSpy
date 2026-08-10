@@ -271,6 +271,47 @@ public sealed class AtomicActionStateMachineTests {
 		Assert.Equal(CleanupOutcome.failed,result.Status.CleanupOutcome);
 	}
 
+	/// <summary>The same unbounded-release hang as the two above, in the place the fix for those did not
+	/// reach: the nearby-slot search released every breakpoint that failed to bind with
+	/// CancellationToken.None, so a wedged engine parked the machine before the action ever ran - no
+	/// result, no resume, and the action_id burned. Both releases here ignore the token, which is the case
+	/// that hangs; without the bound this test does not fail, it never returns.</summary>
+	[Fact] public async Task AnUnboundBreakpointReleaseDuringTheNearbySlotSearchCannotHangTheRun() {
+		var request=Request(); request.NearbyOffsets=new uint[]{4}; request.ResumePolicy=AtomicActionResumePolicy.resume;
+		var host=new Host(Stop()); host.Breakpoint.Binds=false; host.Breakpoint.ReleaseHangs=true;
+		var started=DateTime.UtcNow;
+		var result=await Run(host,new ActionImpl(),request,releaseBudget:TimeSpan.FromMilliseconds(150));
+		Assert.True(DateTime.UtcNow-started<TimeSpan.FromSeconds(10),"The nearby-slot search waited out an unbounded release.");
+		// The exact slot and the one declared nearby slot were both tried, and both releases were abandoned.
+		Assert.Equal(2,host.Breakpoint.ReleaseCalls);
+		Assert.Equal(ActionOutcome.nearby_slot_not_found,result.Status.ActionOutcome);
+		// An abandoned release may have left the breakpoint installed, so the run is not clean cleanup.
+		Assert.Equal(CleanupOutcome.ambiguous,result.Status.CleanupOutcome);
+		Assert.Contains("nearby-slot search did not finish",result.Error);
+		Assert.Equal(AtomicActionStateMachine.StatusOperation,result.Status.ReconciliationOperation);
+	}
+
+	/// <summary>The search's releases share one bound, and it must not eat the reserves: a search that
+	/// overran still leaves the machine able to resume the target and read its final state.</summary>
+	[Fact] public async Task ASearchThatOverrunsStillResumesTheTarget() {
+		var request=Request(); request.NearbyOffsets=new uint[]{4,9,15}; request.ResumePolicy=AtomicActionResumePolicy.resume;
+		var host=new Host(Stop()); host.Breakpoint.Binds=false; host.Breakpoint.ReleaseHangs=true;
+		var result=await Run(host,new ActionImpl(),request,releaseBudget:TimeSpan.FromMilliseconds(150));
+		Assert.Equal(4,host.Breakpoint.ReleaseCalls);
+		Assert.Equal(1,host.ResumeCalls); Assert.True(host.Resumed);
+		Assert.NotNull(result.FinalDebuggerState);
+	}
+
+	/// <summary>A release that completes during the search is still ordinary completed cleanup, so the
+	/// bound does not turn every search into an ambiguous one.</summary>
+	[Fact] public async Task ASearchWhoseReleasesCompleteIsNotReportedAsAmbiguous() {
+		var request=Request(); request.NearbyOffsets=new uint[]{4};
+		var host=new Host(Stop()); host.Breakpoint.Binds=false;
+		var result=await Run(host,new ActionImpl(),request,releaseBudget:TimeSpan.FromMilliseconds(150));
+		Assert.Equal(ActionOutcome.nearby_slot_not_found,result.Status.ActionOutcome);
+		Assert.Equal(CleanupOutcome.completed,result.Status.CleanupOutcome);
+	}
+
 	static async Task<AtomicActionResult> Run(Host host,ActionImpl action,AtomicActionRequest request,CancellationToken client=default,TimeSpan? budget=null,TimeSpan? releaseBudget=null) {
 		using var leases=new ActionLeaseCoordinator();
 		return await new AtomicActionStateMachine(leases,host,budget,releaseBudget).RunAsync(request,action,client,CancellationToken.None);
@@ -292,11 +333,13 @@ public sealed class AtomicActionStateMachineTests {
 
 	sealed class Breakpoint : IAtomicActionBreakpoint {
 		public Guid OwnerToken { get; }=Guid.NewGuid(); public string? BindError=>null; public bool Released; public Exception? ReleaseError; public bool ReleaseHangs;
-		public Task<bool> WaitBoundAsync(CancellationToken token)=>Task.FromResult(true);
+		/// <summary>False makes every bind attempt fail, which is what drives the nearby-slot search loop.</summary>
+		public bool Binds=true; public int ReleaseCalls;
+		public Task<bool> WaitBoundAsync(CancellationToken token)=>Task.FromResult(Binds);
 		// Deliberately ignores the token: OwnedBreakpoint.ReleaseAsync waits on the debugger's removal
 		// callback, and a wedged engine never delivers it, so honouring cancellation is exactly what cannot
 		// be assumed here. The machine's bound has to hold without the callee's cooperation.
-		public Task ReleaseAsync(CancellationToken token) { Released=true; if(ReleaseHangs) return new TaskCompletionSource<bool>().Task; return ReleaseError is null?Task.CompletedTask:Task.FromException(ReleaseError); }
+		public Task ReleaseAsync(CancellationToken token) { Released=true; ReleaseCalls++; if(ReleaseHangs) return new TaskCompletionSource<bool>().Task; return ReleaseError is null?Task.CompletedTask:Task.FromException(ReleaseError); }
 		public void Dispose() { }
 	}
 

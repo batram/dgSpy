@@ -94,11 +94,13 @@ namespace HookLab.Bootstrap {
 		/// unreachable live endpoint. Started state plus retained handles is what makes the retry possible,
 		/// and the report says which part is still outstanding.
 		///
-		/// What this report does *not* claim: that no probe work is still running. ProbePipeServer.Dispose
-		/// closes the endpoint without cancelling a command already inside the handler, so a successful
-		/// teardown means "not reachable from outside", not "quiesced". Distinguishing those needs a
-		/// cancellation contract on the command handler, which is scheduled work rather than something to
-		/// paper over here - and until it exists, no line in this report should be read as quiescence.
+		/// Whether any probe work is still running is now reported rather than left unanswerable.
+		/// <c>command_quiescence</c> is <c>quiesced</c> when no command is inside the handler, <c>in_flight</c>
+		/// when one is and may still be mutating the target, and <c>not_required</c> when there was no
+		/// endpoint to ask. A completed teardown still only means "not reachable from outside"; it is the
+		/// quiescence line that says whether the probe stopped working, and a status of <c>ok</c> now
+		/// requires both. An <c>in_flight</c> answer keeps the endpoint handle retained, so the cleanup stays
+		/// retryable and no Start may publish over a probe that is still being mutated.
 		///
 		/// It also runs when the bootstrap never started but a failed start left handles retained. Gating on
 		/// started state alone was the defect: a start that published the runtime and the endpoint and then
@@ -114,7 +116,10 @@ namespace HookLab.Bootstrap {
 				// The endpoint state is the persistent one, not just this attempt's: an attempt that only
 				// retried the runtime handle must not be allowed to report a clean stop over a listener an
 				// earlier attempt failed to tear down.
-				var clean = cleanup.Clean && !ProbeStartup.EndpointMayBeLive;
+				// The persistent quiescence state, not only this attempt's: a retry that had nothing left to
+				// dispose reports Clean, and must not be allowed to turn an earlier attempt's in-flight
+				// command into a clean stop. The retry that does have a handle re-asks and clears it.
+				var clean = cleanup.Clean && !ProbeStartup.EndpointMayBeLive && ProbeStartup.CommandQuiescenceState != "in_flight";
 				// The resolver is removed only when a bootstrap that actually started has stopped cleanly.
 				// Finishing a failed start's cleanup does not make the payload it already loaded go away, and
 				// removing the handler that satisfies that payload's next bind is what Rollback exists to
@@ -126,6 +131,9 @@ namespace HookLab.Bootstrap {
 					"payloads_resident=true",
 					"resolver_installed=" + (resolverInstalled ? "true" : "false"),
 					"endpoint_teardown=" + ProbeStartup.EndpointTeardownState,
+					// Beside the teardown line, never instead of it: "unreachable" and "no longer working"
+					// are different facts and a rollback needs both to answer cleanup_outcome.
+					"command_quiescence=" + ProbeStartup.CommandQuiescenceState,
 					"endpoint_live=" + (ProbeStartup.EndpointMayBeLive ? "true" : "false"),
 					// Read from the retention state rather than from this attempt's report, so that this line
 					// and the identical one on every refusal report can never disagree.
@@ -193,6 +201,9 @@ namespace HookLab.Bootstrap {
 				"payloads_resident=" + (payloadsResident ? "true" : "false"),
 				"resolver_installed=" + (payloadsResident ? "true" : "false"),
 				"endpoint_teardown=" + ProbeStartup.EndpointTeardownState,
+				// A refused start whose rollback left a command running is the same hazard as a shutdown
+				// that did, and a caller who only ever sees this report has to be able to learn it.
+				"command_quiescence=" + ProbeStartup.CommandQuiescenceState,
 				"endpoint_live=" + (ProbeStartup.EndpointMayBeLive ? "true" : "false"),
 				"cleanup_retry_possible=" + (ProbeStartup.HasRetainedCleanup ? "true" : "false"),
 			};

@@ -21,7 +21,19 @@ namespace HookLab.Probe.CorDebug.Transport {
 		public long HooksVersion { get; }
 	}
 
-	public delegate ProbeCommandResult ProbeCommandHandler(string operation, string payloadJson, long? expectedHooksVersion);
+	/// <summary>Serves one client command.
+	///
+	/// <paramref name="cancellationToken"/> is cancelled when the endpoint is disposed or asked to quiesce.
+	/// A handler that mutates the target - patching, unpatching, anything with an effect that outlives the
+	/// response - must observe it, because <see cref="ProbePipeServer.Dispose"/> closes the transport and
+	/// returns while this delegate is still on the stack: without it, a rollback reports a completed
+	/// teardown over a probe that is still changing the target, and only the response write fails.
+	///
+	/// Cancellation is cooperative, so it cannot be the whole answer on its own - a handler part-way
+	/// through a patch may be unable to stop. <see cref="ProbePipeServer.TryQuiesce"/> is the other half:
+	/// it reports, under a bound, whether the handler actually left. Completed cleanup is the two together;
+	/// either one alone is ambiguous cleanup.</summary>
+	public delegate ProbeCommandResult ProbeCommandHandler(string operation, string payloadJson, long? expectedHooksVersion, CancellationToken cancellationToken);
 
 	public sealed class ProbePipeServer : IDisposable, IHookEventConsumer {
 		readonly object secretGate = new object();
@@ -36,6 +48,17 @@ namespace HookLab.Probe.CorDebug.Transport {
 		readonly int authenticationTimeoutMilliseconds;
 		readonly bool secretWasInjected;
 		readonly ManualResetEvent stopped = new ManualResetEvent(false);
+		/// <summary>Serializes the in-flight command count against <see cref="commandsIdle"/>.</summary>
+		readonly object commandGate = new object();
+		/// <summary>Set exactly while no command is inside the handler. Never disposed, for the same reason
+		/// <see cref="stopped"/> is not: a Set racing a Dispose would throw ObjectDisposedException out of the
+		/// listener thread delegate, and an unhandled exception on a Thread terminates the process on .NET
+		/// Framework - and that process is the debuggee.</summary>
+		readonly ManualResetEvent commandsIdle = new ManualResetEvent(true);
+		/// <summary>Cancelled by <see cref="Dispose"/> and by <see cref="TryQuiesce"/>. Never disposed: the
+		/// listener thread reads its Token, and a disposed source throws there.</summary>
+		readonly CancellationTokenSource commandCancellation = new CancellationTokenSource();
+		int inFlightCommands;
 		volatile bool disposed;
 		int endpointTaken;
 		byte[] secret;
@@ -152,7 +175,13 @@ namespace HookLab.Probe.CorDebug.Transport {
 				if (request.Kind != ProbeMessageKind.Request) throw new InvalidDataException("Only request messages are accepted from clients.");
 				ProbeMessage response;
 				try {
-					var result = commandHandler(request.Operation, request.PayloadJson, request.ExpectedHooksVersion);
+					// Counted around the handler, not around the read: quiescence is a question about the
+					// handler's side effects, and a listener parked waiting for the next request is idle by
+					// any definition a rollback cares about.
+					EnterCommand();
+					ProbeCommandResult result;
+					try { result = commandHandler(request.Operation, request.PayloadJson, request.ExpectedHooksVersion, commandCancellation.Token); }
+					finally { ExitCommand(); }
 					response = new ProbeMessage(ProbeWireProtocol.ProtocolVersion, ProbeMessageKind.Response, request.CorrelationId,
 						request.Operation, result.PayloadJson, result.HooksVersion);
 				}
@@ -215,6 +244,37 @@ namespace HookLab.Probe.CorDebug.Transport {
 			}
 		}
 
+		void EnterCommand() { lock (commandGate) { if (inFlightCommands++ == 0) commandsIdle.Reset(); } }
+
+		void ExitCommand() { lock (commandGate) { if (--inFlightCommands == 0) commandsIdle.Set(); } }
+
+		/// <summary>How many client commands are inside the handler right now. Zero does not by itself mean
+		/// the endpoint is finished - use <see cref="TryQuiesce"/>, which cancels first and then observes.</summary>
+		public int InFlightCommands { get { lock (commandGate) return inFlightCommands; } }
+
+		/// <summary>Requests cancellation of every in-flight command and waits, bounded, for them to leave
+		/// the handler. True means no command is running: a caller may say its cleanup completed. False means
+		/// one is still inside the handler and may still be mutating the target, which is ambiguous cleanup
+		/// with a reconciliation to follow, never a completed one.
+		///
+		/// This exists because <see cref="Dispose"/> alone cannot answer the question. It closes the
+		/// transport and returns; a side-effecting handler keeps running and only its response write fails.
+		/// So "the endpoint is unreachable" and "no probe work is running" are different facts, and a
+		/// rollback that reported the first as the second was reporting a property it had not established.
+		///
+		/// Safe to call before, after, or instead of <see cref="Dispose"/>, and repeatedly: cancellation is
+		/// idempotent, and the wait observes rather than mutates.</summary>
+		public bool TryQuiesce(int millisecondsTimeout) {
+			if (millisecondsTimeout < 0) throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout));
+			CancelCommands();
+			return commandsIdle.WaitOne(millisecondsTimeout);
+		}
+
+		/// <summary>Never throws. Cancel runs registered callbacks on this thread, and this thread can be the
+		/// target's own inside a func-eval; a callback that throws must not become the caller's problem, and
+		/// must not stop the endpoint being closed.</summary>
+		void CancelCommands() { try { commandCancellation.Cancel(); } catch (Exception) { } }
+
 		/// <summary>Bounded and non-blocking: it closes the listening endpoint and returns. It deliberately does
 		/// not wait for the listener thread and does not dispose <c>stopped</c>.
 		///
@@ -222,7 +282,12 @@ namespace HookLab.Probe.CorDebug.Transport {
 		/// wait outran the evaluation timeout and destroyed a correct in-target guard report on its way out. The
 		/// endpoint stops accepting connections before this returns, so a rollback path does not leave an
 		/// externally usable endpoint behind; only the thread's own unwind is unobserved, and
-		/// <see cref="WaitForShutdown"/> exists for tests that need to observe it.</summary>
+		/// <see cref="WaitForShutdown"/> exists for tests that need to observe it.
+		///
+		/// It also cancels any command inside the handler, and deliberately does not wait for it to leave.
+		/// A returned Dispose therefore establishes that the endpoint is unreachable - not that the probe has
+		/// stopped working. <see cref="TryQuiesce"/> is what establishes the second, under a bound its caller
+		/// chooses.</summary>
 		public void Dispose() {
 			if (disposed) return; disposed = true;
 			NamedPipeServerStream? current;
@@ -232,6 +297,11 @@ namespace HookLab.Probe.CorDebug.Transport {
 			// either the listener published its pipe and this sees it, or it has not reached the gate yet and
 			// will observe disposed and exit without creating one.
 			try { current?.Dispose(); } catch { }
+			// After the endpoint is closed, so a handler woken by cancellation can never be handed a client
+			// connection made in between. Cancellation is a request, not a guarantee: whether the handler
+			// actually left is what TryQuiesce answers, and this method deliberately does not wait for it -
+			// the caller can be the target's own thread inside a func-eval, and the bound belongs to them.
+			CancelCommands();
 		}
 
 		/// <summary>Waits for the listener thread to finish unwinding. Nothing in production calls this - it

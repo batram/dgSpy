@@ -54,14 +54,22 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 				breakpoint=await host.AddOwnedBreakpointAsync(slot,_=>{},active.Token).ConfigureAwait(false);
 				if(!await breakpoint.WaitBoundAsync(active.Token).ConfigureAwait(false)) {
 					if(request.NearbyOffsets.Length==0) { result.Error=breakpoint.BindError ?? "The owned breakpoint did not bind."; return result; }
-					await breakpoint.ReleaseAsync(CancellationToken.None).ConfigureAwait(false); breakpoint=null; cleanup=CleanupOutcome.completed;
+					// These releases are the same operation the finally performs, and hang the same way: they wait
+					// on the debugger's own removal callback, which a wedged engine or dispatcher never delivers.
+					// So they carry the same bound rather than CancellationToken.None, from one source for the
+					// whole search - a sweep over many declared offsets must not be able to accumulate its way
+					// past the reserves the action's cleanup and the machine's own resume depend on.
+					using var searchReleases=ReleaseBound(lease);
+					cleanup=Worse(cleanup,await ReleaseDuringSearchAsync(breakpoint,searchReleases,result).ConfigureAwait(false)); breakpoint=null;
 					foreach(var offset in request.NearbyOffsets) {
 						slot=new AtomicActionSlot(request.Module,request.MethodToken,offset);
 						breakpoint=await host.AddOwnedBreakpointAsync(slot,_=>{},active.Token).ConfigureAwait(false);
 						if(await breakpoint.WaitBoundAsync(active.Token).ConfigureAwait(false)) break;
-						await breakpoint.ReleaseAsync(CancellationToken.None).ConfigureAwait(false); breakpoint=null; cleanup=CleanupOutcome.completed;
+						cleanup=Worse(cleanup,await ReleaseDuringSearchAsync(breakpoint,searchReleases,result).ConfigureAwait(false)); breakpoint=null;
 					}
-					if(breakpoint is null) { actionOutcome=ActionOutcome.nearby_slot_not_found; result.Error="No declared nearby slot bound."; return result; }
+					// Combined, not assigned: a release the search had to abandon is the reason this run needs
+					// reconciliation, and overwriting the error with the search verdict erased it.
+					if(breakpoint is null) { actionOutcome=ActionOutcome.nearby_slot_not_found; result.Error=Combine(result.Error,"No declared nearby slot bound."); return result; }
 				}
 				await host.ContinueAsync(mutation=>lease.ExecuteMutation(mutation),active.Token).ConfigureAwait(false);
 				var stop=await host.WaitForOwnedStopAsync(breakpoint.OwnerToken,cursor,active.Token).ConfigureAwait(false);
@@ -115,10 +123,7 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 					// cancelling anything - so run_atomic_action stayed in progress indefinitely and burned its
 					// action_id. They now share one bound that leaves the action's rollback and the machine's
 					// own resume their reserves, and an overrun is reported rather than waited out.
-					var releasesEnd=lease.OwnershipEndsUtc-MachineCleanupReserve-ActionCleanupReserve;
-					var releasesBudgetEnd=DateTime.UtcNow+releaseBudget;
-					if(releasesBudgetEnd<releasesEnd) releasesEnd=releasesBudgetEnd;
-					using var releases=new CancellationTokenSource(Remaining(releasesEnd));
+					using var releases=ReleaseBound(lease);
 					var released=await RunBoundedAsync(token=>breakpoint.ReleaseAsync(token),releases).ConfigureAwait(false);
 					if(released.Result==CleanupStepResult.failed) { cleanupFailed=true; result.Error=Combine(result.Error,"Breakpoint cleanup failed: "+released.Error); }
 					else if(released.Result==CleanupStepResult.timedOut) { cleanup=Worse(cleanup,CleanupOutcome.ambiguous); result.Error=Combine(result.Error,"The owned breakpoint release did not finish inside the lease's bounded cleanup window; the breakpoint may still be installed."); }
@@ -170,6 +175,28 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		static int Severity(CleanupOutcome value) => value switch {
 			CleanupOutcome.not_required=>0,CleanupOutcome.completed=>1,CleanupOutcome.ambiguous=>2,CleanupOutcome.failed=>3,_=>0,
 		};
+
+		/// <summary>The bound every owned-breakpoint or temporary-handle release runs under, wherever it
+		/// happens - the nearby-slot search as much as the final cleanup. Two limits, whichever is nearer:
+		/// the lease's ownership window minus the reserves the action's own rollback and the machine's own
+		/// resume need, and this machine's release budget from now. One helper rather than two copies of the
+		/// arithmetic, because the copy is what got left unbounded the first time.</summary>
+		CancellationTokenSource ReleaseBound(ActionLease lease) {
+			var end=lease.OwnershipEndsUtc-MachineCleanupReserve-ActionCleanupReserve;
+			var budgetEnd=DateTime.UtcNow+releaseBudget;
+			if(budgetEnd<end) end=budgetEnd;
+			return new CancellationTokenSource(Remaining(end));
+		}
+
+		/// <summary>Releases a breakpoint that did not bind, under the search's shared bound. An overrun
+		/// abandons that breakpoint - it may still be installed, which is ambiguous cleanup, not completed -
+		/// and the search continues, because the alternative is the hang this replaced.</summary>
+		static async Task<CleanupOutcome> ReleaseDuringSearchAsync(IAtomicActionBreakpoint breakpoint,CancellationTokenSource bound,AtomicActionResult result) {
+			var released=await RunBoundedAsync(token=>breakpoint.ReleaseAsync(token),bound).ConfigureAwait(false);
+			if(released.Result==CleanupStepResult.failed) { result.Error=Combine(result.Error,"Releasing an unbound breakpoint during the nearby-slot search failed: "+released.Error); return CleanupOutcome.failed; }
+			if(released.Result==CleanupStepResult.timedOut) { result.Error=Combine(result.Error,"Releasing an unbound breakpoint during the nearby-slot search did not finish inside the lease's bounded cleanup window; that breakpoint may still be installed."); return CleanupOutcome.ambiguous; }
+			return CleanupOutcome.completed;
+		}
 
 		internal enum CleanupStepResult { completed,timedOut,failed }
 

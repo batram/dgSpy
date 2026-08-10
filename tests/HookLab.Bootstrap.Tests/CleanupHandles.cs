@@ -9,10 +9,21 @@ namespace HookLab.Bootstrap.Tests {
 	public sealed class CountingHandle : IDisposable {
 		readonly string label;
 		int failuresRemaining;
+		int inFlightRemaining;
 
-		internal CountingHandle(string label, int failures) { this.label = label; failuresRemaining = failures; }
+		internal CountingHandle(string label, int failures, int inFlight = 0) { this.label = label; failuresRemaining = failures; inFlightRemaining = inFlight; }
 
 		internal int Disposals { get; private set; }
+
+		/// <summary>Stands in for ProbePipeServer.TryQuiesce, matched by name and signature because
+		/// ProbeStartup asks for it reflectively - it must not name a probe type on a path that runs when the
+		/// payload never loaded. False means a command is still inside the handler, which is the state a
+		/// teardown cannot see and used to report as a clean stop.</summary>
+		public bool TryQuiesce(int millisecondsTimeout) {
+			if (inFlightRemaining <= 0) return true;
+			inFlightRemaining--;
+			return false;
+		}
 
 		public void Dispose() {
 			Disposals++;
@@ -35,6 +46,10 @@ namespace HookLab.Bootstrap.Tests {
 				case "server-fails-once": Runtime = new CountingHandle("runtime", 0); Server = new CountingHandle("server", 1); break;
 				case "both-fail-always": Runtime = new CountingHandle("runtime", never); Server = new CountingHandle("server", never); break;
 				case "both-fail-once": Runtime = new CountingHandle("runtime", 1); Server = new CountingHandle("server", 1); break;
+				// The endpoint tears down cleanly and a command is still inside the handler: unreachable, and
+				// still working. Nothing in the teardown result can express that, which is the whole point.
+				case "server-in-flight-once": Runtime = new CountingHandle("runtime", 0); Server = new CountingHandle("server", 0, 1); break;
+				case "server-in-flight-always": Runtime = new CountingHandle("runtime", 0); Server = new CountingHandle("server", 0, never); break;
 				default: throw new ArgumentException("Unknown handle mode: " + mode, nameof(mode));
 			}
 			ProbeStartup.ExchangeHandlesForTest(Runtime, Server, out var liveRuntime, out var liveServer);

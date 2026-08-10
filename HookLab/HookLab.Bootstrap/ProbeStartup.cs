@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using HookLab.Contracts;
 using HookLab.Probe.CorDebug;
 using HookLab.Probe.CorDebug.Patching;
@@ -64,8 +65,18 @@ namespace HookLab.Bootstrap {
 			/// stopped accepting connections before anyone asked it to - but it is the difference between a
 			/// stop that happened and a stop that was performed, so it is reported rather than inferred.</summary>
 			internal string? ListenerFailure;
-			internal bool Clean => RuntimeError == null && EndpointError == null && !EndpointMayBeLive;
+			/// <summary>not_required, quiesced or in_flight. See <see cref="CommandQuiescenceState"/>.</summary>
+			internal string CommandQuiescence = "not_required";
+			/// <summary>A command still inside the handler is not a clean stop: the endpoint is unreachable
+			/// but the probe may still be mutating the target, which is exactly the state a rollback used to
+			/// report as completed.</summary>
+			internal bool Clean => RuntimeError == null && EndpointError == null && !EndpointMayBeLive && CommandQuiescence != "in_flight";
 		}
+
+		/// <summary>How long one cleanup attempt waits for an in-flight command to leave the handler. Short
+		/// on purpose: this can run on the target's own thread inside a func-eval whose whole budget is a
+		/// second, and a caller that needs longer retries the Shutdown rather than being made to wait here.</summary>
+		internal const int QuiescenceTimeoutMilliseconds = 250;
 
 		/// <summary>Endpoint teardown state of the last attempt: not_required, completed or failed.</summary>
 		internal static string EndpointTeardownState { get; private set; } = "not_required";
@@ -81,6 +92,17 @@ namespace HookLab.Bootstrap {
 
 		/// <summary>Set while a known endpoint may still be accepting connections.</summary>
 		internal static bool EndpointMayBeLive { get; private set; }
+
+		/// <summary>Whether the last endpoint teardown left a command inside the handler: not_required (no
+		/// endpoint, or a handle with no quiescence contract), quiesced (no command is running, so cleanup
+		/// may be reported as completed) or in_flight (one is still running and may still be mutating the
+		/// target - ambiguous cleanup, and a reconciliation).
+		///
+		/// This is the fact a rollback could not previously obtain. Dispose closes the transport and returns
+		/// while a side-effecting handler keeps running, so a completed teardown meant "not reachable from
+		/// outside", never "quiesced" - and D5's rollback-on-verification-failure has to tell those apart to
+		/// answer cleanup_outcome honestly.</summary>
+		internal static string CommandQuiescenceState { get; private set; } = "not_required";
 
 		/// <summary>The endpoint's listener thread died on an exception rather than on shutdown, if it did.
 		/// Reported so that "the endpoint stopped" and "the endpoint was stopped" are distinguishable.</summary>
@@ -155,6 +177,15 @@ namespace HookLab.Bootstrap {
 					report.RetryPossible = true;
 					lock (Gate) { server = server ?? serverHandle; serverRetained = true; }
 				}
+				// After the dispose attempt, whether or not it threw: a teardown that failed leaves both an
+				// endpoint that may be live and possibly a handler still running, and the second is not
+				// answered by the first. Retained on in_flight for the same reason a failed dispose is -
+				// the retry has something to do, and nothing may publish over a probe still being mutated.
+				report.CommandQuiescence = QuiesceOf(serverHandle, QuiescenceTimeoutMilliseconds);
+				if (report.CommandQuiescence == "in_flight") {
+					report.RetryPossible = true;
+					lock (Gate) { server = server ?? serverHandle; serverRetained = true; }
+				}
 				report.ListenerFailure = ListenerFailureOf(serverHandle);
 			}
 			return report;
@@ -167,6 +198,7 @@ namespace HookLab.Bootstrap {
 		static void Record(CleanupReport report) {
 			if (report.RuntimeAttempted) RuntimeCleanupError = report.RuntimeError;
 			if (report.EndpointAttempted) {
+				CommandQuiescenceState = report.CommandQuiescence;
 				EndpointListenerFailure = report.ListenerFailure;
 				EndpointTeardownError = report.EndpointError;
 				EndpointMayBeLive = report.EndpointMayBeLive;
@@ -181,6 +213,26 @@ namespace HookLab.Bootstrap {
 		/// still ends here - and a probe type named in this method would be resolved when it is jitted.
 		/// Reflection keeps that hazard out of a method whose whole job is to run when things went wrong;
 		/// a handle without the property (a test double) simply reports nothing.</summary>
+		/// <summary>Asks the endpoint, without naming its type, whether any command is still inside the
+		/// handler - cancelling first, which is what ProbePipeServer.TryQuiesce does. Reflection for the same
+		/// reason ListenerFailureOf uses it: this runs on paths where the payload may never have loaded, and
+		/// a probe type named here would be resolved when this method is jitted.
+		///
+		/// A handle without the contract - a test double, or any future endpoint that cannot be asked -
+		/// answers not_required rather than quiesced. Absence of the question is not an answer to it, but it
+		/// is also not evidence of work in flight, and treating it as in_flight would make every cleanup
+		/// ambiguous forever.</summary>
+		static string QuiesceOf(IDisposable serverHandle, int timeoutMilliseconds) {
+			try {
+				var method = serverHandle.GetType().GetMethod("TryQuiesce", BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(int) }, null);
+				if (method == null) return "not_required";
+				return true.Equals(method.Invoke(serverHandle, new object[] { timeoutMilliseconds })) ? "quiesced" : "in_flight";
+			}
+			// An endpoint that cannot answer must not be reported as quiesced: it was asked and did not say
+			// no command was running.
+			catch (Exception) { return "in_flight"; }
+		}
+
 		static string? ListenerFailureOf(IDisposable serverHandle) {
 			try {
 				var property = serverHandle.GetType().GetProperty("ListenerFailure", BindingFlags.Public | BindingFlags.Instance);
@@ -337,7 +389,12 @@ namespace HookLab.Bootstrap {
 			public void Dispose() => fault();
 		}
 
-		static ProbeCommandResult HandleCommand(string operation, string payloadJson, long? expectedHooksVersion) {
+		/// <summary>The bootstrap endpoint's only command. It is a read, so the cancellation token has nothing
+		/// to abandon part-way - but it is honoured before the read rather than ignored, because a probe that
+		/// is being torn down should not answer as though it were not, and because the next handler added
+		/// here will be side-effecting and must inherit the habit rather than the exception.</summary>
+		static ProbeCommandResult HandleCommand(string operation, string payloadJson, long? expectedHooksVersion, CancellationToken cancellationToken) {
+			cancellationToken.ThrowIfCancellationRequested();
 			ProbeRuntime probe;
 			lock (Gate) probe = runtime as ProbeRuntime ?? throw new InvalidOperationException("The probe is not initialized yet.");
 			if (!string.Equals(operation, "status", StringComparison.Ordinal))

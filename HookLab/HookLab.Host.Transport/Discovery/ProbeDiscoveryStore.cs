@@ -12,7 +12,9 @@ namespace HookLab.Host.Transport.Discovery {
 	public sealed class ProbeDiscoveryStore {
 		const int FormatVersion = 1;
 		const int MaximumRecordBytes = 64 * 1024;
-		static readonly TimeSpan DiscoveryRecordLifetime = TimeSpan.FromMinutes(5);
+		/// <summary>How far ahead a write or a refresh sets <c>ExpiresUtc</c>. It is a *refresh deadline*,
+		/// not a validity deadline - see <see cref="Discover"/>.</summary>
+		public static readonly TimeSpan DiscoveryRecordLifetime = TimeSpan.FromMinutes(5);
 		static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 		readonly string directory;
 		readonly string quarantineDirectory;
@@ -38,6 +40,31 @@ namespace HookLab.Host.Transport.Discovery {
 			finally { if (File.Exists(temporary)) File.Delete(temporary); }
 		}
 
+		/// <summary>Every valid record for a live target.
+		///
+		/// <para><b>Expiry is a refresh deadline, not a validity deadline</b>, and it used to be the latter.
+		/// Nothing refreshed a record, so a probe alive longer than <see cref="DiscoveryRecordLifetime"/>
+		/// reported as "nothing installed" - which is exactly backwards for the mechanism T09's D4 rests on
+		/// for idempotency and for reconciliation after a host restart, and invites a second, permanently
+		/// unloadable payload generation into a target that already has one. Two things now hold instead:
+		/// <see cref="VerifyHealthAndRefresh"/> extends the deadline whenever an authenticated health check
+		/// succeeds, and a record past its deadline is still honoured while its target is provably the same
+		/// live process.</para>
+		///
+		/// <para>Nothing about the record's protection changes, and the check that decides validity is the
+		/// stronger of the two: <see cref="ILiveTargetIdentity.IsCurrent"/> compares image path, process id,
+		/// process creation time, architecture, runtime id and AppDomain id against the live process, so a
+		/// record can outlive neither its process nor a pid reuse. The clock never established any of that.
+		/// DPAPI CurrentUser protection, the inheritance-broken single-SID ACL on the directory and every
+		/// file, reparse rejection on the directory and the file, the escape-proof child path, the
+		/// name-matches-identity check and the protocol-version check are all untouched and still run on
+		/// every record read here and written by every refresh.</para>
+		///
+		/// <para>What the deadline still does: a record whose target is gone <b>and</b> whose deadline has
+		/// passed is deleted rather than quarantined. Quarantine is for records that fail an integrity
+		/// check; a record that simply outlived its process is our own garbage, and archiving it kept a
+		/// DPAPI-protected secret on disk indefinitely - strictly longer than the lifetime that was
+		/// supposed to bound it.</para></summary>
 		public IReadOnlyList<ProbeDiscoveryRecord> Discover(ILiveTargetIdentity liveTargets, DateTime nowUtc) {
 			if (liveTargets == null) throw new ArgumentNullException(nameof(liveTargets));
 			if (!Directory.Exists(directory)) return Array.Empty<ProbeDiscoveryRecord>();
@@ -49,8 +76,10 @@ namespace HookLab.Host.Transport.Discovery {
 					var record = Deserialize(DiscoveryCredentialProtection.Unprotect(bytes));
 					if (!string.Equals(Path.GetFileName(path), FileName(record), StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Discovery record name does not match its identity.");
 					if (record.ProtocolVersion != HookLab.Probe.CorDebug.Transport.ProbeWireProtocol.ProtocolVersion) throw new InvalidDataException("Discovery protocol version is incompatible.");
-					if (record.ExpiresUtc <= nowUtc.ToUniversalTime()) throw new InvalidDataException("Discovery record is expired.");
-					if (!liveTargets.IsCurrent(record.Target)) throw new InvalidDataException("Discovery target identity is stale.");
+					if (!liveTargets.IsCurrent(record.Target)) {
+						if (record.ExpiresUtc <= nowUtc.ToUniversalTime()) { File.Delete(path); continue; }
+						throw new InvalidDataException("Discovery target identity is stale.");
+					}
 					result.Add(record);
 				}
 				catch (Exception ex) when (ex is InvalidDataException || ex is CryptographicException || ex is UnauthorizedAccessException || ex is IOException) { Quarantine(path); }
@@ -58,11 +87,38 @@ namespace HookLab.Host.Transport.Discovery {
 			return result.AsReadOnly();
 		}
 
-		public string Rotate(ProbeDiscoveryRecord previous, byte[] rotatedSecret) {
-			var replacement = new ProbeDiscoveryRecord(previous.Target, previous.ProbeInstanceId, previous.PipeName, previous.EndpointNonce,
-				rotatedSecret, previous.ProtocolVersion, DateTime.UtcNow.Add(DiscoveryRecordLifetime));
-			return Write(replacement);
+		public string Rotate(ProbeDiscoveryRecord previous, byte[] rotatedSecret) => Replace(previous, rotatedSecret);
+
+		/// <summary>Extends the refresh deadline of an existing record, keeping its credential.
+		///
+		/// The write is the same write as any other - DPAPI CurrentUser, the single-SID ACL re-applied to the
+		/// temporary file and the replacement, the escape-proof child path, the size bound - so refreshing
+		/// cannot produce a record a fresh write could not.</summary>
+		public string Refresh(ProbeDiscoveryRecord record) {
+			if (record == null) throw new ArgumentNullException(nameof(record));
+			return Replace(record, record.Secret);
 		}
+
+		/// <summary>The health check T09's idempotency short-circuit runs before it considers installing
+		/// anything: it proves the endpoint answers under the record's own credential, and only then extends
+		/// the record's refresh deadline. A refresh is therefore never a bare timer - the record survives
+		/// exactly as long as the probe keeps proving it is there.
+		///
+		/// A failed check is left to the caller rather than quarantined here: D4 uses it to decide that a
+		/// fresh install is needed, and destroying the record on a transient IO failure would strand a probe
+		/// that is still running with no record naming it. <see cref="RecoverAndRotate"/> keeps its own
+		/// quarantine-on-failure behaviour, because a recovery that fails has already spent the credential.</summary>
+		public ProbeHealthResult VerifyHealthAndRefresh(ProbeDiscoveryRecord record, int timeoutMilliseconds = 5000) {
+			if (record == null) throw new ArgumentNullException(nameof(record));
+			var health = ProbeTransportClient.VerifyHealth(record, false, timeoutMilliseconds);
+			Refresh(record);
+			return health;
+		}
+
+		string Replace(ProbeDiscoveryRecord previous, byte[] secret) =>
+			Write(new ProbeDiscoveryRecord(previous.Target, previous.ProbeInstanceId, previous.PipeName, previous.EndpointNonce,
+				secret, previous.ProtocolVersion, DateTime.UtcNow.Add(DiscoveryRecordLifetime)));
+
 		public ProbeHealthResult RecoverAndRotate(ProbeDiscoveryRecord record, int timeoutMilliseconds = 5000) {
 			try { var health = ProbeTransportClient.VerifyHealth(record, true, timeoutMilliseconds); Rotate(record, health.Credential); return health; }
 			catch (Exception ex) when (ex is UnauthorizedAccessException || ex is IOException || ex is ProbeProtocolMismatchException) { var path = SafeChild(directory, FileName(record)); if (File.Exists(path)) Quarantine(path); throw; }

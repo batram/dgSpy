@@ -75,12 +75,70 @@ public sealed class TransportTests {
 	}
 
 	[Fact]
-	public void ExpiredAndIdentityMismatchedRecordsAreQuarantined() {
-		using var first = new TemporaryDirectory(); var process = Process.GetCurrentProcess(); var identity = new TargetIdentity("host", process.MainModule!.FileName, process.Id, process.StartTime.ToUniversalTime(), "x64", ".NET", "1");
-		var store = new ProbeDiscoveryStore(first.Path); store.Write(new ProbeDiscoveryRecord(identity, "probe", "pipe", ProbeAuthentication.CreateNonce(), ProbeAuthentication.CreateSecret(), 1, DateTime.UtcNow.AddSeconds(-1)));
-		Assert.Empty(store.Discover(new ExactIdentity(identity), DateTime.UtcNow));
-		using var second = new TemporaryDirectory(); store = new ProbeDiscoveryStore(second.Path); store.Write(new ProbeDiscoveryRecord(identity, "probe", "pipe", ProbeAuthentication.CreateNonce(), ProbeAuthentication.CreateSecret(), 1, DateTime.UtcNow.AddMinutes(1)));
+	public void AStaleTargetIdentityIsQuarantinedWhateverTheRefreshDeadlineSays() {
+		using var temporary = new TemporaryDirectory(); var process = Process.GetCurrentProcess(); var identity = new TargetIdentity("host", process.MainModule!.FileName, process.Id, process.StartTime.ToUniversalTime(), "x64", ".NET", "1");
+		var store = new ProbeDiscoveryStore(temporary.Path); store.Write(new ProbeDiscoveryRecord(identity, "probe", "pipe", ProbeAuthentication.CreateNonce(), ProbeAuthentication.CreateSecret(), 1, DateTime.UtcNow.AddMinutes(1)));
 		Assert.Empty(store.Discover(new NeverCurrent(), DateTime.UtcNow));
+		Assert.Empty(Directory.GetFiles(store.DirectoryPath, "*.probe"));
+	}
+
+	/// <summary>A probe that outlives the record lifetime must not report as "nothing installed". That is
+	/// what D4's idempotency short-circuit reads, and a false negative there invites a second, permanently
+	/// unloadable payload generation into a target that already has one. The deadline is a refresh
+	/// deadline; the live-target identity is what decides validity.</summary>
+	[Fact]
+	public void AProbeOutlivingTheRecordLifetimeIsStillDiscoveredAndRefreshable() {
+		using var temporary = new TemporaryDirectory(); var process = Process.GetCurrentProcess();
+		var identity = new TargetIdentity("host", process.MainModule!.FileName, process.Id, process.StartTime.ToUniversalTime(), "x64", ".NET", "1");
+		var store = new ProbeDiscoveryStore(temporary.Path);
+		var secret = ProbeAuthentication.CreateSecret();
+		// An hour past its deadline: more than ProbeDiscoveryStore.DiscoveryRecordLifetime by an order of
+		// magnitude, which is an ordinary rung-2 or rung-3 session length.
+		var path = store.Write(new ProbeDiscoveryRecord(identity, "probe", "pipe", ProbeAuthentication.CreateNonce(), secret, 1, DateTime.UtcNow.AddHours(-1)));
+		var found = store.Discover(new ExactIdentity(identity), DateTime.UtcNow).Single();
+		Assert.Equal("probe", found.ProbeInstanceId);
+		Assert.Equal(secret, found.Secret);
+		// Discovery is a read: it neither quarantined the record nor rewrote it.
+		Assert.True(File.Exists(path));
+		Assert.False(Directory.Exists(Path.Combine(Path.GetDirectoryName(store.DirectoryPath)!, "quarantine")));
+		// The refresh a successful health check performs, and its protection is the ordinary one.
+		var refreshed = store.Refresh(found);
+		var current = store.Discover(new ExactIdentity(identity), DateTime.UtcNow).Single();
+		Assert.True(current.ExpiresUtc > DateTime.UtcNow);
+		Assert.Equal(secret, current.Secret);
+		Assert.True(new FileInfo(refreshed).GetAccessControl().AreAccessRulesProtected);
+		Assert.All(new FileInfo(refreshed).GetAccessControl().GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>(),
+			rule => Assert.Equal(WindowsIdentity.GetCurrent().User, rule.IdentityReference));
+	}
+
+	/// <summary>Reconciliation after a host restart. Nothing in the host survives it - the action record
+	/// store is in-memory - so the record on disk is the whole mechanism, and a second store instance over
+	/// the same state root has to find it however long the probe has been up.</summary>
+	[Fact]
+	public void AHostRestartReconcilesFromTheRecordAlone() {
+		using var temporary = new TemporaryDirectory(); var process = Process.GetCurrentProcess();
+		var identity = new TargetIdentity("host", process.MainModule!.FileName, process.Id, process.StartTime.ToUniversalTime(), "x64", ".NET", "1");
+		var nonce = ProbeAuthentication.CreateNonce(); var secret = ProbeAuthentication.CreateSecret();
+		new ProbeDiscoveryStore(temporary.Path).Write(new ProbeDiscoveryRecord(identity, "probe", "pipe-name", nonce, secret, 1, DateTime.UtcNow.AddHours(-1)));
+		// The restarted host: a fresh store over the same root, with no in-memory state to help it.
+		var restarted = new ProbeDiscoveryStore(temporary.Path).Discover(new ExactIdentity(identity), DateTime.UtcNow).Single();
+		// Everything a health check needs to prove ownership of the endpoint came back intact.
+		Assert.Equal("pipe-name", restarted.PipeName); Assert.Equal(nonce, restarted.EndpointNonce); Assert.Equal(secret, restarted.Secret);
+	}
+
+	/// <summary>The deadline still does one thing: a record whose target is gone and whose deadline has
+	/// passed is destroyed, not archived. Quarantine kept a DPAPI-protected secret on disk indefinitely -
+	/// strictly longer than the lifetime that was supposed to bound it.</summary>
+	[Fact]
+	public void AnExpiredRecordForADeadTargetIsDeletedRatherThanArchived() {
+		using var temporary = new TemporaryDirectory(); var process = Process.GetCurrentProcess();
+		var identity = new TargetIdentity("host", process.MainModule!.FileName, process.Id, process.StartTime.ToUniversalTime(), "x64", ".NET", "1");
+		var store = new ProbeDiscoveryStore(temporary.Path);
+		var path = store.Write(new ProbeDiscoveryRecord(identity, "probe", "pipe", ProbeAuthentication.CreateNonce(), ProbeAuthentication.CreateSecret(), 1, DateTime.UtcNow.AddSeconds(-1)));
+		Assert.Empty(store.Discover(new NeverCurrent(), DateTime.UtcNow));
+		Assert.False(File.Exists(path));
+		var quarantine = Path.Combine(Path.GetDirectoryName(store.DirectoryPath)!, "quarantine");
+		Assert.True(!Directory.Exists(quarantine) || Directory.GetFiles(quarantine).Length == 0, "The secret was archived instead of destroyed.");
 	}
 
 	[Fact]
@@ -98,6 +156,13 @@ public sealed class TransportTests {
 			var changed = connection.Send(Request("mutate", "{\"value\":1}", 0)); Assert.Equal(1, changed.ExpectedHooksVersion);
 			var stale = connection.Send(Request("mutate", "{}", 0)); Assert.Equal("error", stale.Operation);
 		}
+		// A successful authenticated health check is what extends the record's refresh deadline, against a
+		// real probe rather than a hand-written record. The credential is unchanged, so the record the rest
+		// of this test uses stays valid.
+		var checkedHealth = store.VerifyHealthAndRefresh(record); Assert.Equal("status", checkedHealth.Status.Operation);
+		var extended = store.Discover(new AlwaysCurrent(), DateTime.UtcNow).Single();
+		Assert.True(extended.ExpiresUtc > record.ExpiresUtc, "A successful health check did not extend the record's refresh deadline.");
+		Assert.Equal(record.Secret, extended.Secret);
 		var health = store.RecoverAndRotate(record); Assert.Equal("status", health.Status.Operation);
 		Assert.Throws<UnauthorizedAccessException>(() => new ProbeConnection(record.PipeName, record.Secret, record.EndpointNonce, timeoutMilliseconds: 2000));
 		var rotated = store.Discover(new AlwaysCurrent(), DateTime.UtcNow).Single(); using var final = new ProbeConnection(rotated.PipeName, rotated.Secret, rotated.EndpointNonce);
@@ -140,6 +205,22 @@ public sealed class TransportTests {
 		try {
 			Assert.True(process.WaitForExit(60000), "injected-secret harness did not exit.");
 			Assert.True(process.ExitCode == 0, "injected-secret harness failed: exit " + process.ExitCode + "; " + HarnessReport(temporary.Path));
+		}
+		finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); } }
+	}
+
+	// Dispose closes the transport and returns while a command is still inside the handler, so a rollback
+	// that read a completed teardown as "the probe stopped" was reporting a property it had not
+	// established - and D5 makes that report the difference between cleanup_outcome completed and
+	// ambiguous. The harness blocks inside a side-effecting handler, disposes, and requires that the
+	// system keeps saying "in flight" until the handler is cancelled or demonstrably finished.
+	[Fact]
+	public void AnInFlightCommandIsReportedUntilItIsCancelledOrFinished() {
+		using var temporary = new TemporaryDirectory();
+		using var process = StartHarness("quiescence", temporary.Path, 1);
+		try {
+			Assert.True(process.WaitForExit(60000), "quiescence harness did not exit.");
+			Assert.True(process.ExitCode == 0, "quiescence harness failed: exit " + process.ExitCode + "; " + HarnessReport(temporary.Path));
 		}
 		finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); } }
 	}
