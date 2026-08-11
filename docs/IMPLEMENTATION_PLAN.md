@@ -167,26 +167,13 @@ authenticated, loopback-only, and shared by equally trusted local callers.
 
 ## 2. Optional high-risk capabilities
 
-Runtime hooking now has an approved concrete design split across:
-
-- [HookLab implementation](HOOKLAB_IMPLEMENTATION_PLAN.md) for the GUI, guarded probes, hybrid
-  authoring, and validated source-plus-DLL export;
-- [extension-provider and MCP integration](DGSPY_EXTENSION_PROVIDER_PLAN.md) for optional MEF
-  composition, typed tools, permissions, independent leases, audit, and remote operation; and
-- [atomic actions and non-stopping tracing](DGSPY_ATOMIC_ACTIONS_PLAN.md) for timing-sensitive
-  bootstrap, tracepoints, and exception capture without agent pause round trips.
-
-Delivery is x64 CLR v4/net48 first and Unity/Mono only after the CLR gate is green. Automatic native
-bootstrap/process watching, profiler/ReJIT, transpilers, reverse patches, CoreCLR, x86, and native
-debugging remain deferred. The current tool surface does not provide these capabilities until their
-implementation milestones and acceptance gates are complete.
-
-Before those milestones, a disposable stage-0 CLR spike proves Harmony patch/unpatch, dependency
-loading, CorDebug coexistence, and authenticated pipe transport using a manually prepared stop. The
-production design then requires extension-hosted process exclusion, coincident user/internal
-breakpoint ownership, orthogonal action/interruption/cleanup outcomes, host-enforced default-deny
-capability permissions, and restart-safe probe discovery credentials. Mono/UCH must reuse a proven
-compatible resident BepInEx HarmonyX/MonoMod backend rather than loading a competing implementation.
+Runtime hooking now has one active [HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md): a
+direct vertical slice for guarded observation hooks through MCP and the dnSpy GUI. Mutation hooks,
+generic providers, expert compilation, persistent reconnect, Unity/Mono, CoreCLR, x86, automatic
+watching, profiler/ReJIT, transpilers, reverse patches, and native debugging are outside the first
+version. The existing CLR prototype already proves Harmony patch/unpatch and event capture; the active
+plan starts from that repository state instead of repeating feasibility work. It deliberately does not
+carry the old provider, atomic-action, credential, or Mono requirements forward.
 
 General target-code execution outside HookLab, assembly editing, general live method-body replacement,
 and dnSpy-host scripting remain unscheduled. Their trust boundaries and prerequisites are in

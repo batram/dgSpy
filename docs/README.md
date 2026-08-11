@@ -13,14 +13,11 @@
   focused fixes upstream.
 - [Remote hosts](REMOTE_HOSTS.md) — deploy packages and the target outbound registration/TLS design.
 
-## Approved implementation designs
+## Active feature plan
 
-- [HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md) - standalone GUI extension,
-  guarded Harmony probes, hybrid hook authoring, and source-plus-DLL export.
-- [Extension-provider and hooking MCP plan](DGSPY_EXTENSION_PROVIDER_PLAN.md) - optional MEF
-  providers, typed `hook_*` tools, permissions, leases, audit, and remote artifacts.
-- [Atomic actions and non-stopping tracing plan](DGSPY_ATOMIC_ACTIONS_PLAN.md) - host-side
-  timing-sensitive actions, payload bootstrap, tracepoints, and exception capture.
+- [HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md) - one direct GUI and MCP path for
+  guarded Harmony observation hooks. It replaces the earlier provider, atomic-action, and micro-task
+  plans.
 
 ## Worked examples
 

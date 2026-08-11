@@ -1,260 +1,190 @@
-# HookLab implementation plan
+# HookLab: simple implementation plan
 
-HookLab is a standalone dnSpy GUI extension and target-side runtime-hooking system. It lives in this
-monorepo, but its UI, protocol, compiler, and runtime probes remain separate assemblies. The GUI
-extension targets both the default net10.0-windows dnSpy host and the retained net48 host; its target
-probe and target runtime are separate concerns. The first supported target runtime is x64 CLR v4/.NET
-Framework 4.8; Unity/Mono follows only after the CLR acceptance gate is green. The dgSpy integration
-and atomic bootstrap are specified in
-[DGSPY_EXTENSION_PROVIDER_PLAN.md](DGSPY_EXTENSION_PROVIDER_PLAN.md) and
-[DGSPY_ATOMIC_ACTIONS_PLAN.md](DGSPY_ATOMIC_ACTIONS_PLAN.md). Existing dgSpy tools and contracts remain
-unchanged until these milestones are implemented and accepted.
+## Goal
 
-## Product and assembly boundaries
+HookLab adds basic Harmony method hooking to dnSpy. A user or agent can select a method in a running
+x64 CLR v4/.NET Framework process, install an observation hook, see hook events, inspect the hooks
+currently installed by HookLab, and remove them. The same behavior is available from the dnSpy GUI and
+from MCP.
 
-| Assembly | Responsibility |
-| --- | --- |
-| `HookLab.Extension.x.dll` | net48/net10 dnSpy WPF UI, authoring, orchestration, event view, and package export. |
-| `HookLab.Contracts.dll` | netstandard2.0 hook/package/probe DTOs shared by the HookLab host components and target probes. |
-| `HookLab.Probe.CorDebug.dll` | net48 target probe using a pinned standard Harmony release. |
-| `HookLab.Host.Transport.dll` | net48/net10 host-side pipe client, discovery records, and credential lifecycle. |
-| `HookLab.Bootstrap.dll` | Dependency-free byte-loaded bootstrap that resolves the probe from embedded verified bytes. |
-| `HookLab.Probe.Mono.dll` | Later Unity/Mono probe reusing a validated resident HarmonyX/MonoMod backend. |
-| `HookLab.Compiler.exe` | Isolated Roslyn helper compiling against exact references on the selected host. |
+This is the whole first product. The implementation should be a clear vertical slice, not a framework
+for imagined future plug-ins or a collection of separately owned task packages.
 
-Harmony and probe dependencies must not enter dnSpy's load context. The GUI and MCP provider use one
-`HookManagerService`, so interactive and remote operations have identical validation and ownership.
-The provider also references the separate `dgSpy.ExtensionContracts` host plug-in ABI; target probes
-never reference or load that assembly, and `dgSpy.ExtensionContracts` contains no HookLab wire DTOs.
-The first milestone supports prefixes, postfixes, and finalizers. Transpilers, reverse patches,
-CoreCLR, x86, native debugging, profiler/ReJIT, and automatic process watching/native bootstrap are
-explicit later work.
+## What the finished first version does
 
-## Identities, guards, and state
+1. Attach dgSpy to an x64 CLR v4 process.
+2. Select an exact managed method from the normal dnSpy code view or identify it through MCP.
+3. Install a Harmony prefix, postfix, or finalizer that observes calls without changing program
+   behavior.
+4. Record bounded events containing the hook ID, method identity, hook kind, time, thread, and a
+   bounded representation of the useful values available at that hook point:
+   - prefix: arguments;
+   - postfix: arguments and return value;
+   - finalizer: exception, when present.
+5. List installed hooks and their current state.
+6. Read new events and dropped-event counts without leaving the target paused.
+7. Remove one hook or all HookLab hooks from the target.
+8. Perform steps 2-7 from either MCP or the dnSpy GUI, through the same implementation.
 
-A target identity contains `host_id`, canonical image path, PID, process creation time, architecture,
-runtime identity, and selected AppDomain. PID alone is never sufficient. Multiple-AppDomain targets
-initially require an explicit runtime/AppDomain selection.
+Hook installation must validate the selected process/runtime, module MVID, metadata token, method
+signature, and current IL hash. A mismatch refuses the operation instead of guessing another method.
+Hook callbacks must be bounded, must not wait for the GUI or MCP, and must fail open so observation does
+not replace the target's result or exception.
 
-Every hook target is guarded by all of:
+## Explicitly not part of the first version
 
-- process and runtime identity;
-- module MVID;
-- metadata token;
-- full declaring-type and method signature; and
-- SHA-256 fingerprint of the expected IL body.
+- changing arguments, results, exceptions, or whether the original method runs;
+- retries, UI-thread scheduling, or application-specific recovery policies;
+- arbitrary or compiled user C# hooks;
+- transpilers, reverse patches, or native/profiler hooks;
+- exportable projects, packages, automatic loaders, or process watchers;
+- hooks that survive debugger detach or dnSpy restart;
+- reconnectable discovery records and long-lived credential management;
+- generic third-party extension-provider infrastructure;
+- public general-purpose atomic-action workflows;
+- Mono/Unity, CoreCLR, or x86 support;
+- remote-host support beyond what falls out naturally from the existing dgSpy connection.
 
-Any mismatch refuses installation or update. HookLab never searches for a "nearest" method. The
-probe reports a stable `probe_instance_id`, stable `patch_id` values, and a monotonically increasing
-`hooks_version`. Hooks remain active after debugger detach; removal is always explicit. Process exit,
-AppDomain unload, or identity mismatch invalidates the resource and PID reuse cannot revive it.
+These are not deferred requirements that the first implementation must prepare for. If one becomes a
+real requirement later, design it from the working product and measured constraints at that time.
 
-Harmony cannot intercept calls already inlined into callers. HookLab reports known or likely inlining
-and offers validation hooks at callers; it never claims complete interception.
+## Starting point in this repository
 
-## Atomic probe bootstrap
+The repository already proves the hard mechanical core:
 
-Probe installation is one specialized debugger-host operation, not a client composition of public
-evaluation calls:
+- `HookLab.Bootstrap` can be byte-loaded into a CLR v4 target and start a resident worker.
+- `HookLab.Probe.CorDebug` can install a guarded Harmony hook, buffer events, and unpatch it.
+- the extension's payload action can prepare, commit, drain, and shut down the probe;
+- `tests/run-hooklab-install-smoke.ps1` has installed a hook in a live target, observed calls, rejected
+  bad guards, removed the hook, and detached without killing the target;
+- packaging places one verified bootstrap payload in the deployed host tree.
 
-1. Resolve and validate the exact target, runtime, AppDomain, module, and method guard.
-2. ~~Stage a hash-verified bootstrap with an embedded dependency bundle beneath a configured host cache
-   using canonical-path and reparse-point protections.~~ **Superseded by P01 and T09's decision D7: there
-   is no host cache and no staging step**, deliberately - not creating a writable cache removes the threat
-   those protections mitigate. The payload ships as one verified file inside the versioned deployment
-   tree. Read it from the running host's tree and verify the digest from an open handle held across the
-   evaluation. Nothing is staged, so nothing is deleted afterwards.
-3. Run naturally to a declared managed location and select an evaluatable managed frame, using only
-   a declared bounded nearby-slot search when necessary.
-4. Execute a fixed `Assembly.Load(byte[])` bootstrap whose dependency-free initializer installs a
-   manifest-restricted resolver for embedded, hash-verified payload assemblies; then call the probe's
-   versioned initializer and pass only bounded initialization data.
-5. Verify assembly digest, protocol version, `probe_instance_id`, target identity, and pipe endpoint.
-6. Release the internal breakpoint owner, settle debugger state, delete staged files where possible,
-   and apply the declared deterministic resume policy.
+This is useful implementation, not a required architecture. Keep code that directly helps the simple
+product and delete or collapse code whose only purpose was satisfying the archived plans. In
+particular, do not expose prepare/commit/drain, leases, breakpoints, payload generations, provider
+schemas, or atomic-action terminology to HookLab users if a single HookLab operation can own those
+details.
 
-The operation returns truthful terminal and ambiguity information defined by the atomic-actions plan.
-Loaded assemblies normally cannot be unloaded from a .NET Framework AppDomain; unpatching removes
-methods but not assembly generations. HookLab tracks generations and warns before repeated expert
-recompilation.
+The current live smoke used the shipping net10 dnSpy host against a net48 target. Treat the retained
+net48 host, the GUI, and the full modernization gate as unverified until they are run during this work.
 
-## Probe transport and reconnection
+## One implementation through-line
 
-HookLab and each probe communicate through an authenticated, bounded named pipe. The pipe has a
-target-appropriate ACL and a deterministic discovery record keyed by full process identity and a
-nonce. Connection establishment uses a challenge tied to a per-probe secret; secrets never enter
-logs, manifests, or event payloads.
+### 1. Establish the current baseline, then simplify it
 
-The initializer returns the secret once to the installing host. For restart continuity the host stores
-it only in a discovery record protected with Windows DPAPI for the host account and a restrictive ACL;
-the record also contains host ID, canonical image identity, PID plus creation time, runtime/AppDomain,
-probe instance, endpoint nonce, protocol version, and expiry. Discovery validates every field against
-the live target before attempting a pipe connection. Successful removal and target exit delete the
-record; startup quarantines stale, malformed, replayed, or identity-mismatched records. Recovery rotates
-the secret after authentication. This protects continuity credentials from other accounts and
-accidental disclosure; it is not a sandbox against arbitrary code already running as the same user or
-inside the target.
+Run the focused unit tests and the existing HookLab live smoke before changing behavior. Record what
+actually passes. Trace the live smoke from extension request to bootstrap and probe, and identify the
+smallest path that installed, observed, and removed the hook.
 
-Rotation is a one-way ratchet over the current secret and two challenges that travel in the clear. A
-captured secret therefore reveals nothing about earlier ones, but rotation does not self-heal: an
-attacker holding one secret who can also observe handshakes derives every successor. Reading pipe
-traffic already implies same-user access, which this design does not claim to defend against, and a
-discovery record leaked on its own cannot be advanced without the challenges - so the exposure is
-narrow. It is recorded because "rotation" otherwise reads as "a leaked secret stops working", which is
-the wrong thing for audit or threat text to assume. See
-`tests/HookLab.Transport.Tests/ACCEPTANCE.md`.
+Refactor around that path. Remove unused abstractions and branches rather than completing them. Likely
+deletion candidates include unused generic provider composition, transport/discovery machinery that is
+not needed for the chosen event path, and general atomic-action features that exist only to support
+future operations. These are candidates, not mandatory deletions: inspect callers and tests, preserve
+ordinary dgSpy behavior, and let the simplest working end-to-end design decide.
 
-Messages are length-prefixed, versioned, size-limited, and schema-validated. Hook callbacks never
-wait for the pipe. They append compact events to a bounded ring buffer and a worker performs delivery.
-Overflow increments an explicit dropped-event count. Commands are serialized through the probe,
-carry an expected `hooks_version`, and return the new version.
+It is acceptable to keep the existing payload action temporarily as a private bootstrap mechanism.
+It is not acceptable to make every GUI or MCP feature speak its low-level multi-step protocol.
 
-Pipe or dnSpy/Gateway disconnection preserves hooks. A restart discovers the probe, authenticates,
-checks its identity and version, and reconciles state. An incompatible client may read a bounded
-status response but cannot mutate hooks. State is never preserved across target exit or PID reuse.
+### 2. Create one HookLab service
 
-## Hybrid authoring
+Add one host-side service that owns all HookLab state and operations for the attached target. Its API
+should express product actions, approximately:
 
-### Declarative hooks
+- install an observation hook;
+- list hooks;
+- read events after a cursor;
+- remove one hook;
+- remove all hooks.
 
-Declarative prefix, postfix, and finalizer documents support:
+The exact class and DTO names are implementation choices. Keep the request and result models small,
+version them only where a real process boundary requires it, and return actionable failures. The
+service owns any payload preparation, natural-arrival breakpoint, evaluation, transport, buffering,
+and cleanup required underneath.
 
-- bounded capture of arguments, fields, results, exceptions, counters, and timing;
-- predicates, sampling, rate limits, and per-hook event filters;
-- argument or result replacement and an explicit skip-original action;
-- exception observation, replacement, suppression, or propagation;
-- bounded retry policies with attempt limits, backoff, reentrancy guards, and predicates; and
-- scheduling on the current thread, a WinForms control, or a WPF dispatcher.
+Use one stable HookLab hook ID. Make install idempotent for the same ID and exact definition; refuse a
+conflicting reuse. Removal affects only HookLab-owned patches. On target exit or detach, discard host
+state and make a best effort to unpatch while the debugger still has a usable target. Report uncertainty
+truthfully when the target exits or communication is lost.
 
-Argument/result replacement, skip-original, and exception replacement are synchronous current-thread
-actions. Work posted to a WinForms/WPF dispatcher is a later invocation and cannot retroactively alter
-the original call's return value or exception. WinForms/WPF scheduling uses weakly held, validated
-targets. Disposed controls, shutting-down
-dispatchers, disconnected sessions, and process shutdown are cancellation, not retryable failure.
-Probe-dispatch exceptions are caught and recorded. Hooks fail open where possible, preserve the
-original method/exception unless an explicit successful action says otherwise, and auto-disable after
-a bounded consecutive-failure threshold.
+Choose the least complex event path that meets the finished behavior. Events may use an existing pipe,
+a much smaller replacement, or another target-to-host mechanism, but callers see only cursor-based
+event reads. Do not retain authentication, discovery, rotation, or reconnection machinery unless the
+actual same-session local path needs it. Event callbacks enqueue bounded data and return immediately.
 
-### Expert C#
+### 3. Expose the service directly through MCP
 
-The UI generates readable prefix/postfix/finalizer templates. `HookLab.Compiler.exe` runs as a
-separate process on the selected local or remote host, uses exact target reference metadata, and has
-bounds for source size, reference count and roots, diagnostics, output size, duration, and compiler
-concurrency. Compilation isolation protects dnSpy stability; custom C# remains explicitly
-unsandboxed code execution inside the target.
+Add a small, explicit MCP surface rather than a generic extension-provider protocol:
 
-The helper produces deterministic patch DLL/PDB artifacts and digests. Generated patches avoid
-unnecessary static target-type references and use generated adapters/reflection where loader context
-requires it. Injection is hash-verified and uses the same atomic payload path as the standard probe.
+- `install_hook`
+- `list_hooks`
+- `get_hook_events`
+- `remove_hook`
+- `remove_all_hooks`
 
-## Bounded observation and hot-hook behavior
+Names may be adjusted to match existing dgSpy conventions, but keep one tool per user action. Tool
+schemas should accept exact target/method identity from existing discovery tools and only the few
+observation choices described above. Results include hook state, verification evidence where useful,
+event cursor/dropped counts, and clear cleanup ambiguity.
 
-Each hook declares maximum event rate, total bytes, serialization depth, collection count, string
-length, and retry/reentrancy limits. Value capture does not invoke property getters or `ToString()` by
-default. Hot hooks require sampling or aggregation when configured thresholds are exceeded. Events
-include `probe_instance_id`, `patch_id`, `hooks_version`, a monotonic sequence, timestamp, thread,
-truncation markers, and dropped counts. Slow consumers cannot block target execution.
+Authorization and audit should use dgSpy's existing mutation/tool mechanisms. Do not introduce another
+permission framework for HookLab. Installation and removal are mutations; listing and reading events
+are reads.
 
-## Prototype export
+### 4. Add the dnSpy GUI over the same service
 
-A validated prototype exports both:
+Add a HookLab tool window and a method-context action. The minimum GUI is:
 
-1. a readable generated source project containing manifest, generated source, exact reference
-   metadata, tests, licenses, and build instructions; and
-2. the exact compiled DLL/PDB and SHA-256 hashes used during live validation.
+- an `Add Hook...` action on a selected method;
+- a small dialog for hook ID, prefix/postfix/finalizer, and capture bounds;
+- a list of installed hooks with state and Remove/Remove All actions;
+- an event list that updates while the target runs and shows dropped counts;
+- clear errors when the target or method identity changed.
 
-The canonical manifest records target guards, backend and versions, compiler identity/options,
-artifact hashes, entry points, permissions required, and validation results. Export uses a configured
-safe artifact root, canonical containment and reparse protection, fresh temporary paths, atomic
-publication, and no overwrite by default. Remote artifacts use chunked hash-verified retrieval.
-Manifests and entry points must already be compatible with the deferred automatic loader.
+The GUI calls the same HookLab service as MCP. It does not invoke MCP internally and does not contain a
+second hook manager. Keep UI state disposable and rebuild it from service state after window reopen.
+Confirm every new MEF import is actually exported and retain composition coverage, because dnSpy drops
+unsatisfied parts silently.
 
-## Backend coexistence and licensing
+### 5. Make the vertical slice reliable and delete the scaffolding it replaces
 
-The dependency-free bootstrap inventories loaded Harmony, HarmonyX, and MonoMod assemblies before any
-backend-specific type is resolved. On CLR it reuses only an exact tested compatible standard-Harmony
-identity; otherwise it loads the pinned embedded backend, and it refuses an incompatible resident
-backend rather than loading a competing implementation.
+Cover the shared service rather than duplicating most behavior tests at the GUI and MCP layers. Keep a
+small number of boundary tests for tool schemas, MEF composition, and GUI command wiring. Extend the
+live smoke so it uses the public HookLab MCP tools, not private payload or atomic-action operations.
 
-The UCH/Mono implementation must bind to and reuse the compatible HarmonyX/MonoMod implementation
-already loaded by BepInEx. It does not load a second patching implementation into that target. A clean
-Mono fixture may load the separately pinned HarmonyX bundle, but UCH acceptance is absent until the
-resident versions, API compatibility, owner isolation, patch/unpatch behavior, and conflict reporting
-are proven as a matrix. An incompatible resident backend fails closed with its exact identity and no
-target mutation.
+Once the public vertical slice works, remove obsolete public operations, DTOs, tests, and documentation
+that were used only by the prototype path. If some low-level operation remains useful internally, make
+that ownership obvious and stop advertising it as product surface. Do not preserve an abstraction just
+because earlier tasks spent time building it.
 
-Packages record the pinned Harmony license and notices, HarmonyX/MonoMod licenses if used, and the
-origin and license of any UnityExplorer-derived Hook Manager code. License review is an acceptance
-item, not a post-release cleanup.
+## Acceptance
 
-## Delivery stages and acceptance
+The first version is complete when one unattended end-to-end run, on the hidden desktop:
 
-0. **Disposable feasibility spike:** at a manually prepared user breakpoint, use existing explicit
-   evaluation/invocation primitives to load a throwaway probe into a net48 fixture and prove Harmony
-   patch/unpatch, CorDebug coexistence, bounded pipe transport, dependency resolution, and clean target
-   exit. The load test must prove func-eval completes across the nested module/assembly-load callbacks
-   raised by `Assembly.Load`; successful loading outside func-eval is not sufficient.
+1. launches and attaches to the net48 x64 fixture;
+2. identifies a method through normal dgSpy discovery;
+3. installs each supported observation hook through the public MCP surface;
+4. proves the method continues returning and throwing exactly as it did without the hooks;
+5. receives correctly ordered, bounded events while the target runs;
+6. shows the same hooks and events in the HookLab GUI;
+7. rejects a wrong MVID, token, signature, and IL hash without installing anything;
+8. reports overflow rather than blocking or growing without bound;
+9. removes one hook and then all hooks, after which no new events appear;
+10. detaches cleanly and leaves the target running;
+11. passes the focused HookLab, extension, composition, protocol, Gateway, and packaging tests; and
+12. passes the applicable CorDebug modernization gate for both the shipping net10 host and retained
+    net48 host.
 
-   In the same stage, prototype the lowest engine layer needed to multiplex an internal logical owner
-   with an existing conditional, trace, enabled, and disabled user breakpoint at the exact same
-   location. Prove independent hit delivery, user-stop precedence, and ownership-scoped cleanup without
-   mutating the user's settings. If dnSpy's engine cannot support that model, stop and redesign the
-   atomic breakpoint contract before stage 1; do not defer the discovery behind a capability-absent
-   fallback.
+GUI automation and every smoke that launches dnSpy must run on the private hidden desktop described in
+`AGENTS.md`. Run dgSpy Protocol, Gateway, and Extension tests sequentially to avoid assembly locks.
 
-   This spike is not shipped, is not exposed as a workflow, and does not weaken the production rule
-   that bootstrap is one specialized host action. Stop before the atomic/provider implementation if
-   either the bootstrap or breakpoint experiment cannot establish these facts.
+## How agents should execute this plan
 
-   **Both experiments ran and both returned go.** See
-   `docs/local/evidence/hooklab-bootstrap-spike-verdict.md` and
-   `docs/local/evidence/hooklab-breakpoint-multiplex-verdict.md`. The measured consequences are folded
-   into the paragraphs below; what the spikes did not establish is listed in each verdict and must not
-   be treated as proven.
-1. **CLR fixture and transport:** disposable net48 fixture, guarded atomic injection, authenticated
-   pipe health, status, unpatch, and clean exit.
-2. **Observation:** non-stopping prefix/postfix/finalizer events, bounds, counters, and GUI event view.
-3. **Declarative mutation:** argument/result actions, skip, exception actions, bounded retries,
-   failure auto-disable, and current-thread/WinForms/WPF schedulers.
-4. **Expert compilation and export:** isolated selected-host compilation, injection, generation
-   tracking, source-project-plus-exact-DLL export, and rebuild verification.
-5. **dgSpy/MCP and remote operation:** typed and generic provider tools, permissions, independent
-   leases, detach-with-hooks, reconnection, remote compilation, artifact transfer, and redacted audit.
-6. **Unity/Mono:** equivalent applicable contract against UCH, safe detach, existing-Harmony conflict
-   detection, and bounded Unity gates.
+One capable agent owns the repository and the whole through-line at a time. The agent may revise the
+implementation order as source evidence demands, edit any necessary in-scope file, and remove obsolete
+code. Do not split the work into tiny hand-off documents, fixed file-ownership packages, or independent
+tasks whose local acceptance can pass while the product remains unusable.
 
-The CLR fixture must prove install from both net48 and net10 dnSpy hosts, observe, mutate, retry,
-exception handling, expert compilation, unpatch, detach-with-hooks, post-detach control, reconnection,
-export, and clean process exit. It also verifies debugger behavior after patching, whose shape stage 0
-measured rather than predicted: a hooked method keeps full metadata fidelity - `get_il`, `get_csharp`,
-call stacks, and breakpoint *binding* all continue to describe the original body - but loses execution
-visibility of that body, because Harmony's detour routes calls into an unnamed `[Lightweight Function]`
-DynamicMethod and the original jitted entry leaves every executed path.
-
-A source breakpoint on a hooked method therefore binds and then never fires. Stage 1 must not present
-binding as evidence that the breakpoint is live, and must not offer `get_il`/`get_csharp` output as
-evidence that the original body still executes: a silently inert breakpoint is worse than a refused one.
-The truthful contract is that hooked methods keep their metadata view and lose original-body execution
-breakpoints, and that execution is observed through the hook instead, where breakpoints, frames, and
-stepping are all fully available - stage 0 stepped inside an active prefix from IL 0 to IL 9 with
-accurate locals.
-
-The behavior survives an unpatch, and that much is measured: in a single-process fixture at a unique
-module path, the `Worker.Run` breakpoint stayed at `engine_hit_count:0` both before and after `Unpatch`,
-while an exact-path control breakpoint on an un-hooked method in the same module reached
-`engine_hit_count:1` immediately. The likeliest explanation is that Harmony keeps routing calls through
-a rebuilt replacement rather than restoring the original entry - but that mechanism is inference, not
-measurement, and only the behavior may be relied on. Plan for a breakpoint that stays inert after
-unpatch; do not build anything on why.
-VMConnect acceptance requires a non-stopping postfix that observes `SyncDisplaySettings()` failure and
-schedules a bounded UI-thread retry without breaking fullscreen or waiting for an agent response while
-paused. It is a validation target, not a bundled machine-specific patch.
-
-All existing Protocol, Gateway, Extension, composition, CorDebug, and bounded Unity gates run
-sequentially. GUI smokes run on the hidden desktop. Mono work begins only after every applicable CLR
-gate is green.
-
-Pipe acceptance covers same-integrity, elevated-host to medium-integrity target, the supported reverse
-direction, unauthorized clients, discovery-record replay, and pipe-name squatting. Each delivery stage
-is independently gated and may ship without later stages; expert compilation/export and Mono do not
-expand the minimum CLR probe milestone merely because they appear in the same plan.
+At each useful checkpoint, leave the repository buildable and verify the narrowest real vertical slice
+available. A commit may contain a coherent cross-layer increment. Before declaring completion, the agent
+must inspect the complete diff, run the end-to-end acceptance path, and state separately what was
+measured, what is inferred, and what remains unverified.

@@ -4,13 +4,11 @@ These capabilities are deliberately unscheduled. Implement one only for a concre
 remote authorization and audit model can grant it independently. None is a sandbox, and no permission
 implies another.
 
-Runtime Harmony hooking is no longer merely speculative: its approved, staged design is in the
-[HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md),
-[extension-provider and MCP plan](DGSPY_EXTENSION_PROVIDER_PLAN.md), and
-[atomic-actions plan](DGSPY_ATOMIC_ACTIONS_PLAN.md). Those plans cover guarded declarative hooks and
-isolated expert compilation, but custom C# remains unsandboxed target-code execution. The sections
-below continue to govern general execution, assembly editing/live replacement, and host scripting
-outside that bounded design.
+Basic observational Harmony hooking now has one active
+[HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md). Mutation hooks and custom C# are not
+part of that first version; custom C# remains unsandboxed target-code execution. The sections below
+continue to govern general execution, assembly editing/live replacement, and host scripting outside
+the bounded observation feature.
 
 ## Target C# execution
 
