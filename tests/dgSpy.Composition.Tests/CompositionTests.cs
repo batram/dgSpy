@@ -112,6 +112,15 @@ public class CompositionTests {
 	}
 
 	[Fact]
+	public void HookLab_gui_command_window_and_loader_compose() {
+		RequirePublishedHost();
+		var names = PublishedHost.Instance.Catalog.Parts.Select(part => part.Type.FullName ?? "").ToHashSet(StringComparer.Ordinal);
+		Assert.Contains("dgSpy.Extension.ToolWindows.AddHookFromCodeCommand", names);
+		Assert.Contains("dgSpy.Extension.ToolWindows.HookLabToolWindowProvider", names);
+		Assert.Contains("dgSpy.Extension.ToolWindows.HookLabToolWindowLoader", names);
+	}
+
+	[Fact]
 	public void Debugger_composes_with_zero_action_guards() {
 		RequirePublishedHost();
 		var configuration=PublishedHost.Instance.ComposeWithoutAssembly("dgSpy.Extension.x");

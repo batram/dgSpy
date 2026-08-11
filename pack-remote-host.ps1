@@ -1,5 +1,5 @@
 param(
-	[string]$Configuration = 'Release',
+	[ValidateSet('Release')][string]$Configuration = 'Release',
 	[string]$OutputDirectory = "$PSScriptRoot\artifacts\remote-host",
 	[switch]$SkipBuild,
 	[string]$HostPublishDirectory = "$PSScriptRoot\dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish"
@@ -46,7 +46,7 @@ foreach ($relativePath in $requiredHostFiles) {
 		throw "Self-contained host file is missing: $relativePath. Build with .\build.ps1 net-x64 -NoMsbuild."
 	}
 }
-$extensionFiles = @('dgSpy.Extension.x.dll', 'dgSpy.Extension.x.pdb', 'dgSpy.Protocol.dll', 'dgSpy.Protocol.pdb')
+$extensionFiles = @('dgSpy.Extension.x.dll', 'dgSpy.Extension.x.pdb', 'dgSpy.Protocol.dll', 'dgSpy.Protocol.pdb', 'HookLab.Contracts.dll', 'HookLab.Contracts.pdb', 'HookLab.Host.Transport.dll', 'HookLab.Host.Transport.pdb')
 foreach ($fileName in $extensionFiles) {
 	if (-not (Test-Path -LiteralPath (Join-Path $extensionOutput $fileName) -PathType Leaf)) { throw "Extension output is missing: $fileName." }
 }
@@ -61,6 +61,13 @@ Copy-Item -LiteralPath $HostPublishDirectory -Destination $resolvedBundle -Recur
 $deployDirectory = Join-Path $resolvedBundle 'bin\Extensions\dgSpy'
 New-Item -ItemType Directory -Path $deployDirectory -Force | Out-Null
 foreach ($fileName in $extensionFiles) { Copy-Item -LiteralPath (Join-Path $extensionOutput $fileName) -Destination $deployDirectory }
+$rootProtocol = Join-Path $resolvedBundle 'bin\dgSpy.Protocol.dll'
+$extensionProtocol = Join-Path $deployDirectory 'dgSpy.Protocol.dll'
+if (Test-Path -LiteralPath $rootProtocol -PathType Leaf) {
+	if ((Get-FileHash -LiteralPath $rootProtocol -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $extensionProtocol -Algorithm SHA256).Hash) {
+		throw 'The remote bundle has different app-base and extension dgSpy.Protocol.dll files; dnSpy would silently load the app-base copy.'
+	}
+}
 $launcherDirectory = Join-Path $resolvedBundle 'launcher'
 New-Item -ItemType Directory -Path $launcherDirectory -Force | Out-Null
 foreach ($launcher in 'Start-dgSpyRemoteHost.ps1', 'Start-dgSpyRemoteHost.cmd') {

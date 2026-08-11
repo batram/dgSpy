@@ -227,6 +227,13 @@ namespace dgSpy.Protocol {
 			Op("pause",12000,mutates:true),
 			Op("continue",12000,mutates:true),
 			Op("run_atomic_action",65000,mutates:true,version:1),
+			Op("initialize_hooklab",130000,mutates:true,version:1),
+			Op("get_hooklab_status",5000,version:1),
+			Op("install_hook",65000,mutates:true,version:1),
+			Op("list_hooks",5000,version:1),
+			Op("get_hook_events",65000,version:1),
+			Op("remove_hook",65000,mutates:true,version:1),
+			Op("remove_all_hooks",65000,mutates:true,version:1),
 			// start_atomic_action returns after registration, not after the action - so its bound is the
 			// validate-and-schedule cost, not the action's deadline. Advertising the action's 65 s here would
 			// make every Gateway hold a minute-long deadline open for a call that answers in milliseconds.

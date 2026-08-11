@@ -138,6 +138,18 @@ Duplicate files must have identical SHA-256 hashes except for the explicit Windo
 variants retained from dnSpy at the same .NET servicing version. Packaging fails on every unknown or
 version-mismatched collision.
 
+The shared `dgSpy.Protocol.dll` is a hard package boundary. dnSpy probes `cli\bin` before the extension
+directory, while the CLI and Gateway also load that same app-base copy. The packer requires the app-base
+and extension copies to be byte-identical and records `protocol_sha256`; the installer and Gateway
+recheck it. `-HostOnly` refuses protocol drift before copying anything because the running MCP process
+locks that shared assembly. Use a full install/restart for tool or schema changes.
+
+Installation validates the source package before stopping any process, validates the staged copy before
+the directory swap, and retains the previous tree until MCP registration, CLI smoke, and installed-byte
+verification all succeed. Any late failure restores the previous directory. The manifest covers the
+extension, protocol, HookLab payload, and coarse complete-tree shape; Gateway deployment additionally
+hashes the whole payload tree.
+
 With no switches, `pack-dgspy.ps1` remains the release-engineering command: it writes the optimally
 compressed portable archive `artifacts\dgspy\dgspy-win-x64.zip`. `-CompressionLevel Fastest` and
 `-CompressionLevel NoCompression` are available for explicit ZIP experiments, but do not change the

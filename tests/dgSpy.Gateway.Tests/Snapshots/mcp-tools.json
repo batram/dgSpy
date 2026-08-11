@@ -537,6 +537,286 @@
       }
     },
     {
+      "name": "initialize_hooklab",
+      "description": "SIDE EFFECTING. Initialize HookLab in the selected process. dgSpy pauses only as needed, selects an evaluable managed thread, injects the resident runtime, verifies its control channel, and restores the process\u0027s prior running state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          }
+        },
+        "required": [
+          "session_id",
+          "process_id",
+          "expected_execution_version"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "get_hooklab_status",
+      "description": "Report whether HookLab is initialized and ready in a process.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "install_hook",
+      "description": "SIDE EFFECTING and audited. Install one Harmony prefix, postfix, or finalizer through an already initialized HookLab runtime. Exact MVID, token, signature, and IL digest guards are required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "hook_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "Prefix",
+              "Postfix",
+              "Finalizer"
+            ]
+          },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
+          "assembly": {
+            "type": "string"
+          },
+          "declaring_type": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "method_token": {
+            "type": "integer"
+          },
+          "signature": {
+            "type": "string"
+          },
+          "module_mvid": {
+            "type": "string"
+          },
+          "il_sha256": {
+            "type": "string"
+          },
+          "maximum_events_per_second": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maximum_string_length": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          }
+        },
+        "required": [
+          "session_id",
+          "process_id",
+          "hook_id",
+          "kind",
+          "module_id",
+          "assembly",
+          "declaring_type",
+          "method",
+          "method_token",
+          "signature",
+          "module_mvid",
+          "il_sha256",
+          "expected_execution_version"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "list_hooks",
+      "description": "List HookLab observation hooks owned by this dgSpy session.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "get_hook_events",
+      "description": "Read bounded HookLab events after a cursor through the resident control channel while the target keeps running.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "after_cursor": {
+            "type": "integer"
+          },
+          "max_events": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          }
+        },
+        "required": [
+          "session_id",
+          "process_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "remove_hook",
+      "description": "SIDE EFFECTING and audited. Remove one HookLab-owned Harmony patch by hook_id through the resident control channel.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "hook_id": {
+            "type": "string"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          }
+        },
+        "required": [
+          "session_id",
+          "process_id",
+          "hook_id",
+          "expected_execution_version"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "remove_all_hooks",
+      "description": "SIDE EFFECTING and audited. Remove every HookLab-owned Harmony patch in one process through the resident control channel.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          }
+        },
+        "required": [
+          "session_id",
+          "process_id",
+          "expected_execution_version"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
       "name": "start_atomic_action",
       "description": "SIDE EFFECTING and audited. Start the same bounded natural-arrival workflow as run_atomic_action, but return as soon as the action is REGISTERED - before lease acquisition and before breakpoint binding - so the caller\u0027s single host connection stays free to poll status or cancel. Answers accepted, action_id, phase and recommended_poll_after_ms. Prefer this over run_atomic_action: a blocking run occupies the one channel for its whole budget, so nothing can reach the action while it runs. Poll get_atomic_action_status at the interval it recommends; there is deliberately no wait operation, because a wait would block the channel again. disconnect_policy is not accepted here - after acceptance the action is host-owned and ends only on its deadline or an explicit cancel_atomic_action.",
       "inputSchema": {

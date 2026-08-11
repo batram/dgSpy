@@ -595,7 +595,30 @@ public sealed class DeploymentServiceTests : IDisposable {
 		Assert.Contains("could not be read",(string?)check["recovery"]);
 	}
 
-	string CreatePayload() { var path=Path.Combine(root,"payload"); foreach(var directory in new[]{"bin","bin\\Extensions\\dgSpy","hooklab","launcher"}) Directory.CreateDirectory(Path.Combine(path,directory)); foreach(var file in new[]{"dnSpy.exe","bin\\dnSpy.dll","bin\\dnSpy.Contracts.DnSpy.dll","bin\\hostfxr.dll","bin\\hostpolicy.dll","bin\\coreclr.dll","bin\\clrjit.dll","bin\\Extensions\\dgSpy\\dgSpy.Extension.x.dll","launcher\\Start-dgSpyRemoteHost.ps1","launcher\\Start-dgSpyRemoteHost.cmd"}) File.WriteAllText(Path.Combine(path,file),file); StageHookLabPayload(path,"a HookLab bootstrap payload"); return path; }
+	[Fact]
+	public async Task A_stale_app_base_protocol_is_rejected_before_deployment() {
+		var payload=PayloadRoot();
+		File.WriteAllText(Path.Combine(payload,"bin","dgSpy.Protocol.dll"),"stale app-base protocol",new UTF8Encoding(false));
+		var doctor=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("doctor",new JsonObject(),new HostRouter(),default)))!;
+		var check=doctor["checks"]!.AsArray().Single(item=>(string?)item?["name"]=="bundled_host_payload")!;
+		Assert.False((bool?)check["ok"]);
+		Assert.Contains("app-base",(string?)check["recovery"]);
+	}
+
+	[Fact]
+	public async Task Package_assembly_digests_are_checked_independently() {
+		var payload=PayloadRoot();
+		var extension=Path.Combine(payload,"bin","Extensions","dgSpy","dgSpy.Extension.x.dll");
+		var protocol=Path.Combine(payload,"bin","dgSpy.Protocol.dll");
+		File.WriteAllText(Path.Combine(root,"manifest.json"),"{\"format_version\":1,\"extension_sha256\":\""+FileSha(extension)+"\",\"protocol_sha256\":\""+FileSha(protocol)+"\",\"hooklab_payload_sha256\":\""+FileSha(Path.Combine(payload,PayloadFile))+"\"}",new UTF8Encoding(false));
+		File.WriteAllText(extension,"different extension bytes",new UTF8Encoding(false));
+		var doctor=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await new DeploymentService().ExecuteAsync("doctor",new JsonObject(),new HostRouter(),default)))!;
+		var check=doctor["checks"]!.AsArray().Single(item=>(string?)item?["name"]=="bundled_host_payload")!;
+		Assert.False((bool?)check["ok"]);
+		Assert.Contains("package manifest records",(string?)check["recovery"]);
+	}
+
+	string CreatePayload() { var path=Path.Combine(root,"payload"); foreach(var directory in new[]{"bin","bin\\Extensions\\dgSpy","hooklab","launcher"}) Directory.CreateDirectory(Path.Combine(path,directory)); foreach(var file in new[]{"dnSpy.exe","bin\\dnSpy.dll","bin\\dnSpy.Contracts.DnSpy.dll","bin\\hostfxr.dll","bin\\hostpolicy.dll","bin\\coreclr.dll","bin\\clrjit.dll","bin\\Extensions\\dgSpy\\dgSpy.Extension.x.dll","bin\\Extensions\\dgSpy\\HookLab.Contracts.dll","bin\\Extensions\\dgSpy\\HookLab.Host.Transport.dll","launcher\\Start-dgSpyRemoteHost.ps1","launcher\\Start-dgSpyRemoteHost.cmd"}) File.WriteAllText(Path.Combine(path,file),file); File.WriteAllText(Path.Combine(path,"bin\\dgSpy.Protocol.dll"),"one protocol"); File.WriteAllText(Path.Combine(path,"bin\\Extensions\\dgSpy\\dgSpy.Protocol.dll"),"one protocol"); StageHookLabPayload(path,"a HookLab bootstrap payload"); return path; }
 	const string PayloadFile="hooklab\\hooklab-bootstrap.net48.payload";
 	const string PayloadManifestFile="hooklab\\hooklab-payload-manifest.json";
 	/// <summary>Writes the payload and a manifest that describes it, which is what a real staging step does.

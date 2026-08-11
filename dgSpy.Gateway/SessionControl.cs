@@ -33,10 +33,10 @@ public sealed class SessionControllers {
 	readonly Dictionary<string,SessionControllerInfo> owners=new(StringComparer.Ordinal);
 	readonly McpClientSessions clients;
 	public SessionControllers(McpClientSessions clients) { this.clients=clients; }
-	public SessionControllerInfo Claim(string sessionId,string? hostId,string clientId) {
+	public SessionControllerInfo Claim(string sessionId,string? hostId,string clientId,bool force=false) {
 		lock(sync) {
-			if(owners.TryGetValue(sessionId,out var current) && current.ClientId!=clientId && clients.IsActive(current.ClientId))
-				throw new GatewayControlException("session_owned",$"Session '{sessionId}' is controlled by another active MCP session.");
+			if(owners.TryGetValue(sessionId,out var current) && current.ClientId!=clientId && clients.IsActive(current.ClientId) && !force)
+				throw new GatewayControlException("session_owned",$"Session '{sessionId}' is controlled by another active MCP session. Inspect get_session_controller, warn the current operator, then retry claim_session with force=true only to take control intentionally.");
 			var claimed=new SessionControllerInfo(sessionId,hostId,clientId,DateTime.UtcNow); owners[sessionId]=claimed; return claimed;
 		}
 	}
@@ -129,7 +129,7 @@ public sealed class GatewayToolExecutor {
 				var remaining=expires is null ? (int?)null : Math.Max(0,(int)Math.Ceiling((expires.Value-DateTime.UtcNow).TotalSeconds));
 				return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,owned=true,controller_id=(string?)current.ClientId,controller_is_caller=current.ClientId==clientId,controller_expires_utc=expires?.ToString("O"),controller_expires_in_seconds=remaining });
 			}
-			if(operation=="claim_session") { access.AuthorizeMutation(operation); if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var state=await GetStateAsync(arguments,token); var claimed=controllers.Claim(sessionId,hostId,clientId); var node=ProtocolJson.ToNode(state)!; audit.Write(auditId!,clientId,hostId,sessionId,operation,null,"succeeded",null); return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,controller_id=claimed.ClientId,state_version=(long?)node["state_version"],lifecycle_version=(long?)node["lifecycle_version"],execution_version=(long?)node["execution_version"],breakpoints_version=(long?)node["breakpoints_version"],stop_id=(string?)node["stop_id"] }); }
+			if(operation=="claim_session") { access.AuthorizeMutation(operation); if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var state=await GetStateAsync(arguments,token); var previous=controllers.Get(sessionId); var force=(bool?)arguments["force"] ?? false; var claimed=controllers.Claim(sessionId,hostId,clientId,force); var node=ProtocolJson.ToNode(state)!; audit.Write(auditId!,clientId,hostId,sessionId,operation,null,"succeeded",null); return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,controller_id=claimed.ClientId,took_over=previous is not null && previous.ClientId!=clientId,previous_controller_id=previous?.ClientId,state_version=(long?)node["state_version"],lifecycle_version=(long?)node["lifecycle_version"],execution_version=(long?)node["execution_version"],breakpoints_version=(long?)node["breakpoints_version"],stop_id=(string?)node["stop_id"] }); }
 			if(operation=="release_session") { access.AuthorizeMutation(operation); if(string.IsNullOrWhiteSpace(sessionId)) throw new GatewayControlException("invalid_arguments","session_id is required."); var released=controllers.Release(sessionId,clientId); audit.Write(auditId!,clientId,hostId,sessionId,operation,null,"succeeded",null); return RpcResponse.Success(Guid.NewGuid().ToString("N"),new { session_id=sessionId,released=true,controller_id=released.ClientId }); }
 			if(mutates) {
 				access.AuthorizeMutation(operation);

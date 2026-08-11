@@ -303,6 +303,17 @@ public class HostRegistryTests {
 	}
 
 	[Fact]
+	public void Active_controller_can_only_be_displaced_by_explicit_force_claim() {
+		var clients=new McpClientSessions(TimeSpan.FromMinutes(5)); var controllers=new SessionControllers(clients);
+		clients.Touch("client-a"); clients.Touch("client-b"); controllers.Claim("session-a","host-a","client-a");
+		var warning=Assert.Throws<GatewayControlException>(()=>controllers.Claim("session-a","host-a","client-b"));
+		Assert.Equal("session_owned",warning.Code);
+		Assert.Contains("warn",warning.Message,StringComparison.OrdinalIgnoreCase);
+		Assert.Equal("client-b",controllers.Claim("session-a","host-a","client-b",force:true).ClientId);
+		Assert.Equal("session_owned",Assert.Throws<GatewayControlException>(()=>controllers.Authorize("session-a","client-a")).Code);
+	}
+
+	[Fact]
 	public async Task Outbound_connection_is_not_routable_until_registration_acknowledgement_is_complete() {
 		var directory=CreateRegistryDirectory();
 		try {

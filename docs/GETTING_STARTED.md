@@ -41,6 +41,22 @@ separate build, packaging, extraction, or MCP configuration command is needed.
 Repository installs use a local directory artifact under `artifacts\dgspy-local` to avoid creating and
 immediately extracting a large ZIP. Release packages remain compressed portable ZIPs.
 
+For development updates after the MCP is already connected, update only the bundled dnSpy host payload:
+
+```powershell
+.\install-dgspy.ps1 codex -HostOnly
+```
+
+This leaves the installed CLI, running Gateway, MCP process, and agent registration untouched, so Codex
+does not need to restart. Then call `launch_local_host` with `replace=true` to activate the new version.
+That replacement closes only dnSpy and ends any debugging sessions it currently owns.
+
+Host-only mode is deliberately limited to changes compatible with the installed `dgSpy.Protocol.dll`.
+If the package changes RPC operations or schemas, the installer refuses before changing host files and
+prints the full-install command. A protocol update must replace the shared CLI/Gateway contract and
+therefore requires a Codex restart; silently mixing the old app-base contract with a new extension is
+not supported.
+
 ## What the installer does
 
 - Installs the unified self-contained dnSpy, CLI, and Gateway package under

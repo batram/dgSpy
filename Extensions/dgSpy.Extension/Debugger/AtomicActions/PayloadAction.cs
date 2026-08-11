@@ -25,6 +25,10 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		commit,
 		/// <summary>Reads a bounded batch of hook events out of the resident probe.</summary>
 		drain,
+		/// <summary>Installs another guarded hook into the resident probe.</summary>
+		install,
+		/// <summary>Removes one HookLab-owned patch from the resident probe.</summary>
+		uninstall,
 		/// <summary>Unpatches every installed hook while leaving the byte-loaded payload resident.</summary>
 		shutdown,
 	}
@@ -91,6 +95,8 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		}
 
 		public static string Shutdown(int generationIndex) => GuardedInvoke(generationIndex,"Shutdown","null");
+		public static string Install(int generationIndex,string parameters) => GuardedInvoke(generationIndex,"InstallHook","new object[]{"+Literal(parameters)+"}");
+		public static string Uninstall(int generationIndex,string patchId) => GuardedInvoke(generationIndex,"UninstallHook","new object[]{"+Literal(patchId)+"}");
 
 		/// <summary>Reads <c>ResidentLauncher.GenerationIdentity</c> out of the assembly at the scanned index
 		/// and invokes the requested entry only if it matches. The identity check is the condition of a
@@ -236,13 +242,14 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			"appdomain_id","event_capacity","byte_capacity","endpoint","completion_path",
 			"hook_id","hook_kind","hook_assembly","hook_type","hook_method","hook_module_mvid",
 			"hook_metadata_token","hook_declaring_type","hook_method_signature","hook_il_sha256",
+			"maximum_events_per_second","maximum_string_length",
 		};
 		const int MaxParameterValueLength=1024;
 		const int MaxParameterBytes=8192;
 		const int MaxParameterLines=64;
 
-		PayloadActionRequest(PayloadOperation operation,List<KeyValuePair<string,string>> parameters,int drainMax,int evaluationTimeoutMs) {
-			Operation=operation; Parameters=parameters; DrainMax=drainMax; EvaluationTimeoutMs=evaluationTimeoutMs;
+		PayloadActionRequest(PayloadOperation operation,List<KeyValuePair<string,string>> parameters,string? patchId,int drainMax,int evaluationTimeoutMs) {
+			Operation=operation; Parameters=parameters; PatchId=patchId; DrainMax=drainMax; EvaluationTimeoutMs=evaluationTimeoutMs;
 		}
 
 		public PayloadOperation Operation { get; }
@@ -250,6 +257,7 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		/// <c>commit</c> and <c>drain</c>, which reuse what preparation already installed.</summary>
 		public IReadOnlyList<KeyValuePair<string,string>> Parameters { get; }
 		public int DrainMax { get; }
+		public string? PatchId { get; }
 		public int EvaluationTimeoutMs { get; }
 		public string? CompletionPath => Find("completion_path");
 		/// <summary>The hook this preparation will install, or null. It is deliberately separate from the
@@ -267,14 +275,16 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		public static PayloadActionRequest Parse(JsonObject? arguments) {
 			if(arguments is null) throw new RpcException("invalid_arguments","payload_operation is required.");
 			var name=(string?)arguments["payload_operation"];
-			if(String.IsNullOrWhiteSpace(name)) throw new RpcException("invalid_arguments","payload_operation is required and must be prepare, commit, drain, or shutdown.");
+			if(String.IsNullOrWhiteSpace(name)) throw new RpcException("invalid_arguments","payload_operation is required.");
 			PayloadOperation operation;
 			switch(name) {
 				case "prepare": operation=PayloadOperation.prepare; break;
 				case "commit": operation=PayloadOperation.commit; break;
 				case "drain": operation=PayloadOperation.drain; break;
+				case "install": operation=PayloadOperation.install; break;
+				case "uninstall": operation=PayloadOperation.uninstall; break;
 				case "shutdown": operation=PayloadOperation.shutdown; break;
-				default: throw new RpcException("invalid_arguments","payload_operation must be prepare, commit, drain, or shutdown.");
+				default: throw new RpcException("invalid_arguments","payload_operation must be prepare, commit, drain, install, uninstall, or shutdown.");
 			}
 			var drainMax=(int?)arguments["drain_max"] ?? DefaultDrainMax;
 			if(operation==PayloadOperation.drain && (drainMax<1 || drainMax>MaxDrainMax))
@@ -286,17 +296,20 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			if(timeout<1 || timeout>dgSpy.Protocol.CapabilityCatalog.Limits.MaxEvaluationTimeoutMs)
 				throw new RpcException("invalid_arguments","evaluation_timeout_ms must be between 1 and "+dgSpy.Protocol.CapabilityCatalog.Limits.MaxEvaluationTimeoutMs.ToString(CultureInfo.InvariantCulture)+".");
 			var parameters=ParseParameters(arguments["payload_parameters"],operation);
-			return new PayloadActionRequest(operation,parameters,drainMax,timeout);
+			var patchId=(string?)arguments["patch_id"];
+			if(operation==PayloadOperation.uninstall && String.IsNullOrWhiteSpace(patchId)) throw new RpcException("invalid_arguments","patch_id is required for payload_operation=uninstall.");
+			if(operation!=PayloadOperation.uninstall && patchId is not null) throw new RpcException("invalid_arguments","patch_id applies to payload_operation=uninstall only.");
+			return new PayloadActionRequest(operation,parameters,patchId,drainMax,timeout);
 		}
 
 		static List<KeyValuePair<string,string>> ParseParameters(JsonNode? node,PayloadOperation operation) {
 			var parsed=new List<KeyValuePair<string,string>>();
 			if(node is null) {
-				if(operation==PayloadOperation.prepare) throw new RpcException("invalid_arguments","payload_parameters is required for payload_operation=prepare.");
+				if(operation==PayloadOperation.prepare || operation==PayloadOperation.install) throw new RpcException("invalid_arguments","payload_parameters is required for payload_operation="+operation.ToString()+".");
 				return parsed;
 			}
-			if(operation!=PayloadOperation.prepare)
-				throw new RpcException("invalid_arguments","payload_parameters applies to payload_operation=prepare only; commit, drain, and shutdown reuse what preparation installed.");
+			if(operation!=PayloadOperation.prepare && operation!=PayloadOperation.install)
+				throw new RpcException("invalid_arguments","payload_parameters applies to payload_operation=prepare or install only.");
 			if(node is not JsonObject supplied) throw new RpcException("invalid_arguments","payload_parameters must be an object of string values.");
 			var total=0;
 			var seen=new HashSet<string>(StringComparer.Ordinal);
@@ -315,15 +328,12 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			}
 			if(parsed.Count>MaxParameterLines) throw new RpcException("invalid_arguments","payload_parameters carries more than "+MaxParameterLines.ToString(CultureInfo.InvariantCulture)+" keys.");
 			if(total>MaxParameterBytes) throw new RpcException("invalid_arguments","payload_parameters exceeds "+MaxParameterBytes.ToString(CultureInfo.InvariantCulture)+" characters.");
-			// endpoint is required and never defaulted, exactly as the payload requires it: if the pipe can
-			// come back by forgetting to set something, it will. pipe is refused here rather than passed on,
-			// because the host cannot reach the probe's pipe at all today - HookLab.Host.Transport is neither
-			// referenced by the extension nor deployed - so accepting it would promise a channel that does
-			// not exist.
+			// endpoint is required and never defaulted, exactly as the payload requires it: forgetting the
+			// transport choice must fail rather than silently changing the probe's reachability.
 			var endpoint=Value(parsed,"endpoint");
 			if(endpoint is null) throw new RpcException("invalid_arguments","payload_parameters must set endpoint explicitly; it is never defaulted.");
-			if(endpoint!="none") throw new RpcException("invalid_arguments","payload_parameters endpoint must be none. The pipe endpoint is not reachable from this host, so it is refused rather than accepted and left unusable.");
-			if(Value(parsed,"completion_path") is null) throw new RpcException("invalid_arguments","payload_parameters must set completion_path when endpoint is none: commit publishes its result to that file, and reading it is the only way to learn the outcome without a second stop.");
+			if(endpoint!="none" && endpoint!="pipe") throw new RpcException("invalid_arguments","payload_parameters endpoint must be exactly none or pipe.");
+			if(Value(parsed,"completion_path") is null) throw new RpcException("invalid_arguments","payload_parameters must set completion_path: commit publishes its result to that file.");
 			return parsed;
 		}
 
@@ -480,11 +490,14 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 				return Refused(evidence,"No HookLab.Bootstrap generation is resident in this target, so there is nothing to "+request.Operation.ToString()+". Run payload_operation=prepare first.");
 			if(scan.GenerationCount>1)
 				return Refused(evidence,"This target carries "+scan.GenerationCount.ToString(CultureInfo.InvariantCulture)+" HookLab.Bootstrap generations, so the index this operation would reach is ambiguous. Refusing rather than picking one.");
-			var expression=request.Operation==PayloadOperation.commit
-				? PayloadExpressions.Commit(scan.FirstGenerationIndex)
-				: request.Operation==PayloadOperation.shutdown
-					? PayloadExpressions.Shutdown(scan.FirstGenerationIndex)
-					: PayloadExpressions.Drain(scan.FirstGenerationIndex,request.DrainMax);
+			string expression;
+			switch(request.Operation) {
+				case PayloadOperation.commit: expression=PayloadExpressions.Commit(scan.FirstGenerationIndex); break;
+				case PayloadOperation.shutdown: expression=PayloadExpressions.Shutdown(scan.FirstGenerationIndex); break;
+				case PayloadOperation.install: expression=PayloadExpressions.Install(scan.FirstGenerationIndex,request.Compose(context.Stop.ProcessId,context.Stop.AppDomainId)); break;
+				case PayloadOperation.uninstall: expression=PayloadExpressions.Uninstall(scan.FirstGenerationIndex,request.PatchId!); break;
+				default: expression=PayloadExpressions.Drain(scan.FirstGenerationIndex,request.DrainMax); break;
+			}
 			evidence["expression"]=expression;
 			var evaluated=await evaluator.EvaluateAsync(context,expression,request.EvaluationTimeoutMs,cancellationToken).ConfigureAwait(false);
 			var completed=Record(evidence,evaluated);
@@ -543,6 +556,12 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 				case PayloadOperation.shutdown:
 					if(report.Value("payloads_resident")!="true") return "Shutdown reported payloads_resident="+(report.Value("payloads_resident") ?? "absent")+"; byte-loaded payloads cannot be unloaded.";
 					if(report.Value("behavior_commit")!="stopped") return "Shutdown reported behavior_commit="+(report.Value("behavior_commit") ?? "absent")+" rather than stopped.";
+					return null;
+				case PayloadOperation.install:
+				case PayloadOperation.uninstall:
+					if(!report.Has("patch_id")) return "The hook operation did not report a patch_id.";
+					if(!report.Has("hooks_version")) return "The hook operation did not report hooks_version.";
+					if(!report.Has("changed")) return "The hook operation did not report whether state changed.";
 					return null;
 				default:
 					// dropped is what makes a drain truthful: a count without it cannot distinguish "no events"

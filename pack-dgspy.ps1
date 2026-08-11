@@ -1,6 +1,6 @@
 param(
-  [string]$Configuration='Release',
-  [string]$Runtime='win-x64',
+  [ValidateSet('Release')][string]$Configuration='Release',
+  [ValidateSet('win-x64')][string]$Runtime='win-x64',
   [string]$OutputDirectory="$PSScriptRoot\artifacts\dgspy",
   [ValidateSet('Optimal','Fastest','NoCompression')][string]$CompressionLevel='Optimal',
   [switch]$DirectoryPackage
@@ -86,15 +86,13 @@ try {
   & (Join-Path $PSScriptRoot 'build.ps1') net-x64 -NoMsbuild
   if(-not $?){ throw 'Remote host publish failed.' }
   Write-PackTiming 'dnSpy build'
-  dotnet build (Join-Path $PSScriptRoot 'Extensions\dgSpy.Extension\dgSpy.Extension.csproj') -c $Configuration -f net10.0-windows --nologo -v:minimal
-  if($LASTEXITCODE){ throw "Remote extension build failed: $LASTEXITCODE" }
-  Write-PackTiming 'extension build'
-  # The HookLab payload. One file: the bootstrap embeds the probe and HookLab.Contracts as hash-verified
-  # resources, so there is no bundle to assemble. It is never deployed beside the extension - see
-  # packaging\HookLabPayload.ps1 and the HookLab payload section of docs\DGSPY_BASELINE.md.
-  dotnet build (Join-Path $PSScriptRoot 'HookLab\HookLab.Bootstrap\HookLab.Bootstrap.csproj') -c $Configuration --nologo -v:minimal
-  if($LASTEXITCODE){ throw "HookLab bootstrap build failed: $LASTEXITCODE" }
-  Write-PackTiming 'HookLab bootstrap build'
+  # build.ps1 deliberately wipes extensions from the published host. Always follow it with the one
+  # authoritative dgSpy deployer; a direct extension build creates bin output but leaves the runnable
+  # repository host without its extension and HookLab payload. Packaging and local live tests must be
+  # able to use the same complete publish tree after this command returns.
+  & (Join-Path $PSScriptRoot 'build-dgspy.ps1') -Configuration $Configuration -TargetFramework net10.0-windows
+  if(-not $?){ throw 'dgSpy extension and HookLab deployment failed.' }
+  Write-PackTiming 'extension and HookLab deployment'
   dotnet publish (Join-Path $PSScriptRoot 'dgSpy.Cli\dgSpy.Cli.csproj') -c $Configuration -r $Runtime --self-contained true -o $cliPublish --nologo -v:minimal
   if($LASTEXITCODE){ throw "CLI publish failed: $LASTEXITCODE" }
   dotnet publish (Join-Path $PSScriptRoot 'dgSpy.Gateway\dgSpy.Gateway.csproj') -c $Configuration -r $Runtime --self-contained true -o $gatewayPublish --nologo -v:minimal
@@ -102,6 +100,9 @@ try {
   Write-PackTiming 'CLI and Gateway publish'
   $hostPublish=Join-Path $PSScriptRoot 'dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish'
   $extensionOutput=Join-Path $PSScriptRoot "Extensions\dgSpy.Extension\bin\$Configuration\net10.0-windows"
+	$repositoryExtension=Join-Path $hostPublish 'bin\Extensions\dgSpy\dgSpy.Extension.x.dll'
+	if(-not (Test-Path -LiteralPath $repositoryExtension -PathType Leaf)){ throw "Packaging left the repository host without dgSpy.Extension.x.dll: $repositoryExtension" }
+	$null=Test-HookLabPayload -HostRoot $hostPublish
   foreach($required in 'dnSpy.exe','bin\dnSpy.dll','bin\hostfxr.dll','bin\coreclr.dll'){
     if(-not (Test-Path -LiteralPath (Join-Path $hostPublish $required) -PathType Leaf)){ throw "Remote payload build is incomplete: $required" }
   }
@@ -112,7 +113,7 @@ try {
   Merge-PublishTree $gatewayPublish $sharedBin
   Remove-Item -LiteralPath $cliPublish,$gatewayPublish -Recurse -Force
   $extensionDestination=Join-Path $sharedBin 'Extensions\dgSpy';New-Item -ItemType Directory -Path $extensionDestination -Force|Out-Null
-  foreach($file in 'dgSpy.Extension.x.dll','dgSpy.Extension.x.pdb','dgSpy.Protocol.dll','dgSpy.Protocol.pdb','HookLab.Contracts.dll','HookLab.Contracts.pdb'){
+  foreach($file in 'dgSpy.Extension.x.dll','dgSpy.Extension.x.pdb','dgSpy.Protocol.dll','dgSpy.Protocol.pdb','HookLab.Contracts.dll','HookLab.Contracts.pdb','HookLab.Host.Transport.dll','HookLab.Host.Transport.pdb'){
     Copy-Item -LiteralPath (Join-Path $extensionOutput $file) -Destination $extensionDestination
   }
   # Staged after the host tree and before the shape is measured, so file_count and payload_bytes cover it
@@ -130,7 +131,10 @@ try {
   $commit=Get-GitValue 'rev-parse','HEAD'
   $dirty=[bool](Get-GitValue 'status','--porcelain')
   $extensionSha=(Get-FileHash -LiteralPath (Join-Path $extensionDestination 'dgSpy.Extension.x.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
-  $manifest=[ordered]@{format_version=1;runtime=$Runtime;target_framework='net10.0';shared_runtime=$true;package_format=$(if($DirectoryPackage){'directory'}else{'zip'});archive_compression=$(if($DirectoryPackage){$null}else{$CompressionLevel});created_utc=[DateTime]::UtcNow.ToString('O');entrypoint='cli/bin/dgspy.exe';gateway='cli/bin/dgSpy.Gateway.exe';host='cli/dnSpy.exe';extension_sha256=$extensionSha;hooklab_payload='hooklab/'+$script:HookLabPayloadFileName;hooklab_payload_sha256=$bootstrapSha;file_count=$shape.file_count;payload_bytes=$shape.payload_bytes;git_commit=$commit;git_dirty=$dirty}
+  $protocolSha=(Get-FileHash -LiteralPath (Join-Path $sharedBin 'dgSpy.Protocol.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+  $extensionProtocolSha=(Get-FileHash -LiteralPath (Join-Path $extensionDestination 'dgSpy.Protocol.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+  if($protocolSha -ne $extensionProtocolSha){ throw 'The package has different app-base and extension dgSpy.Protocol.dll files; dnSpy would silently load the app-base copy.' }
+  $manifest=[ordered]@{format_version=1;runtime=$Runtime;target_framework='net10.0';shared_runtime=$true;package_format=$(if($DirectoryPackage){'directory'}else{'zip'});archive_compression=$(if($DirectoryPackage){$null}else{$CompressionLevel});created_utc=[DateTime]::UtcNow.ToString('O');entrypoint='cli/bin/dgspy.exe';gateway='cli/bin/dgSpy.Gateway.exe';host='cli/dnSpy.exe';extension_sha256=$extensionSha;protocol_sha256=$protocolSha;hooklab_payload='hooklab/'+$script:HookLabPayloadFileName;hooklab_payload_sha256=$bootstrapSha;file_count=$shape.file_count;payload_bytes=$shape.payload_bytes;git_commit=$commit;git_dirty=$dirty}
   Write-Host "dgSpy HookLab payload $($bootstrapSha.Substring(0,12)) staged at cli\hooklab"
   Write-Host "dgSpy extension $($extensionSha.Substring(0,12)) from commit $(if($commit){$commit.Substring(0,12)}else{'unknown'})$(if($dirty){' (dirty tree)'})"
   [IO.File]::WriteAllText((Join-Path $staging 'manifest.json'),(($manifest|ConvertTo-Json)+"`n"),[Text.UTF8Encoding]::new($false))

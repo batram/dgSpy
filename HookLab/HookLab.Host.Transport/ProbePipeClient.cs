@@ -13,13 +13,14 @@ namespace HookLab.Host.Transport {
 
 	public sealed class ProbeConnection : IDisposable {
 		readonly NamedPipeClientStream pipe;
-		public ProbeConnection(string pipeName, byte[] secret, byte[] endpointNonce, bool rotateCredential = false, int timeoutMilliseconds = 5000, int protocolVersion = ProbeWireProtocol.ProtocolVersion) {
+		public ProbeConnection(string pipeName, byte[] secret, byte[] endpointNonce, bool rotateCredential = false, int timeoutMilliseconds = 5000, int protocolVersion = ProbeWireProtocol.ProtocolVersion, bool authenticationEnabled = true) {
 			if (string.IsNullOrWhiteSpace(pipeName)) throw new ArgumentException("Pipe name is required.", nameof(pipeName));
 			pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.None);
 			pipe.Connect(timeoutMilliseconds);
 			var requested = BitConverter.GetBytes(protocolVersion); pipe.Write(requested, 0, requested.Length); pipe.Flush();
 			var compatibility = ReadExactly(pipe, sizeof(int) + 1); var supported = BitConverter.ToInt32(compatibility, 0);
 			if (compatibility[sizeof(int)] != 1 || supported != protocolVersion) { pipe.Dispose(); throw new ProbeProtocolMismatchException(protocolVersion, supported); }
+			if (!authenticationEnabled) { Credential = Array.Empty<byte>(); return; }
 			var serverChallenge = ReadExactly(pipe, ProbeAuthentication.NonceBytes);
 			var clientChallenge = ProbeAuthentication.CreateNonce();
 			var proof = ProbeAuthentication.ClientProof(secret, serverChallenge, clientChallenge, endpointNonce);

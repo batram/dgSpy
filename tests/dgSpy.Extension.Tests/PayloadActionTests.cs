@@ -108,7 +108,7 @@ public sealed class PayloadActionRequestTests {
 	[Fact]
 	public void Prepare_requires_explicit_reachable_endpoint_and_completion_path() {
 		AssertInvalid(new JsonObject { ["payload_operation"] = "prepare", ["payload_parameters"] = new JsonObject() }, "endpoint");
-		AssertInvalid(PrepareArgs("pipe", @"C:\done"), "must be none");
+		Assert.Equal(PayloadOperation.prepare,PayloadActionRequest.Parse(PrepareArgs("pipe",@"C:\done")).Operation);
 		AssertInvalid(PrepareArgs("none", null), "completion_path");
 	}
 
@@ -118,7 +118,7 @@ public sealed class PayloadActionRequestTests {
 		Assert.Equal(PayloadOperation.shutdown, PayloadActionRequest.Parse(new JsonObject { ["payload_operation"] = "shutdown" }).Operation);
 		var drain = PayloadActionRequest.Parse(new JsonObject { ["payload_operation"] = "drain", ["drain_max"] = 17 });
 		Assert.Equal(17, drain.DrainMax);
-		AssertInvalid(new JsonObject { ["payload_operation"] = "commit", ["payload_parameters"] = new JsonObject() }, "prepare only");
+		AssertInvalid(new JsonObject { ["payload_operation"] = "commit", ["payload_parameters"] = new JsonObject() }, "prepare or install only");
 	}
 
 	[Theory]
@@ -129,6 +129,9 @@ public sealed class PayloadActionRequestTests {
 
 	[Fact]
 	public void Parameters_are_fixed_data_not_expression_fragments() {
+		var bounded = PayloadActionRequest.Parse(PrepareArgs("pipe", @"C:\done", ("maximum_events_per_second", "25"), ("maximum_string_length", "128")));
+		Assert.Contains("maximum_events_per_second=25\n", bounded.Compose(42, "1"));
+		Assert.Contains("maximum_string_length=128\n", bounded.Compose(42, "1"));
 		AssertInvalid(PrepareArgs("none", "x\ncode=evil"), "character");
 		AssertInvalid(PrepareArgs("none", @"C:\done", ("surprise", "value")), "unknown key");
 		AssertInvalid(PrepareArgs("none", @"C:\done", ("hook_id", new string('x', 1025))), "exceeds 1024");

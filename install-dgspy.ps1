@@ -3,6 +3,9 @@ param(
 	# A release ZIP or an already-extracted/package directory. Repository installs populate this internally.
 	[string]$PackagePath,
 	[string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA 'Programs\dgSpyMcp'),
+	# Update only the bundled dnSpy host payload. The running dgspy MCP process and Gateway live in
+	# cli\bin and are deliberately left untouched; launch_local_host performs versioned activation later.
+	[switch]$HostOnly,
 	# Kill whatever is running out of the install directory instead of refusing. This terminates the MCP
 	# server the calling agent is talking to, so that agent loses its dgSpy tools until it is restarted.
 	[switch]$Force
@@ -41,6 +44,98 @@ function Write-InstallTiming([string]$Phase) {
 	$script:lastPhase = $now
 }
 
+function Copy-HostPayload([string]$SourceCli, [string]$InstalledCli) {
+	if (-not (Test-Path -LiteralPath $InstalledCli -PathType Container)) {
+		throw "Host-only update requires an existing complete dgSpy installation: $InstalledCli"
+	}
+
+	# These are the only files at cli\bin's root owned by dnSpy. dgspy.exe, dgSpy.Gateway.exe and their
+	# shared runtime stay byte-for-byte unchanged so an MCP process can keep running from this directory.
+	$sourceBin = Join-Path $SourceCli 'bin'
+	$installedBin = Join-Path $InstalledCli 'bin'
+	$sourceProtocol = Join-Path $sourceBin 'dgSpy.Protocol.dll'
+	$installedProtocol = Join-Path $installedBin 'dgSpy.Protocol.dll'
+	if (-not (Test-Path -LiteralPath $sourceProtocol -PathType Leaf) -or -not (Test-Path -LiteralPath $installedProtocol -PathType Leaf)) {
+		throw 'Host-only update requires dgSpy.Protocol.dll in both the package and installed control plane.'
+	}
+	if ((Get-FileHash -LiteralPath $sourceProtocol -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $installedProtocol -Algorithm SHA256).Hash) {
+		throw "Host-only update cannot install a protocol/schema change while the MCP Gateway is running. No host files were changed. Run the full installer and restart Codex: .\install-dgspy.ps1 -Agent $Agent -PackagePath '$sourceRoot' -Force"
+	}
+	foreach ($file in Get-ChildItem -LiteralPath $sourceBin -File -Filter 'dnSpy*') {
+		Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $installedBin $file.Name) -Force
+	}
+	foreach ($file in Get-ChildItem -LiteralPath $SourceCli -File -Filter 'dnSpy*.exe') {
+		Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $InstalledCli $file.Name) -Force
+	}
+
+	# Extension and payload directories are host-owned and are not loaded by the CLI or Gateway. Replace
+	# their contents so removed assemblies do not linger and silently compose into later host versions.
+	foreach ($relative in 'bin\Extensions','hooklab','launcher') {
+		$source = Join-Path $SourceCli $relative
+		$destination = Join-Path $InstalledCli $relative
+		if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Host payload is incomplete: $relative" }
+		$staging = $destination+'.staging-'+[Guid]::NewGuid().ToString('N')
+		$backup = $destination+'.previous-'+[Guid]::NewGuid().ToString('N')
+		try {
+			Copy-Item -LiteralPath $source -Destination $staging -Recurse
+			if (Test-Path -LiteralPath $destination) { Move-Item -LiteralPath $destination -Destination $backup }
+			Move-Item -LiteralPath $staging -Destination $destination
+			if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
+		}
+		catch {
+			if (-not (Test-Path -LiteralPath $destination) -and (Test-Path -LiteralPath $backup)) { Move-Item -LiteralPath $backup -Destination $destination }
+			throw
+		}
+		finally {
+			if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+		}
+	}
+}
+
+function Update-HostPayloadManifest([string]$SourceRoot, [string]$InstalledRoot) {
+	$sourceManifestPath = Join-Path $SourceRoot 'manifest.json'
+	$installedManifestPath = Join-Path $InstalledRoot 'manifest.json'
+	if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf) -or -not (Test-Path -LiteralPath $installedManifestPath -PathType Leaf)) {
+		throw 'Host-only update requires both the new package manifest and the installed package manifest.'
+	}
+	$sourceManifest = Get-Content -LiteralPath $sourceManifestPath -Raw | ConvertFrom-Json
+	$installedManifest = Get-Content -LiteralPath $installedManifestPath -Raw | ConvertFrom-Json
+	$installedManifest.extension_sha256 = $sourceManifest.extension_sha256
+	if ($sourceManifest.PSObject.Properties.Name -contains 'protocol_sha256') { $installedManifest | Add-Member -NotePropertyName protocol_sha256 -NotePropertyValue $sourceManifest.protocol_sha256 -Force }
+	$installedManifest.hooklab_payload_sha256 = $sourceManifest.hooklab_payload_sha256
+	$installedFiles = @(Get-ChildItem -LiteralPath (Join-Path $InstalledRoot 'cli') -File -Recurse)
+	$installedManifest.file_count = $installedFiles.Count
+	$installedManifest.payload_bytes = [int64](($installedFiles | Measure-Object -Property Length -Sum).Sum)
+	$installedManifest | Add-Member -NotePropertyName host_update -NotePropertyValue ([ordered]@{
+		created_utc = [DateTime]::UtcNow.ToString('O')
+		git_commit = $sourceManifest.git_commit
+		git_dirty = $sourceManifest.git_dirty
+	}) -Force
+	[IO.File]::WriteAllText($installedManifestPath,(($installedManifest | ConvertTo-Json -Depth 6) + "`n"),[Text.UTF8Encoding]::new($false))
+}
+
+function Assert-PackageContent([string]$PackageRoot) {
+	$manifestPath = Join-Path $PackageRoot 'manifest.json'
+	if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "The package has no manifest.json and cannot prove its contents: $PackageRoot" }
+	$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+	$cliRoot = Join-Path $PackageRoot 'cli'
+	$extension = Join-Path $cliRoot 'bin\Extensions\dgSpy\dgSpy.Extension.x.dll'
+	$rootProtocol = Join-Path $cliRoot 'bin\dgSpy.Protocol.dll'
+	$extensionProtocol = Join-Path $cliRoot 'bin\Extensions\dgSpy\dgSpy.Protocol.dll'
+	foreach ($required in $extension,$rootProtocol,$extensionProtocol) { if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "The package is missing required assembly: $required" } }
+	if (-not $manifest.extension_sha256 -or -not $manifest.protocol_sha256 -or -not $manifest.hooklab_payload_sha256) { throw 'The package manifest lacks an extension, protocol, or HookLab digest; rebuild it with the current pack-dgspy.ps1.' }
+	$extensionHash = (Get-FileHash -LiteralPath $extension -Algorithm SHA256).Hash.ToLowerInvariant()
+	$rootProtocolHash = (Get-FileHash -LiteralPath $rootProtocol -Algorithm SHA256).Hash.ToLowerInvariant()
+	$extensionProtocolHash = (Get-FileHash -LiteralPath $extensionProtocol -Algorithm SHA256).Hash.ToLowerInvariant()
+	if ($extensionHash -ne $manifest.extension_sha256) { throw "The package extension digest is $extensionHash; manifest records $($manifest.extension_sha256)." }
+	if ($rootProtocolHash -ne $manifest.protocol_sha256 -or $extensionProtocolHash -ne $manifest.protocol_sha256) { throw "The package protocol contract is inconsistent (root $rootProtocolHash, extension $extensionProtocolHash, manifest $($manifest.protocol_sha256))." }
+	$files = @(Get-ChildItem -LiteralPath $cliRoot -File -Recurse)
+	$bytes = [int64](($files | Measure-Object -Property Length -Sum).Sum)
+	if ($files.Count -ne $manifest.file_count -or $bytes -ne $manifest.payload_bytes) { throw "The package tree is incomplete: $($files.Count) files / $bytes bytes, manifest records $($manifest.file_count) / $($manifest.payload_bytes)." }
+	$null = Test-HookLabPayload -HostRoot $cliRoot -ExpectedSha256 $manifest.hooklab_payload_sha256
+	return $manifest
+}
+
 try {
 	# A release archive already contains cli\bin\dgspy.exe. A repository checkout builds the same complete
 	# package first, so installation and agent registration are identical after this point.
@@ -77,11 +172,38 @@ try {
 	if (-not (Test-Path -LiteralPath $sourceCli -PathType Leaf) -or -not (Test-Path -LiteralPath $sourcePayload -PathType Leaf)) {
 		throw 'The package is incomplete: cli\bin\dgspy.exe or cli\dnSpy.exe is missing.'
 	}
+	# Validate before stopping a control plane or touching an installed host. A bad package must be a cheap
+	# refusal, not a rollback exercise after the user's debugger and MCP connection have already ended.
+	$null = Assert-PackageContent -PackageRoot $sourceRoot
 
 	$resolvedInstall = [IO.Path]::GetFullPath($InstallDirectory)
 	$installParent = Split-Path -Parent $resolvedInstall
 	if ([string]::IsNullOrWhiteSpace($installParent) -or $resolvedInstall.Equals([IO.Path]::GetPathRoot($resolvedInstall),[StringComparison]::OrdinalIgnoreCase)) {
 		throw "Refusing unsafe install directory: $resolvedInstall"
+	}
+	if ($HostOnly) {
+		if ($Force) { throw '-HostOnly never stops the MCP or Gateway, so it cannot be combined with -Force.' }
+		$installedCli = Join-Path $resolvedInstall 'cli'
+		$protected = @('bin\dgspy.exe','bin\dgSpy.Gateway.exe')
+		$before = @{}
+		foreach ($relative in $protected) {
+			$path = Join-Path $installedCli $relative
+			if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Host-only update requires the installed control plane: $path" }
+			$before[$relative] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+		}
+		Copy-HostPayload -SourceCli (Join-Path $sourceRoot 'cli') -InstalledCli $installedCli
+		Update-HostPayloadManifest -SourceRoot $sourceRoot -InstalledRoot $resolvedInstall
+		foreach ($relative in $protected) {
+			$after = (Get-FileHash -LiteralPath (Join-Path $installedCli $relative) -Algorithm SHA256).Hash
+			if ($after -ne $before[$relative]) { throw "Host-only update changed protected control-plane file: $relative" }
+		}
+		$extension = Join-Path $installedCli 'bin\Extensions\dgSpy\dgSpy.Extension.x.dll'
+		$payloadSha = Test-HookLabPayload -HostRoot $installedCli
+		Write-InstallTiming 'host payload update'
+		Write-Host "Updated bundled dnSpy host payload; extension $(((Get-FileHash -LiteralPath $extension -Algorithm SHA256).Hash).Substring(0,12).ToLowerInvariant()), HookLab $($payloadSha.Substring(0,12))."
+		Write-Host 'The CLI, Gateway, MCP registration, and running MCP process were left untouched.'
+		Write-Host 'Activate it with launch_local_host replace=true (this closes only the running dnSpy host and ends its debug sessions).'
+		return
 	}
 	# Policy is mutable administrator state, not package payload. Create explicit disabled defaults once
 	# and leave the file untouched on every later upgrade.
@@ -148,6 +270,7 @@ try {
 			New-Item -ItemType Directory -Path (Join-Path $staging 'packaging') -Force | Out-Null
 			Copy-Item -LiteralPath $sourcePackaging -Destination (Join-Path $staging 'packaging')
 		}
+		$null = Assert-PackageContent -PackageRoot $staging
 		Write-InstallTiming 'installation staging copy'
 		# A process exiting does not mean Windows has released its handle on the directory yet, so the swap
 		# can fail for a moment after a successful -Force kill. Retry briefly rather than failing an install
@@ -155,11 +278,6 @@ try {
 		Invoke-WithRetry { if (Test-Path -LiteralPath $resolvedInstall) { Move-Item -LiteralPath $resolvedInstall -Destination $backup } }
 		Invoke-WithRetry { Move-Item -LiteralPath $staging -Destination $resolvedInstall }
 		Write-InstallTiming 'directory swap'
-		if (Test-Path -LiteralPath $backup) {
-			try { Invoke-WithRetry { Remove-Item -LiteralPath $backup -Recurse -Force } }
-			catch { Write-Warning "The new installation is active, but the previous installation could not be removed: $backup ($($_.Exception.Message))" }
-		}
-		Write-InstallTiming 'previous installation cleanup'
 	}
 	catch {
 		if (-not (Test-Path -LiteralPath $resolvedInstall) -and (Test-Path -LiteralPath $backup)) { Move-Item -LiteralPath $backup -Destination $resolvedInstall }
@@ -199,6 +317,15 @@ try {
 				throw "The installed extension does not match the package manifest (installed $actual, packaged $($manifest.extension_sha256)). The copy is incomplete or the package was modified."
 			}
 		}
+		if ($manifest.PSObject.Properties.Name -contains 'protocol_sha256' -and $manifest.protocol_sha256) {
+			$rootProtocol = Join-Path $resolvedInstall 'cli\bin\dgSpy.Protocol.dll'
+			$extensionProtocol = Join-Path $resolvedInstall 'cli\bin\Extensions\dgSpy\dgSpy.Protocol.dll'
+			$rootHash = (Get-FileHash -LiteralPath $rootProtocol -Algorithm SHA256).Hash.ToLowerInvariant()
+			$extensionHash = (Get-FileHash -LiteralPath $extensionProtocol -Algorithm SHA256).Hash.ToLowerInvariant()
+			if ($rootHash -ne $manifest.protocol_sha256 -or $extensionHash -ne $manifest.protocol_sha256) {
+				throw "The installed protocol contract is inconsistent (root $rootHash, extension $extensionHash, packaged $($manifest.protocol_sha256))."
+			}
+		}
 		# Coarse, but it catches the interrupted or partially-copied tree that an exact hash of one assembly
 		# cannot see. The gateway does the authoritative whole-tree hash when it deploys.
 		if ($manifest.PSObject.Properties.Name -contains 'file_count' -and $manifest.file_count) {
@@ -224,8 +351,25 @@ try {
 
 	Write-Host "dgSpy is installed and registered for $Agent."
 	Write-Host 'The CLI will start the Gateway on first MCP use. Restart the agent, then say: Use dgspy and go local.'
+	if (Test-Path -LiteralPath $backup) {
+		try { Invoke-WithRetry { Remove-Item -LiteralPath $backup -Recurse -Force } }
+		catch { Write-Warning "The new installation is verified, but the previous installation could not be removed: $backup ($($_.Exception.Message))" }
+	}
+	Write-InstallTiming 'previous installation cleanup'
 }
 catch {
+	# The previous tree remains available until every content check, registration command, and CLI smoke
+	# succeeds. Restore it on any late failure instead of leaving a newly swapped but unusable install.
+	if ($backup -and (Test-Path -LiteralPath $backup -PathType Container)) {
+		$failed = $resolvedInstall+'.failed-'+[Guid]::NewGuid().ToString('N')
+		try {
+			if (Test-Path -LiteralPath $resolvedInstall) { Move-Item -LiteralPath $resolvedInstall -Destination $failed }
+			Move-Item -LiteralPath $backup -Destination $resolvedInstall
+			if (Test-Path -LiteralPath $failed) { Remove-Item -LiteralPath $failed -Recurse -Force }
+			Write-Warning 'The install failed after the directory swap; the previous installation was restored.'
+		}
+		catch { Write-Warning "Automatic rollback also failed: $($_.Exception.Message). Previous tree: $backup" }
+	}
 	if ($packageBuiltHere -and $PackagePath -and (Test-Path -LiteralPath $PackagePath)) {
 		Write-Warning "The completed package was preserved. Retry the install without rebuilding: .\install-dgspy.ps1 $Agent -PackagePath '$PackagePath'$(if ($Force) { ' -Force' })"
 	}

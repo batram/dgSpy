@@ -16,6 +16,7 @@ param(
     [ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows',
     [int]$RpcPort = 0,
     [string]$RunDirectory,
+	[switch]$ResidentInitializeOnly,
     [switch]$FixtureChild,
     [string]$FixtureExitPath,
     [int]$FixtureExitAfterMs
@@ -54,6 +55,67 @@ function Check([string]$Name, [bool]$Ok, [string]$Detail = '') {
 }
 function Rpc([string]$Operation, [hashtable]$Arguments = @{}, [int]$Deadline = 30) {
     Invoke-DgSpyRpc -OperationName $Operation -OperationArguments $Arguments -RpcPort $RpcPort -DeadlineSeconds $Deadline
+}
+function Expect-RpcFailure([string]$Label, [hashtable]$Arguments, [string]$ExpectedText) {
+    try { $null = Rpc 'install_hook' $Arguments 70; Check $Label $false 'request unexpectedly succeeded' }
+    catch { Check $Label ($_.Exception.Message -like ('*' + $ExpectedText + '*')) $_.Exception.Message }
+}
+function Get-UiElement([int]$ProcessId, [string]$Name, [int]$TimeoutSeconds = 15) {
+    if (-not ('System.Windows.Automation.AutomationElement' -as [type])) {
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+    }
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $scope = [System.Windows.Automation.TreeScope]::Descendants
+    $processCondition = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$ProcessId)
+    $nameCondition = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,$Name)
+    $condition = New-Object System.Windows.Automation.AndCondition($processCondition,$nameCondition)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $found = $root.FindFirst($scope,$condition)
+        if ($found) { return $found }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return $null
+}
+function Invoke-UiElement($Element) {
+    $pattern = $null
+    if (-not $Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { throw "UI element '$($Element.Current.Name)' is not invokable" }
+    ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+}
+function Open-HookLabAndRemove([int]$HostProcessId, [string]$HookId) {
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+    $hooks = Get-UiElement $HostProcessId 'Installed hooks'
+    $events = Get-UiElement $HostProcessId 'Hook events'
+    Check 'HookLab GUI opens with installed-hooks and event lists' ($null -ne $hooks -and $null -ne $events)
+    $hookRow = Get-UiElement $HostProcessId $HookId
+    Check 'HookLab GUI shows the MCP-installed hook' ($null -ne $hookRow) ("hook_id=" + $HookId)
+    $eventRows = if ($events) { @($events.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)) } else { @() }
+    Check 'HookLab GUI receives events without an MCP read driving it' ($eventRows.Count -gt 0) ("descendants=" + $eventRows.Count)
+    if ($hookRow) {
+        $selection = $null
+        $selectable = $hookRow
+        $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+        while ($selectable -and -not $selectable.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$selection)) { $selectable = $walker.GetParent($selectable) }
+        if (-not $selection) { throw 'HookLab hook row did not expose a selectable ancestor' }
+        ([System.Windows.Automation.SelectionItemPattern]$selection).Select()
+        Start-Sleep -Milliseconds 500
+    }
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $conditions = @(
+        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$HostProcessId)),
+        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,'Remove selected HookLab hook')),
+        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button))
+    )
+    $remove = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,(New-Object System.Windows.Automation.AndCondition($conditions)))
+    if (-not $remove) { throw 'HookLab Remove button was not present' }
+    Invoke-UiElement $remove
+}
+function Invoke-HookLabRemoveAll([int]$HostProcessId) {
+    $button = Get-UiElement $HostProcessId 'Remove all HookLab hooks'
+    if (-not $button) { throw 'HookLab Remove All button was not present' }
+    Invoke-UiElement $button
 }
 function Parse-Report([string]$Text) {
     $report = @{}
@@ -158,7 +220,7 @@ function Start-Fixture([string]$Label, [int]$ExitAfterMs) {
     $exitPath = Join-Path $RunDirectory ($Label + '.exit-code')
     $process = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
         -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $PSCommandPath + '"'),'-FixtureChild','-FixtureExitPath',('"' + $exitPath + '"'),'-FixtureExitAfterMs',"$ExitAfterMs" `
-        -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+		-PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $null = $startedProcesses.Add($process)
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
@@ -261,6 +323,43 @@ try {
     $RpcPort = [int]$env:DGSPY_RPC_PORT
     Say "host pid=$hostId rpc_port=$RpcPort"
 
+	if ($ResidentInitializeOnly) {
+		Say 'resident initialization and first pipe-only hook'
+		$fixture = Start-Fixture 'resident-initialize' 90000
+		$sessionId = Attach-Fixture $fixture
+		try {
+			$before = Rpc 'get_session_state' @{ session_id=$sessionId }
+			Check 'fixture is running before initialization' ($before.state -eq 'running') ("state=" + $before.state)
+			$initialized = Rpc 'initialize_hooklab' @{ session_id=$sessionId; process_id=$fixture.Id } 130
+			Check 'initialize_hooklab reports a ready zero-hook runtime' ($initialized.initialized -eq $true -and $initialized.state -eq 'ready') ("changed=" + $initialized.changed + " state=" + $initialized.state)
+			$again = Rpc 'initialize_hooklab' @{ session_id=$sessionId; process_id=$fixture.Id } 10
+			Check 'initialize_hooklab is idempotent' ($again.initialized -eq $true -and $again.changed -eq $false) ("changed=" + $again.changed)
+			$status = Rpc 'get_hooklab_status' @{ session_id=$sessionId; process_id=$fixture.Id }
+			Check 'get_hooklab_status sees the retained runtime with zero hooks' ($status.initialized -eq $true -and @($status.runtimes).Count -eq 1) ("runtimes=" + @($status.runtimes).Count)
+			$after = Rpc 'get_session_state' @{ session_id=$sessionId }
+			Check 'initialization restores the running state' ($after.state -eq 'running') ("state=" + $after.state)
+
+			$installed = Rpc 'install_hook' @{
+				session_id=$sessionId; process_id=$fixture.Id; hook_id='resident-tick-prefix'; kind='Prefix'
+				module_id=$script:carrierModuleId; assembly='Milestone1Target'; declaring_type='Milestone1Target.Program'
+				method='Tick'; method_token=[int]$tickFacts.Token; signature=$tickFacts.Signature
+				module_mvid=$tickFacts.Mvid; il_sha256=$tickFacts.IlSha256
+			} 70
+			Check 'the first hook installs through the resident pipe' ($installed.installed -eq $true -and -not [string]::IsNullOrWhiteSpace($installed.hook.patch_id)) ("patch_id=" + $installed.hook.patch_id)
+			Start-Sleep -Milliseconds 1200
+			$read = Rpc 'get_hook_events' @{ session_id=$sessionId; process_id=$fixture.Id; after_cursor=0; max_events=64 } 10
+			Check 'the pipe-only first hook produces events' (@($read.events).Count -gt 0) ("events=" + @($read.events).Count + " dropped=" + $read.dropped)
+			$removed = Rpc 'remove_hook' @{ session_id=$sessionId; process_id=$fixture.Id; hook_id='resident-tick-prefix' } 10
+			Check 'the pipe-only hook removes while the target runs' ($removed.removed -eq $true) ("removed=" + $removed.removed)
+		}
+		finally {
+			try { Detach-Fixture $sessionId $fixture $false } catch { Say ("cleanup detach failed for resident initialize: " + $_.Exception.Message) }
+		}
+		if ($fail -ne 0) { throw "HookLab resident initialization smoke failed: $fail failed, $pass passed. See $driverLog" }
+		Say "RESULT pass=$pass fail=$fail"
+		return
+	}
+
     Run-Negative 'N1-wrong-token' { param($parameters) $parameters.hook_metadata_token = $otherFacts.Token.ToString() } {
         param($report,$text)
         Check 'N1 wrong same-module token is refused' ($report.status -eq 'error') ("report=" + ($text -replace "`r?`n",';'))
@@ -274,33 +373,47 @@ try {
     }
 
     Say 'positive install and events'
-    $fixture = Start-Fixture 'positive' 30000
+    $fixture = Start-Fixture 'positive' 90000
     $sessionId = Attach-Fixture $fixture
     try {
         $carrierOffset = [uint32]$script:resolvedCarrierOffset
         Say "carrier token=$($carrierFacts.Token) sequence_point=$carrierOffset"
-        $completion = Join-Path $RunDirectory 'positive.completion'
-        $parameters = Hook-Parameters $fixture $tickFacts $completion
         $stdoutBefore = Get-Content -LiteralPath $fixture.Out -Raw
-        $prepareWatch = [Diagnostics.Stopwatch]::StartNew()
-        $prepare = Start-PayloadAction $sessionId $fixture.Id $carrierFacts.Token $carrierOffset 'prepare' @{ payload_parameters=$parameters }
-        $prepareWatch.Stop()
-        Check-Action 'prepare' $prepare $carrierFacts.Token $carrierOffset
-        Say "MEASURE prepare_action_ms=$($prepareWatch.ElapsedMilliseconds)"
-        $prepareEvidence = $prepare.verification_evidence | ConvertFrom-Json
-        $prepareReport = Parse-Report $prepareEvidence.report
-        Check 'prepare report is ok' ($prepareReport.status -eq 'ok') ("status=" + $prepareReport.status)
-
-        $commitWatch = [Diagnostics.Stopwatch]::StartNew()
-        $commit = Start-PayloadAction $sessionId $fixture.Id $carrierFacts.Token $carrierOffset 'commit'
-        $commitWatch.Stop()
-        Check-Action 'commit' $commit $carrierFacts.Token $carrierOffset
-        Say "MEASURE commit_action_ms=$($commitWatch.ElapsedMilliseconds)"
-        $completionText = Wait-File $completion
-        $completionReport = Parse-Report $completionText
-        Check 'completion evidence reports ok with a patch id' ($completionReport.status -eq 'ok' -and -not [string]::IsNullOrWhiteSpace($completionReport.patch_id)) ("status=" + $completionReport.status + " patch_id=" + $completionReport.patch_id)
-        Check 'backend inventory was captured before Harmony resolved' ($completionReport.backend_inventory_at_initialize -eq '') ("inventory=" + $completionReport.backend_inventory_at_initialize)
-        Check 'completion evidence carries no secret_base64' (-not $completionReport.ContainsKey('secret_base64')) ($completionText -replace "`r?`n",';')
+        $installArguments = @{
+            session_id = $sessionId; process_id = $fixture.Id; hook_id = 'tick-prefix'
+            kind = 'Prefix'; module_id = $script:carrierModuleId; assembly = 'Milestone1Target'
+            declaring_type = 'Milestone1Target.Program'; method = 'Tick'; method_token = [int]$tickFacts.Token
+            signature = $tickFacts.Signature; module_mvid = $tickFacts.Mvid; il_sha256 = $tickFacts.IlSha256
+            arrival_module_id = $script:carrierModuleId; arrival_method_token = [int]$carrierFacts.Token
+            arrival_il_offset = [int]$carrierOffset
+        }
+        $installWatch = [Diagnostics.Stopwatch]::StartNew()
+        $installed = Rpc 'install_hook' $installArguments 130
+        $installWatch.Stop()
+        Say "MEASURE install_hook_ms=$($installWatch.ElapsedMilliseconds)"
+        Check 'public install_hook installs the guarded hook' ($installed.installed -eq $true -and -not [string]::IsNullOrWhiteSpace($installed.hook.patch_id)) ("patch_id=" + $installed.hook.patch_id)
+        foreach ($kind in @('Postfix','Finalizer')) {
+            $additional = @{}
+            foreach ($key in $installArguments.Keys) { $additional[$key] = $installArguments[$key] }
+            $additional.kind = $kind
+            $additional.hook_id = 'tick-' + $kind.ToLowerInvariant()
+            $extra = Rpc 'install_hook' $additional 70
+            Check "public install_hook installs $kind" ($extra.installed -eq $true -and $extra.hook.kind -eq $kind) ("patch_id=" + $extra.hook.patch_id)
+        }
+        foreach ($case in @(
+            @{ Label='public install_hook rejects wrong MVID'; Field='module_mvid'; Value=[Guid]::NewGuid().ToString('D'); Text='MVID' },
+            @{ Label='public install_hook rejects wrong token'; Field='method_token'; Value=[int]$otherFacts.Token; Text='method' },
+            @{ Label='public install_hook rejects wrong signature'; Field='signature'; Value='System.Int32 Tick(System.String)'; Text='signature' },
+            @{ Label='public install_hook rejects wrong IL hash'; Field='il_sha256'; Value=('0' * 64); Text='il_sha256' }
+        )) {
+            $bad = @{}
+            foreach ($key in $installArguments.Keys) { $bad[$key] = $installArguments[$key] }
+            $bad.hook_id = 'bad-' + $case.Field
+            $bad[$case.Field] = $case.Value
+            Expect-RpcFailure $case.Label $bad $case.Text
+        }
+        $listed = Rpc 'list_hooks' @{ session_id=$sessionId; process_id=$fixture.Id }
+        Check 'public list_hooks returns prefix, postfix, and finalizer' (@($listed.hooks).Count -eq 3) ("count=" + @($listed.hooks).Count)
 
         $modules = @((Rpc 'list_modules' @{ session_id=$sessionId; count=500 }).modules)
         foreach ($name in @('HookLab.Bootstrap','HookLab.Probe.CorDebug','HookLab.Contracts','0Harmony','HarmonySharedState')) {
@@ -309,30 +422,35 @@ try {
         }
 
         Start-Sleep -Seconds 2
-        $drain = Start-PayloadAction $sessionId $fixture.Id $carrierFacts.Token $carrierOffset 'drain' @{ drain_max=256 }
-        Check-Action 'drain' $drain $carrierFacts.Token $carrierOffset
-        $drainEvidence = $drain.verification_evidence | ConvertFrom-Json
-        $drainReport = Parse-Report $drainEvidence.report
-        Check 'drain sees more than zero hook events' ([int]$drainReport.count -gt 0) ("count=" + $drainReport.count)
-        Check 'drain dropped no events' ([int64]$drainReport.dropped -eq 0) ("dropped=" + $drainReport.dropped)
-        $eventText = (@($drainReport.Keys | Where-Object { $_ -like 'event_*' } | ForEach-Object { $drainReport[$_] }) -join ' ')
-        Check 'drained events name the hooked Tick method' ($eventText -like '*Tick*') $eventText
+        $eventArguments = @{ session_id=$sessionId; process_id=$fixture.Id; max_events=256; after_cursor=0 }
+        $drain = Rpc 'get_hook_events' $eventArguments 70
+        Check 'public get_hook_events sees more than zero events' (@($drain.events).Count -gt 0) ("count=" + @($drain.events).Count)
+        Check 'public get_hook_events reports no drops' ([int64]$drain.dropped -eq 0) ("dropped=" + $drain.dropped)
+        $eventText = (@($drain.events | ForEach-Object { $_.patch_id + '|' + $_.payload_json }) -join ' ')
+        Check 'public events name the hooked Tick method' ($eventText -like '*Tick*') $eventText
         $stdoutAfter = Get-Content -LiteralPath $fixture.Out -Raw
         Check 'the recording hook leaves fixture stdout unchanged' ($stdoutAfter -ceq $stdoutBefore) ("before=" + ($stdoutBefore -replace "`r?`n",'|') + " after=" + ($stdoutAfter -replace "`r?`n",'|'))
 
-        # Binding Step 3 requires this fixed operation. If the product has not published it, this is the
-        # deliberate failure rung; do not replace it with a caller-composed evaluate expression.
-        $shutdown = Start-PayloadAction $sessionId $fixture.Id $carrierFacts.Token $carrierOffset 'shutdown'
-        Check-Action 'shutdown' $shutdown $carrierFacts.Token $carrierOffset
-        $shutdownEvidence = $shutdown.verification_evidence | ConvertFrom-Json
-        $shutdownReport = Parse-Report $shutdownEvidence.report
-        Check 'shutdown reports ok and resident payloads' ($shutdownReport.status -eq 'ok' -and $shutdownReport.payloads_resident -eq 'true') ("status=" + $shutdownReport.status + " resident=" + $shutdownReport.payloads_resident)
+        Open-HookLabAndRemove $hostId 'tick-prefix'
+        $removeDeadline = [DateTime]::UtcNow.AddSeconds(70)
+        do {
+            Start-Sleep -Milliseconds 200
+            $listedAfter = Rpc 'list_hooks' @{ session_id=$sessionId; process_id=$fixture.Id }
+        } while (@($listedAfter.hooks).Count -ne 2 -and [DateTime]::UtcNow -lt $removeDeadline)
+        Check 'GUI Remove removes one owned patch through the shared service' (@($listedAfter.hooks).Count -eq 2) ("count=" + @($listedAfter.hooks).Count)
+        Invoke-HookLabRemoveAll $hostId
+        do {
+            Start-Sleep -Milliseconds 200
+            $listedAfter = Rpc 'list_hooks' @{ session_id=$sessionId; process_id=$fixture.Id }
+        } while (@($listedAfter.hooks).Count -ne 0 -and [DateTime]::UtcNow -lt $removeDeadline)
+        Check 'GUI Remove All removes the remaining owned patches' (@($listedAfter.hooks).Count -eq 0) ("count=" + @($listedAfter.hooks).Count)
+        $listedAfter = Rpc 'list_hooks' @{ session_id=$sessionId; process_id=$fixture.Id }
+        Check 'public list_hooks is empty after removal' (@($listedAfter.hooks).Count -eq 0) ("count=" + @($listedAfter.hooks).Count)
+        $removalBoundary = Rpc 'get_hook_events' @{ session_id=$sessionId; process_id=$fixture.Id; max_events=256; after_cursor=$drain.next_cursor } 70
         Start-Sleep -Seconds 1
-        $afterShutdown = Start-PayloadAction $sessionId $fixture.Id $carrierFacts.Token $carrierOffset 'drain' @{ drain_max=256 }
-        $afterEvidence = $afterShutdown.verification_evidence | ConvertFrom-Json
-        $afterReport = Parse-Report $afterEvidence.report
-        Check 'drain after shutdown sees zero new events' ([int]$afterReport.count -eq 0) ("count=" + $afterReport.count)
-        Detach-Fixture $sessionId $fixture $true
+        $afterRemoval = Rpc 'get_hook_events' @{ session_id=$sessionId; process_id=$fixture.Id; max_events=256; after_cursor=$removalBoundary.next_cursor } 70
+        Check 'public event read beyond the removal boundary sees zero new events' (@($afterRemoval.events).Count -eq 0) ("count=" + @($afterRemoval.events).Count)
+        Detach-Fixture $sessionId $fixture $false
         $sessionId = $null
     }
     finally {

@@ -46,6 +46,7 @@ namespace HookLab.Probe.CorDebug.Transport {
 		readonly string pipeName;
 		readonly Thread listener;
 		readonly int authenticationTimeoutMilliseconds;
+		readonly bool authenticationEnabled;
 		readonly bool secretWasInjected;
 		readonly ManualResetEvent stopped = new ManualResetEvent(false);
 		/// <summary>Serializes the in-flight command count, the dispatch gate and <see cref="commandsIdle"/>
@@ -79,10 +80,11 @@ namespace HookLab.Probe.CorDebug.Transport {
 		/// array is copied, so the caller may clear its own. When null (the default) the probe generates its own
 		/// secret and hands it out once through <see cref="TakeInitialEndpoint"/>, which is the behaviour every
 		/// pre-existing caller gets.</param>
-		public ProbePipeServer(ProbeCommandHandler commandHandler, int authenticationTimeoutMilliseconds = 5000, byte[]? injectedSecret = null) {
+		public ProbePipeServer(ProbeCommandHandler commandHandler, int authenticationTimeoutMilliseconds = 5000, byte[]? injectedSecret = null, bool authenticationEnabled = true) {
 			this.commandHandler = commandHandler ?? throw new ArgumentNullException(nameof(commandHandler));
 			if (authenticationTimeoutMilliseconds <= 0) throw new ArgumentOutOfRangeException(nameof(authenticationTimeoutMilliseconds));
 			this.authenticationTimeoutMilliseconds = authenticationTimeoutMilliseconds;
+			this.authenticationEnabled = authenticationEnabled;
 			secretWasInjected = injectedSecret != null;
 			secret = injectedSecret == null ? ProbeAuthentication.CreateSecret() : ValidateInjectedSecret(injectedSecret);
 			endpointNonce = ProbeAuthentication.CreateNonce();
@@ -175,7 +177,8 @@ namespace HookLab.Probe.CorDebug.Transport {
 		}
 
 		void Serve(Stream pipe) {
-			Authenticate(pipe); authenticatedPipe = pipe;
+			if (authenticationEnabled) Authenticate(pipe); else NegotiateVersion(pipe);
+			authenticatedPipe = pipe;
 			while (!disposed) {
 				ProbeMessage request;
 				try { request = ProbeWireProtocol.Decode(ProbeWireProtocol.ReadFrame(pipe)); }
@@ -217,7 +220,7 @@ namespace HookLab.Probe.CorDebug.Transport {
 				}
 				catch (Exception ex) {
 					response = new ProbeMessage(ProbeWireProtocol.ProtocolVersion, ProbeMessageKind.Response, request.CorrelationId,
-						"error", "{\"error\":\"" + Escape(ex.GetType().Name) + "\"}", null);
+						"error", "{\"error\":\"" + Escape(ex.GetType().Name) + "\",\"message\":\"" + Escape(ex.Message) + "\"}", null);
 				}
 				lock (sendGate) ProbeWireProtocol.WriteFrame(pipe, ProbeWireProtocol.Encode(response));
 			}
@@ -227,11 +230,7 @@ namespace HookLab.Probe.CorDebug.Transport {
 			var timedOut = 0;
 			using (var deadline = new Timer(_ => { Interlocked.Exchange(ref timedOut, 1); try { pipe.Dispose(); } catch { } }, null, authenticationTimeoutMilliseconds, Timeout.Infinite)) {
 				try {
-					var clientVersion = BitConverter.ToInt32(ReadExactly(pipe, sizeof(int)), 0);
-					var compatible = clientVersion == ProbeWireProtocol.ProtocolVersion;
-					var versionResponse = new byte[sizeof(int) + 1]; BitConverter.GetBytes(ProbeWireProtocol.ProtocolVersion).CopyTo(versionResponse, 0); versionResponse[sizeof(int)] = compatible ? (byte)1 : (byte)0;
-					pipe.Write(versionResponse, 0, versionResponse.Length); pipe.Flush();
-					if (!compatible) throw new InvalidDataException("Client protocol version is incompatible.");
+					NegotiateVersion(pipe);
 					var serverChallenge = ProbeAuthentication.CreateNonce(); pipe.Write(serverChallenge, 0, serverChallenge.Length); pipe.Flush();
 					var request = ReadExactly(pipe, 1 + ProbeAuthentication.NonceBytes + 32);
 					if (request[0] > 1) throw new InvalidDataException("Invalid authentication mode.");
@@ -251,6 +250,14 @@ namespace HookLab.Probe.CorDebug.Transport {
 				}
 				catch (ObjectDisposedException ex) when (Volatile.Read(ref timedOut) != 0) { throw new IOException("Probe authentication timed out.", ex); }
 			}
+		}
+
+		static void NegotiateVersion(Stream pipe) {
+			var clientVersion = BitConverter.ToInt32(ReadExactly(pipe, sizeof(int)), 0);
+			var compatible = clientVersion == ProbeWireProtocol.ProtocolVersion;
+			var versionResponse = new byte[sizeof(int) + 1]; BitConverter.GetBytes(ProbeWireProtocol.ProtocolVersion).CopyTo(versionResponse, 0); versionResponse[sizeof(int)] = compatible ? (byte)1 : (byte)0;
+			pipe.Write(versionResponse, 0, versionResponse.Length); pipe.Flush();
+			if (!compatible) throw new InvalidDataException("Client protocol version is incompatible.");
 		}
 
 		public void EventsAvailable(IHookEventSource source) {

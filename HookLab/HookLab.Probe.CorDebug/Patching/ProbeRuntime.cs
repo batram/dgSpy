@@ -52,9 +52,10 @@ namespace HookLab.Probe.CorDebug.Patching {
 				MethodGuards.ValidateMethod(method, document.Target);
 				var patchId = StablePatchId(document.HookId);
 				if (hooks.TryGetValue(patchId, out var old)) RemoveCore(old);
+				var phaseAlreadyPatched = hooks.Values.Any(value => value.Method == method && value.Document.Kind == document.Kind);
 				var context = new HookContext(this, method, patchId, document, hooksVersion + 1);
 				HookDispatch.Register(context);
-				try { ApplyPatch(method, document.Kind); } catch { HookDispatch.Unregister(context); throw; }
+				try { if (!phaseAlreadyPatched) ApplyPatch(method, document.Kind); } catch { HookDispatch.Unregister(context); throw; }
 				hooks[patchId] = context; hooksVersion++;
 				return new PatchOperationResult(patchId, hooksVersion, true);
 			}
@@ -83,8 +84,8 @@ namespace HookLab.Probe.CorDebug.Patching {
 		}
 
 		void RemoveCore(HookContext context) {
-			harmony.Unpatch(context.Method, HarmonyPatchType.All, harmony.Id);
 			HookDispatch.Unregister(context); hooks.Remove(context.PatchId);
+			if (!hooks.Values.Any(value => value.Method == context.Method)) harmony.Unpatch(context.Method, HarmonyPatchType.All, harmony.Id);
 		}
 		void CheckVersion(long expected) { if (expected != hooksVersion) throw new StaleHooksVersionException(expected, hooksVersion); }
 		void ThrowIfDisposed() { if (disposed) throw new ObjectDisposedException(nameof(ProbeRuntime)); }
@@ -153,7 +154,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 		}
 		internal ProbeRuntime Runtime { get; } internal MethodBase Method { get; } internal string PatchId { get; }
 		internal HookDocument Document { get; } internal long InstalledVersion { get; } internal bool Disabled { get; private set; }
-		internal void Invoke(object? instance, object[] args, Exception? exception) {
+		internal void Invoke(object? instance, object[] args, object? result, Exception? exception) {
 			if (Disabled) return;
 			if (dispatching) { Runtime.RecordReentrantSuppression(); return; }
 			dispatching = true;
@@ -162,7 +163,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 				if (Interlocked.Read(ref rateSecond) != second) { Interlocked.Exchange(ref rateSecond, second); Interlocked.Exchange(ref rateCount, 0); }
 				if (Interlocked.Increment(ref rateCount) > Document.Limits.MaximumEventsPerSecond) { Runtime.RecordRateLimitedDrop(); return; }
 				if (Document.BehaviorJson.IndexOf("\"throw\":true", StringComparison.OrdinalIgnoreCase) >= 0) throw new InvalidOperationException("Injected hook behavior failure.");
-				var capture = BoundedCapture.Serialize(new CaptureEnvelope(instance, args, exception), Document.Limits);
+				var capture = BoundedCapture.Serialize(new CaptureEnvelope(instance, args, result, exception), Document.Limits);
 				var sequenceValue = Interlocked.Increment(ref sequence);
 				Runtime.Buffer.TryAppend(dropped => new HookEvent(Runtime.ProbeInstanceId, PatchId, InstalledVersion, sequenceValue,
 					DateTime.UtcNow, Thread.CurrentThread.ManagedThreadId, capture.Json, capture.Truncated, dropped));
@@ -171,8 +172,8 @@ namespace HookLab.Probe.CorDebug.Patching {
 			finally { dispatching = false; }
 		}
 		sealed class CaptureEnvelope {
-			internal CaptureEnvelope(object? instance, object[] arguments, Exception? exception) { Instance = instance; Arguments = arguments; Exception = exception; }
-			public readonly object? Instance; public readonly object[] Arguments; public readonly Exception? Exception;
+			internal CaptureEnvelope(object? instance, object[] arguments, object? result, Exception? exception) { Instance = instance; Arguments = arguments; Result = result; Exception = exception; }
+			public readonly object? Instance; public readonly object[] Arguments; public readonly object? Result; public readonly Exception? Exception;
 		}
 	}
 
@@ -180,9 +181,9 @@ namespace HookLab.Probe.CorDebug.Patching {
 		static readonly ConcurrentDictionary<MethodBase, ConcurrentDictionary<string, HookContext>> contexts = new ConcurrentDictionary<MethodBase, ConcurrentDictionary<string, HookContext>>();
 		internal static void Register(HookContext context) => contexts.GetOrAdd(context.Method, _ => new ConcurrentDictionary<string, HookContext>())[context.PatchId] = context;
 		internal static void Unregister(HookContext context) { if (contexts.TryGetValue(context.Method, out var set)) { set.TryRemove(context.PatchId, out _); if (set.IsEmpty) contexts.TryRemove(context.Method, out _); } }
-		public static void Prefix(MethodBase __originalMethod, object? __instance, object[] __args) => Invoke(__originalMethod, __instance, __args, null);
-		public static void Postfix(MethodBase __originalMethod, object? __instance, object[] __args) => Invoke(__originalMethod, __instance, __args, null);
-		public static Exception? Finalizer(MethodBase __originalMethod, object? __instance, object[] __args, Exception? __exception) { Invoke(__originalMethod, __instance, __args, __exception); return __exception; }
-		static void Invoke(MethodBase method, object? instance, object[] args, Exception? exception) { if (contexts.TryGetValue(method, out var set)) foreach (var context in set.Values) context.Invoke(instance, args, exception); }
+		public static void Prefix(MethodBase __originalMethod, object? __instance, object[] __args) => Invoke(__originalMethod, HookKind.Prefix, __instance, __args, null, null);
+		public static void Postfix(MethodBase __originalMethod, object? __instance, object[] __args, object? __result) => Invoke(__originalMethod, HookKind.Postfix, __instance, __args, __result, null);
+		public static Exception? Finalizer(MethodBase __originalMethod, object? __instance, object[] __args, Exception? __exception) { Invoke(__originalMethod, HookKind.Finalizer, __instance, __args, null, __exception); return __exception; }
+		static void Invoke(MethodBase method, HookKind kind, object? instance, object[] args, object? result, Exception? exception) { if (contexts.TryGetValue(method, out var set)) foreach (var context in set.Values) if (context.Document.Kind == kind) context.Invoke(instance, args, result, exception); }
 	}
 }

@@ -44,6 +44,16 @@ if ($installText -notmatch 'Test-Path\s+-LiteralPath\s+\$resolvedPackage\s+-Path
 if ($installText -notmatch 'ZipFile\]::ExtractToDirectory') {
 	throw 'Release ZIP installation must retain the native extraction path.'
 }
+if ($installText -notmatch '\[switch\]\$HostOnly' -or
+	$installText -notmatch 'foreach \(\$file in Get-ChildItem -LiteralPath \$sourceBin -File -Filter ''dnSpy\*''\)' -or
+	$installText -notmatch 'foreach \(\$relative in ''bin\\Extensions'',''hooklab'',''launcher''\)') {
+	throw 'HostOnly must update only dnSpy-owned root files and host-owned payload directories.'
+}
+if ($installText -notmatch '\$protected = @\(''bin\\dgspy\.exe'',''bin\\dgSpy\.Gateway\.exe''\)' -or
+	$installText -notmatch 'HostOnly never stops the MCP or Gateway' -or
+	$installText -notmatch 'hooklab_payload_sha256 = \$sourceManifest\.hooklab_payload_sha256') {
+	throw 'HostOnly must protect the CLI and Gateway and must reject Force.'
+}
 
 $fixtureRoot = Join-Path $PSScriptRoot 'bin\packaged-layout-contract'
 if (Test-Path -LiteralPath $fixtureRoot) { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force }
@@ -128,17 +138,52 @@ if ($packText -notmatch 'Write-HookLabPayload\s+-BootstrapAssembly\s+\$bootstrap
 if ($packText -notmatch 'hooklab_payload_sha256=\$bootstrapSha') {
 	throw 'pack-dgspy.ps1 must record the payload digest in the package manifest, independently of the payload manifest.'
 }
+if ($packText -notmatch 'protocol_sha256=\$protocolSha' -or
+	$packText -notmatch 'different app-base and extension dgSpy\.Protocol\.dll') {
+	throw 'pack-dgspy.ps1 must verify and record the one protocol contract loaded by both the host and control plane.'
+}
+if ($packText -notmatch "ValidateSet\('Release'\)" -or $packText -notmatch "ValidateSet\('win-x64'\)") {
+	throw 'pack-dgspy.ps1 must reject configuration/runtime values its hard-coded dnSpy publish layout cannot produce.'
+}
+if ($packText -notmatch "'HookLab\.Host\.Transport\.dll','HookLab\.Host\.Transport\.pdb'") {
+	throw 'pack-dgspy.ps1 must deploy the transport dependency used by the public HookLab RPC service.'
+}
+if ($packText -notmatch 'build-dgspy\.ps1''\)\s+-Configuration\s+\$Configuration\s+-TargetFramework\s+net10\.0-windows') {
+	throw 'pack-dgspy.ps1 must run the authoritative dgSpy deployer after build.ps1 wipes the repository host extension tree.'
+}
+if ($packText -notmatch 'repositoryExtension=Join-Path\s+\$hostPublish\s+''bin\\Extensions\\dgSpy\\dgSpy\.Extension\.x\.dll''' -or
+	$packText -notmatch 'Test-HookLabPayload\s+-HostRoot\s+\$hostPublish') {
+	throw 'pack-dgspy.ps1 must verify that the repository publish tree still contains both the extension and HookLab payload before packaging it.'
+}
 if ($installText -notmatch 'Test-HookLabPayload\s+-HostRoot\s+\(Join-Path\s+\$resolvedInstall\s+''cli''\)\s+-ExpectedSha256\s+\$manifest\.hooklab_payload_sha256') {
 	throw 'install-dgspy.ps1 must verify the installed payload against the package manifest digest.'
 }
 if ($installText -notmatch 'packaging\\HookLabPayload\.ps1') {
 	throw 'install-dgspy.ps1 must load the shared payload verifier, and the package must carry it.'
 }
+if ($installText -notmatch 'Host-only update cannot install a protocol/schema change' -or
+	$installText -notmatch 'No host files were changed') {
+	throw 'Host-only install must reject protocol drift before mutating the installed host; the running Gateway locks and shares that contract.'
+}
+if ($installText -notmatch 'Assert-PackageContent\s+-PackageRoot\s+\$sourceRoot' -or
+	$installText -notmatch 'Assert-PackageContent\s+-PackageRoot\s+\$staging') {
+	throw 'install-dgspy.ps1 must validate both source and staged package trees before swapping the installation.'
+}
+if ($installText -notmatch 'previous installation was restored' -or
+	$installText -notmatch 'every content check, registration command, and CLI smoke') {
+	throw 'install-dgspy.ps1 must retain and restore the previous tree across late verification failures.'
+}
 if ($packText -notmatch 'Join-Path\s+\$staging\s+''packaging''') {
 	throw 'pack-dgspy.ps1 must copy packaging\HookLabPayload.ps1 into the package, or an extracted release cannot verify itself.'
 }
 if ($remotePackText -notmatch 'Test-HookLabPayload\s+-HostRoot\s+\$resolvedBundle') {
 	throw 'pack-remote-host.ps1 must re-verify the staged payload before it archives the bundle.'
+}
+if ($remotePackText -notmatch 'HookLab\.Contracts\.dll' -or $remotePackText -notmatch 'HookLab\.Host\.Transport\.dll') {
+	throw 'pack-remote-host.ps1 must carry every assembly the HookLab RPC service imports or MEF silently removes it.'
+}
+if ($remotePackText -notmatch 'different app-base and extension dgSpy\.Protocol\.dll') {
+	throw 'pack-remote-host.ps1 must refuse a stale app-base protocol whenever that optional shared copy exists.'
 }
 
 . $payloadHelperPath

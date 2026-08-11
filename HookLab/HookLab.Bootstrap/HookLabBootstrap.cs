@@ -47,14 +47,13 @@ namespace HookLab.Bootstrap {
 				EmbeddedAssemblyResolver? installed = null;
 				try {
 					var parsed = BootstrapParameters.Parse(parameters);
-					if (parsed.Endpoint != "none") throw new ArgumentException("Prepare requires endpoint=none.", nameof(parameters));
+					if (parsed.Endpoint != "none" && parsed.Endpoint != "pipe") throw new ArgumentException("Prepare requires endpoint=none or endpoint=pipe.", nameof(parameters));
 					installed = resolver ?? EmbeddedAssemblyResolver.FromEmbeddedManifest();
 					installed.Install(); resolver = installed;
 					var outcome = ProbeStartup.Prepare(parsed);
 					ResidentLauncher.Prepare(parsed);
 					installed.VerifyNoDiskProvenance(AppDomain.CurrentDomain.GetAssemblies());
-					return "status=ok\nresidency_commit=completed\nbehavior_commit=not_started\npayloads_resident=true\n" +
-						"generation_identity=" + ResidentLauncher.GenerationIdentity + "\nprototype_compromises=endpoint_none,identity_partly_self_asserted,no_residency_rollback\n";
+					return Describe(outcome, installed) + "generation_identity=" + ResidentLauncher.GenerationIdentity + "\npayloads_resident=true\n";
 				}
 				catch (Exception ex) { return Error(ex.GetType().FullName ?? "Exception", ex.Message, installed != null && installed.LoadCount != 0); }
 			}
@@ -65,6 +64,12 @@ namespace HookLab.Bootstrap {
 
 		[MethodImpl(MethodImplOptions.NoInlining)]
 		public static string DrainEvents(int max) => ProbeStartup.DrainEvents(max);
+
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		public static string InstallHook(string parameters) => ProbeStartup.InstallPrepared(BootstrapParameters.Parse(parameters));
+
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		public static string UninstallHook(string patchId) => ProbeStartup.UninstallPrepared(patchId);
 
 		internal static string RunPrepared(BootstrapParameters parameters) {
 			var outcome = ProbeStartup.CommitPrepared(parameters);
@@ -213,7 +218,6 @@ namespace HookLab.Bootstrap {
 				"backend_resident=" + (outcome.BackendResident ? "true" : "false"),
 				"backend_inventory_at_initialize=" + Sanitize(outcome.InventoryIdentities),
 				"hooks_version=" + outcome.HooksVersion.ToString(CultureInfo.InvariantCulture),
-				"pipe_name=" + outcome.PipeName,
 				"target_process_id=" + outcome.TargetProcessId.ToString(CultureInfo.InvariantCulture),
 				"target_image_path=" + Sanitize(outcome.TargetImagePath),
 				"payload_identities=" + string.Join(",", installed.ManifestIdentities),
@@ -222,6 +226,7 @@ namespace HookLab.Bootstrap {
 				"behavior_commit=" + (outcome.PatchId == null ? "not_started" : "completed"),
 				"prototype_compromises=" + (outcome.PipeName.Length == 0 ? "endpoint_none," : "") + "identity_partly_self_asserted,no_residency_rollback",
 			};
+			if (outcome.PipeName.Length != 0) { lines.Add("pipe_name=" + outcome.PipeName); lines.Add("pipe_nonce_base64=" + outcome.EndpointNonceBase64); }
 			if (outcome.PatchId != null) lines.Add("patch_id=" + Sanitize(outcome.PatchId));
 			return Join(lines);
 		}

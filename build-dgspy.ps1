@@ -123,7 +123,7 @@ New-Item -ItemType Directory -Path $deployDir -Force | Out-Null
 $obsoleteNewtonsoft = Join-Path $deployDir 'Newtonsoft.Json.dll'
 if (Test-Path -LiteralPath $obsoleteNewtonsoft) { Remove-Item -LiteralPath $obsoleteNewtonsoft -Force }
 $deployFiles = @('dgSpy.Extension.x.dll', 'dgSpy.Extension.x.pdb', 'dgSpy.Protocol.dll', 'dgSpy.Protocol.pdb',
-	'HookLab.Contracts.dll', 'HookLab.Contracts.pdb')
+	'HookLab.Contracts.dll', 'HookLab.Contracts.pdb', 'HookLab.Host.Transport.dll', 'HookLab.Host.Transport.pdb')
 if ($TargetFramework -eq 'net48') {
 	# dgSpy.Protocol targets netstandard2.0, so under net48 its System.Text.Json compatibility
 	# assemblies must sit beside the extension in the LoadFrom context. Copy only these dependencies,

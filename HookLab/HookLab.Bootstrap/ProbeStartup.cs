@@ -302,15 +302,35 @@ namespace HookLab.Bootstrap {
 
 		[MethodImpl(MethodImplOptions.NoInlining)]
 		internal static BootstrapOutcome Prepare(BootstrapParameters parameters) {
-			if (parameters.Endpoint != "none") throw new InvalidOperationException("Prepare requires endpoint=none.");
+			if (parameters.Endpoint != "none" && parameters.Endpoint != "pipe") throw new InvalidOperationException("Prepare requires endpoint=none or endpoint=pipe.");
 			var expected = new TargetIdentity(parameters.HostId, parameters.ImagePath, parameters.ProcessId,
 				new DateTime(parameters.ProcessCreationUtcTicks, DateTimeKind.Utc), parameters.Architecture,
 				parameters.RuntimeId, parameters.AppDomainId);
 			var provider = new LiveTargetIdentityProvider(parameters.HostId);
-			var probe = ProbeInitializer.Initialize(new ProbeInitialization(expected, provider, null, parameters.EventCapacity, parameters.ByteCapacity));
-			lock (Gate) { runtime = probe; server = null; }
-			var actual = provider.GetCurrentIdentity();
-			return Outcome(probe, actual);
+			ProbePipeServer? pipe = null;
+			ProbeRuntime? probe = null;
+			try {
+				if (parameters.Endpoint == "pipe") {
+					pipe = new ProbePipeServer(HandleCommand, authenticationEnabled: false);
+					PipeConstructionCountForTest++;
+				}
+				// The public HookLab service uses explicit bounded drain commands. Do not also register the pipe
+				// as a push consumer here: that would remove events from the authoritative buffer before the
+				// caller's cursor read. The older one-shot Start path retains its push behavior above.
+				probe = ProbeInitializer.Initialize(new ProbeInitialization(expected, provider, null, parameters.EventCapacity, parameters.ByteCapacity));
+				lock (Gate) { runtime = probe; server = pipe; }
+				var endpoint = pipe?.TakeInitialEndpoint();
+				var outcome = Outcome(probe, provider.GetCurrentIdentity());
+				outcome.PipeName = endpoint?.PipeName ?? "";
+				outcome.SecretBase64 = endpoint == null ? "" : Convert.ToBase64String(endpoint.Secret);
+				outcome.EndpointNonceBase64 = endpoint == null ? "" : Convert.ToBase64String(endpoint.EndpointNonce);
+				return outcome;
+			}
+			catch {
+				lock (Gate) { runtime = null; server = null; }
+				Cleanup(probe, pipe);
+				throw;
+			}
 		}
 
 		internal static BootstrapOutcome CommitPrepared(BootstrapParameters parameters) {
@@ -344,6 +364,25 @@ namespace HookLab.Bootstrap {
 			}
 			return string.Join("\n", lines.ToArray()) + "\n";
 		}
+
+		internal static string InstallPrepared(BootstrapParameters parameters) {
+			ProbeRuntime probe;
+			lock (Gate) probe = runtime as ProbeRuntime ?? throw new InvalidOperationException("The probe is not initialized yet.");
+			var result = InstallHook(probe, parameters);
+			return OperationReport(result);
+		}
+
+		internal static string UninstallPrepared(string patchId) {
+			if (string.IsNullOrWhiteSpace(patchId)) throw new ArgumentException("A patch id is required.", nameof(patchId));
+			ProbeRuntime probe;
+			lock (Gate) probe = runtime as ProbeRuntime ?? throw new InvalidOperationException("The probe is not initialized yet.");
+			return OperationReport(probe.Uninstall(patchId, probe.HooksVersion));
+		}
+
+		static string OperationReport(PatchOperationResult result) =>
+			"status=ok\npatch_id=" + result.PatchId + "\nhooks_version=" + result.HooksVersion.ToString(CultureInfo.InvariantCulture) +
+			"\nchanged=" + (result.Changed ? "true" : "false") + "\nresidency_commit=completed\nbehavior_commit=completed\n" +
+			"prototype_compromises=identity_partly_self_asserted,no_residency_rollback\n";
 
 		static BootstrapOutcome Outcome(ProbeRuntime probe, TargetIdentity actual) => new BootstrapOutcome {
 			ProbeInstanceId = probe.ProbeInstanceId,
@@ -414,11 +453,19 @@ namespace HookLab.Bootstrap {
 				signature,
 				parameters.Hook("hook_il_sha256"));
 			var kind = (HookKind)Enum.Parse(typeof(HookKind), parameters.Hook("hook_kind"), false);
-			var limits = new HookLimits(100, 64 * 1024, 8, 64, 1024, 5);
+			var limits = new HookLimits(Positive(parameters, "maximum_events_per_second", 100), 64 * 1024, 8, 64, Positive(parameters, "maximum_string_length", 1024), 5);
 			var document = new HookDocument(1, parameters.Hook("hook_id"), kind, guard, "{}", limits, true);
 			// ProbeRuntime.Install re-validates the target identity and every method guard field. The values
 			// come from the caller, so a wrong module, token, signature or IL digest refuses here.
 			return probe.Install(method, document, probe.HooksVersion);
+		}
+
+		static int Positive(BootstrapParameters parameters, string name, int fallback) {
+			var text = parameters.OptionalHook(name);
+			if (string.IsNullOrWhiteSpace(text)) return fallback;
+			if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) || value <= 0)
+				throw new InvalidOperationException(name + " must be a positive whole number.");
+			return value;
 		}
 
 		static string SafeName(Assembly assembly) {
@@ -455,10 +502,22 @@ namespace HookLab.Bootstrap {
 			cancellationToken.ThrowIfCancellationRequested();
 			ProbeRuntime probe;
 			lock (Gate) probe = runtime as ProbeRuntime ?? throw new InvalidOperationException("The probe is not initialized yet.");
-			if (!string.Equals(operation, "status", StringComparison.Ordinal))
-				throw new NotSupportedException("The bootstrap probe endpoint serves 'status' only; hook operations belong to the extension surface.");
-			var state = probe.GetState();
-			return new ProbeCommandResult(StatusJson(state), state.HooksVersion);
+			if (expectedHooksVersion.HasValue && expectedHooksVersion.Value != probe.HooksVersion)
+				throw new InvalidOperationException("The expected hooks version does not match the resident probe.");
+			if (string.Equals(operation, "status", StringComparison.Ordinal)) {
+				var state = probe.GetState();
+				return new ProbeCommandResult(StatusJson(state), state.HooksVersion);
+			}
+			if (string.Equals(operation, "drain", StringComparison.Ordinal)) {
+				if (!int.TryParse(payloadJson, NumberStyles.Integer, CultureInfo.InvariantCulture, out var maximum) || maximum < 1 || maximum > 256)
+					throw new ArgumentException("Drain payload must be an integer from 1 through 256.");
+				return new ProbeCommandResult(DrainEvents(maximum), probe.HooksVersion);
+			}
+			if (string.Equals(operation, "uninstall", StringComparison.Ordinal))
+				return new ProbeCommandResult(UninstallPrepared(payloadJson), probe.HooksVersion);
+			if (string.Equals(operation, "install", StringComparison.Ordinal))
+				return new ProbeCommandResult(InstallPrepared(BootstrapParameters.Parse(payloadJson)), probe.HooksVersion);
+			throw new NotSupportedException("Unsupported probe operation: " + operation);
 		}
 
 		static string StatusJson(ProbeState state) =>

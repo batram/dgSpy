@@ -277,6 +277,18 @@ public sealed class ToolCatalogTests {
 	}
 
 	[Fact]
+	public void HookLab_initialization_owns_injection_and_install_requires_no_carrier() {
+		var initialize=ToolCatalog.All.Single(tool=>Name(tool)=="initialize_hooklab");
+		Assert.Equal(new[]{"expected_execution_version","host_id","process_id","session_id"},InputProperties(initialize).Keys.OrderBy(value=>value,StringComparer.Ordinal));
+		var install=ToolCatalog.All.Single(tool=>Name(tool)=="install_hook");
+		var properties=InputProperties(install);
+		Assert.DoesNotContain("arrival_module_id",properties.Keys);
+		Assert.DoesNotContain("arrival_method_token",properties.Keys);
+		Assert.DoesNotContain("arrival_il_offset",properties.Keys);
+		Assert.DoesNotContain("expected_stop_id",properties.Keys);
+	}
+
+	[Fact]
 	public void Every_exact_module_tool_exposes_the_opaque_identity() {
 		foreach(var name in new[]{"run_to_method","run_to_location","set_il_breakpoint","set_instruction_pointer","list_types","list_members","get_il","get_csharp","set_breakpoint","find_references","find_implementations","get_metadata","analyze_symbol","get_raw_module"}) {
 			var tool=ToolCatalog.All.Single(value=>Name(value)==name);

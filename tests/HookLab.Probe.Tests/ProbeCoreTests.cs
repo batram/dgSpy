@@ -76,6 +76,24 @@ namespace HookLab.Probe.Tests {
 		}
 
 		[Fact]
+		public void MultipleKindsShareOneMethodPatchAndUnpatchIndependently() {
+			using (var runtime = Runtime()) {
+				var installed = new List<PatchOperationResult>();
+				foreach (var kind in new[] { HookKind.Prefix, HookKind.Postfix, HookKind.Finalizer })
+					installed.Add(runtime.Install(TargetMethod, new HookDocument(1, kind.ToString(), kind, GuardFor(TargetMethod), "{}", Limits, true), runtime.HooksVersion));
+				Assert.Equal(3, Fixture.Add(1, 2));
+				Assert.Equal(3, runtime.Events.Drain(10).Count);
+				runtime.Uninstall(installed[0].PatchId, runtime.HooksVersion);
+				Assert.Equal(3, Fixture.Add(1, 2));
+				Assert.Equal(2, runtime.Events.Drain(10).Count);
+				runtime.Uninstall(installed[1].PatchId, runtime.HooksVersion);
+				runtime.Uninstall(installed[2].PatchId, runtime.HooksVersion);
+				Assert.Equal(3, Fixture.Add(1, 2));
+				Assert.Empty(runtime.Events.Drain(10));
+			}
+		}
+
+		[Fact]
 		public void PatchLifecycleVersionsAndStaleRejectionAreAtomic() {
 			using (var runtime = Runtime()) {
 				Assert.Equal(5, Fixture.Add(2, 3));

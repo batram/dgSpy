@@ -74,7 +74,7 @@ namespace dgSpy.Extension {
 			// Never let counting break the host: at detach the bound breakpoint being reported is already
 			// being torn down, and a throw here runs unhandled on the debugger thread. A missed tick
 			// degrades a diagnostic counter; an exception would take dnSpy down.
-			manager.MessageBoundBreakpoint += (_,e) => { try { var id=e.BoundBreakpoint.Breakpoint.Id; lock(sync) { engineHitCounts.TryGetValue(id,out var hits); engineHitCounts[id]=hits+1; } } catch (Exception) { } }; manager.IsRunningChanged += (_,__) => { NotifyConnectionStateChanged(); if (IsTargetRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => { NotifyConnectionStateChanged(); Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded); };
+			manager.MessageBoundBreakpoint += (_,e) => { try { var id=e.BoundBreakpoint.Breakpoint.Id; lock(sync) { engineHitCounts.TryGetValue(id,out var hits); engineHitCounts[id]=hits+1; } } catch (Exception) { } }; manager.IsRunningChanged += (_,__) => { NotifyConnectionStateChanged(); if (IsTargetRunning==true) Record(EventKinds.Continued); }; manager.IsDebuggingChanged += (_,__) => { NotifyConnectionStateChanged(); Record(manager.IsDebugging ? EventKinds.SessionStarted : EventKinds.SessionEnded); if(!manager.IsDebugging) { hookLab.ClearAll(); lock(sync) if(sessionKind=="ui") { sessionId=null; attachedProgramId=null; sessionKind=null; lifecycleAction=null; attaching=false; faulted=false; faultMessage=null; lastUserMessage=null; terminalExitCode=null; terminalReason=null; } } };
 			breakpoints.BreakpointsChanged += (_,__) => IncrementBreakpointsVersion(); breakpoints.BreakpointsModified += (_,__) => IncrementBreakpointsVersion();
 			moduleBreakpoints.BreakpointsChanged += (_,__) => IncrementBreakpointsVersion(); moduleBreakpoints.BreakpointsModified += (_,__) => IncrementBreakpointsVersion();
 			exceptions.ExceptionsChanged += (_,__) => IncrementBreakpointsVersion(); exceptions.ExceptionSettingsModified += (_,__) => IncrementBreakpointsVersion();
@@ -93,6 +93,7 @@ namespace dgSpy.Extension {
 			// capture, so nothing arrives for those.
 			manager.MessageAsyncProgramMessage += (_,e) => { try { var category=e.Source==AsyncProgramMessageSource.StandardError ? OutputCategories.StandardError : OutputCategories.StandardOutput; programOutput.Append(new ProgramOutputOrigin(category,e.Runtime.Process.Id,e.Runtime.Guid.ToString("D")),e.Message); } catch (Exception) { } };
 			NotifyConnectionStateChanged();
+			hookLab.BindUi(this);
 		}
 		public string ConnectionState => GetConnectionState();
 
@@ -213,7 +214,7 @@ namespace dgSpy.Extension {
 			// policy, so it moves execution_version and stop_id like any other execution operation. Leaving
 			// it unstamped forced a get_session_state between it and the next guarded call, and made
 			// cancel_atomic_action's mandatory expected_execution_version racy against the action it cancels.
-			"run_atomic_action",
+			"run_atomic_action","install_hook","get_hook_events","remove_hook","remove_all_hooks",
 		};
 		// Mutations which can invalidate an atomic action's captured process state. This deliberately
 		// includes evaluation-side effects and debugger policy changes in addition to engine transitions.
@@ -310,6 +311,13 @@ namespace dgSpy.Extension {
 			case "pause": return RpcResponse.Success(req.RequestId,await PauseProcessAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "continue": return RpcResponse.Success(req.RequestId,await ContinueProcessAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "run_atomic_action": return RpcResponse.Success(req.RequestId,await RunAtomicActionAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "initialize_hooklab": return RpcResponse.Success(req.RequestId,await InitializeHookLabAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "get_hooklab_status": return RpcResponse.Success(req.RequestId,GetHookLabStatus(req));
+			case "install_hook": return RpcResponse.Success(req.RequestId,await InstallHookAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "list_hooks": return RpcResponse.Success(req.RequestId,ListHooks(req));
+			case "get_hook_events": return RpcResponse.Success(req.RequestId,await GetHookEventsAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "remove_hook": return RpcResponse.Success(req.RequestId,await RemoveHookAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "remove_all_hooks": return RpcResponse.Success(req.RequestId,await RemoveAllHooksAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "start_atomic_action": return RpcResponse.Success(req.RequestId,StartAtomicAction(req));
 			case "get_atomic_action_status": return RpcResponse.Success(req.RequestId,GetAtomicActionStatus(req));
 			case "cancel_atomic_action": return RpcResponse.Success(req.RequestId,CancelAtomicAction(req));

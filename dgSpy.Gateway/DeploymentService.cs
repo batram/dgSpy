@@ -553,9 +553,25 @@ public sealed class DeploymentService {
 	/// Both files are required: the bootstrap without its manifest cannot have its digest verified, and the
 	/// verifier refuses to hand on bytes it cannot check.</summary>
 	static void ValidateRemotePayload(string payload) {
-		var required=new[]{"dnSpy.exe",Path.Combine("bin","dnSpy.dll"),Path.Combine("bin","dnSpy.Contracts.DnSpy.dll"),Path.Combine("bin","hostfxr.dll"),Path.Combine("bin","hostpolicy.dll"),Path.Combine("bin","coreclr.dll"),Path.Combine("bin","clrjit.dll"),Path.Combine("bin","Extensions","dgSpy","dgSpy.Extension.x.dll"),HookLabPayloadRelativePath,HookLabManifestRelativePath,Path.Combine("launcher","Start-dgSpyRemoteHost.ps1"),Path.Combine("launcher","Start-dgSpyRemoteHost.cmd")};
+		var required=new[]{"dnSpy.exe",Path.Combine("bin","dnSpy.dll"),Path.Combine("bin","dnSpy.Contracts.DnSpy.dll"),Path.Combine("bin","hostfxr.dll"),Path.Combine("bin","hostpolicy.dll"),Path.Combine("bin","coreclr.dll"),Path.Combine("bin","clrjit.dll"),Path.Combine("bin","Extensions","dgSpy","dgSpy.Extension.x.dll"),Path.Combine("bin","Extensions","dgSpy","dgSpy.Protocol.dll"),Path.Combine("bin","Extensions","dgSpy","HookLab.Contracts.dll"),Path.Combine("bin","Extensions","dgSpy","HookLab.Host.Transport.dll"),HookLabPayloadRelativePath,HookLabManifestRelativePath,Path.Combine("launcher","Start-dgSpyRemoteHost.ps1"),Path.Combine("launcher","Start-dgSpyRemoteHost.cmd")};
 		var missing=required.Where(path=>!File.Exists(Path.Combine(payload,path))).ToArray(); if(missing.Length>0) throw new GatewayControlException("installation_incomplete",$"The installed remote-host payload is incomplete ({string.Join(", ",missing)}). Reinstall dgSpy from a complete release package; runtime builds are not supported.");
+		var rootProtocol=Path.Combine(payload,"bin","dgSpy.Protocol.dll"); var extensionProtocol=Path.Combine(payload,"bin","Extensions","dgSpy","dgSpy.Protocol.dll");
+		if(File.Exists(rootProtocol) && !File.ReadAllBytes(rootProtocol).SequenceEqual(File.ReadAllBytes(extensionProtocol))) throw new GatewayControlException("installation_incomplete","The app-base and extension dgSpy.Protocol.dll files differ; dnSpy would silently load the stale app-base contract. Reinstall from one complete package.");
+		VerifyPackagedFile(payload,Path.Combine("bin","Extensions","dgSpy","dgSpy.Extension.x.dll"),"extension_sha256");
+		VerifyPackagedFile(payload,File.Exists(rootProtocol)?Path.Combine("bin","dgSpy.Protocol.dll"):Path.Combine("bin","Extensions","dgSpy","dgSpy.Protocol.dll"),"protocol_sha256");
 		var packaged=PackagedHookLabRecord(payload); VerifyHookLabPayload(payload,packaged.Sha,packaged.Readable);
+	}
+	static void VerifyPackagedFile(string payloadRoot,string relativePath,string manifestField) {
+		var record=PackagedDigestRecord(payloadRoot,manifestField);
+		if(!record.Readable) throw new GatewayControlException("installation_incomplete","The package manifest beside the payload root could not be read, so packaged assembly digests cannot be checked.");
+		if(string.IsNullOrWhiteSpace(record.Sha)) return;
+		var actual=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(payloadRoot,relativePath)))).ToLowerInvariant();
+		if(!string.Equals(actual,record.Sha,StringComparison.OrdinalIgnoreCase)) throw new GatewayControlException("installation_incomplete",$"The staged {relativePath} digest is {actual}, but the package manifest records {record.Sha}.");
+	}
+	static (bool Readable,string? Sha) PackagedDigestRecord(string payloadRoot,string field) {
+		var parent=Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(payloadRoot))); if(string.IsNullOrEmpty(parent)) return (true,null);
+		var manifest=Path.Combine(parent!,"manifest.json"); if(!File.Exists(manifest)) return (true,null);
+		try { return (true,(string?)JsonNode.Parse(File.ReadAllText(manifest))?[field]); } catch { return (false,null); }
 	}
 
 	internal static readonly string HookLabPayloadRelativePath=Path.Combine("hooklab","hooklab-bootstrap.net48.payload");
@@ -572,14 +588,7 @@ public sealed class DeploymentService {
 	///
 	/// A manifest that parses but carries no digest is still allowed - that is a package predating the
 	/// field, not a damaged one.</summary>
-	static (bool Readable,string? Sha) PackagedHookLabRecord(string payloadRoot) {
-		var parent=Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(payloadRoot)));
-		if(string.IsNullOrEmpty(parent)) return (true,null);
-		var manifest=Path.Combine(parent!,"manifest.json");
-		if(!File.Exists(manifest)) return (true,null);
-		try { return (true,(string?)JsonNode.Parse(File.ReadAllText(manifest))?["hooklab_payload_sha256"]); }
-		catch { return (false,null); }
-	}
+	static (bool Readable,string? Sha) PackagedHookLabRecord(string payloadRoot) => PackagedDigestRecord(payloadRoot,"hooklab_payload_sha256");
 
 	/// <summary>Verifies the staged HookLab payload the way a consumer must, and at the moment readiness is
 	/// reported rather than at the moment an action needs it.
