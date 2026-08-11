@@ -22,6 +22,8 @@ namespace HookLab.Bootstrap {
 		static readonly object Gate = new object();
 		static object? runtime;
 		static IDisposable? server;
+		static string preparedPipeName = "";
+		static string preparedEndpointNonceBase64 = "";
 		// Set when the handle in the corresponding field is there because its own Dispose failed, rather
 		// than because a start succeeded. The two states occupy the same fields and mean opposite things:
 		// one is a running bootstrap, the other is wreckage a retry still has to clear.
@@ -143,7 +145,7 @@ namespace HookLab.Bootstrap {
 			IDisposable? currentServer;
 			lock (Gate) {
 				currentRuntime = runtime; currentServer = server;
-				runtime = null; server = null;
+				runtime = null; server = null; preparedPipeName = ""; preparedEndpointNonceBase64 = "";
 				// Retention describes the handles now in hand. Cleanup sets it again for whichever fails
 				// this time; leaving it set here would report wreckage that has just been cleared.
 				runtimeRetained = false; serverRetained = false;
@@ -318,8 +320,12 @@ namespace HookLab.Bootstrap {
 				// as a push consumer here: that would remove events from the authoritative buffer before the
 				// caller's cursor read. The older one-shot Start path retains its push behavior above.
 				probe = ProbeInitializer.Initialize(new ProbeInitialization(expected, provider, null, parameters.EventCapacity, parameters.ByteCapacity));
-				lock (Gate) { runtime = probe; server = pipe; }
 				var endpoint = pipe?.TakeInitialEndpoint();
+				lock (Gate) {
+					runtime = probe; server = pipe;
+					preparedPipeName = endpoint?.PipeName ?? "";
+					preparedEndpointNonceBase64 = endpoint == null ? "" : Convert.ToBase64String(endpoint.EndpointNonce);
+				}
 				var outcome = Outcome(probe, provider.GetCurrentIdentity());
 				outcome.PipeName = endpoint?.PipeName ?? "";
 				outcome.SecretBase64 = endpoint == null ? "" : Convert.ToBase64String(endpoint.Secret);
@@ -327,7 +333,7 @@ namespace HookLab.Bootstrap {
 				return outcome;
 			}
 			catch {
-				lock (Gate) { runtime = null; server = null; }
+				lock (Gate) { runtime = null; server = null; preparedPipeName = ""; preparedEndpointNonceBase64 = ""; }
 				Cleanup(probe, pipe);
 				throw;
 			}
@@ -337,6 +343,7 @@ namespace HookLab.Bootstrap {
 			ProbeRuntime probe;
 			lock (Gate) probe = runtime as ProbeRuntime ?? throw new InvalidOperationException("The probe is not prepared.");
 			var outcome = Outcome(probe, probe.GetState().Target);
+			lock (Gate) { outcome.PipeName = preparedPipeName; outcome.EndpointNonceBase64 = preparedEndpointNonceBase64; }
 			if (parameters.HasHook) {
 				ResidentLauncher.NotePatchInstall();
 				var result = InstallHook(probe, parameters);

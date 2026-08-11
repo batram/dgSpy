@@ -35,7 +35,7 @@ if ($fixtureChildMode) {
     [IO.File]::WriteAllText($FixtureExitPath,"$nativeExitCode")
     exit $nativeExitCode
 }
-$dnlibPath = Join-Path $repoRoot 'Build\compiled\dnlib.dll'
+$configuredLayout = [Environment]::GetEnvironmentVariable('DGSPY_LAYOUT_ROOT')
 $driverLog = Join-Path $RunDirectory 'driver.log'
 $hostId = 0
 $pass = 0
@@ -181,38 +181,22 @@ function Check-Action([string]$Label, $Result, [uint32]$CarrierToken, [uint32]$C
     Check "$Label resumed the target" ($Result.final_debugger_state.is_running -eq $true) ("running=" + $Result.final_debugger_state.is_running)
 }
 
-# dnlib selects the exact MethodDef and maps its RVA. The small PE reader hashes the method body's raw
-# IL bytes, not a reflection result from the target and not an IL re-encoding that could normalize bytes.
-function Get-DnlibMethodFacts([string]$AssemblyPath, [string]$TypeName, [string]$MethodName) {
-    if (-not ('dnlib.DotNet.ModuleDefMD' -as [type])) { [Reflection.Assembly]::LoadFrom($dnlibPath) | Out-Null }
-    $module = [dnlib.DotNet.ModuleDefMD]::Load($AssemblyPath)
-    try {
-        $type = @($module.Types | Where-Object { $_.FullName -eq $TypeName })[0]
-        $method = @($type.Methods | Where-Object { $_.Name.String -eq $MethodName })[0]
-        if (-not $method -or -not $method.HasBody) { throw "dnlib did not find a body for $TypeName.$MethodName" }
-        $bytes = [IO.File]::ReadAllBytes($AssemblyPath)
-        $offset = [int]$module.Metadata.PEImage.ToFileOffset($method.RVA)
-        $first = [int]$bytes[$offset]
-        if (($first -band 3) -eq 2) { $header = 1; $size = $first -shr 2 }
-        elseif (($first -band 3) -eq 3) {
-            $flagsAndSize = [BitConverter]::ToUInt16($bytes,$offset)
-            $header = (($flagsAndSize -shr 12) -band 15) * 4
-            $size = [BitConverter]::ToInt32($bytes,$offset + 4)
-        }
-        else { throw "unsupported method header 0x$('{0:X2}' -f $first) at file offset $offset" }
-        $il = New-Object byte[] $size
-        [Array]::Copy($bytes,$offset + $header,$il,0,$size)
+# Reflection exposes the original method-body IL byte array; no compiler-output helper is needed.
+function Get-MethodFacts([string]$AssemblyPath, [string]$TypeName, [string]$MethodName) {
+    $assembly = [Reflection.Assembly]::LoadFrom($AssemblyPath)
+    $type = $assembly.GetType($TypeName,$true)
+    $method = $type.GetMethod($MethodName,[Reflection.BindingFlags]'Static,NonPublic')
+    $il = $method.GetMethodBody().GetILAsByteArray()
+    if (-not $il) { throw "reflection did not find a body for $TypeName.$MethodName" }
         $sha = [Security.Cryptography.SHA256]::Create()
         try { $digest = [BitConverter]::ToString($sha.ComputeHash($il)).Replace('-','').ToLowerInvariant() }
         finally { $sha.Dispose() }
         [pscustomobject]@{
-            Token = [uint32]$method.MDToken.Raw
-            Mvid = $module.Mvid.ToString('D')
-            Signature = 'System.Int32 ' + $MethodName + '(System.Int32)'
+            Token = [uint32]$method.MetadataToken
+            Mvid = $method.Module.ModuleVersionId.ToString('D')
+            Signature = $method.ReturnType.FullName + ' ' + $MethodName + '(' + (($method.GetParameters() | ForEach-Object { $_.ParameterType.FullName }) -join ',') + ')'
             IlSha256 = $digest
         }
-    }
-    finally { $module.Dispose() }
 }
 function Start-Fixture([string]$Label, [int]$ExitAfterMs) {
     $stdout = Join-Path $RunDirectory ($Label + '.out')
@@ -313,10 +297,9 @@ function Run-Negative([string]$Label, [scriptblock]$Mutate, [scriptblock]$Assert
 New-Item -ItemType Directory -Force -Path $RunDirectory | Out-Null
 try {
     if (-not (Test-Path -LiteralPath $targetExe)) { throw "unoptimized Release/net48 target not built: $targetExe" }
-    if (-not (Test-Path -LiteralPath $dnlibPath)) { throw "in-tree dnlib not built: $dnlibPath" }
-    $tickFacts = Get-DnlibMethodFacts $targetExe 'Milestone1Target.Program' 'Tick'
-    $otherFacts = Get-DnlibMethodFacts $targetExe 'Milestone1Target.Program' 'UseWorker'
-    $carrierFacts = Get-DnlibMethodFacts $targetExe 'Milestone1Target.Program' 'ViaInMemory'
+    $tickFacts = Get-MethodFacts $targetExe 'Milestone1Target.Program' 'Tick'
+    $otherFacts = Get-MethodFacts $targetExe 'Milestone1Target.Program' 'UseWorker'
+    $carrierFacts = Get-MethodFacts $targetExe 'Milestone1Target.Program' 'ViaInMemory'
     Say "offline dnlib facts token=$($tickFacts.Token) mvid=$($tickFacts.Mvid) il_sha256=$($tickFacts.IlSha256)"
 
     $hostId = & (Join-Path $PSScriptRoot 'TestSupport\Start-DgSpyHost.ps1') -RpcPort $RpcPort -TargetFramework $TargetFramework
@@ -416,7 +399,9 @@ try {
         Check 'public list_hooks returns prefix, postfix, and finalizer' (@($listed.hooks).Count -eq 3) ("count=" + @($listed.hooks).Count)
 
         $modules = @((Rpc 'list_modules' @{ session_id=$sessionId; count=500 }).modules)
-        foreach ($name in @('HookLab.Bootstrap','HookLab.Probe.CorDebug','HookLab.Contracts','0Harmony','HarmonySharedState')) {
+        $bootstrapModules = @($modules | Where-Object { $_.name -eq 'HookLab.Bootstrap' -or $_.filename -like '*HookLab.Bootstrap*' })
+        Check 'list_modules independently sees HookLab.Bootstrap' ($bootstrapModules.Count -gt 0) ("matches=" + $bootstrapModules.Count)
+        foreach ($name in @('HookLab.Probe.CorDebug','HookLab.Contracts','0Harmony','HarmonySharedState')) {
             $found = @($modules | Where-Object { ($_.name -eq $name -or $_.filename -like "*$name*") -and $_.is_in_memory })
             Check "list_modules independently sees in-memory $name" ($found.Count -gt 0) ("matches=" + $found.Count)
         }

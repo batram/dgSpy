@@ -5,6 +5,7 @@ param(
 	# the fallback baseline.
 	[ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows',
 	[switch]$SkipHostBuild,
+	[string]$LayoutRoot,
 	[switch]$UpdateSnapshots
 )
 
@@ -48,10 +49,21 @@ if ($locking.Count) {
 
 Push-Location $repoRoot
 try {
+	$completedLayout = if ([string]::IsNullOrWhiteSpace($LayoutRoot)) { $null } else { [IO.Path]::GetFullPath($LayoutRoot) }
+	if ($completedLayout) {
+		dotnet run --project Build\DgSpyTool\DgSpyTool.csproj -c Release -- verify --layout $completedLayout
+		if ($LASTEXITCODE) { throw "Configured layout verification failed with exit code $LASTEXITCODE" }
+		$env:DGSPY_LAYOUT_ROOT = $completedLayout
+	}
 	# The net10 host publishes through the SDK-native driver and needs no Visual Studio installation at
 	# all. Only the net48 host requires full MSBuild, so that discovery now runs only when it is asked for.
 	if (-not $SkipHostBuild -and $TargetFramework -ne 'net48') {
-		Invoke-Checked 'dnSpy net10 x64 self-contained publish' { .\build.ps1 net-x64 -NoMsbuild }
+		$buildId = "gate-$([Guid]::NewGuid().ToString('N'))"
+		$completedLayout = Join-Path $repoRoot "artifacts\layouts\$buildId"
+		Invoke-Checked 'immutable build, composition, and package pipeline' {
+			dotnet run --project Build\DgSpyTool\DgSpyTool.csproj -c Release -- pipeline --repo $repoRoot --artifacts (Join-Path $repoRoot 'artifacts') --build-id $buildId --layout $completedLayout
+		}
+		$env:DGSPY_LAYOUT_ROOT = $completedLayout
 	}
 	elseif (-not $SkipHostBuild) {
 		$msbuildCandidates = @(
@@ -83,9 +95,9 @@ try {
 			$env:MSBuildEnableWorkloadResolver = $previousWorkloadResolver
 		}
 	}
-	Invoke-Checked 'dgSpy build and deploy' { .\build-dgspy.ps1 -TargetFramework $TargetFramework }
+	if ($TargetFramework -eq 'net48') { Invoke-Checked 'dgSpy net48 compatibility build' { .\build-dgspy.ps1 -TargetFramework $TargetFramework } }
 	Invoke-Checked 'PowerShell host-launcher tests' { .\tests\TestSupport\Start-DgSpyHost.Tests.ps1 }
-	Invoke-Checked 'PowerShell packaging-script tests' { .\tests\TestSupport\PackagingScripts.Tests.ps1 }
+	Invoke-Checked 'immutable pipeline tests' { dotnet test tests\DgSpyTool.Tests\DgSpyTool.Tests.csproj -c Release --nologo -v:minimal }
 
 	if ($UpdateSnapshots) {
 		$env:DGSPY_UPDATE_SNAPSHOTS = '1'
@@ -105,7 +117,9 @@ try {
 		# silence and no other check in this gate can see it.
 		$previousPublishBin = $env:DGSPY_PUBLISH_BIN
 		try {
-			$env:DGSPY_PUBLISH_BIN = if ($TargetFramework -eq 'net48') {
+			$env:DGSPY_PUBLISH_BIN = if ($completedLayout) {
+				Join-Path $completedLayout 'bin'
+			} elseif ($TargetFramework -eq 'net48') {
 				Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net48'
 			}
 			else {

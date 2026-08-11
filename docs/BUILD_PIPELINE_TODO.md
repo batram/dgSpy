@@ -1,4 +1,7 @@
-# Build and Packaging Simplification TODO
+# Immutable Build and Packaging Pipeline
+
+Status: implemented for the shipping win-x64/net10 flow. The legacy scripts remain only for the
+retained net48 compatibility path while that target is in scope.
 
 ## Goal
 
@@ -39,13 +42,12 @@ No stage may modify another stage's output. A completed directory is published b
 
 ## Intended implementation
 
-Create a small C# tool under `Build/DgSpyTool` with commands such as:
+The C# tool under `Build/DgSpyTool` is the authoritative entry point:
 
 ```powershell
-dotnet run --project Build/DgSpyTool -- compose
-dotnet run --project Build/DgSpyTool -- verify
-dotnet run --project Build/DgSpyTool -- install
-dotnet run --project Build/DgSpyTool -- pack-remote
+dotnet run --project Build/DgSpyTool -- pipeline --repo . --artifacts artifacts --build-id local
+dotnet run --project Build/DgSpyTool -- verify --layout artifacts/layouts/local
+dotnet run --project Build/DgSpyTool -- install --package artifacts/packages/dgspy-win-x64/local --install <directory>
 ```
 
 MSBuild remains responsible for compilation, generated resources, dependency ordering, and apphost work
@@ -68,19 +70,23 @@ Do not assume `Private="false"` or `ExcludeAssets="runtime"` prevents a `Project
 built. Those settings primarily affect copied runtime assets. The separation from the upstream host
 build must be structural.
 
-## Migration order
+## Implemented flow
 
-1. Add `Build/DgSpyTool` with `compose` and `verify` commands.
-2. Define one typed layout specification containing every shipped file and its ownership category.
-3. Consume the existing build outputs and produce a fresh immutable runnable layout.
-4. Port collision handling, protocol/extension matching, HookLab payload verification, manifests, and
-   complete-tree verification into the tool.
-5. Change local, live, composition, and GUI tests to use only the completed layout artifact.
-6. Make installers consume verified packages only; remove implicit repository builds.
-7. Port atomic install, rollback, host-only compatibility checks, and remote-host packaging.
-8. Introduce the dgSpy-only build graph and remove the hand-ordered project builds.
-9. Replace `build.ps1`'s in-place root/`bin` reshaping with a fresh host-layout output.
-10. Reduce the old PowerShell scripts to compatibility wrappers, then remove obsolete recovery code.
+1. `pipeline` compiles host and components into independently published, hashed artifacts.
+2. `compose` merges those inputs in fresh staging with typed ownership and explicit collision rules.
+3. `verify` checks the complete inventory, size and SHA-256 of every file plus required layout contracts.
+4. `package` consumes only a verified layout; `install` consumes only a verified package.
+5. Publication and installation use rename-based swaps and restore the previous completed tree on failure.
+6. Host-only installation is ownership-based and refuses protocol drift before changing any file.
+7. CI and the modernization gate launch and inspect only the completed composed layout.
+8. The managed component graph restores/builds in one MSBuild process; CLI and Gateway publish in
+   parallel without a second restore, and hashing/copy verification uses bounded parallel work.
+9. CI builds the verified net10 package once and passes that exact artifact to CorDebug and every
+   Mono matrix job.
+
+Remaining cleanup: structurally separate the dgSpy extension's upstream contract references so the
+last `BuildProjectReferences=false` can disappear, and port the retained net48, agent-registration,
+and remote-host compatibility flows before deleting their legacy scripts.
 
 ## First milestone
 

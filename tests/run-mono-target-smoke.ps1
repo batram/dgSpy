@@ -64,7 +64,8 @@ try {
 	}
 	Assert-That "the Mono agent is listening on $AgentPort" $listening
 
-	$gatewayDll = Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net10.0\dgSpy.Gateway.dll'
+	$configuredLayout = [Environment]::GetEnvironmentVariable('DGSPY_LAYOUT_ROOT')
+	$gatewayDll = if (-not [string]::IsNullOrWhiteSpace($configuredLayout)) { Join-Path $configuredLayout 'bin\dgSpy.Gateway.dll' } else { Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net10.0\dgSpy.Gateway.dll' }
 	if (-not (Test-Path $gatewayDll)) { throw "Gateway not built at $gatewayDll. Run .\build-dgspy.ps1." }
 
 	$env:DGSPY_EXPORT_ROOT = $runDirectory

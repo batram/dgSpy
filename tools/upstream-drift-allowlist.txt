@@ -28,6 +28,8 @@ dgSpy.ExtensionContracts/      dgSpy optional feature-provider ABI, loaded only 
 Extensions/dgSpy.Extension/    dgSpy in-process dnSpy extension
 HookLab/                       HookLab contracts, target probe and host transport
 Build/RemoteCertificateTool/   certificate helper for remote hosts
+Build/DgSpyTool/               immutable build, composition, packaging and install tool
+Build/DgSpy.Components.proj    managed dgSpy component build graph
 tests/                         dgSpy test suites, fixtures and gates
 docs/                          dgSpy documentation
 tools/                         dgSpy developer tooling

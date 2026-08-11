@@ -21,7 +21,7 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			if(request is null) throw new ArgumentNullException(nameof(request));
 			if(stop is null || request.NearbyOffsets is null || request.NearbyOffsets.Length==0) return null;
 			// A stop in another module or another method is not a nearby slot of this target at all.
-			if(stop.MethodToken!=request.MethodToken || !SameModule(stop.Module,request.Module)) return null;
+			if(stop.MethodToken!=request.MethodToken || !MatchesRequestModule(request,stop.Module)) return null;
 			foreach(var offset in request.NearbyOffsets)
 				if(offset==stop.IlOffset) return new AtomicActionSlot(request.Module,request.MethodToken,offset);
 			return null;
@@ -36,6 +36,14 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		/// </summary>
 		public static bool SameModule(string? stopModule,string? requestedModule) =>
 			String.Equals(stopModule,requestedModule,StringComparison.OrdinalIgnoreCase) || ModuleNameMatch.Matches(null,stopModule,requestedModule);
+
+		/// <summary>The owned-breakpoint token already proves the stop came from the location this host
+		/// created. New callers additionally provide the exact session module id; legacy callers provide
+		/// only a display name, while CorDebug reports the resolved id on the stop. Do not compare those
+		/// different identity forms as strings.</summary>
+		public static bool MatchesRequestModule(AtomicActionRequest request,string? stopModule) =>
+			!String.IsNullOrWhiteSpace(request.ModuleId) ? SameModule(stopModule,request.ModuleId) :
+				stopModule?.StartsWith("dm1:",StringComparison.Ordinal)==true || SameModule(stopModule,request.Module);
 	}
 
 	/// <summary>The bound an atomic action's deadline is held to, and the one place that applies it.</summary>

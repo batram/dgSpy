@@ -82,8 +82,14 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 				report(AtomicActionPhase.running);
 				var stop=await host.WaitForOwnedStopAsync(breakpoint.OwnerToken,cursor,active.Token).ConfigureAwait(false);
 				EnsureIdentity(request,stop);
-				if(stop.MethodToken!=request.MethodToken || stop.IlOffset!=request.IlOffset || !NearbySlotSelector.SameModule(stop.Module,request.Module)) {
-					if(request.NearbyOffsets.Length==0) { actionOutcome=ActionOutcome.nearby_slot_not_found; result.Error="The exact target was not reached and nearby-slot search was not allowed."; return result; }
+				if(stop.MethodToken!=request.MethodToken || stop.IlOffset!=request.IlOffset || !NearbySlotSelector.MatchesRequestModule(request,stop.Module)) {
+					if(request.NearbyOffsets.Length==0) {
+						actionOutcome=ActionOutcome.nearby_slot_not_found;
+						result.Error=String.Format(System.Globalization.CultureInfo.InvariantCulture,
+							"The exact target was not reached and nearby-slot search was not allowed. Requested {0}:0x{1:X8}@IL_{2:X4}; observed {3}:0x{4:X8}@IL_{5:X4}.",
+							request.Module,request.MethodToken,request.IlOffset,stop.Module,stop.MethodToken,stop.IlOffset);
+						return result;
+					}
 					// The slot reported is the one execution actually bound, matched against the declared
 					// offsets - never the first declared offset assumed to be where the stop landed.
 					slot=await host.SelectNearbySlotAsync(request,stop,active.Token).ConfigureAwait(false);

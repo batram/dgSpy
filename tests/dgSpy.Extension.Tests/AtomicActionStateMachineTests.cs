@@ -7,6 +7,21 @@ using Xunit;
 namespace dgSpy.Extension.Tests;
 
 public sealed class AtomicActionStateMachineTests {
+	[Fact]
+	public async Task ExactSlotMismatchReportsRequestedAndObservedIdentity() {
+		var stop=new AtomicActionStop("runtime","domain",42,"thread","other.dll",0x06000002,7,AtomicActionEvaluationProbe.Clear);
+		var result=await Run(new Host(stop),new ActionImpl(),Request());
+		Assert.Equal(ActionOutcome.nearby_slot_not_found,result.Status.ActionOutcome);
+		Assert.Contains("Requested",result.Error);
+		Assert.Contains("observed",result.Error);
+	}
+
+	[Fact]
+	public async Task LegacyModuleNameAcceptsResolvedOwnedBreakpointModuleId() {
+		var stop=new AtomicActionStop("runtime","domain",42,"thread","dm1:resolved",0x06000001,3,AtomicActionEvaluationProbe.Clear);
+		var result=await Run(new Host(stop),new ActionImpl(),Request());
+		Assert.Equal(ActionOutcome.completed,result.Status.ActionOutcome);
+	}
 	static AtomicActionRequest Request() => new() { ActionId=Guid.NewGuid().ToString("N"),ActionName="test",ProcessId=42,RuntimeId="runtime",AppDomainId="domain",Module="target.dll",MethodToken=0x06000001,IlOffset=3,DeadlineUtc=DateTime.UtcNow.AddSeconds(10) };
 	static AtomicActionStop Stop(AtomicActionEvaluationProbe? evaluation=null,uint offset=3) => new("runtime","domain",42,"thread","target.dll",0x06000001,offset,evaluation ?? AtomicActionEvaluationProbe.Clear);
 

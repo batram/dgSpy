@@ -75,6 +75,7 @@ namespace dgSpy.Extension {
 			readonly Dictionary<string,HookRecord> hooks=new Dictionary<string,HookRecord>(StringComparer.Ordinal);
 			readonly Dictionary<string,RuntimeRecord> runtimes=new Dictionary<string,RuntimeRecord>(StringComparer.Ordinal);
 			readonly List<HookEventRecord> events=new List<HookEventRecord>();
+			readonly SemaphoreSlim initialization=new SemaphoreSlim(1,1);
 			long cursor;
 
 			public async Task<object> InitializeAsync(RpcHost host,RpcRequest source,CancellationToken token) {
@@ -82,7 +83,11 @@ namespace dgSpy.Extension {
 				BindUi(host);
 				var session=Required(source.Arguments,"session_id");
 				var processId=RequiredInt(source.Arguments,"process_id");
-				lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out var existing)) return Initialized(existing,false);
+				RuntimeRecord existing;
+				lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) return Initialized(existing,false);
+				await initialization.WaitAsync(token).ConfigureAwait(false);
+				try {
+					lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) return Initialized(existing,false);
 
 				var wasRunning=await host.OnDebuggerAsync(()=>{ host.CheckVersion(source); return host.SelectProcess(source).IsRunning; },token).ConfigureAwait(false);
 				var completion=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-init-"+Guid.NewGuid().ToString("N")+".completion");
@@ -109,6 +114,8 @@ namespace dgSpy.Extension {
 					if(wasRunning) await ResumeAsync(host,source,CancellationToken.None).ConfigureAwait(false);
 					else await EnsurePausedAsync(host,source,CancellationToken.None).ConfigureAwait(false);
 				}
+				}
+				finally { initialization.Release(); }
 			}
 
 			static async Task<string> InitializeAutonomouslyAsync(int processId,JsonObject parameters,CancellationToken token) {
@@ -143,6 +150,8 @@ namespace dgSpy.Extension {
 				host.CheckSession(source);
 				BindUi(host);
 				var definition=HookDefinition.Parse(source.Arguments);
+				bool initialized; lock(gate) initialized=runtimes.ContainsKey(RuntimeKey(definition.SessionId,definition.ProcessId));
+				if(!initialized) await InitializeAsync(host,source,token).ConfigureAwait(false);
 				lock(gate) {
 					if(hooks.TryGetValue(definition.Key,out var existing)) {
 						if(existing.Definition.Equivalent(definition)) return Installed(existing,false);
@@ -377,7 +386,20 @@ namespace dgSpy.Extension {
 			static void EnsureCompleted(AtomicActionResult result,string operation) { if(result.Status.ActionOutcome!=HookLab.Contracts.ActionOutcome.completed) throw new RpcException("hook_operation_failed",HookLabInstallPresentation.Failure(operation,result.Status.ActionOutcome,result.Status.InterruptionReason,result.Error)); }
 			static Dictionary<string,string> Report(AtomicActionResult result) { var node=JsonNode.Parse(result.VerificationEvidence ?? "{}") as JsonObject; return ParseReport((string?)node?["report"] ?? ""); }
 			static Dictionary<string,string> ParseReport(string text) { var values=new Dictionary<string,string>(StringComparer.Ordinal); foreach(var line in text.Split(new[]{'\n'},StringSplitOptions.RemoveEmptyEntries)) { var separator=line.IndexOf('='); if(separator>0) values[line.Substring(0,separator)]=line.Substring(separator+1); } return values; }
-			static async Task<Dictionary<string,string>> ReadCompletionAsync(string path,CancellationToken token) { var deadline=DateTime.UtcNow.AddSeconds(20); while(DateTime.UtcNow<deadline) { token.ThrowIfCancellationRequested(); if(File.Exists(path)) return ParseReport(File.ReadAllText(path)); await Task.Delay(50,token).ConfigureAwait(false); } throw new RpcException("hook_operation_timed_out","HookLab worker did not publish completion within 20 seconds."); }
+			static async Task<Dictionary<string,string>> ReadCompletionAsync(string path,CancellationToken token) {
+				var deadline=DateTime.UtcNow.AddSeconds(20);
+				while(DateTime.UtcNow<deadline) {
+					token.ThrowIfCancellationRequested();
+					if(File.Exists(path)) {
+						var report=ParseReport(File.ReadAllText(path));
+						// The target writes the report incrementally. File existence, and even its first
+						// status line, do not mean the ready record has been fully published yet.
+						if(report.TryGetValue("status",out var status) && (!String.Equals(status,"ok",StringComparison.Ordinal) || report.ContainsKey("pipe_name"))) return report;
+					}
+					await Task.Delay(50,token).ConfigureAwait(false);
+				}
+				throw new RpcException("hook_operation_timed_out","HookLab worker did not publish a complete ready record within 20 seconds.");
+			}
 			static void TryDelete(string path) { try { File.Delete(path); } catch { } }
 			static void TryDeleteDirectory(string path) { try { Directory.Delete(path,true); } catch { } }
 			static string Required(Dictionary<string,string> values,string key,string message) => values.TryGetValue(key,out var value) && !String.IsNullOrWhiteSpace(value) ? value : throw new RpcException("hook_operation_failed",message);

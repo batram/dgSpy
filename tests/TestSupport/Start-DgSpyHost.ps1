@@ -43,14 +43,17 @@ $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 
 # The net10 host is a self-contained publish, so its runtime tree is the publish directory. Both
 # layouts put dnSpy.exe at the root with the runtime and Extensions\ under bin\.
-$dnSpyDir = if ($TargetFramework -eq 'net48') {
+$configuredLayout = [Environment]::GetEnvironmentVariable('DGSPY_LAYOUT_ROOT')
+$dnSpyDir = if (-not [string]::IsNullOrWhiteSpace($configuredLayout)) {
+	[IO.Path]::GetFullPath($configuredLayout)
+} elseif ($TargetFramework -eq 'net48') {
 	Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net48'
 } else {
 	Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish'
 }
 $dnSpyExe = Join-Path $dnSpyDir 'dnSpy.exe'
 if (-not (Test-Path $dnSpyExe)) {
-	throw "dnSpy host not found at $dnSpyExe. Build it first: .\build.ps1 net-x64 -NoMsbuild (or .\build.ps1 netframework for net48), then .\build-dgspy.ps1."
+	throw "dnSpy host not found at $dnSpyExe. Run the DgSpyTool pipeline and set DGSPY_LAYOUT_ROOT to its completed layout."
 }
 
 # A host with no extension deployed starts happily and then answers nothing, which reads as a

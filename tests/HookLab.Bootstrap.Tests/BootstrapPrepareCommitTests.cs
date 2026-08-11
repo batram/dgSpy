@@ -21,6 +21,22 @@ namespace HookLab.Bootstrap.Tests {
 		}
 
 		[Fact]
+		public void Pipe_endpoint_identity_survives_prepare_to_async_completion() {
+			var completion = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".hooklab-completion");
+			try {
+				using (var runner = BootstrapRunner.Create("bootstrap-pipe-prepare-commit")) {
+					var prepared = Report.Parse(runner.Prepare(Parameters(runner, completion).With("endpoint", "pipe").ToString()));
+					Assert.False(string.IsNullOrWhiteSpace(prepared["pipe_name"]));
+					runner.Commit();
+					var watch = Stopwatch.StartNew(); while (!File.Exists(completion) && watch.Elapsed < TimeSpan.FromSeconds(10)) Thread.Sleep(10);
+					var completed = Report.Parse(File.ReadAllText(completion));
+					Assert.Equal(prepared["pipe_name"], completed["pipe_name"]);
+				}
+			}
+			finally { try { File.Delete(completion); File.Delete(completion + ".tmp"); } catch { } }
+		}
+
+		[Fact]
 		public void Prepare_and_idempotent_commit_publish_completion_out_of_band() {
 			var completion = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".hooklab-completion");
 			try {

@@ -33,13 +33,13 @@ developer pack. Initialize the submodules, then run the same installer:
 
 ```powershell
 git submodule update --init --recursive
-.\install-dgspy.ps1 codex
+dotnet run --project Build\DgSpyTool -- pipeline --repo . --artifacts artifacts --build-id local
+dotnet run --project Build\DgSpyTool -- install --package artifacts\packages\dgspy-win-x64\local --install "$env:LOCALAPPDATA\Programs\dgSpyMcp"
 ```
 
-Use `claude` instead of `codex` for Claude Code. The installer builds the complete package first; no
-separate build, packaging, extraction, or MCP configuration command is needed.
-Repository installs use a local directory artifact under `artifacts\dgspy-local` to avoid creating and
-immediately extracting a large ZIP. Release packages remain compressed portable ZIPs.
+The C# pipeline is authoritative for repository builds and never mutates its compiler outputs. Agent
+registration remains a separate compatibility step until it moves into the C# tool; release archives
+still carry the compatibility installer for that purpose.
 
 For development updates after the MCP is already connected, update only the bundled dnSpy host payload:
 

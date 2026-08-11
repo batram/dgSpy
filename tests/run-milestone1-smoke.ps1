@@ -24,12 +24,15 @@ if ($RpcPort -eq 0) {
 
 # The net10 host is a self-contained publish, so its runtime tree is the publish directory. Both
 # layouts put dnSpy.exe at the root with the runtime and Extensions\ under bin\.
-$dnSpyDir = if ($TargetFramework -eq 'net48') {
+$configuredLayout = [Environment]::GetEnvironmentVariable('DGSPY_LAYOUT_ROOT')
+$dnSpyDir = if (-not [string]::IsNullOrWhiteSpace($configuredLayout)) {
+	[IO.Path]::GetFullPath($configuredLayout)
+} elseif ($TargetFramework -eq 'net48') {
 	Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net48'
 } else {
 	Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish'
 }
-$gatewayDll = Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net10.0\dgSpy.Gateway.dll'
+$gatewayDll = if (-not [string]::IsNullOrWhiteSpace($configuredLayout)) { Join-Path $configuredLayout 'bin\dgSpy.Gateway.dll' } else { Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net10.0\dgSpy.Gateway.dll' }
 $targetProject = Join-Path $PSScriptRoot 'TestTargets\Milestone1Target\Milestone1Target.csproj'
 $targetExe = Join-Path $PSScriptRoot 'TestTargets\Milestone1Target\bin\Debug\net48\Milestone1Target.exe'
 # CI collects these logs as an artifact, and its temp root is not the process temp directory, so let
@@ -132,7 +135,9 @@ function Write-StopDiagnostics {
 try {
 	Write-Section 'build and deploy'
 	Write-Host "  host target framework: $TargetFramework ($dnSpyDir)"
-	& (Join-Path $repoRoot 'build-dgspy.ps1') -TargetFramework $TargetFramework -DnSpyDir $dnSpyDir | Out-Null
+	if ([string]::IsNullOrWhiteSpace($configuredLayout)) {
+		& (Join-Path $repoRoot 'build-dgspy.ps1') -TargetFramework $TargetFramework -DnSpyDir $dnSpyDir | Out-Null
+	}
 	& dotnet build $targetProject -c Debug --nologo -v:quiet
 	if ($LASTEXITCODE) { throw "Target build failed with exit code $LASTEXITCODE" }
 

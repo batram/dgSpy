@@ -1,5 +1,4 @@
 name: dgSpy CI
-# test
 on:
   push:
     branches: [dgspy]
@@ -75,10 +74,47 @@ jobs:
         shell: pwsh
         run: dotnet test tests/dgSpy.Extension.Tests/dgSpy.Extension.Tests.csproj --configuration Release --nologo --verbosity minimal
 
+      - name: Immutable build pipeline tests
+        shell: pwsh
+        run: dotnet test tests/DgSpyTool.Tests/DgSpyTool.Tests.csproj --configuration Release --nologo --verbosity minimal
+
+  build-net10-package:
+    name: Build verified net10 package once
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install .NET SDKs
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            10.0.x
+            7.0.x
+      - name: Build, compose, and verify package
+        shell: pwsh
+        run: |
+          dotnet run --project Build/DgSpyTool/DgSpyTool.csproj -c Release -- pipeline `
+            --repo "${{ github.workspace }}" `
+            --artifacts "${{ runner.temp }}/dgspy-artifacts" `
+            --build-id "${{ github.sha }}" `
+            --layout "${{ runner.temp }}/dgspy-layout" `
+            --package "${{ runner.temp }}/dgspy-package"
+      - name: Upload verified package
+        uses: actions/upload-artifact@v4
+        with:
+          name: dgspy-net10-package-${{ github.run_id }}
+          path: ${{ runner.temp }}/dgspy-package
+          if-no-files-found: error
+          retention-days: 2
+
   cordebug-live:
     name: CorDebug live smoke (net10, shipping host)
     runs-on: windows-latest
     timeout-minutes: 45
+    needs: build-net10-package
 
     steps:
       - name: Check out repository
@@ -93,13 +129,19 @@ jobs:
             10.0.x
             7.0.x
 
+      - name: Download verified net10 package
+        uses: actions/download-artifact@v4
+        with:
+          name: dgspy-net10-package-${{ github.run_id }}
+          path: ${{ runner.temp }}/dgspy-package
+
       - name: Build, test, and run live CorDebug smoke
         shell: pwsh
         env:
           # The smoke run defaults its logs to the process temp directory, which is not runner.temp,
           # so the collector below found nothing to upload.
           DGSPY_SMOKE_LOG_ROOT: ${{ runner.temp }}
-        run: .\tests\run-modernization-gate.ps1 -Stage CorDebug
+        run: .\tests\run-modernization-gate.ps1 -Stage CorDebug -SkipHostBuild -LayoutRoot "${{ runner.temp }}/dgspy-package/cli"
 
       - name: Upload smoke diagnostics
         if: failure()
@@ -157,6 +199,7 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 45
+    needs: build-net10-package
     strategy:
       fail-fast: false
       matrix:
@@ -177,6 +220,12 @@ jobs:
           dotnet-version: |
             10.0.x
             7.0.x
+
+      - name: Download verified net10 package
+        uses: actions/download-artifact@v4
+        with:
+          name: dgspy-net10-package-${{ github.run_id }}
+          path: ${{ runner.temp }}/dgspy-package
 
       # Pinned to a tag on purpose. Tracking "latest" would make a regression gate's verdict depend
       # on when it happened to run. Hosted runners have no Unity editor and no licence, so the player
@@ -208,11 +257,11 @@ jobs:
           Write-Host "verified $($zip.Name) ($($asset.bytes) bytes) against manifest tag $($manifest.tag)"
           Expand-Archive $zip.FullName -DestinationPath (Join-Path $dir 'player')
 
-      - name: Build and deploy dgSpy
+      - name: Select the verified dgSpy layout
         shell: pwsh
         run: |
-          .\build.ps1 net-x64 -NoMsbuild
-          .\build-dgspy.ps1
+          dotnet run --project Build/DgSpyTool/DgSpyTool.csproj -c Release -- verify --layout "${{ runner.temp }}/dgspy-package/cli"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value 'DGSPY_LAYOUT_ROOT=${{ runner.temp }}/dgspy-package/cli'
 
       # Launching is the target repo's job (tools\Launch-Target.ps1), but its tooling is not in this
       # repo, so the two routes it uses are reproduced here. A Unity player does NOT read

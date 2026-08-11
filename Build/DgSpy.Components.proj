@@ -1,0 +1,25 @@
+<Project DefaultTargets="Build">
+  <PropertyGroup>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+  </PropertyGroup>
+  <ItemGroup>
+    <ComponentProject Include="$(MSBuildThisFileDirectory)..\dgSpy.Protocol\dgSpy.Protocol.csproj" />
+    <ComponentProject Include="$(MSBuildThisFileDirectory)..\dgSpy.ExtensionContracts\dgSpy.ExtensionContracts.csproj" />
+    <ComponentProject Include="$(MSBuildThisFileDirectory)..\HookLab\HookLab.Contracts\HookLab.Contracts.csproj" />
+    <ComponentProject Include="$(MSBuildThisFileDirectory)..\HookLab\HookLab.Probe.CorDebug\HookLab.Probe.CorDebug.csproj" />
+    <ComponentProject Include="$(MSBuildThisFileDirectory)..\HookLab\HookLab.Host.Transport\HookLab.Host.Transport.csproj" />
+    <ComponentProject Include="$(MSBuildThisFileDirectory)..\HookLab\HookLab.Bootstrap\HookLab.Bootstrap.csproj" />
+    <ComponentProject Include="$(MSBuildThisFileDirectory)..\dgSpy.Gateway\dgSpy.Gateway.csproj" />
+    <ComponentProject Include="$(MSBuildThisFileDirectory)..\dgSpy.Cli\dgSpy.Cli.csproj" />
+  </ItemGroup>
+  <Target Name="Restore">
+    <MSBuild Projects="@(ComponentProject);$(MSBuildThisFileDirectory)..\Extensions\dgSpy.Extension\dgSpy.Extension.csproj"
+             Targets="Restore" BuildInParallel="true" Properties="Configuration=$(Configuration)" />
+  </Target>
+  <Target Name="Build" DependsOnTargets="Restore">
+    <MSBuild Projects="@(ComponentProject)" Targets="Build" BuildInParallel="true"
+             Properties="Configuration=$(Configuration)" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\Extensions\dgSpy.Extension\dgSpy.Extension.csproj" Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=net10.0-windows;BuildProjectReferences=false" />
+  </Target>
+</Project>

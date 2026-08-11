@@ -38,7 +38,8 @@ require the debugger to share the target's runtime.
 | `tests/TestTargets/NoPdbTarget` | `net48`, x64 | Built with `DebugType=none`. Shipped game assemblies almost never carry a PDB, so decompiled debug info is the normal case in the wild; this fixture keeps that path covered, including across a rebuild under one long-lived dnSpy. |
 | `tests/TestTargets/Milestone1Target` | `net48`, x64 | Stays .NET Framework permanently: it is a *debuggee*, and CorDebug `CLR v4` is an in-scope engine that needs a Framework process to debug. CorDebug smoke target; the project pins `PlatformTarget=x64` and the smoke test verifies dnSpy reports `X64`. |
 
-The dgSpy projects are intentionally **not** in `dnSpy.sln`, and dgSpy builds through `build-dgspy.ps1`.
+The dgSpy projects are intentionally **not** in `dnSpy.sln`. The shipping flow is orchestrated by
+`Build/DgSpyTool`; the retained net48 compatibility flow still uses `build-dgspy.ps1`.
 The two deliberate upstream patch sets are recorded below because each is a modernization/rebase
 obligation. The dgSpy superproject is distributed under GPLv3, matching the inherited dnSpy license.
 The patched `Mono.Debugger.Soft` sources retain their permissive MIT-style source notices; for example,
@@ -85,15 +86,22 @@ client-to-gateway MCP credential.
 
 ### Default: the net10 host that ships
 
-This is what `pack-dgspy.ps1` packages, what `install-dgspy.ps1` installs, and what
-`launch_local_host` runs. `build-dgspy.ps1`, `tests\run-milestone1-smoke.ps1` and
-`tests\run-modernization-gate.ps1` all target it by default, so the live smoke proves the build users
-actually get. No Visual Studio installation is required.
+This is what the immutable C# pipeline composes and packages, and what CI launches. Compiler outputs,
+runnable layouts, packages, and installs are distinct verified directories.
 
 ```powershell
-.\build.ps1 net-x64 -NoMsbuild
-.\tests\run-modernization-gate.ps1 -Stage CorDebug
+dotnet run --project Build\DgSpyTool -- pipeline --repo . --artifacts artifacts --build-id local
+.\tests\run-modernization-gate.ps1 -Stage CorDebug -SkipHostBuild -LayoutRoot artifacts\layouts\local
 ```
+
+`pipeline` is the single shipping build verb. `package` never compiles, `install` never builds or
+packages, and every completed tree is verified before rename-based publication. Lower-level commands
+and the remaining net48/remote compatibility cleanup are documented in
+[BUILD_PIPELINE_TODO.md](BUILD_PIPELINE_TODO.md).
+
+CI builds that package once. The CorDebug job and all Mono/Unity matrix jobs download and verify the
+same artifact, avoiding four redundant host builds and ensuring every live verdict applies to the
+identical bytes.
 
 ### Retained fallback: the net48 host
 
@@ -132,6 +140,13 @@ the SDK 10 `Microsoft.Deployment.DotNet.Releases` task dependency during this pu
 build-driver limitation, not a source failure. Neither driver can produce both target frameworks,
 which is why `build.ps1` has two modes.
 
+### Legacy packaging and compatibility flows
+
+The scripts below document the retained net48, remote-host, and release-installer compatibility paths.
+They are not the repository's authoritative net10 build path; new local and CI net10 builds use
+`DgSpyTool pipeline`. Keep these notes until each remaining compatibility verb has moved into the C#
+tool and its wrapper can be deleted.
+
 `pack-dgspy.ps1` starts with the self-contained dnSpy tree, then merges the CLI and Gateway publishes
 into its `cli\bin` runtime directory. All three applications therefore ship one .NET 10 runtime.
 Duplicate files must have identical SHA-256 hashes except for the explicit Windows Desktop framework
@@ -150,7 +165,7 @@ verification all succeed. Any late failure restores the previous directory. The 
 extension, protocol, HookLab payload, and coarse complete-tree shape; Gateway deployment additionally
 hashes the whole payload tree.
 
-With no switches, `pack-dgspy.ps1` remains the release-engineering command: it writes the optimally
+With no switches, the legacy `pack-dgspy.ps1` release-engineering command writes the optimally
 compressed portable archive `artifacts\dgspy\dgspy-win-x64.zip`. `-CompressionLevel Fastest` and
 `-CompressionLevel NoCompression` are available for explicit ZIP experiments, but do not change the
 default. `install-dgspy.ps1` from a repository checkout instead calls the packer with

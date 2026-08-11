@@ -15,6 +15,15 @@ public sealed class HookLabUiBoundaryTests {
 	}
 
 	[Fact]
+	public void Mcp_install_initializes_the_target_when_needed_and_serializes_initialization() {
+		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
+		Assert.Contains("if(!initialized)awaitInitializeAsync(host,source,token)",source,StringComparison.Ordinal);
+		Assert.Contains("awaitinitialization.WaitAsync(token)",source,StringComparison.Ordinal);
+		Assert.Contains("finally{initialization.Release();}",source,StringComparison.Ordinal);
+		Assert.Contains("report.ContainsKey(\"pipe_name\")",source,StringComparison.Ordinal);
+	}
+
+	[Fact]
 	public void Synthetic_gui_session_is_released_when_debugging_ends() {
 		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Rpc","RpcHost.cs")));
 		Assert.Contains("if(sessionKind==\"ui\"){sessionId=null;attachedProgramId=null;sessionKind=null",source,StringComparison.Ordinal);
