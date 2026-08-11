@@ -102,27 +102,19 @@ namespace dgSpy.Extension {
 			},cancellationToken).ConfigureAwait(false);
 		}
 
-		/// <summary>Resolves the requested scope to a stable module list. Loaded instances are retained;
-		/// only the Assembly Explorer copy is de-duplicated under <c>all</c>. Order must not vary
+		/// <summary>Resolves the requested scope to a stable module list. Runtime and Assembly Explorer
+		/// views of the same metadata are walked once. Order must not vary
 		/// between two calls with the same arguments or the resume cursor is meaningless, so the union is
 		/// session-first and then sorted within each source.</summary>
 		List<SearchModule> CollectSearchModules(string scope,(DbgModule Module,string ModuleId,string Name,string Filename,int ProcessId,Guid Runtime,int AppDomainId,int Order)[] sessionModules,string? moduleFilter) {
 			var result=new List<SearchModule>();
-			var seenInstances=new HashSet<ModuleDef>();
-			var seenMvids=new HashSet<Guid>();
-			// Reference identity and MVID survive the common views of the same code. A name deliberately
+			var seen=new SearchModuleDeduplication();
+			// Reference identity, MVID and canonical path survive the common views of the same code. A name deliberately
 			// does not participate: two unrelated assemblies called Helpers.dll must remain two modules.
-			// The debugger's
-			// metadata service and the Assembly Explorer hand back *different* ModuleDef instances for one
-			// module, so reference identity does not join them; and against a live Unity player the MVID
-			// does not join them either -- a `scope: "all"` search walked all 54 modules twice until the
-			// name key was added.
+			// The debugger metadata service, separate app domains and Assembly Explorer can hand back
+			// different ModuleDef instances for the same symbols, so reference identity alone is insufficient.
 			//
-			bool IsNew(ModuleDef metadata) {
-				if (!seenInstances.Add(metadata)) return false;
-				var mvid=metadata.Mvid;
-				return !mvid.HasValue || mvid.Value==Guid.Empty || seenMvids.Add(mvid.Value);
-			}
+			bool IsNew(ModuleDef metadata,string? path) => seen.TryAdd(metadata,metadata.Mvid,path,metadata.Assembly?.FullName);
 			// Resolve the session's metadata once, before walking anything. Two things need it: the session
 			// branch below, and in_session, which is a fact about the module rather than about which loop
 			// happened to find it. Deriving the flag from the branch reported in_session:false under
@@ -160,12 +152,12 @@ namespace dgSpy.Extension {
 			if (scope is "session" or "all") {
 				foreach (var entry in resolvedSession) {
 					if (!MatchesModuleFilter(entry.Name,entry.Path,moduleFilter)) continue;
-					// Every loaded instance remains visible. Two app domains can carry the same MVID and
-					// path but have different module_id values, and collapsing those would recreate the
-					// ambiguity this identity is designed to remove.
+					// Search walks symbols, not runtime instances. Multiple app domains can expose the same
+					// metadata through distinct ModuleDef objects; walking each copy duplicates every hit.
+					// Keep the first deterministic module_id while list_modules remains instance-complete.
+					if (!IsNew(entry.Metadata,entry.Path)) continue;
 					result.Add(new SearchModule { Metadata=entry.Metadata,ModuleId=entry.ModuleId,Name=entry.Name,Path=entry.Path,InSession=true });
 				}
-				if(scope=="all") foreach(var entry in resolvedSession) { seenInstances.Add(entry.Metadata); var mvid=entry.Metadata.Mvid; if(mvid.HasValue && mvid.Value!=Guid.Empty) seenMvids.Add(mvid.Value); }
 			}
 			if (scope is "documents" or "all") {
 				foreach (var document in documentService.GetDocuments().OrderBy(d=>d.Filename,StringComparer.OrdinalIgnoreCase)) {
@@ -175,7 +167,7 @@ namespace dgSpy.Extension {
 					if (!MatchesModuleFilter(name,document.Filename,moduleFilter)) continue;
 					// Session first, so under `all` a shared module is walked once, as the session copy,
 					// carrying the identifiers the session-scoped tools actually accept.
-					if (!IsNew(metadata)) continue;
+					if (!IsNew(metadata,document.Filename)) continue;
 					result.Add(new SearchModule { Metadata=metadata,ModuleId=SessionModuleId(metadata,document.Filename),Name=name,Path=document.Filename,InSession=IsInSession(metadata,document.Filename) });
 				}
 			}

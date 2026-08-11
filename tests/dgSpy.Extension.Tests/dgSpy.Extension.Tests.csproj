@@ -57,6 +57,7 @@
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\ModuleNameMatch.cs" Link="Decompiler\ModuleNameMatch.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\ModuleInstanceId.cs" Link="Decompiler\ModuleInstanceId.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\ScanCursor.cs" Link="Decompiler\ScanCursor.cs" />
+	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\SearchModuleDeduplication.cs" Link="Decompiler\SearchModuleDeduplication.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Evaluation\MemberPagination.cs" Link="Evaluation\MemberPagination.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Evaluation\ChildExpansionFailure.cs" Link="Evaluation\ChildExpansionFailure.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Evaluation\ExpressionAddressability.cs" Link="Evaluation\ExpressionAddressability.cs" />
