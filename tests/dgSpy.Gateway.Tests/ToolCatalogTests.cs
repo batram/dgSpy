@@ -1,6 +1,7 @@
 using System.Reflection;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using dgSpy.Protocol;
 using Xunit;
@@ -12,6 +13,22 @@ namespace dgSpy.Gateway.Tests;
 /// bounds and the gateway derives deadlines from them; these tests are what keeps the two from drifting
 /// apart again.</summary>
 public sealed class ToolCatalogTests {
+	static string RepoRoot {
+		get {
+			for(var directory=new DirectoryInfo(AppContext.BaseDirectory);directory is not null;directory=directory.Parent)
+				if(File.Exists(Path.Combine(directory.FullName,"AGENTS.md")) && Directory.Exists(Path.Combine(directory.FullName,"dgSpy.Gateway"))) return directory.FullName;
+			throw new InvalidOperationException("Could not locate the dgSpy repository root.");
+		}
+	}
+	[Fact]
+	public void GatewayStartupKeepsStableTokenAndCliSerializesStarts() {
+		var gateway=File.ReadAllText(Path.Combine(RepoRoot,"dgSpy.Gateway","Program.cs"));
+		var cli=File.ReadAllText(Path.Combine(RepoRoot,"dgSpy.Cli","Program.cs"));
+		Assert.Contains("EnsureState(tokenFile",gateway,StringComparison.Ordinal);
+		Assert.DoesNotContain("File.WriteAllText(tokenFile, token)",gateway,StringComparison.Ordinal);
+		Assert.Contains("Local\\dgSpy.Gateway.Start",cli,StringComparison.Ordinal);
+		Assert.Contains("if(await HealthyAsync()) return",cli,StringComparison.Ordinal);
+	}
 	static readonly HashSet<string> GatewayOperations=new(StringComparer.Ordinal) { "get_started","doctor","get_workflow_help","get_local_deployment","launch_local_host","rollback_local_deployment","uninstall_local_deployment","create_remote_host_package","get_remote_host_readiness","revoke_remote_host","step_and_inspect","trace_calls","run_to_method","run_to_location","list_hosts","get_session_controller","claim_session","release_session" };
 	static readonly HashSet<string> UnroutedGatewayOperations=new(StringComparer.Ordinal) { "get_started","doctor","get_workflow_help","get_local_deployment","launch_local_host","rollback_local_deployment","uninstall_local_deployment","create_remote_host_package","list_hosts" };
 	static string Name(object tool) => (string)tool.GetType().GetProperty("name", BindingFlags.Public | BindingFlags.Instance)!.GetValue(tool)!;

@@ -36,6 +36,7 @@ $hookLabContractsProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Contracts\Ho
 $hookLabProbeProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Probe.CorDebug\HookLab.Probe.CorDebug.csproj'
 $hookLabHostTransportProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Host.Transport\HookLab.Host.Transport.csproj'
 $hookLabBootstrapProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Bootstrap\HookLab.Bootstrap.csproj'
+$hookLabNativeBootstrap = Join-Path $PSScriptRoot "HookLab\HookLab.NativeBootstrap\bin\$Configuration\HookLab.NativeBootstrap.x64.dll"
 
 if (-not (Test-Path $DnSpyDir)) {
 	throw "dnSpy directory not found: $DnSpyDir. Build dnSpy first ($hostBuildCommand) or pass -DnSpyDir."
@@ -69,6 +70,8 @@ if ($LASTEXITCODE) { throw "HookLab host transport build failed with exit code $
 # assembly whose bundle is silently empty.
 dotnet build $hookLabBootstrapProject -c $Configuration --nologo -v:minimal
 if ($LASTEXITCODE) { throw "HookLab bootstrap build failed with exit code $LASTEXITCODE" }
+& (Join-Path $PSScriptRoot 'tools\build-hooklab-native.ps1') -Configuration $Configuration | Write-Host
+if (-not $?) { throw 'HookLab native initializer build failed.' }
 
 dotnet build $extensionProject -c $Configuration -f $TargetFramework --nologo -v:minimal -p:BuildProjectReferences=false
 if ($LASTEXITCODE) { throw "Extension build failed with exit code $LASTEXITCODE" }
@@ -148,5 +151,5 @@ Write-Host "Deployed dgSpy extension to $deployDir"
 # copy that leaked into a scanned directory fails the build here.
 . (Join-Path $PSScriptRoot 'packaging\HookLabPayload.ps1')
 $bootstrapAssembly = Join-Path $PSScriptRoot "HookLab\HookLab.Bootstrap\bin\$Configuration\net48\HookLab.Bootstrap.dll"
-$payloadSha = Write-HookLabPayload -BootstrapAssembly $bootstrapAssembly -HostRoot $DnSpyDir
+$payloadSha = Write-HookLabPayload -BootstrapAssembly $bootstrapAssembly -NativeBootstrap $hookLabNativeBootstrap -HostRoot $DnSpyDir
 Write-Host "Staged HookLab payload $($payloadSha.Substring(0,12)) at $(Get-HookLabPayloadDirectory $DnSpyDir)"

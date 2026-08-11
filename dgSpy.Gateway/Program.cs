@@ -26,10 +26,10 @@ Directory.CreateDirectory(stateRoot);
 EnsureState(Path.Combine(stateRoot,"host.id"),()=>"local-"+Guid.NewGuid().ToString("N"));
 EnsureState(Path.Combine(stateRoot,"rpc.token"),()=>Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)));
 if (string.IsNullOrEmpty(token)) {
-	token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
 	Directory.CreateDirectory(Path.GetDirectoryName(tokenFile)!);
-	File.WriteAllText(tokenFile, token);
-	Console.WriteLine($"dgSpy gateway token written to {tokenFile}");
+	EnsureState(tokenFile,()=>Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)));
+	token = File.ReadAllText(tokenFile).Trim();
+	Console.WriteLine($"dgSpy gateway token loaded from {tokenFile}");
 }
 Console.WriteLine($"dgSpy gateway listening; send it as the {RequestGuard.TokenHeader} header.");
 

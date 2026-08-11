@@ -19,6 +19,7 @@
 $script:HookLabPayloadDirectoryName = 'hooklab'
 $script:HookLabPayloadFileName = 'hooklab-bootstrap.net48.payload'
 $script:HookLabPayloadManifestName = 'hooklab-payload-manifest.json'
+$script:HookLabNativeBootstrapFileName = 'HookLab.NativeBootstrap.x64.dll'
 # The name the CLR would probe for if a copy ever escaped into a scanned directory.
 $script:HookLabPayloadAssemblyFileName = 'HookLab.Bootstrap.dll'
 
@@ -59,15 +60,20 @@ function Get-DgSpyScanDirectory([string]$HostRoot) {
 function Write-HookLabPayload {
 	param(
 		[Parameter(Mandatory=$true)][string]$BootstrapAssembly,
+		[Parameter(Mandatory=$true)][string]$NativeBootstrap,
 		[Parameter(Mandatory=$true)][string]$HostRoot
 	)
 	if (-not (Test-Path -LiteralPath $BootstrapAssembly -PathType Leaf)) {
 		throw "HookLab bootstrap assembly not found: $BootstrapAssembly. Build HookLab\HookLab.Bootstrap\HookLab.Bootstrap.csproj first."
 	}
+	if (-not (Test-Path -LiteralPath $NativeBootstrap -PathType Leaf)) {
+		throw "HookLab native initializer not found: $NativeBootstrap. Run tools\build-hooklab-native.ps1 first."
+	}
 	$payloadDirectory = Get-HookLabPayloadDirectory $HostRoot
 	New-Item -ItemType Directory -Path $payloadDirectory -Force | Out-Null
 	$payloadFile = Get-HookLabPayloadFile $HostRoot
 	Copy-Item -LiteralPath $BootstrapAssembly -Destination $payloadFile -Force
+	Copy-Item -LiteralPath $NativeBootstrap -Destination (Join-Path $payloadDirectory $script:HookLabNativeBootstrapFileName) -Force
 	$item = Get-Item -LiteralPath $payloadFile
 	$digest = Get-FileSha256 $payloadFile
 	$version = $item.VersionInfo.FileVersion
@@ -111,6 +117,10 @@ function Test-HookLabPayload {
 	}
 	if (-not (Test-Path -LiteralPath $payloadFile -PathType Leaf)) {
 		throw "The host layout carries no HookLab payload: $payloadFile. The payload action has nothing to deliver."
+	}
+	$nativeFile = Join-Path (Get-HookLabPayloadDirectory $resolvedRoot) $script:HookLabNativeBootstrapFileName
+	if (-not (Test-Path -LiteralPath $nativeFile -PathType Leaf)) {
+		throw "The host layout carries no HookLab native initializer: $nativeFile. Autonomous initialization is unavailable."
 	}
 	$manifest = Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json
 	$entry = @($manifest.payloads | Where-Object { $_.id -eq 'hooklab_bootstrap' })

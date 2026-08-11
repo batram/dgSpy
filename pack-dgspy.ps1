@@ -119,7 +119,8 @@ try {
   # Staged after the host tree and before the shape is measured, so file_count and payload_bytes cover it
   # and an interrupted copy is caught by the installer's coarse check as well as by its digest.
   $bootstrapAssembly=Join-Path $PSScriptRoot "HookLab\HookLab.Bootstrap\bin\$Configuration\net48\HookLab.Bootstrap.dll"
-  $bootstrapSha=Write-HookLabPayload -BootstrapAssembly $bootstrapAssembly -HostRoot $cli
+  $nativeBootstrap=Join-Path $PSScriptRoot "HookLab\HookLab.NativeBootstrap\bin\$Configuration\HookLab.NativeBootstrap.x64.dll"
+  $bootstrapSha=Write-HookLabPayload -BootstrapAssembly $bootstrapAssembly -NativeBootstrap $nativeBootstrap -HostRoot $cli
   Write-PackTiming 'payload staging and merge'
   $launcherDestination=Join-Path $cli 'launcher';New-Item -ItemType Directory -Path $launcherDestination -Force|Out-Null
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'packaging\remote-host\Start-dgSpyRemoteHost.ps1') -Destination $launcherDestination

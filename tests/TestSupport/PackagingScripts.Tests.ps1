@@ -132,7 +132,7 @@ foreach ($producer in @(
 		throw "$($producer.Name) must stage the HookLab payload through packaging\HookLabPayload.ps1."
 	}
 }
-if ($packText -notmatch 'Write-HookLabPayload\s+-BootstrapAssembly\s+\$bootstrapAssembly\s+-HostRoot\s+\$cli') {
+if ($packText -notmatch 'Write-HookLabPayload\s+-BootstrapAssembly\s+\$bootstrapAssembly\s+-NativeBootstrap\s+\$nativeBootstrap\s+-HostRoot\s+\$cli') {
 	throw 'pack-dgspy.ps1 must stage the payload inside cli\, the tree the installer copies and the Gateway deploys as one version.'
 }
 if ($packText -notmatch 'hooklab_payload_sha256=\$bootstrapSha') {
@@ -189,12 +189,18 @@ if ($remotePackText -notmatch 'different app-base and extension dgSpy\.Protocol\
 . $payloadHelperPath
 
 $bootstrapAssembly = Join-Path $repoRoot 'HookLab\HookLab.Bootstrap\bin\Release\net48\HookLab.Bootstrap.dll'
+$nativeBootstrap = Join-Path $repoRoot 'HookLab\HookLab.NativeBootstrap\bin\Release\HookLab.NativeBootstrap.x64.dll'
 if (-not (Test-Path -LiteralPath $bootstrapAssembly -PathType Leaf)) {
 	# Real bytes matter here: the digest checks are only meaningful over the assembly that actually ships.
 	& dotnet build (Join-Path $repoRoot 'HookLab\HookLab.Bootstrap\HookLab.Bootstrap.csproj') -c Release --nologo -v:minimal
 	if ($LASTEXITCODE) { throw "Could not build HookLab.Bootstrap for the payload tests (exit $LASTEXITCODE)." }
 	if (-not (Test-Path -LiteralPath $bootstrapAssembly -PathType Leaf)) { throw "HookLab bootstrap output is still missing: $bootstrapAssembly" }
 }
+$dotnetBeforeNativeBuild=(Get-Command dotnet -ErrorAction Stop).Source
+& (Join-Path $repoRoot 'tools\build-hooklab-native.ps1') -Configuration Release | Out-Host
+if (-not $?) { throw 'Could not build the HookLab native initializer for payload tests.' }
+$dotnetAfterNativeBuild=(Get-Command dotnet -ErrorAction Stop).Source
+if($dotnetAfterNativeBuild -ne $dotnetBeforeNativeBuild){ throw "The native build changed dotnet resolution from '$dotnetBeforeNativeBuild' to '$dotnetAfterNativeBuild'." }
 
 function Assert-PayloadFailure([scriptblock]$Action, [string]$Pattern, [string]$Because) {
 	try { & $Action | Out-Null }
@@ -216,7 +222,7 @@ try {
 	Set-Content -LiteralPath (Join-Path $payloadFixture 'bin\dnSpy.Contracts.DnSpy.dll') -Value ''
 	Set-Content -LiteralPath (Join-Path $payloadFixture 'bin\Extensions\dgSpy\dgSpy.Extension.x.dll') -Value ''
 
-	$staged = Write-HookLabPayload -BootstrapAssembly $bootstrapAssembly -HostRoot $payloadFixture
+	$staged = Write-HookLabPayload -BootstrapAssembly $bootstrapAssembly -NativeBootstrap $nativeBootstrap -HostRoot $payloadFixture
 	$expected = (Get-FileHash -LiteralPath $bootstrapAssembly -Algorithm SHA256).Hash.ToLowerInvariant()
 	if ($staged -ne $expected) { throw "Staging recorded $staged for a payload whose bytes hash to $expected." }
 	$payloadFile = Get-HookLabPayloadFile $payloadFixture
@@ -246,7 +252,7 @@ try {
 		'Verification accepted a payload and manifest that were rewritten together.'
 
 	# Re-stage to undo both rewrites before the next case.
-	$null = Write-HookLabPayload -BootstrapAssembly $bootstrapAssembly -HostRoot $payloadFixture
+	$null = Write-HookLabPayload -BootstrapAssembly $bootstrapAssembly -NativeBootstrap $nativeBootstrap -HostRoot $payloadFixture
 
 	# Truncation is a distinct failure from substitution, and the cheap check has to catch it.
 	[IO.File]::WriteAllBytes($payloadFile, $original[0..1023])
@@ -279,7 +285,7 @@ try {
 	}
 	$null = Test-HookLabPayload -HostRoot $payloadFixture -ExpectedSha256 $expected
 
-	Assert-PayloadFailure { Write-HookLabPayload -BootstrapAssembly (Join-Path $payloadFixture 'no-such-bootstrap.dll') -HostRoot $payloadFixture } `
+	Assert-PayloadFailure { Write-HookLabPayload -BootstrapAssembly (Join-Path $payloadFixture 'no-such-bootstrap.dll') -NativeBootstrap $nativeBootstrap -HostRoot $payloadFixture } `
 		'HookLab bootstrap assembly not found' 'Staging accepted a missing bootstrap assembly.'
 }
 finally {

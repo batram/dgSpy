@@ -1260,7 +1260,7 @@
     },
     {
       "name": "claim_session",
-      "description": "Explicitly claim an unowned or expired debugger session after caller or Gateway recovery. Never changes target state.",
+      "description": "Explicitly claim an unowned or expired debugger session after caller or Gateway recovery. A live owner is refused with session_owned so the operator can be warned; after that warning, force=true intentionally transfers control without changing target state.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1270,6 +1270,10 @@
           },
           "session_id": {
             "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Default false. Set true only after inspecting the current controller and warning its operator; transfers the controller lease but does not resume, pause, or detach the target."
           }
         },
         "required": [

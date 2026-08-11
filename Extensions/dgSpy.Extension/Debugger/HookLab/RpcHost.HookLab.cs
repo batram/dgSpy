@@ -89,13 +89,8 @@ namespace dgSpy.Extension {
 				ProbeConnection? connection=null;
 				try {
 					var identity=TargetIdentity(source.Arguments,processId,completion);
-					var prepared=await ExecuteInitializationOperationAsync(host,source,PayloadOperation.prepare,identity,token).ConfigureAwait(false);
-					var pipe=Required(prepared,"pipe_name","HookLab initialization did not report its control pipe.");
-
-					// A real run boundary between prepare and commit is required by the payload contract.
 					await ResumeAsync(host,source,token).ConfigureAwait(false);
-					await ExecuteInitializationOperationAsync(host,source,PayloadOperation.commit,null,token).ConfigureAwait(false);
-					await ResumeAsync(host,source,token).ConfigureAwait(false);
+					var pipe=await InitializeAutonomouslyAsync(processId,identity,token).ConfigureAwait(false);
 
 					var completionReport=await ReadCompletionAsync(completion,token).ConfigureAwait(false);
 					if(!String.Equals(completionReport.TryGetValue("status",out var completedStatus)?completedStatus:null,"ok",StringComparison.Ordinal))
@@ -114,6 +109,27 @@ namespace dgSpy.Extension {
 					if(wasRunning) await ResumeAsync(host,source,CancellationToken.None).ConfigureAwait(false);
 					else await EnsurePausedAsync(host,source,CancellationToken.None).ConfigureAwait(false);
 				}
+			}
+
+			static async Task<string> InitializeAutonomouslyAsync(int processId,JsonObject parameters,CancellationToken token) {
+				var staging=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-native-"+processId.ToString(CultureInfo.InvariantCulture)+"-"+Guid.NewGuid().ToString("N"));
+				Directory.CreateDirectory(staging);
+				try {
+					using var payload=dgSpy.Extension.PayloadDelivery.HookLabPayloadResolver.Open();
+					var nativeSource=Path.Combine(payload.HostRoot,"hooklab","HookLab.NativeBootstrap.x64.dll");
+					if(!File.Exists(nativeSource)) throw new RpcException("hooklab_native_initializer_missing","The installed host does not contain the HookLab x64 initializer. Rebuild or reinstall dgSpy.");
+					var nativePath=Path.Combine(staging,"HookLab.NativeBootstrap.x64.dll");
+					File.Copy(nativeSource,nativePath,false);
+					File.Copy(payload.PayloadPath,Path.Combine(staging,"HookLab.Bootstrap.dll"),false);
+					File.WriteAllText(Path.Combine(staging,"initialize.params"),ParameterText(parameters),new System.Text.UTF8Encoding(false));
+					NativeHookLabInitializer.Load(processId,nativePath);
+					var completion=Required(parameters,"completion_path");
+					var report=await ReadCompletionAsync(completion,token).ConfigureAwait(false);
+					if(!String.Equals(report.TryGetValue("status",out var status)?status:null,"ok",StringComparison.Ordinal))
+						throw new RpcException("hooklab_initialization_failed","HookLab worker reported: "+String.Join("; ",report.Select(pair=>pair.Key+"="+pair.Value)));
+					return Required(report,"pipe_name","HookLab initialization did not report its control pipe.");
+				}
+				finally { TryDeleteDirectory(staging); }
 			}
 
 			public object Status(string sessionId,int? processId) {
@@ -363,6 +379,7 @@ namespace dgSpy.Extension {
 			static Dictionary<string,string> ParseReport(string text) { var values=new Dictionary<string,string>(StringComparer.Ordinal); foreach(var line in text.Split(new[]{'\n'},StringSplitOptions.RemoveEmptyEntries)) { var separator=line.IndexOf('='); if(separator>0) values[line.Substring(0,separator)]=line.Substring(separator+1); } return values; }
 			static async Task<Dictionary<string,string>> ReadCompletionAsync(string path,CancellationToken token) { var deadline=DateTime.UtcNow.AddSeconds(20); while(DateTime.UtcNow<deadline) { token.ThrowIfCancellationRequested(); if(File.Exists(path)) return ParseReport(File.ReadAllText(path)); await Task.Delay(50,token).ConfigureAwait(false); } throw new RpcException("hook_operation_timed_out","HookLab worker did not publish completion within 20 seconds."); }
 			static void TryDelete(string path) { try { File.Delete(path); } catch { } }
+			static void TryDeleteDirectory(string path) { try { Directory.Delete(path,true); } catch { } }
 			static string Required(Dictionary<string,string> values,string key,string message) => values.TryGetValue(key,out var value) && !String.IsNullOrWhiteSpace(value) ? value : throw new RpcException("hook_operation_failed",message);
 			static long Long(Dictionary<string,string> values,string key) => values.TryGetValue(key,out var value) && Int64.TryParse(value,NumberStyles.Integer,CultureInfo.InvariantCulture,out var parsed) ? parsed : 0;
 			static string ParameterText(JsonObject values) => String.Join("\n",values.Select(pair=>pair.Key+"="+(string?)pair.Value))+"\n";

@@ -29,6 +29,7 @@ $bootstrapProject = Join-Path $PSScriptRoot 'HookLab\HookLab.Bootstrap\HookLab.B
 # The bootstrap is net48 whatever the host targets: the payload is injected into a CLR v4 target, not
 # loaded by the host. It ships as one file that embeds and verifies its own dependencies.
 $bootstrapAssembly = Join-Path $PSScriptRoot "HookLab\HookLab.Bootstrap\bin\$Configuration\net48\HookLab.Bootstrap.dll"
+$nativeBootstrap = Join-Path $PSScriptRoot "HookLab\HookLab.NativeBootstrap\bin\$Configuration\HookLab.NativeBootstrap.x64.dll"
 $extensionOutput = Join-Path $PSScriptRoot "Extensions\dgSpy.Extension\bin\$Configuration\$targetFramework"
 
 if (-not $SkipBuild) {
@@ -38,6 +39,8 @@ if (-not $SkipBuild) {
 	if ($LASTEXITCODE) { throw "dgSpy extension build failed with exit code $LASTEXITCODE." }
 	dotnet build $bootstrapProject -c $Configuration --nologo -v:minimal
 	if ($LASTEXITCODE) { throw "HookLab bootstrap build failed with exit code $LASTEXITCODE." }
+	& (Join-Path $PSScriptRoot 'tools\build-hooklab-native.ps1') -Configuration $Configuration | Write-Host
+	if (-not $?) { throw 'HookLab native initializer build failed.' }
 }
 
 $requiredHostFiles = @('dnSpy.exe', 'bin\dnSpy.dll', 'bin\dnSpy.Contracts.DnSpy.dll', 'bin\hostfxr.dll', 'bin\hostpolicy.dll', 'bin\coreclr.dll', 'bin\clrjit.dll')
@@ -51,6 +54,7 @@ foreach ($fileName in $extensionFiles) {
 	if (-not (Test-Path -LiteralPath (Join-Path $extensionOutput $fileName) -PathType Leaf)) { throw "Extension output is missing: $fileName." }
 }
 if (-not (Test-Path -LiteralPath $bootstrapAssembly -PathType Leaf)) { throw "HookLab bootstrap output is missing: $bootstrapAssembly. Build without -SkipBuild." }
+if (-not (Test-Path -LiteralPath $nativeBootstrap -PathType Leaf)) { throw "HookLab native initializer output is missing: $nativeBootstrap. Build without -SkipBuild." }
 
 $resolvedOutput = [IO.Path]::GetFullPath($OutputDirectory)
 $resolvedBundle = [IO.Path]::GetFullPath($bundleDirectory)
@@ -76,7 +80,7 @@ foreach ($launcher in 'Start-dgSpyRemoteHost.ps1', 'Start-dgSpyRemoteHost.cmd') 
 # The HookLab payload, staged into the bundle root the same way pack-dgspy.ps1 stages it into cli\: one
 # file under hooklab\, never beside the extension, with its digest recorded twice - once in the payload
 # manifest and once in this bundle's own per-file manifest below.
-$bootstrapSha = Write-HookLabPayload -BootstrapAssembly $bootstrapAssembly -HostRoot $resolvedBundle
+$bootstrapSha = Write-HookLabPayload -BootstrapAssembly $bootstrapAssembly -NativeBootstrap $nativeBootstrap -HostRoot $resolvedBundle
 Write-Host "HookLab payload $($bootstrapSha.Substring(0,12)) staged at hooklab\$script:HookLabPayloadFileName"
 $stateDirectory = Join-Path $resolvedBundle 'state'
 New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
