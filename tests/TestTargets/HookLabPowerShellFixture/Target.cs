@@ -5,4 +5,12 @@ namespace HookLabPowerShellFixture {
 		[MethodImpl(MethodImplOptions.NoInlining)]
 		public static int Calculate(int value) => value + 1;
 	}
+
+	public sealed class InstanceTarget {
+		public InstanceTarget(int offset) { Offset = offset; }
+		public int Offset;
+
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		public int Calculate(int value) => value + Offset;
+	}
 }

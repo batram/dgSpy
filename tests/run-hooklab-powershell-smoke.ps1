@@ -10,6 +10,7 @@ if ([string]::IsNullOrWhiteSpace($RunDirectory)) { $RunDirectory = Join-Path $PS
 New-Item -ItemType Directory -Force -Path $RunDirectory | Out-Null
 $statusPath = Join-Path $RunDirectory 'status.log'
 $observedPath = Join-Path $RunDirectory 'observed.txt'
+$instanceObservedPath = Join-Path $RunDirectory 'instance-observed.txt'
 $stopPath = Join-Path $RunDirectory 'stop'
 $childScript = Join-Path $RunDirectory 'child.ps1'
 $hostProcessId = 0
@@ -26,34 +27,36 @@ function Status([string]$Text) {
 function Rpc([string]$Operation,[hashtable]$Arguments=@{},[int]$Deadline=30) {
 	Invoke-DgSpyRpc -OperationName $Operation -OperationArguments $Arguments -RpcPort $rpcPort -DeadlineSeconds $Deadline
 }
-function Wait-Observed([int]$Expected,[int]$Seconds=10) {
+function Wait-Observed([int]$Expected,[string]$Path=$observedPath,[int]$Seconds=10) {
 	$deadline=[DateTime]::UtcNow.AddSeconds($Seconds)
-	do { if(Test-Path -LiteralPath $observedPath) { $value=[int](Get-Content -LiteralPath $observedPath -Raw); if($value -eq $Expected) { return $true } }; Start-Sleep -Milliseconds 100 } while([DateTime]::UtcNow -lt $deadline)
+	do { if(Test-Path -LiteralPath $Path) { $value=[int](Get-Content -LiteralPath $Path -Raw); if($value -eq $Expected) { return $true } }; Start-Sleep -Milliseconds 100 } while([DateTime]::UtcNow -lt $deadline)
 	return $false
 }
-function Facts([string]$Path) {
-	$assembly=[Reflection.Assembly]::LoadFrom($Path); $method=$assembly.GetType('HookLabPowerShellFixture.Target',$true).GetMethod('Calculate')
+function Facts([string]$Path,[string]$TypeName,[string]$Signature) {
+	$assembly=[Reflection.Assembly]::LoadFrom($Path); $method=$assembly.GetType($TypeName,$true).GetMethod('Calculate')
 	$il=$method.GetMethodBody().GetILAsByteArray(); $sha=[Security.Cryptography.SHA256]::Create()
 	try { $digest=[BitConverter]::ToString($sha.ComputeHash($il)).Replace('-','').ToLowerInvariant() } finally { $sha.Dispose() }
-	[pscustomobject]@{ Token=[int]$method.MetadataToken; Mvid=$method.Module.ModuleVersionId.ToString('D'); Signature='System.Int32 Calculate(System.Int32)'; IlSha256=$digest }
+	[pscustomobject]@{ Token=[int]$method.MetadataToken; Mvid=$method.Module.ModuleVersionId.ToString('D'); Signature=$Signature; IlSha256=$digest }
 }
 
 try {
-	Remove-Item -LiteralPath $statusPath,$observedPath,$stopPath -Force -ErrorAction SilentlyContinue
-	$fixtureEscaped=$fixtureDll.Replace("'","''"); $observedEscaped=$observedPath.Replace("'","''"); $stopEscaped=$stopPath.Replace("'","''")
-	$childBody = "Add-Type -Path '$fixtureEscaped'`nwhile(-not (Test-Path -LiteralPath '$stopEscaped')) { [IO.File]::WriteAllText('$observedEscaped',[HookLabPowerShellFixture.Target]::Calculate(41).ToString()); Start-Sleep -Milliseconds 100 }"
+	Remove-Item -LiteralPath $statusPath,$observedPath,$instanceObservedPath,$stopPath -Force -ErrorAction SilentlyContinue
+	$fixtureEscaped=$fixtureDll.Replace("'","''"); $observedEscaped=$observedPath.Replace("'","''"); $instanceObservedEscaped=$instanceObservedPath.Replace("'","''"); $stopEscaped=$stopPath.Replace("'","''")
+	$childBody = "Add-Type -Path '$fixtureEscaped'`n`$instance=[HookLabPowerShellFixture.InstanceTarget]::new(5)`nwhile(-not (Test-Path -LiteralPath '$stopEscaped')) { [IO.File]::WriteAllText('$observedEscaped',[HookLabPowerShellFixture.Target]::Calculate(41).ToString()); [IO.File]::WriteAllText('$instanceObservedEscaped',`$instance.Calculate(1).ToString()); Start-Sleep -Milliseconds 100 }"
 	[IO.File]::WriteAllText($childScript,$childBody,[Text.UTF8Encoding]::new($false))
 	$child=Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$childScript+'"') -PassThru -WindowStyle Hidden
 	Status "CHILD_STARTED pid=$($child.Id)"
 	if(-not (Wait-Observed 42)) { throw 'baseline did not become 42' }
 	Status 'BASELINE_OK value=42'
+	if(-not (Wait-Observed 6 $instanceObservedPath)) { throw 'instance baseline did not become 6' }
+	Status 'INSTANCE_BASELINE_OK value=6'
 
 	$hostProcessId=& (Join-Path $PSScriptRoot 'TestSupport\Start-DgSpyHost.ps1') -TargetFramework net10.0-windows
 	$rpcPort=[int]$env:DGSPY_RPC_PORT
 	Status "HOST_STARTED pid=$hostProcessId rpc_port=$rpcPort"
 	$program=@(Rpc 'list_programs' @{process_ids=@($child.Id)})[0]
 	$sessionId=(Rpc 'attach' @{program_id=$program.program_id} 60).session_id
-	$facts=Facts $fixtureDll
+	$facts=Facts $fixtureDll 'HookLabPowerShellFixture.Target' 'System.Int32 Calculate(System.Int32)'
 	$moduleResult=Rpc 'list_modules' @{session_id=$sessionId;count=500}
 	[IO.File]::WriteAllText((Join-Path $RunDirectory 'modules.json'),(ConvertTo-Json -InputObject $moduleResult -Depth 8),[Text.UTF8Encoding]::new($false))
 	Status "MODULE_RESPONSE type=$($moduleResult.GetType().FullName) count=$(@($moduleResult.modules).Count)"
@@ -83,6 +86,15 @@ try {
 	$null=Rpc 'remove_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate'} 30
 	if(-not (Wait-Observed 42)) { throw 'removal did not restore 42' }
 	Status 'REMOVE_OK value=42'
+
+	$instanceFacts=Facts $fixtureDll 'HookLabPowerShellFixture.InstanceTarget' 'System.Int32 Calculate(System.Int32)'
+	$instanceRequest=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-instance-calculate';kind='Postfix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.InstanceTarget';method='Calculate';method_token=$instanceFacts.Token;signature=$instanceFacts.Signature;module_mvid=$instanceFacts.Mvid;il_sha256=$instanceFacts.IlSha256;revision=1;source='public static class PowerShellInstancePostfix { public static void Postfix(HookLabPowerShellFixture.InstanceTarget __instance, ref int __result) { __result += __instance.Offset; } }'}
+	$null=Rpc 'install_hook' $instanceRequest 70
+	if(-not (Wait-Observed 11 $instanceObservedPath)) { throw 'instance Postfix did not receive Offset 5 and produce 11' }
+	Status 'INSTANCE_POSTFIX_OK value=11'
+	$null=Rpc 'remove_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-instance-calculate'} 30
+	if(-not (Wait-Observed 6 $instanceObservedPath)) { throw 'instance removal did not restore 6' }
+	Status 'INSTANCE_REMOVE_OK value=6'
 	Status 'RESULT pass'
 }
 catch {

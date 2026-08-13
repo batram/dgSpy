@@ -17,7 +17,8 @@ operation exposes carrier methods, atomic actions, prepare/commit, payload gener
    its command channel, and restores the target's previous running or paused state.
 4. Select a method in dnSpy or identify it through MCP.
 5. Create a hook from a template or editable C# source.
-6. The resident runtime compiles and applies Prefix, Postfix, Finalizer, or Transpiler methods directly.
+6. The resident runtime compiles and applies Prefix and Postfix methods directly. Finalizer and
+   Transpiler remain later slices.
 7. Edit, recompile, enable, disable, inspect, or remove hooks while the target keeps running.
 
 Initialization is idempotent. Hook operations fail with `hooklab_not_initialized` and point to
@@ -56,9 +57,17 @@ events, and removes one or all hooks through the same service. Commit `c1258b616
 immutable C# build/package/install pipeline; its exact 1,902-file package passed the final CorDebug gate,
 including 414 debugger checks, 52 atomic-action checks, and 49 HookLab GUI/install checks.
 
-The remaining product work begins at resident source compilation. No HookLab C# compiler, editable
-hook state, transactional replacement, enable/disable operation, Transpiler support, or source editor
-exists yet. Those features are the next vertical slice; initialization and packaging are no longer the
+Resident source compilation is now package-proven for complete C# units containing one public static
+Prefix, one public static Postfix, or one of each. Harmony supplies named argument binding, `ref`
+argument mutation, `__instance`, `__args`, `__result`, paired `__state`, and `___fieldName` injection.
+HookLab compiles before mutation, requires monotonically increasing revisions, preserves the last good
+revision after compiler failure, permits Prefix/Postfix phase replacement on the same exactly guarded
+method, lists compiled revision state, and removes every method in a paired patch. The disposable
+Windows PowerShell acceptance target proves create, update, failed-update rollback, and removal while
+the target runs.
+
+Enable/disable without removal, a source editor, Finalizer, Transpiler, generic-target handling, and
+broader compilation references remain unfinished. Initialization and packaging are no longer the
 active design problem.
 
 ## One implementation through-line
@@ -94,7 +103,7 @@ Keep exact MVID, token, signature, and IL digest checks. Resolve the guarded met
 `MethodBase` inside the resident runtime before compiling or patching. Hook IDs are stable and
 conflicting reuse is refused.
 
-### 3. Add resident arbitrary C# hooks - active
+### 3. Add resident arbitrary C# hooks - complete for Prefix and Postfix
 
 Follow UnityExplorer's useful model: each hook owns editable source, compiled patch methods, target
 identity, enabled state, diagnostics, and Harmony patch handles. Provide templates for call logger,
@@ -106,10 +115,11 @@ enabled state, bounded diagnostics, and the last successful revision. Compile an
 before changing the active patch; a failed create changes nothing, and a failed update leaves the
 previous working hook installed. Then add enable/disable without deleting source or diagnostics.
 
-Patch source may use Harmony conventions including `__instance`, `__args`, `__result`, `__exception`,
-field injection, and a boolean Prefix that skips the original. Compilation happens in the target
-context. Compiler errors are bounded structured diagnostics. Once the Prefix create/update/toggle path
-is live-proven, extend the same state machine to Postfix and Finalizer, then add Transpiler last.
+Verified Prefix/Postfix source may use Harmony conventions including named original arguments, `ref`
+argument mutation, `__instance`, `__args`, `__result`, paired `__state`, `___fieldName` injection, and
+a boolean Prefix that skips the original. Compilation happens in the target context. Compiler errors
+are bounded structured diagnostics. Finalizer and Transpiler remain later phases; do not add custom
+binding or IL machinery that duplicates Harmony.
 
 Do not reintroduce a generic provider framework, export-project system, credential lifecycle, or
 cross-process compiler service before the resident compiler proves it is needed.
@@ -150,14 +160,13 @@ Already reusable:
 
 Still missing:
 
-- resident arbitrary C# compilation and editable hook state;
-- transactional create/update with bounded compiler diagnostics and last-good rollback;
 - enable/disable state that preserves source and diagnostics;
 - public `create_hook`, `update_hook`, `enable_hook`, and `disable_hook` operations;
 - UnityExplorer-style source editor and matching GUI/MCP state;
-- compiled Postfix, Finalizer, and Transpiler after the Prefix path is proven;
-- package-level acceptance for behavior-changing source, failed-update rollback, toggling, and clean
-  detach from an ordinary CLR v4 target.
+- compiled Finalizer and Transpiler after Prefix/Postfix are proven;
+- generic-target handling and broader compilation references when a concrete hook requires them;
+- package-level acceptance for toggling; behavior-changing source, failed-update rollback, removal,
+  and clean detach are already proven against an ordinary CLR v4 PowerShell target.
 
 ## Execution rule
 
