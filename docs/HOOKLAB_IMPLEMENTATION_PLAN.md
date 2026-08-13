@@ -87,7 +87,9 @@ reopens the installed source and automatically submits revision N+1 instead of e
 revision invariant to the user. HookLab dialogs use dnSpy's native themed window style. Hooked methods
 show a dedicated teal hook glyph on the method-definition line; hover summarizes the method's hooks,
 left-click opens HookLab and selects the exact module/token row, and the glyph context menu provides
-**Show in HookLab**. Explicit row Edit actions, enable/disable without removal, Finalizer, Transpiler,
+**Show in HookLab**. Any selected compiled row can now be reopened with **Edit**, preserving its exact
+ID and source and automatically advancing to revision N+1; observer rows remain non-editable. Enable/
+disable without removal, Finalizer, Transpiler,
 generic-target handling, and broader compilation references remain unfinished. Initialization and
 packaging are no longer the active design problem.
 
@@ -182,7 +184,7 @@ Already reusable:
 
 Still missing:
 
-- an explicit Edit action for arbitrary selected compiled rows (default-ID reopen already increments);
+- live GUI acceptance for the explicit Edit action (the row-owned source/revision path is implemented);
 - enable/disable state that preserves source and diagnostics;
 - public `create_hook`, `update_hook`, `enable_hook`, and `disable_hook` operations;
 - matching editable source and diagnostics in GUI and MCP hook state;

@@ -18,6 +18,17 @@ public sealed class HookLabUiBoundaryTests {
 	}
 
 	[Fact]
+	public void Compiled_hook_rows_can_reopen_their_exact_source_at_the_next_revision() {
+		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","ToolWindows","HookLabToolWindow.cs")));
+		Assert.Contains("Content=\"Edit\"",source,StringComparison.Ordinal);
+		Assert.Contains("edit.SetBinding(IsEnabledProperty,\"CanEdit\")",source,StringComparison.Ordinal);
+		Assert.Contains("selected?.Compiled==true&&selected.Sourceisnotnull&&selected.MethodDefinitionisnotnull",source,StringComparison.Ordinal);
+		Assert.Contains("newCustomHookEditorDialog(value).ShowDialog()",source,StringComparison.Ordinal);
+		Assert.Contains("existing.Revision+1,existing.Source,existing.Kind",source,StringComparison.Ordinal);
+		Assert.Contains("id.IsReadOnly=existingisnotnull",source,StringComparison.Ordinal);
+	}
+
+	[Fact]
 	public void Mcp_install_initializes_the_target_when_needed_and_serializes_initialization() {
 		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
 		Assert.Contains("if(!initialized)awaitInitializeAsync(host,source,token)",source,StringComparison.Ordinal);
