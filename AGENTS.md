@@ -29,6 +29,23 @@ dotnet run --project Build\DgSpyTool -- pipeline
 This is the only supported dgSpy build/package path. It publishes immutable compiler inputs,
 composes a fresh layout, verifies every file, and publishes a package without mutating build output.
 
+## NuGet and the Codex sandbox
+
+The Codex sandbox blocks NuGet's outbound HTTPS requests, including repository-signature metadata.
+Run supported `dotnet` build, restore, test, and pipeline commands outside the sandbox from the first
+attempt by default. A socket-denied NU1301 is an execution-policy failure, not a package defect. Do
+not use `--ignore-failed-sources`, disable audit or signature verification, or assume a warm cache.
+
+For repeated sandbox builds, prepare the optional gitignored feed once outside the sandbox, then use
+the offline wrapper:
+
+```powershell
+.\tools\prepare-offline-nuget.ps1
+.\tools\invoke-offline.ps1 -Operation Pipeline
+```
+
+Refresh it after package or SDK/runtime-pack changes. Ordinary commands and CI remain online.
+
 Submodules must be present, or the build fails with `MSB3202` on seven missing projects:
 
 ```bash
