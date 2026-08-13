@@ -82,9 +82,12 @@ The first GUI source-editor slice is complete. **Create Custom Hook...** on the 
 opens the shared generated Prefix, Postfix, or paired Prefix/Postfix source, permits editing the hook
 ID and complete C# unit, and compiles and installs revision 1 through the same service as MCP. Compiler
 failure leaves the dialog and entered source open, and installed rows distinguish compiled C# from
-observational hooks and show the revision. Reopening an installed hook for revisioned updates,
-enable/disable without removal, Finalizer, Transpiler, generic-target handling, and broader compilation
-references remain unfinished. Initialization and packaging are no longer the active design problem.
+observational hooks and show the revision. Invoking the editor again for its default installed ID now
+reopens the installed source and automatically submits revision N+1 instead of exposing the resident
+revision invariant to the user. HookLab dialogs use dnSpy's native themed window style. Explicit row
+Edit actions, enable/disable without removal, Finalizer, Transpiler, generic-target handling, and broader
+compilation references remain unfinished. Initialization and packaging are no longer the active design
+problem.
 
 ## One implementation through-line
 
@@ -177,7 +180,7 @@ Already reusable:
 
 Still missing:
 
-- reopening a compiled hook in the GUI and incrementing its revision for updates;
+- an explicit Edit action for arbitrary selected compiled rows (default-ID reopen already increments);
 - enable/disable state that preserves source and diagnostics;
 - public `create_hook`, `update_hook`, `enable_hook`, and `disable_hook` operations;
 - matching editable source and diagnostics in GUI and MCP hook state;

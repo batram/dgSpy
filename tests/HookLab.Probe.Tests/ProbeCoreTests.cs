@@ -165,6 +165,20 @@ namespace HookLab.Probe.Tests {
 		}
 
 		[Fact]
+		public void ObservationalPostfixCoexistsWithCompiledPostfix() {
+			using (var runtime = Runtime()) {
+				var compiled = new HookDocument(1, "compiled", HookKind.Postfix, GuardFor(TargetMethod), "{}", Limits, true);
+				var observer = new HookDocument(1, "observer", HookKind.Postfix, GuardFor(TargetMethod), "{}", Limits, true);
+				runtime.InstallCompiledHook(TargetMethod, compiled, PostfixReturning(41), 1, 0);
+				var observed = runtime.Install(TargetMethod, observer, runtime.HooksVersion);
+				Assert.Equal(41, Fixture.Add(1, 2));
+				Assert.Single(runtime.Events.Drain(10));
+				runtime.Uninstall(observed.PatchId, runtime.HooksVersion);
+				Assert.Equal(41, Fixture.Add(1, 2));
+			}
+		}
+
+		[Fact]
 		public void CompiledPrefixCanMutateANamedOriginalArgument() {
 			using (var runtime = Runtime()) {
 				runtime.InstallCompiledHook(TargetMethod, Document(), "public static class UserHook { public static void Prefix(ref int left) { left += 10; } }", 1, 0);

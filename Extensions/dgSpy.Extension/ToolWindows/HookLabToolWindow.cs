@@ -13,6 +13,7 @@ using System.Windows.Automation;
 using dnlib.DotNet;
 using dnSpy.Contracts.Decompiler;
 using dnSpy.Contracts.Documents.Tabs.DocViewer;
+using dnSpy.Contracts.Controls;
 using dnSpy.Contracts.Extension;
 using dnSpy.Contracts.Menus;
 using dnSpy.Contracts.ToolWindows;
@@ -27,7 +28,8 @@ namespace dgSpy.Extension.ToolWindows {
 		public static event Action? Changed;
 		public static void Bind(Func<Task<object>> initializeHookLab,Func<MethodDef,string,string,int,int,Task<object>> installHook,Func<MethodDef,string,string> generateSource,Func<MethodDef,string,string,string,int,Task<object>> installCustomSource,Func<string,int,string,Task> removeHook,Func<string,int,Task> removeAllHooks) { lock(gate) { initialize=initializeHookLab; install=installHook; generate=generateSource; installSource=installCustomSource; remove=removeHook; removeAll=removeAllHooks; } }
 		public static void BindWindow(Action showWindow) { lock(gate) show=showWindow; }
-		public static void PublishHook(string session,int process,string id,string kind,string method,string patch,int revision,bool compiled) { Action? open; lock(gate) { hooks.RemoveAll(value=>value.Session==session && value.Process==process && value.Id==id); hooks.Add(new HookLabHookRow(session,process,id,kind,method,patch,revision,compiled)); open=show; } Changed?.Invoke(); open?.Invoke(); }
+		public static void PublishHook(string session,int process,string id,string kind,string method,string patch,int revision,bool compiled,string? source) { Action? open; lock(gate) { hooks.RemoveAll(value=>value.Session==session && value.Process==process && value.Id==id); hooks.Add(new HookLabHookRow(session,process,id,kind,method,patch,revision,compiled,source)); open=show; } Changed?.Invoke(); open?.Invoke(); }
+		public static HookLabHookRow? FindCompiled(string id,string method) { lock(gate) return hooks.LastOrDefault(value=>value.Id==id && value.Method==method && value.Compiled); }
 		public static void RemoveHook(string session,int process,string id) { lock(gate) hooks.RemoveAll(value=>value.Session==session && value.Process==process && value.Id==id); Changed?.Invoke(); }
 		public static void Clear() { lock(gate) { hooks.Clear(); events.Clear(); } Changed?.Invoke(); }
 		public static void PublishEvent(long cursor,string patch,string payload,long dropped) { lock(gate) { events.Add(new HookLabEventRow(cursor,patch,payload,dropped)); if(events.Count>1024) events.RemoveRange(0,events.Count-1024); } Changed?.Invoke(); }
@@ -47,7 +49,7 @@ namespace dgSpy.Extension.ToolWindows {
 		HookLabToolWindowLoader(IDsToolWindowService windows) => HookLabUiBridge.BindWindow(()=>Application.Current.Dispatcher.BeginInvoke(new Action(()=>windows.Show(HookLabToolWindowContent.GuidValue))));
 	}
 
-	sealed class HookLabHookRow { public HookLabHookRow(string session,int process,string id,string kind,string method,string patch,int revision,bool compiled) { Session=session; Process=process; Id=id; Kind=kind; Method=method; Patch=patch; Revision=revision; Compiled=compiled; } public string Session { get; } public int Process { get; } public string Id { get; } public string Kind { get; } public string Method { get; } public string Patch { get; } public int Revision { get; } public bool Compiled { get; } public string SourceKind=>Compiled?"C#":"Observer"; }
+	sealed class HookLabHookRow { public HookLabHookRow(string session,int process,string id,string kind,string method,string patch,int revision,bool compiled,string? source) { Session=session; Process=process; Id=id; Kind=kind; Method=method; Patch=patch; Revision=revision; Compiled=compiled; Source=source; } public string Session { get; } public int Process { get; } public string Id { get; } public string Kind { get; } public string Method { get; } public string Patch { get; } public int Revision { get; } public bool Compiled { get; } public string? Source { get; } public string SourceKind=>Compiled?"C#":"Observer"; }
 	sealed class HookLabEventRow { public HookLabEventRow(long cursor,string patch,string payload,long dropped) { Cursor=cursor; Patch=patch; Payload=payload; Dropped=dropped; } public long Cursor { get; } public string Patch { get; } public string Payload { get; } public long Dropped { get; } }
 
 	sealed class HookLabToolWindowVM : INotifyPropertyChanged {
@@ -81,13 +83,14 @@ namespace dgSpy.Extension.ToolWindows {
 		}
 	}
 
-	sealed class AddHookDialog : Window {
+	sealed class AddHookDialog : WindowBase {
 		readonly TextBox id=new TextBox { MinWidth=300,Margin=new Thickness(6) };
 		readonly ComboBox kind=new ComboBox { Margin=new Thickness(6),ItemsSource=new[]{"Prefix","Postfix","Finalizer"},SelectedIndex=0 };
 		readonly TextBox rate=new TextBox { Text="100",Margin=new Thickness(6) };
 		readonly TextBox stringLength=new TextBox { Text="1024",Margin=new Thickness(6) };
 		public string HookId=>id.Text.Trim(); public string Kind=>(string)kind.SelectedItem; public int MaximumEventsPerSecond=>Int32.Parse(rate.Text); public int MaximumStringLength=>Int32.Parse(stringLength.Text);
 		public AddHookDialog(MethodDef method) {
+			SetResourceReference(StyleProperty,"DialogWindowStyle");
 			Title="Add Hook"; SizeToContent=SizeToContent.WidthAndHeight; ResizeMode=ResizeMode.NoResize; WindowStartupLocation=WindowStartupLocation.CenterOwner; Owner=Application.Current?.MainWindow;
 			id.Text=(method.DeclaringType.FullName+"."+method.Name).Replace('`','_');
 			AutomationProperties.SetName(id,"Hook ID"); AutomationProperties.SetName(kind,"Hook kind"); AutomationProperties.SetName(rate,"Maximum events per second"); AutomationProperties.SetName(stringLength,"Maximum string length");
@@ -97,7 +100,7 @@ namespace dgSpy.Extension.ToolWindows {
 		static bool Positive(string text)=>Int32.TryParse(text,out var value) && value>0;
 	}
 
-	sealed class CustomHookEditorDialog : Window {
+	sealed class CustomHookEditorDialog : WindowBase {
 		readonly MethodDef method;
 		readonly HookLabEditorState state;
 		readonly TextBox id=new TextBox { Margin=new Thickness(6) };
@@ -106,8 +109,10 @@ namespace dgSpy.Extension.ToolWindows {
 		readonly TextBox diagnostics=new TextBox { Margin=new Thickness(6),Height=95,IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto };
 		readonly Button install=new Button { Content="Compile & Install",IsDefault=true,MinWidth=125,Margin=new Thickness(6) };
 		public CustomHookEditorDialog(MethodDef selected) {
-			method=selected; state=new HookLabEditorState(DefaultId(selected),value=>HookLabUiBridge.GenerateSource(selected,value));
-			Title="Create Custom Hook"; Width=920; Height=720; MinWidth=680; MinHeight=520; WindowStartupLocation=WindowStartupLocation.CenterOwner; Owner=Application.Current?.MainWindow;
+			SetResourceReference(StyleProperty,"DialogWindowStyle");
+			method=selected; var defaultId=DefaultId(selected); var methodName=selected.DeclaringType.FullName+"."+selected.Name; var existing=HookLabUiBridge.FindCompiled(defaultId,methodName);
+			state=existing is null ? new HookLabEditorState(defaultId,value=>HookLabUiBridge.GenerateSource(selected,value)) : new HookLabEditorState(existing.Id,value=>HookLabUiBridge.GenerateSource(selected,value),existing.Revision+1,existing.Source,existing.Kind);
+			Title=existing is null?"Create Custom Hook":"Edit Custom Hook"; Width=920; Height=720; MinWidth=680; MinHeight=520; WindowStartupLocation=WindowStartupLocation.CenterOwner; Owner=Application.Current?.MainWindow;
 			id.Text=state.HookId; template.SelectedItem=state.Template; source.Text=state.Source;
 			AutomationProperties.SetName(id,"Custom hook ID"); AutomationProperties.SetName(template,"Custom hook template"); AutomationProperties.SetName(source,"Custom hook C# source"); AutomationProperties.SetName(diagnostics,"Custom hook compiler diagnostics"); AutomationProperties.SetName(install,"Compile and install custom hook");
 			var layout=new Grid { Margin=new Thickness(10) }; layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition()); layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });

@@ -43,5 +43,15 @@ public sealed class HookLabEditorStateTests {
 		Assert.True(state.TryBegin(out _));
 	}
 
+	[Fact]
+	public void ExistingHookStartsAtNextRevisionWithItsInstalledSource() {
+		var state=new HookLabEditorState("fixture.custom",template=>"generated:"+template,4,"installed source","Postfix");
+		Assert.Equal(4,state.Revision);
+		Assert.Equal("installed source",state.Source);
+		Assert.Equal("Postfix",state.Template);
+		Assert.True(state.TryBegin(out _));
+		Assert.Equal("Compiling revision 4...",state.Diagnostics);
+	}
+
 	static HookLabEditorState State()=>new HookLabEditorState("fixture.custom",template=>"source:"+template);
 }

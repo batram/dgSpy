@@ -101,6 +101,14 @@ try {
 	$null=Rpc 'install_hook' $base 70
 	if(-not (Wait-Observed 242)) { throw 'Postfix revision 3 did not produce 242' }
 	Status 'POSTFIX_REVISION_3_OK value=242'
+	$observer=@{}; foreach($pair in $base.GetEnumerator()) { $observer[$pair.Key]=$pair.Value }
+	$observer.Remove('source'); $observer.Remove('revision'); $observer.hook_id='powershell-calculate-observer'; $observer.kind='Postfix'
+	$null=Rpc 'install_hook' $observer 30
+	if(-not (Wait-Observed 242)) { throw 'observational Postfix suppressed the compiled Postfix result' }
+	Status 'OBSERVER_COMPILED_COEXIST_OK value=242'
+	$null=Rpc 'remove_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate-observer'} 30
+	if(-not (Wait-Observed 242)) { throw 'removing the observational Postfix removed the compiled Postfix' }
+	Status 'OBSERVER_REMOVE_PRESERVES_COMPILED_OK value=242'
 	$null=Rpc 'remove_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate'} 30
 	if(-not (Wait-Observed 42)) { throw 'removal did not restore 42' }
 	Status 'REMOVE_OK value=42'

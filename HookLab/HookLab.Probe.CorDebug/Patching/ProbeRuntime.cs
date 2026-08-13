@@ -122,18 +122,22 @@ namespace HookLab.Probe.CorDebug.Patching {
 		}
 
 		void ApplyPatch(MethodBase method, HookKind kind) {
-			var type = typeof(HookDispatch);
 			HarmonyMethod? prefix = null, postfix = null, finalizer = null;
-			if (kind == HookKind.Prefix) prefix = new HarmonyMethod(type.GetMethod(nameof(HookDispatch.Prefix), BindingFlags.Public | BindingFlags.Static));
-			else if (kind == HookKind.Postfix) postfix = new HarmonyMethod(type.GetMethod(nameof(HookDispatch.Postfix), BindingFlags.Public | BindingFlags.Static));
-			else if (kind == HookKind.Finalizer) finalizer = new HarmonyMethod(type.GetMethod(nameof(HookDispatch.Finalizer), BindingFlags.Public | BindingFlags.Static));
-			else throw new NotSupportedException("Unsupported hook kind: " + kind);
+			var dispatch = DispatchMethod(kind);
+			if (kind == HookKind.Prefix) prefix = new HarmonyMethod(dispatch);
+			else if (kind == HookKind.Postfix) postfix = new HarmonyMethod(dispatch);
+			else finalizer = new HarmonyMethod(dispatch);
 			harmony.Patch(method, prefix, postfix, null, finalizer);
 		}
 
 		void RemoveCore(HookContext context) {
 			HookDispatch.Unregister(context); hooks.Remove(context.PatchId);
-			if (!hooks.Values.Any(value => value.Method == context.Method)) harmony.Unpatch(context.Method, HarmonyPatchType.All, harmony.Id);
+			if (!hooks.Values.Any(value => value.Method == context.Method && value.Document.Kind == context.Document.Kind))
+				harmony.Unpatch(context.Method, DispatchMethod(context.Document.Kind));
+		}
+		static MethodInfo DispatchMethod(HookKind kind) {
+			var name = kind == HookKind.Prefix ? nameof(HookDispatch.Prefix) : kind == HookKind.Postfix ? nameof(HookDispatch.Postfix) : kind == HookKind.Finalizer ? nameof(HookDispatch.Finalizer) : throw new NotSupportedException("Unsupported hook kind: " + kind);
+			return typeof(HookDispatch).GetMethod(name, BindingFlags.Public | BindingFlags.Static) ?? throw new MissingMethodException(typeof(HookDispatch).FullName, name);
 		}
 		void CheckVersion(long expected) { if (expected != hooksVersion) throw new StaleHooksVersionException(expected, hooksVersion); }
 		void ThrowIfDisposed() { if (disposed) throw new ObjectDisposedException(nameof(ProbeRuntime)); }

@@ -201,7 +201,7 @@ namespace dgSpy.Extension {
 				var runtime=ForOperation(source.Arguments);
 				var report=await SendAsync(runtime,compiled?"install_compiled_prefix":"install",ParameterText(parameters),token).ConfigureAwait(false);
 				var installedRecord=new HookRecord(definition,Required(report,"patch_id","The probe installed a hook without reporting its patch ID."));
-				lock(gate) hooks[definition.Key]=installedRecord; HookLabUiBridge.PublishHook(definition.SessionId,definition.ProcessId,definition.HookId,definition.Kind,definition.DeclaringType+"."+definition.Method,installedRecord.PatchId,definition.Revision,compiled);
+				lock(gate) hooks[definition.Key]=installedRecord; HookLabUiBridge.PublishHook(definition.SessionId,definition.ProcessId,definition.HookId,definition.Kind,definition.DeclaringType+"."+definition.Method,installedRecord.PatchId,definition.Revision,compiled,definition.Source);
 				return Installed(installedRecord,true);
 			}
 
