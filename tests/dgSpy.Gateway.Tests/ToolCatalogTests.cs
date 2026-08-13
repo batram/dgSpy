@@ -26,8 +26,19 @@ public sealed class ToolCatalogTests {
 		var cli=File.ReadAllText(Path.Combine(RepoRoot,"dgSpy.Cli","Program.cs"));
 		Assert.Contains("EnsureState(tokenFile",gateway,StringComparison.Ordinal);
 		Assert.DoesNotContain("File.WriteAllText(tokenFile, token)",gateway,StringComparison.Ordinal);
-		Assert.Contains("Local\\dgSpy.Gateway.Start",cli,StringComparison.Ordinal);
+		Assert.Contains("Local\\dgSpy.Gateway.Start.Semaphore",cli,StringComparison.Ordinal);
+		Assert.Contains("new Semaphore(1,1",cli,StringComparison.Ordinal);
+		Assert.DoesNotContain("new Mutex(false",cli,StringComparison.Ordinal);
 		Assert.Contains("if(await HealthyAsync()) return",cli,StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void StdioDiscoveryStaysInTheCliUntilARealCallNeedsTheGateway() {
+		var cli=File.ReadAllText(Path.Combine(RepoRoot,"dgSpy.Cli","Program.cs"));
+		Assert.Contains("if(method==\"initialize\")",cli,StringComparison.Ordinal);
+		Assert.Contains("if(method==\"tools/list\")",cli,StringComparison.Ordinal);
+		Assert.Contains("if(method==\"resources/list\")",cli,StringComparison.Ordinal);
+		Assert.Contains("startup ??= StartGatewayBehindMcpAsync()",cli,StringComparison.Ordinal);
 	}
 	static readonly HashSet<string> GatewayOperations=new(StringComparer.Ordinal) { "get_started","doctor","get_workflow_help","get_local_deployment","launch_local_host","rollback_local_deployment","uninstall_local_deployment","create_remote_host_package","get_remote_host_readiness","revoke_remote_host","step_and_inspect","trace_calls","run_to_method","run_to_location","list_hosts","get_session_controller","claim_session","release_session" };
 	static readonly HashSet<string> UnroutedGatewayOperations=new(StringComparer.Ordinal) { "get_started","doctor","get_workflow_help","get_local_deployment","launch_local_host","rollback_local_deployment","uninstall_local_deployment","create_remote_host_package","list_hosts" };

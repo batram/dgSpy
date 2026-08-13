@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using dgSpy.Gateway;
 
 internal static class Program {
 	static readonly string StateRoot=Environment.GetEnvironmentVariable("DGSPY_STATE_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy");
@@ -22,16 +23,16 @@ internal static class Program {
 	static int Help() { Console.WriteLine("dgspy mcp|start|stop|status|doctor|configure <codex|claude|generic> [--apply]|launch-local|uninstall-local [--remove-settings]|pack-host --host-id ID --gateway-address IP [--plaintext] [--compression none|fastest|optimal] [--output PATH]|revoke-host --host-id ID"); return 0; }
 	static async Task<int> StartAsync() { if(await HealthyAsync()) { Console.WriteLine("dgSpy Gateway is already healthy."); return 0; } await EnsureGatewayAsync(); Console.WriteLine($"dgSpy Gateway started at {Endpoint}."); Console.WriteLine("URL-based MCP clients may need an MCP reconnect or a new session before tools appear."); return 0; }
 	static async Task EnsureGatewayAsync() {
-		using var startup=new Mutex(false,@"Local\dgSpy.Gateway.Start");
+		using var startup=new Semaphore(1,1,@"Local\dgSpy.Gateway.Start.Semaphore");
 		if(!startup.WaitOne(TimeSpan.FromSeconds(15))) throw new TimeoutException("Another dgSpy client is still starting the Gateway.");
 		try {
 			if(await HealthyAsync()) return;
 			StartGateway();
 			if(!await WaitHealthyAsync()) throw new InvalidOperationException($"Gateway did not become healthy. See {Path.Combine(StateRoot,"gateway-cli.log")}");
 		}
-		finally { startup.ReleaseMutex(); }
+		finally { startup.Release(); }
 	}
-	static void StartGateway() { Directory.CreateDirectory(StateRoot); var (file,arguments)=GatewayCommand(); var start=new ProcessStartInfo(file,arguments) { UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true }; start.Environment["DGSPY_STATE_ROOT"]=StateRoot; start.Environment["DGSPY_URL"]=Endpoint.GetLeftPart(UriPartial.Authority); start.Environment["Logging__LogLevel__Default"]="Warning"; BackfillWindowsEnvironment(start.Environment); var packageRoot=Environment.GetEnvironmentVariable("DGSPY_PACKAGE_ROOT") ?? Path.Combine(StateRoot,"packages"); var registry=Path.Combine(packageRoot,"gateway-hosts.json"); if(File.Exists(registry)) { start.Environment["DGSPY_HOSTS_FILE"]=registry; start.Environment["DGSPY_INCLUDE_LOCAL_HOST"]="true"; } var process=Process.Start(start) ?? throw new InvalidOperationException("Gateway process did not start."); File.WriteAllText(Path.Combine(StateRoot,"gateway.pid"),process.Id.ToString()); var log=Path.Combine(StateRoot,"gateway-cli.log"); process.OutputDataReceived+=(_,e)=>{ if(e.Data is not null) TryAppend(log,e.Data); }; process.ErrorDataReceived+=(_,e)=>{ if(e.Data is not null) TryAppend(log,e.Data); }; process.BeginOutputReadLine(); process.BeginErrorReadLine(); }
+	static void StartGateway() { Directory.CreateDirectory(StateRoot); var (file,arguments)=GatewayCommand(); var start=new ProcessStartInfo(file,arguments) { UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true }; start.Environment["DGSPY_STATE_ROOT"]=StateRoot; start.Environment["DGSPY_URL"]=Endpoint.GetLeftPart(UriPartial.Authority); start.Environment["Logging__LogLevel__Default"]="Warning"; BackfillWindowsEnvironment(start.Environment); var packageRoot=Environment.GetEnvironmentVariable("DGSPY_PACKAGE_ROOT") ?? Path.Combine(StateRoot,"packages"); var registry=Path.Combine(packageRoot,"gateway-hosts.json"); if(File.Exists(registry)) { start.Environment["DGSPY_HOSTS_FILE"]=registry; start.Environment["DGSPY_INCLUDE_LOCAL_HOST"]="true"; } var process=Process.Start(start) ?? throw new InvalidOperationException("Gateway process did not start."); process.StandardInput.Close(); File.WriteAllText(Path.Combine(StateRoot,"gateway.pid"),process.Id.ToString()); var log=Path.Combine(StateRoot,"gateway-cli.log"); process.OutputDataReceived+=(_,e)=>{ if(e.Data is not null) TryAppend(log,e.Data); }; process.ErrorDataReceived+=(_,e)=>{ if(e.Data is not null) TryAppend(log,e.Data); }; process.BeginOutputReadLine(); process.BeginErrorReadLine(); }
 	// Setting anything on ProcessStartInfo.Environment composes the child's block from ours instead of
 	// inheriting a normal one, so a client that starts us without windir hands that gap to the Gateway and
 	// from there to dnSpy, where WPF's font cache dies on an unresolvable Fonts path before startup
@@ -46,7 +47,65 @@ internal static class Program {
 	static async Task<int> StatusAsync() { Console.WriteLine(JsonSerializer.Serialize(new { healthy=await HealthyAsync(),endpoint=Endpoint.ToString(),state_root=StateRoot,pid=ReadPid() },JsonOptions)); return await HealthyAsync()?0:1; }
 	static int? ReadPid() { var path=Path.Combine(StateRoot,"gateway.pid"); return File.Exists(path)&&int.TryParse(File.ReadAllText(path),out var id)?id:null; }
 
-	static async Task<int> RunMcpAsync() { if(!await HealthyAsync()) await EnsureGatewayAsync(); using var client=Client(); string? session=null; while(await Console.In.ReadLineAsync() is { } line) { if(string.IsNullOrWhiteSpace(line)) continue; using var request=new HttpRequestMessage(HttpMethod.Post,Endpoint) { Content=new StringContent(line,Encoding.UTF8,"application/json") }; if(session is not null) request.Headers.TryAddWithoutValidation("Mcp-Session-Id",session); request.Headers.TryAddWithoutValidation("MCP-Protocol-Version",ProtocolVersion(line)); var response=await client.SendAsync(request); if(response.Headers.TryGetValues("Mcp-Session-Id",out var values)) session=values.FirstOrDefault(); var body=await response.Content.ReadAsStringAsync(); if(!string.IsNullOrWhiteSpace(body)) { await Console.Out.WriteLineAsync(body); await Console.Out.FlushAsync(); } } return 0; }
+	static async Task<int> RunMcpAsync() {
+		Task? startup=null;
+		string? session=null;
+		while(await Console.In.ReadLineAsync() is { } line) {
+			if(string.IsNullOrWhiteSpace(line)) continue;
+			var message=line.TrimStart('\uFEFF');
+			JsonObject? root;
+			try { root=JsonNode.Parse(message) as JsonObject; }
+			catch(JsonException) { root=null; }
+			if(root is not null && TryHandleLocalMcp(root,out var local)) {
+				if(local is not null) await WriteMcpAsync(local.ToJsonString());
+				continue;
+			}
+			startup ??= StartGatewayBehindMcpAsync();
+			await startup;
+			if(!await HealthyAsync()) await EnsureGatewayAsync();
+			using var client=Client();
+			if(session is null) session=await InitializeGatewaySessionAsync(client,root);
+			using var request=new HttpRequestMessage(HttpMethod.Post,Endpoint) { Content=new StringContent(message,Encoding.UTF8,"application/json") };
+			request.Headers.TryAddWithoutValidation("Mcp-Session-Id",session);
+			request.Headers.TryAddWithoutValidation(McpProtocol.VersionHeader,ProtocolVersion(message));
+			var response=await client.SendAsync(request);
+			if(response.Headers.TryGetValues("Mcp-Session-Id",out var values)) session=values.FirstOrDefault() ?? session;
+			var body=await response.Content.ReadAsStringAsync();
+			if(!string.IsNullOrWhiteSpace(body)) await WriteMcpAsync(body);
+		}
+		return 0;
+	}
+	static async Task StartGatewayBehindMcpAsync() { if(!await HealthyAsync()) await EnsureGatewayAsync(); }
+	static bool TryHandleLocalMcp(JsonObject root,out JsonNode? response) {
+		response=null;
+		var id=root["id"]?.DeepClone();
+		var method=(string?)root["method"];
+		try {
+			if(method=="initialize") {
+				var negotiated=McpProtocol.Negotiate((string?)root["params"]?["protocolVersion"]);
+				response=new JsonObject { ["jsonrpc"]="2.0",["id"]=id,["result"]=JsonSerializer.SerializeToNode(new { protocolVersion=negotiated,capabilities=new { tools=new { listChanged=false },resources=new { listChanged=false } },serverInfo=new { name="dgSpy",version="0.2.0" },instructions=ToolCatalog.Instructions }) };
+				return true;
+			}
+			if(id is null) return true;
+			if(method=="tools/list") response=LocalResult(id,new { tools=ToolCatalog.All });
+			else if(method=="resources/list") response=LocalResult(id,new { resources=ToolCatalog.Resources });
+			else if(method=="resources/read") {
+				var resource=ToolCatalog.ReadResource((string?)root["params"]?["uri"]);
+				response=resource is null ? LocalError(id,-32002,"Resource not found") : LocalResult(id,new { contents=new[]{resource} });
+			}
+			else return false;
+			return true;
+		} catch(Exception ex) { response=LocalError(id,-32603,ex.Message); return true; }
+	}
+	static JsonObject LocalResult(JsonNode id,object result) => new() { ["jsonrpc"]="2.0",["id"]=id,["result"]=JsonSerializer.SerializeToNode(result) };
+	static JsonObject LocalError(JsonNode? id,int code,string message) => new() { ["jsonrpc"]="2.0",["id"]=id,["error"]=JsonSerializer.SerializeToNode(new { code,message }) };
+	static async Task<string> InitializeGatewaySessionAsync(HttpClient client,JsonObject? source) {
+		var requested=(string?)source?["params"]?["protocolVersion"] ?? "2025-11-25";
+		var initialize=new JsonObject { ["jsonrpc"]="2.0",["id"]=0,["method"]="initialize",["params"]=new JsonObject { ["protocolVersion"]=requested,["capabilities"]=new JsonObject(),["clientInfo"]=new JsonObject { ["name"]="dgspy-stdio-bridge",["version"]="0.2.0" } } };
+		var initialized=await PostAsync(client,initialize);
+		return initialized.Session ?? throw new InvalidOperationException("Gateway initialize returned no MCP session identity.");
+	}
+	static async Task WriteMcpAsync(string body) { await Console.Out.WriteLineAsync(body); await Console.Out.FlushAsync(); }
 	static string ProtocolVersion(string json) { try { return JsonNode.Parse(json)?["params"]?["protocolVersion"]?.GetValue<string>() ?? "2025-11-25"; } catch { return "2025-11-25"; } }
 	static HttpClient Client() { var client=new HttpClient { Timeout=TimeSpan.FromSeconds(330) }; var tokenPath=Path.Combine(StateRoot,"gateway.token"); if(File.Exists(tokenPath)) client.DefaultRequestHeaders.TryAddWithoutValidation("X-dgSpy-Token",File.ReadAllText(tokenPath).Trim()); return client; }
 	static async Task<bool> HealthyAsync() { try { using var client=new HttpClient { Timeout=TimeSpan.FromSeconds(1) }; var response=await client.GetAsync(Health); if(!response.IsSuccessStatusCode) return false; var json=JsonNode.Parse(await response.Content.ReadAsStringAsync()); return (string?)json?["status"]=="ok" && ((int?)json?["protocol_version"] ?? 0)>0; } catch { return false; } }
