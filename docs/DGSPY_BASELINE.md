@@ -19,23 +19,6 @@
 git submodule update --init --recursive
 ```
 
-## NuGet restore modes
-
-Ordinary builds and CI restore online with NuGet's normal audit and signature behavior. The Codex
-sandbox blocks those HTTPS requests, so agents should run supported `dotnet` commands outside it by
-default. For repeated sandbox work, populate the optional gitignored local feed once from a normal
-networked Windows identity and invoke a supported operation through the offline wrapper:
-
-```powershell
-.\tools\prepare-offline-nuget.ps1
-.\tools\invoke-offline.ps1 -Operation Pipeline
-```
-
-The preparation script resolves the host, component, test, runtime-pack, and targeting-pack closure,
-then proves the feed with an empty temporary global package folder and HTTP cache disabled. Refresh
-the feed after dependency or SDK/runtime-pack changes. Offline mode cannot provide current advisory
-data; ordinary online restore and CI remain authoritative for NuGet Audit.
-
 ## One build path
 
 ```powershell

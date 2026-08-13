@@ -14,6 +14,3 @@ ps_scratch/
 # Claude Code local settings (machine-specific)
 .claude/settings.local.json
 artifacts/
-
-# Optional machine-local NuGet source for network-restricted agent sandboxes.
-/.nuget/offline-feed/

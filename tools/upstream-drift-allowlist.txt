@@ -30,7 +30,6 @@ HookLab/                       HookLab contracts, target probe and host transpor
 Build/RemoteCertificateTool/   certificate helper for remote hosts
 Build/DgSpyTool/               immutable build, composition, packaging and install tool
 Build/DgSpy.Components.proj    managed dgSpy component build graph
-.nuget/offline.config          optional offline-only source for network-restricted agent builds
 tests/                         dgSpy test suites, fixtures and gates
 docs/                          dgSpy documentation
 tools/                         dgSpy developer tooling
