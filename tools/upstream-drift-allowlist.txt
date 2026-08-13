@@ -43,6 +43,7 @@ install-dgspy.ps1             argument-only repository shortcut to the packaged 
 # them that way, and prefer adding a new file over editing an upstream one.
 # ---------------------------------------------------------------------------
 Extensions/dnSpy.Debugger/dnSpy.Debugger/DbgUI/DgSpyWindowActivation.cs    dgSpy window activation, new file
+dnSpy/dnSpy/Images/dnSpy.ico                                               dgSpy stacked-square and Glorpy Bunny application and window icon
 
 # RPC threading. dgSpy serves requests off dnSpy's UI thread, so the debugger
 # dispatcher has to expose a way to marshal work and observe completion.
