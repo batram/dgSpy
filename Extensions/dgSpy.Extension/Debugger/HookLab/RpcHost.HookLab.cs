@@ -54,7 +54,10 @@ namespace dgSpy.Extension {
 			},token).ConfigureAwait(false);
 		}
 
-		async Task<object> InstallSelectedHookAsync(MethodDef selected,string hookId,string kind,int maximumEventsPerSecond,int maximumStringLength,CancellationToken token) {
+		string GenerateSelectedHookTemplate(MethodDef selected,string template)=>HookSourceTemplate.Generate(TemplateTarget(selected),template);
+		Task<object> InstallSelectedHookAsync(MethodDef selected,string hookId,string kind,int maximumEventsPerSecond,int maximumStringLength,CancellationToken token) =>
+			InstallSelectedHookAsync(selected,hookId,kind,maximumEventsPerSecond,maximumStringLength,null,0,token);
+		async Task<object> InstallSelectedHookAsync(MethodDef selected,string hookId,string kind,int maximumEventsPerSecond,int maximumStringLength,string? source,int revision,CancellationToken token) {
 			await EnsureUiSessionAsync(token).ConfigureAwait(false);
 			string currentSession,currentStop; long currentExecution;
 			lock(sync) { currentSession=sessionId!; currentStop=stopId ?? ""; currentExecution=executionVersion; }
@@ -73,6 +76,7 @@ namespace dgSpy.Extension {
 				["arrival_il_offset"]=(int)(body.Instructions.FirstOrDefault()?.Offset ?? 0),["nearby_offsets"]=new JsonArray(body.Instructions.Select(instruction=>(JsonNode)(int)instruction.Offset).ToArray())
 				,["maximum_events_per_second"]=maximumEventsPerSecond,["maximum_string_length"]=maximumStringLength
 			};
+			if(source is not null) { request["source"]=source; request["revision"]=revision; }
 			return await hookLab.InstallAsync(this,new RpcRequest { Operation="install_hook",Arguments=request },token).ConfigureAwait(false);
 		}
 		ModuleDef? TryMetadata(dnSpy.Contracts.Debugger.DbgModule module) { try { return metadataService.TryGetMetadata(module); } catch(Exception) { return null; } }
@@ -197,7 +201,7 @@ namespace dgSpy.Extension {
 				var runtime=ForOperation(source.Arguments);
 				var report=await SendAsync(runtime,compiled?"install_compiled_prefix":"install",ParameterText(parameters),token).ConfigureAwait(false);
 				var installedRecord=new HookRecord(definition,Required(report,"patch_id","The probe installed a hook without reporting its patch ID."));
-				lock(gate) hooks[definition.Key]=installedRecord; HookLabUiBridge.PublishHook(definition.SessionId,definition.ProcessId,definition.HookId,definition.Kind,definition.DeclaringType+"."+definition.Method,installedRecord.PatchId);
+				lock(gate) hooks[definition.Key]=installedRecord; HookLabUiBridge.PublishHook(definition.SessionId,definition.ProcessId,definition.HookId,definition.Kind,definition.DeclaringType+"."+definition.Method,installedRecord.PatchId,definition.Revision,compiled);
 				return Installed(installedRecord,true);
 			}
 
@@ -256,6 +260,8 @@ namespace dgSpy.Extension {
 			public void BindUi(RpcHost host) => HookLabUiBridge.Bind(
 				()=>host.InitializeHookLabFromUiAsync(CancellationToken.None),
 				(method,id,kind,rate,stringLength)=>host.InstallSelectedHookAsync(method,id,kind,rate,stringLength,CancellationToken.None),
+				(method,template)=>host.GenerateSelectedHookTemplate(method,template),
+				(method,id,kind,source,revision)=>host.InstallSelectedHookAsync(method,id,kind,100,1024,source,revision,CancellationToken.None),
 				async (session,process,hookId)=>{ var args=new JsonObject { ["session_id"]=session,["process_id"]=process,["hook_id"]=hookId }; await RemoveAsync(host,new RpcRequest { Operation="remove_hook",Arguments=args },CancellationToken.None).ConfigureAwait(false); },
 				async (session,process)=>{ var args=new JsonObject { ["session_id"]=session,["process_id"]=process }; await RemoveAllAsync(host,new RpcRequest { Operation="remove_all_hooks",Arguments=args },CancellationToken.None).ConfigureAwait(false); });
 

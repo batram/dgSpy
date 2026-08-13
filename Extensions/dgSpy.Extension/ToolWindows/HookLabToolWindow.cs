@@ -23,17 +23,19 @@ namespace dgSpy.Extension.ToolWindows {
 		static readonly object gate=new object();
 		static readonly List<HookLabHookRow> hooks=new List<HookLabHookRow>();
 		static readonly List<HookLabEventRow> events=new List<HookLabEventRow>();
-		static Func<Task<object>>? initialize; static Func<MethodDef,string,string,int,int,Task<object>>? install; static Func<string,int,string,Task>? remove; static Func<string,int,Task>? removeAll; static Action? show; static string status="Initialize HookLab, then select a method and use Add Hook...";
+		static Func<Task<object>>? initialize; static Func<MethodDef,string,string,int,int,Task<object>>? install; static Func<MethodDef,string,string>? generate; static Func<MethodDef,string,string,string,int,Task<object>>? installSource; static Func<string,int,string,Task>? remove; static Func<string,int,Task>? removeAll; static Action? show; static string status="Initialize HookLab, then select a method and use Add Hook...";
 		public static event Action? Changed;
-		public static void Bind(Func<Task<object>> initializeHookLab,Func<MethodDef,string,string,int,int,Task<object>> installHook,Func<string,int,string,Task> removeHook,Func<string,int,Task> removeAllHooks) { lock(gate) { initialize=initializeHookLab; install=installHook; remove=removeHook; removeAll=removeAllHooks; } }
+		public static void Bind(Func<Task<object>> initializeHookLab,Func<MethodDef,string,string,int,int,Task<object>> installHook,Func<MethodDef,string,string> generateSource,Func<MethodDef,string,string,string,int,Task<object>> installCustomSource,Func<string,int,string,Task> removeHook,Func<string,int,Task> removeAllHooks) { lock(gate) { initialize=initializeHookLab; install=installHook; generate=generateSource; installSource=installCustomSource; remove=removeHook; removeAll=removeAllHooks; } }
 		public static void BindWindow(Action showWindow) { lock(gate) show=showWindow; }
-		public static void PublishHook(string session,int process,string id,string kind,string method,string patch) { Action? open; lock(gate) { hooks.RemoveAll(value=>value.Session==session && value.Process==process && value.Id==id); hooks.Add(new HookLabHookRow(session,process,id,kind,method,patch)); open=show; } Changed?.Invoke(); open?.Invoke(); }
+		public static void PublishHook(string session,int process,string id,string kind,string method,string patch,int revision,bool compiled) { Action? open; lock(gate) { hooks.RemoveAll(value=>value.Session==session && value.Process==process && value.Id==id); hooks.Add(new HookLabHookRow(session,process,id,kind,method,patch,revision,compiled)); open=show; } Changed?.Invoke(); open?.Invoke(); }
 		public static void RemoveHook(string session,int process,string id) { lock(gate) hooks.RemoveAll(value=>value.Session==session && value.Process==process && value.Id==id); Changed?.Invoke(); }
 		public static void Clear() { lock(gate) { hooks.Clear(); events.Clear(); } Changed?.Invoke(); }
 		public static void PublishEvent(long cursor,string patch,string payload,long dropped) { lock(gate) { events.Add(new HookLabEventRow(cursor,patch,payload,dropped)); if(events.Count>1024) events.RemoveRange(0,events.Count-1024); } Changed?.Invoke(); }
 		public static (HookLabHookRow[] Hooks,HookLabEventRow[] Events,string Status) Snapshot() { lock(gate) return (hooks.ToArray(),events.ToArray(),status); }
 		public static async Task InitializeAsync() { Func<Task<object>>? action; lock(gate) action=initialize; if(action is null) throw new InvalidOperationException("Attach to a target before initializing HookLab."); ReportStatus("Initializing HookLab..."); await action(); ReportStatus("HookLab is ready. Select a method and use Add Hook..."); }
 		public static async Task InstallAsync(MethodDef method,string id,string kind,int maximumEventsPerSecond,int maximumStringLength) { Func<MethodDef,string,string,int,int,Task<object>>? action; lock(gate) action=install; if(action is null) throw new InvalidOperationException("HookLab service is unavailable."); ReportStatus(HookLabInstallPresentation.Waiting(method.DeclaringType.FullName+"."+method.Name)); await action(method,id,kind,maximumEventsPerSecond,maximumStringLength); ReportStatus("Installed "+id+"."); }
+		public static string GenerateSource(MethodDef method,string template) { Func<MethodDef,string,string>? action; lock(gate) action=generate; if(action is null) throw new InvalidOperationException("HookLab service is unavailable."); return action(method,template); }
+		public static async Task InstallSourceAsync(MethodDef method,string id,string kind,string source,int revision) { Func<MethodDef,string,string,string,int,Task<object>>? action; lock(gate) action=installSource; if(action is null) throw new InvalidOperationException("HookLab service is unavailable."); ReportStatus("Compiling "+id+" revision "+revision+"..."); await action(method,id,kind,source,revision); ReportStatus("Installed "+id+" revision "+revision+"."); }
 		public static void ReportStatus(string value) { lock(gate) status=value; Changed?.Invoke(); }
 		public static Task RemoveAsync(HookLabHookRow row) { Func<string,int,string,Task>? action; lock(gate) action=remove; return action is null ? Task.FromException(new InvalidOperationException("HookLab has not been started by this dgSpy host.")) : action(row.Session,row.Process,row.Id); }
 		public static Task RemoveAllAsync(HookLabHookRow row) { Func<string,int,Task>? action; lock(gate) action=removeAll; return action is null ? Task.FromException(new InvalidOperationException("HookLab has not been started by this dgSpy host.")) : action(row.Session,row.Process); }
@@ -45,7 +47,7 @@ namespace dgSpy.Extension.ToolWindows {
 		HookLabToolWindowLoader(IDsToolWindowService windows) => HookLabUiBridge.BindWindow(()=>Application.Current.Dispatcher.BeginInvoke(new Action(()=>windows.Show(HookLabToolWindowContent.GuidValue))));
 	}
 
-	sealed class HookLabHookRow { public HookLabHookRow(string session,int process,string id,string kind,string method,string patch) { Session=session; Process=process; Id=id; Kind=kind; Method=method; Patch=patch; } public string Session { get; } public int Process { get; } public string Id { get; } public string Kind { get; } public string Method { get; } public string Patch { get; } }
+	sealed class HookLabHookRow { public HookLabHookRow(string session,int process,string id,string kind,string method,string patch,int revision,bool compiled) { Session=session; Process=process; Id=id; Kind=kind; Method=method; Patch=patch; Revision=revision; Compiled=compiled; } public string Session { get; } public int Process { get; } public string Id { get; } public string Kind { get; } public string Method { get; } public string Patch { get; } public int Revision { get; } public bool Compiled { get; } public string SourceKind=>Compiled?"C#":"Observer"; }
 	sealed class HookLabEventRow { public HookLabEventRow(long cursor,string patch,string payload,long dropped) { Cursor=cursor; Patch=patch; Payload=payload; Dropped=dropped; } public long Cursor { get; } public string Patch { get; } public string Payload { get; } public long Dropped { get; } }
 
 	sealed class HookLabToolWindowVM : INotifyPropertyChanged {
@@ -74,7 +76,7 @@ namespace dgSpy.Extension.ToolWindows {
 		public HookLabControl(HookLabToolWindowVM vm) {
 			DataContext=vm; RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto }); RowDefinitions.Add(new RowDefinition()); RowDefinitions.Add(new RowDefinition { Height=new GridLength(2,GridUnitType.Star) });
 			var toolbar=new StackPanel { Orientation=Orientation.Horizontal }; var initialize=new Button { Content="Initialize HookLab",Margin=new Thickness(3),Padding=new Thickness(8,1,8,1) }; AutomationProperties.SetName(initialize,"Initialize HookLab"); initialize.SetBinding(IsEnabledProperty,"CanOperate"); initialize.Click+=(s,e)=>vm.Initialize(); var remove=new Button { Content="Remove",Margin=new Thickness(3),Padding=new Thickness(8,1,8,1) }; AutomationProperties.SetName(remove,"Remove selected HookLab hook"); remove.SetBinding(IsEnabledProperty,"CanOperate"); remove.Click+=(s,e)=>vm.RemoveSelected(); var all=new Button { Content="Remove All",Margin=new Thickness(3),Padding=new Thickness(8,1,8,1) }; AutomationProperties.SetName(all,"Remove all HookLab hooks"); all.SetBinding(IsEnabledProperty,"CanOperate"); all.Click+=(s,e)=>vm.RemoveAll(); var status=new TextBlock { Margin=new Thickness(8,5,3,3),VerticalAlignment=VerticalAlignment.Center,TextWrapping=TextWrapping.Wrap,MaxWidth=900 }; AutomationProperties.SetName(status,"HookLab status"); status.SetBinding(TextBlock.TextProperty,"Status"); status.SetResourceReference(TextBlock.ForegroundProperty,"GridViewListViewForeground"); toolbar.Children.Add(initialize); toolbar.Children.Add(remove); toolbar.Children.Add(all); toolbar.Children.Add(status); Children.Add(toolbar);
-			var hookList=new ListView { Margin=new Thickness(3) }; AutomationProperties.SetName(hookList,"Installed hooks"); hookList.SetBinding(ItemsControl.ItemsSourceProperty,"Hooks"); hookList.SetBinding(ListView.SelectedItemProperty,"Selected"); hookList.View=new GridView { Columns={ new GridViewColumn { Header="Hook",DisplayMemberBinding=new System.Windows.Data.Binding("Id"),Width=200 },new GridViewColumn { Header="Kind",DisplayMemberBinding=new System.Windows.Data.Binding("Kind"),Width=80 },new GridViewColumn { Header="Method",DisplayMemberBinding=new System.Windows.Data.Binding("Method"),Width=320 } } }; SetRow(hookList,1); Children.Add(hookList);
+			var hookList=new ListView { Margin=new Thickness(3) }; AutomationProperties.SetName(hookList,"Installed hooks"); hookList.SetBinding(ItemsControl.ItemsSourceProperty,"Hooks"); hookList.SetBinding(ListView.SelectedItemProperty,"Selected"); hookList.View=new GridView { Columns={ new GridViewColumn { Header="Hook",DisplayMemberBinding=new System.Windows.Data.Binding("Id"),Width=200 },new GridViewColumn { Header="Kind",DisplayMemberBinding=new System.Windows.Data.Binding("Kind"),Width=80 },new GridViewColumn { Header="Source",DisplayMemberBinding=new System.Windows.Data.Binding("SourceKind"),Width=70 },new GridViewColumn { Header="Revision",DisplayMemberBinding=new System.Windows.Data.Binding("Revision"),Width=65 },new GridViewColumn { Header="Method",DisplayMemberBinding=new System.Windows.Data.Binding("Method"),Width=320 } } }; SetRow(hookList,1); Children.Add(hookList);
 			var eventList=new ListView { Margin=new Thickness(3) }; AutomationProperties.SetName(eventList,"Hook events"); eventList.SetBinding(ItemsControl.ItemsSourceProperty,"Events"); eventList.View=new GridView { Columns={ new GridViewColumn { Header="#",DisplayMemberBinding=new System.Windows.Data.Binding("Cursor"),Width=55 },new GridViewColumn { Header="Patch",DisplayMemberBinding=new System.Windows.Data.Binding("Patch"),Width=260 },new GridViewColumn { Header="Payload",DisplayMemberBinding=new System.Windows.Data.Binding("Payload"),Width=500 },new GridViewColumn { Header="Dropped",DisplayMemberBinding=new System.Windows.Data.Binding("Dropped"),Width=70 } } }; SetRow(eventList,2); Children.Add(eventList);
 		}
 	}
@@ -95,19 +97,71 @@ namespace dgSpy.Extension.ToolWindows {
 		static bool Positive(string text)=>Int32.TryParse(text,out var value) && value>0;
 	}
 
-	[ExportMenuItem(Header="Add Hook...",Group="2100,67C441E9-66EC-4DA0-9693-BEE4E7E57C30",Order=0)]
-	sealed class AddHookFromCodeCommand : MenuItemBase {
-		readonly IDsToolWindowService windows; [ImportingConstructor] AddHookFromCodeCommand(IDsToolWindowService windows)=>this.windows=windows;
-		static MethodDef? Method(IMenuItemContext context) {
+	sealed class CustomHookEditorDialog : Window {
+		readonly MethodDef method;
+		readonly HookLabEditorState state;
+		readonly TextBox id=new TextBox { Margin=new Thickness(6) };
+		readonly ComboBox template=new ComboBox { Margin=new Thickness(6),ItemsSource=new[]{"Prefix","Postfix","PrefixPostfix"} };
+		readonly TextBox source=new TextBox { Margin=new Thickness(6),AcceptsReturn=true,AcceptsTab=true,HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,TextWrapping=TextWrapping.NoWrap,FontFamily=new System.Windows.Media.FontFamily("Consolas"),FontSize=13 };
+		readonly TextBox diagnostics=new TextBox { Margin=new Thickness(6),Height=95,IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto };
+		readonly Button install=new Button { Content="Compile & Install",IsDefault=true,MinWidth=125,Margin=new Thickness(6) };
+		public CustomHookEditorDialog(MethodDef selected) {
+			method=selected; state=new HookLabEditorState(DefaultId(selected),value=>HookLabUiBridge.GenerateSource(selected,value));
+			Title="Create Custom Hook"; Width=920; Height=720; MinWidth=680; MinHeight=520; WindowStartupLocation=WindowStartupLocation.CenterOwner; Owner=Application.Current?.MainWindow;
+			id.Text=state.HookId; template.SelectedItem=state.Template; source.Text=state.Source;
+			AutomationProperties.SetName(id,"Custom hook ID"); AutomationProperties.SetName(template,"Custom hook template"); AutomationProperties.SetName(source,"Custom hook C# source"); AutomationProperties.SetName(diagnostics,"Custom hook compiler diagnostics"); AutomationProperties.SetName(install,"Compile and install custom hook");
+			var layout=new Grid { Margin=new Thickness(10) }; layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition()); layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
+			var heading=new StackPanel(); heading.Children.Add(new TextBlock { Text=selected.FullName,Margin=new Thickness(6),TextWrapping=TextWrapping.Wrap }); heading.Children.Add(new TextBlock { Text="Edit the generated complete C# source. HookLab compiles before changing the target; a compiler failure leaves any working revision installed.",Margin=new Thickness(6),TextWrapping=TextWrapping.Wrap }); Grid.SetRow(heading,0); layout.Children.Add(heading);
+			var fields=new Grid(); fields.ColumnDefinitions.Add(new ColumnDefinition()); fields.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(230) }); var idPanel=new StackPanel(); idPanel.Children.Add(new TextBlock { Text="Hook ID",Margin=new Thickness(6,3,6,0) }); idPanel.Children.Add(id); var templatePanel=new StackPanel(); templatePanel.Children.Add(new TextBlock { Text="Template",Margin=new Thickness(6,3,6,0) }); templatePanel.Children.Add(template); Grid.SetColumn(templatePanel,1); fields.Children.Add(idPanel); fields.Children.Add(templatePanel); Grid.SetRow(fields,1); layout.Children.Add(fields);
+			var sourcePanel=new DockPanel(); var sourceLabel=new TextBlock { Text="C# source",Margin=new Thickness(6,3,6,0) }; DockPanel.SetDock(sourceLabel,Dock.Top); sourcePanel.Children.Add(sourceLabel); sourcePanel.Children.Add(source); Grid.SetRow(sourcePanel,2); layout.Children.Add(sourcePanel);
+			var diagnosticsPanel=new DockPanel(); var diagnosticsLabel=new TextBlock { Text="Compiler diagnostics",Margin=new Thickness(6,3,6,0) }; DockPanel.SetDock(diagnosticsLabel,Dock.Top); diagnosticsPanel.Children.Add(diagnosticsLabel); diagnosticsPanel.Children.Add(diagnostics); Grid.SetRow(diagnosticsPanel,3); layout.Children.Add(diagnosticsPanel);
+			var buttons=new StackPanel { Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right }; install.Click+=Install; var cancel=new Button { Content="Cancel",IsCancel=true,MinWidth=80,Margin=new Thickness(6) }; buttons.Children.Add(install); buttons.Children.Add(cancel); Grid.SetRow(buttons,4); layout.Children.Add(buttons); Content=layout;
+			template.SelectionChanged+=(s,e)=>{ if(template.SelectedItem is string value && value!=state.Template) { state.SelectTemplate(value); source.Text=state.Source; diagnostics.Text=state.Diagnostics; } };
+		}
+		async void Install(object? sender,RoutedEventArgs e) {
+			state.HookId=id.Text.Trim(); state.Source=source.Text;
+			if(!state.TryBegin(out var error)) { diagnostics.Text=error; return; }
+			install.IsEnabled=false; id.IsEnabled=false; template.IsEnabled=false; diagnostics.Text=state.Diagnostics;
+			try {
+				await HookLabUiBridge.InstallSourceAsync(method,state.HookId,state.Kind,state.Source,state.Revision);
+				state.Complete(); diagnostics.Text=state.Diagnostics; DialogResult=true;
+			}
+			catch(Exception ex) {
+				state.Fail(ex.Message); diagnostics.Text=state.Diagnostics; HookLabUiBridge.ReportStatus(ex.Message);
+				install.IsEnabled=true; id.IsEnabled=true; template.IsEnabled=true;
+			}
+		}
+		static string DefaultId(MethodDef method)=>(method.DeclaringType.FullName+"."+method.Name+".custom").Replace('`','_');
+	}
+
+	static class HookLabMethodContext {
+		public static MethodDef? Method(IMenuItemContext context) {
 			if(context.CreatorObject.Guid!=new Guid(MenuConstants.GUIDOBJ_DOCUMENTVIEWERCONTROL_GUID)) return null;
 			var reference=context.Find<TextReference>()?.Reference;
 			return reference as MethodDef ?? (reference as MethodStatementReference)?.Method ?? (reference as InstructionReference)?.Method;
 		}
-		public override bool IsVisible(IMenuItemContext context)=>Method(context) is not null;
-		public override bool IsEnabled(IMenuItemContext context)=>Method(context)?.HasBody==true;
+	}
+
+	[ExportMenuItem(Header="Add Hook...",Group="2100,67C441E9-66EC-4DA0-9693-BEE4E7E57C30",Order=0)]
+	sealed class AddHookFromCodeCommand : MenuItemBase {
+		readonly IDsToolWindowService windows; [ImportingConstructor] AddHookFromCodeCommand(IDsToolWindowService windows)=>this.windows=windows;
+		public override bool IsVisible(IMenuItemContext context)=>HookLabMethodContext.Method(context) is not null;
+		public override bool IsEnabled(IMenuItemContext context)=>HookLabMethodContext.Method(context)?.HasBody==true;
 		public override async void Execute(IMenuItemContext context) {
-			var method=Method(context); if(method is null) return; var dialog=new AddHookDialog(method); if(dialog.ShowDialog()!=true) return; windows.Show(HookLabToolWindowContent.GuidValue);
+			var method=HookLabMethodContext.Method(context); if(method is null) return; var dialog=new AddHookDialog(method); if(dialog.ShowDialog()!=true) return; windows.Show(HookLabToolWindowContent.GuidValue);
 			try { await HookLabUiBridge.InstallAsync(method,dialog.HookId,dialog.Kind,dialog.MaximumEventsPerSecond,dialog.MaximumStringLength); } catch(Exception ex) { HookLabUiBridge.ReportStatus(ex.Message); }
+		}
+	}
+
+	[ExportMenuItem(Header="Create Custom Hook...",Group="2100,67C441E9-66EC-4DA0-9693-BEE4E7E57C30",Order=10)]
+	sealed class CreateCustomHookFromCodeCommand : MenuItemBase {
+		readonly IDsToolWindowService windows; [ImportingConstructor] CreateCustomHookFromCodeCommand(IDsToolWindowService windows)=>this.windows=windows;
+		public override bool IsVisible(IMenuItemContext context)=>HookLabMethodContext.Method(context) is not null;
+		public override bool IsEnabled(IMenuItemContext context)=>HookLabMethodContext.Method(context)?.HasBody==true;
+		public override void Execute(IMenuItemContext context) {
+			var method=HookLabMethodContext.Method(context); if(method is null) return;
+			try { var dialog=new CustomHookEditorDialog(method); if(dialog.ShowDialog()==true) windows.Show(HookLabToolWindowContent.GuidValue); }
+			catch(Exception ex) { HookLabUiBridge.ReportStatus(ex.Message); MessageBox.Show(Application.Current?.MainWindow,ex.Message,"Create Custom Hook",MessageBoxButton.OK,MessageBoxImage.Warning); }
 		}
 	}
 

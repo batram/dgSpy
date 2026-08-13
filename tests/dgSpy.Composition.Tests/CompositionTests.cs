@@ -113,6 +113,7 @@ public class CompositionTests {
 		RequirePublishedHost();
 		var names = PublishedHost.Instance.Catalog.Parts.Select(part => part.Type.FullName ?? "").ToHashSet(StringComparer.Ordinal);
 		Assert.Contains("dgSpy.Extension.ToolWindows.AddHookFromCodeCommand", names);
+		Assert.Contains("dgSpy.Extension.ToolWindows.CreateCustomHookFromCodeCommand", names);
 		Assert.Contains("dgSpy.Extension.ToolWindows.HookLabToolWindowProvider", names);
 		Assert.Contains("dgSpy.Extension.ToolWindows.HookLabToolWindowLoader", names);
 	}

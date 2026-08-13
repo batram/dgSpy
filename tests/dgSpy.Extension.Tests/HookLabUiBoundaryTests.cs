@@ -7,8 +7,11 @@ public sealed class HookLabUiBoundaryTests {
 	public void Gui_operations_adopt_the_active_debugger_and_initialize_before_installing() {
 		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
 		Assert.Contains("InitializeHookLabFromUiAsync(CancellationTokentoken){awaitEnsureUiSessionAsync(token)",source,StringComparison.Ordinal);
-		Assert.Contains("InstallSelectedHookAsync(MethodDefselected,stringhookId,stringkind,intmaximumEventsPerSecond,intmaximumStringLength,CancellationTokentoken){awaitEnsureUiSessionAsync(token)",source,StringComparison.Ordinal);
-		var install=source.IndexOf("InstallSelectedHookAsync(",StringComparison.Ordinal);
+		Assert.Contains("InstallSelectedHookAsync(MethodDefselected,stringhookId,stringkind,intmaximumEventsPerSecond,intmaximumStringLength,string?source,intrevision,CancellationTokentoken){awaitEnsureUiSessionAsync(token)",source,StringComparison.Ordinal);
+		Assert.Contains("if(sourceisnotnull){request[\"source\"]=source;request[\"revision\"]=revision;}",source,StringComparison.Ordinal);
+		Assert.Contains("(method,template)=>host.GenerateSelectedHookTemplate(method,template)",source,StringComparison.Ordinal);
+		Assert.Contains("(method,id,kind,source,revision)=>host.InstallSelectedHookAsync(method,id,kind,100,1024,source,revision,CancellationToken.None)",source,StringComparison.Ordinal);
+		var install=source.IndexOf("asyncTask<object>InstallSelectedHookAsync(",StringComparison.Ordinal);
 		var initialize=source.IndexOf("awaithookLab.InitializeAsync(",install,StringComparison.Ordinal);
 		var pipeInstall=source.IndexOf("returnawaithookLab.InstallAsync(",install,StringComparison.Ordinal);
 		Assert.True(initialize>install && pipeInstall>initialize,"GUI hook installation must initialize HookLab before using its resident transport.");

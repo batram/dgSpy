@@ -78,10 +78,13 @@ and patch through the same resident Harmony path as hand-written source, includi
 both `ref` and original `out` parameters. Invalid template selections, non-method tokens, and generic
 targets fail with stable public errors.
 
-GUI consumption of the generated templates, enable/disable without removal, a source editor,
-Finalizer, Transpiler, generic-target handling, and
-broader compilation references remain unfinished. Initialization and packaging are no longer the
-active design problem.
+The first GUI source-editor slice is complete. **Create Custom Hook...** on the selected dnSpy method
+opens the shared generated Prefix, Postfix, or paired Prefix/Postfix source, permits editing the hook
+ID and complete C# unit, and compiles and installs revision 1 through the same service as MCP. Compiler
+failure leaves the dialog and entered source open, and installed rows distinguish compiled C# from
+observational hooks and show the revision. Reopening an installed hook for revisioned updates,
+enable/disable without removal, Finalizer, Transpiler, generic-target handling, and broader compilation
+references remain unfinished. Initialization and packaging are no longer the active design problem.
 
 ## One implementation through-line
 
@@ -137,7 +140,7 @@ binding or IL machinery that duplicates Harmony.
 Do not reintroduce a generic provider framework, export-project system, credential lifecycle, or
 cross-process compiler service before the resident compiler proves it is needed.
 
-### 4. Make the GUI a hook editor
+### 4. Make the GUI a hook editor - create slice complete
 
 The HookLab window first shows Not initialized, Initializing, Ready, or Failed with Retry. It provides
 **Initialize HookLab** and may offer initialization when Create Hook is chosen.
@@ -174,10 +177,10 @@ Already reusable:
 
 Still missing:
 
-- GUI method selection and source editor consuming the shared generated templates;
+- reopening a compiled hook in the GUI and incrementing its revision for updates;
 - enable/disable state that preserves source and diagnostics;
 - public `create_hook`, `update_hook`, `enable_hook`, and `disable_hook` operations;
-- UnityExplorer-style source editor and matching GUI/MCP state;
+- matching editable source and diagnostics in GUI and MCP hook state;
 - compiled Finalizer and Transpiler after Prefix/Postfix are proven;
 - generic-target handling and broader compilation references when a concrete hook requires them;
 - package-level acceptance for toggling; behavior-changing source, failed-update rollback, removal,
