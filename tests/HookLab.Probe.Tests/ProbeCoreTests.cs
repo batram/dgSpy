@@ -15,6 +15,7 @@ namespace HookLab.Probe.Tests {
 	public sealed class ProbeCoreTests {
 		static readonly MethodInfo TargetMethod = typeof(Fixture).GetMethod(nameof(Fixture.Add))!;
 		static readonly MethodInfo InstanceTargetMethod = typeof(InstanceFixture).GetMethod(nameof(InstanceFixture.Calculate))!;
+		static readonly MethodInfo PrivateTargetMethod = typeof(PrivateInstanceFixture).GetMethod(nameof(PrivateInstanceFixture.Calculate))!;
 		static readonly HookLimits Limits = new HookLimits(1000, 4096, 4, 8, 32, 3);
 
 		[Fact]
@@ -214,6 +215,23 @@ namespace HookLab.Probe.Tests {
 				var source = "public static class First { public static void Prefix() { } } public static class Second { public static void Prefix() { } }";
 				var error = Assert.Throws<HookCompilationException>(() => runtime.InstallCompiledHook(TargetMethod, Document(), source, 1, 0));
 				Assert.Contains("at most one", error.Diagnostics.Single(), StringComparison.Ordinal);
+			}
+		}
+
+		[Fact]
+		public void CompiledPrefixCanMutateTheHarmonyArgumentArray() {
+			using (var runtime = Runtime()) {
+				runtime.InstallCompiledHook(TargetMethod, Document(), "public static class UserHook { public static void Prefix(object[] __args) { __args[0] = 10; } }", 1, 0);
+				Assert.Equal(12, Fixture.Add(1, 2));
+			}
+		}
+
+		[Fact]
+		public void CompiledPrefixCanAccessAnInstanceFieldThroughHarmony() {
+			using (var runtime = Runtime()) {
+				var document = new HookDocument(1, "private-field", HookKind.Prefix, GuardFor(PrivateTargetMethod), "{}", Limits, true);
+				runtime.InstallCompiledHook(PrivateTargetMethod, document, "public static class UserHook { public static void Prefix(ref int ___offset) { ___offset += 10; } }", 1, 0);
+				Assert.Equal(16, new PrivateInstanceFixture(5).Calculate(1));
 			}
 		}
 
@@ -432,6 +450,11 @@ namespace HookLab.Probe.Tests {
 			public InstanceFixture(int offset) { Offset = offset; }
 			public int Offset;
 			[MethodImpl(MethodImplOptions.NoInlining)] public int Calculate(int value) => value + Offset;
+		}
+		public sealed class PrivateInstanceFixture {
+			readonly int offset;
+			public PrivateInstanceFixture(int offset) { this.offset = offset; }
+			[MethodImpl(MethodImplOptions.NoInlining)] public int Calculate(int value) => value + offset;
 		}
 		sealed class FixtureException : Exception { }
 	}
