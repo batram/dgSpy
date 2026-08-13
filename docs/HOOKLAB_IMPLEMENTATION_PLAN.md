@@ -69,10 +69,14 @@ the target runs.
 
 `get_hook_template` now supplies editable no-op Prefix, Postfix, or paired Prefix/Postfix C# for an
 exactly selected non-generic method. It derives the declaring type, original parameter names and
-`ref`/`out` modifiers, `__instance`, `__result`, and paired `__state` directly from module metadata.
+CLR by-reference arguments as Harmony-compatible `ref` parameters, `__instance`, `__result`, and
+paired `__state` directly from module metadata. Missing or invalid C# parameter names receive stable
+positional names, while keywords are escaped.
 The packaged PowerShell acceptance proves both static and instance template shapes and proves that
 this read-only operation does not initialize HookLab or alter the target. Generated templates compile
-and patch through the same resident Harmony path as hand-written source.
+and patch through the same resident Harmony path as hand-written source, including a real method with
+both `ref` and original `out` parameters. Invalid template selections, non-method tokens, and generic
+targets fail with stable public errors.
 
 GUI consumption of the generated templates, enable/disable without removal, a source editor,
 Finalizer, Transpiler, generic-target handling, and

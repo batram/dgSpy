@@ -35,7 +35,7 @@ namespace dgSpy.Extension {
 		static void AppendMethod(StringBuilder builder,string name,HookTemplateTarget target,bool includeResult,bool includeState,bool stateOutput) {
 			var parameters=new List<string>();
 			if(!target.IsStatic) parameters.Add(target.DeclaringType+" __instance");
-			parameters.AddRange(target.Parameters.Select(parameter=>(String.IsNullOrEmpty(parameter.Modifier)?"":parameter.Modifier+" ")+parameter.TypeName+" @"+parameter.Name));
+			parameters.AddRange(target.Parameters.Select((parameter,index)=>(String.IsNullOrEmpty(parameter.Modifier)?"":parameter.Modifier+" ")+parameter.TypeName+" @"+ParameterName(parameter.Name,index)));
 			if(includeResult) parameters.Add("ref "+target.ReturnType+" __result");
 			if(includeState) parameters.Add((stateOutput?"out ":"")+"object __state");
 			builder.Append("    public static void ").Append(name).Append('(').Append(String.Join(", ",parameters)).AppendLine(")");
@@ -43,5 +43,12 @@ namespace dgSpy.Extension {
 			if(includeState&&stateOutput) builder.AppendLine("        __state = null;");
 			builder.AppendLine("    }");
 		}
+
+		static string ParameterName(string name,int index) {
+			if(String.IsNullOrEmpty(name)||!IsIdentifierStart(name[0])||name.Skip(1).Any(character=>!IsIdentifierPart(character))) return "__"+index;
+			return name;
+		}
+		static bool IsIdentifierStart(char value)=>value=='_'||Char.IsLetter(value);
+		static bool IsIdentifierPart(char value)=>value=='_'||Char.IsLetterOrDigit(value);
 	}
 }

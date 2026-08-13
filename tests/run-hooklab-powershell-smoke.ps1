@@ -72,7 +72,15 @@ try {
 	$instanceFacts=Facts $fixtureDll 'HookLabPowerShellFixture.InstanceTarget' 'System.Int32 Calculate(System.Int32)'
 	$instanceTemplate=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$instanceFacts.Token;template='Postfix'}
 	if($instanceTemplate.source -notlike '*HookLabPowerShellFixture.InstanceTarget __instance*' -or $instanceTemplate.source -notlike '*ref System.Int32 __result*') { throw 'instance Postfix template shape was incorrect' }
-	Status 'HOOK_TEMPLATE_READ_ONLY_OK static=PrefixPostfix instance=Postfix initialized=false'
+	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$facts.Token;template='Transpiler'}; throw 'invalid template unexpectedly succeeded' } catch { if($_.Exception.Message -notlike '*invalid_arguments*') { throw } }
+	$fixtureAssembly=[Reflection.Assembly]::LoadFrom($fixtureDll)
+	$fieldToken=[int]$fixtureAssembly.GetType('HookLabPowerShellFixture.InstanceTarget',$true).GetField('Offset').MetadataToken
+	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$fieldToken}; throw 'field token unexpectedly produced a method template' } catch { if($_.Exception.Message -notlike '*method_not_found*') { throw } }
+	$genericMethod=$fixtureAssembly.GetType('HookLabPowerShellFixture.Target',$true).GetMethod('Identity')
+	if(-not $genericMethod) { throw 'fixture is stale: generic Identity method is missing; rebuild HookLabPowerShellFixture' }
+	$genericToken=[int]$genericMethod.MetadataToken
+	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$genericToken}; throw 'generic method unexpectedly produced a template' } catch { if($_.Exception.Message -notlike '*unsupported_hook_target*') { throw } }
+	Status 'HOOK_TEMPLATE_READ_ONLY_OK static=PrefixPostfix instance=Postfix invalid=refused non_method=refused generic=refused initialized=false'
 	$base=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate';kind='Prefix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='Calculate';method_token=$facts.Token;signature=$facts.Signature;module_mvid=$facts.Mvid;il_sha256=$facts.IlSha256}
 	$base.source='public static class PowerShellPairV1 { public static void Prefix(ref int value, out int __state) { __state = value; value += 10; } public static void Postfix(int __state, ref int __result) { __result += __state; } }'; $base.revision=1
 	$null=Rpc 'install_hook' $base 70

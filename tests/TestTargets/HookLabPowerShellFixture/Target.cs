@@ -4,6 +4,9 @@ namespace HookLabPowerShellFixture {
 	public static class Target {
 		[MethodImpl(MethodImplOptions.NoInlining)]
 		public static int Calculate(int value) => value + 1;
+
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		public static T Identity<T>(T value) => value;
 	}
 
 	public sealed class InstanceTarget {

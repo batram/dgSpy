@@ -24,6 +24,7 @@ namespace dgSpy.Extension {
 		async Task<object> GetHookTemplateAsync(RpcRequest req,CancellationToken token) {
 			CheckSession(req);
 			var template=(string?)req.Arguments["template"] ?? "PrefixPostfix";
+			if(template!="Prefix"&&template!="Postfix"&&template!="PrefixPostfix") throw new RpcException("invalid_arguments","template must be Prefix, Postfix, or PrefixPostfix.");
 			return await OnDebuggerAsync(()=>{
 				var loaded=FindModule(req,null);
 				var metadata=TryMetadata(loaded) ?? throw new RpcException("metadata_unavailable","The selected module has no readable metadata.");
@@ -81,7 +82,9 @@ namespace dgSpy.Extension {
 			var parameters=method.MethodSig.Params.Select((type,index)=>{
 				var definition=method.ParamDefs.FirstOrDefault(parameter=>parameter.Sequence==index+1);
 				var name=definition is null||String.IsNullOrWhiteSpace(definition.Name?.ToString())?"__"+index.ToString(CultureInfo.InvariantCulture):definition.Name!.ToString();
-				var modifier=type is ByRefSig ? (definition?.IsOut==true?"out":"ref") : "";
+				// Harmony exposes every CLR by-reference argument to a patch as ref. Emitting out would
+				// make an empty no-op Prefix fail C# definite-assignment checks.
+				var modifier=type is ByRefSig ? "ref" : "";
 				return new HookTemplateParameter(name,CSharpHookType(type),modifier);
 			}).ToArray();
 			return new HookTemplateTarget(CSharpHookType(method.DeclaringType.ToTypeSig()),method.IsStatic,CSharpHookType(method.MethodSig.RetType),parameters);

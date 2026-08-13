@@ -16,6 +16,7 @@ namespace HookLab.Probe.Tests {
 	public sealed class ProbeCoreTests {
 		static readonly MethodInfo TargetMethod = typeof(Fixture).GetMethod(nameof(Fixture.Add))!;
 		static readonly MethodInfo InstanceTargetMethod = typeof(InstanceFixture).GetMethod(nameof(InstanceFixture.Calculate))!;
+		static readonly MethodInfo RefOutTargetMethod = typeof(Fixture).GetMethod(nameof(Fixture.RefOut))!;
 		static readonly MethodInfo PrivateTargetMethod = typeof(PrivateInstanceFixture).GetMethod(nameof(PrivateInstanceFixture.Calculate))!;
 		static readonly HookLimits Limits = new HookLimits(1000, 4096, 4, 8, 32, 3);
 
@@ -254,15 +255,51 @@ namespace HookLab.Probe.Tests {
 		}
 
 		[Fact]
-		public void GeneratedTemplatePreservesRefOutAndArraySyntax() {
+		public void GeneratedTemplatePreservesByRefAndArraySyntax() {
 			var target=new HookTemplateTarget("Fixture",true,"System.Void",new[] {
 				new HookTemplateParameter("left","System.Int32","ref"),
-				new HookTemplateParameter("right","System.String[]","out")
+				new HookTemplateParameter("right","System.String[]","ref")
 			});
 			var source=HookSourceTemplate.Generate(target,"Prefix");
 			Assert.Contains("ref System.Int32 @left",source,StringComparison.Ordinal);
-			Assert.Contains("out System.String[] @right",source,StringComparison.Ordinal);
+			Assert.Contains("ref System.String[] @right",source,StringComparison.Ordinal);
 			Assert.DoesNotContain("__result",source,StringComparison.Ordinal);
+		}
+
+		[Fact]
+		public void GeneratedTemplateForRefAndOutTargetCompilesAndRuns() {
+			var target=new HookTemplateTarget("HookLab.Probe.Tests.ProbeCoreTests.Fixture",true,"System.Void",new[] {
+				new HookTemplateParameter("left","System.Int32","ref"),
+				new HookTemplateParameter("right","System.String","ref")
+			});
+			var source=HookSourceTemplate.Generate(target,"Prefix");
+			using(var runtime=Runtime()) {
+				var document=new HookDocument(1,"generated-ref-out",HookKind.Prefix,GuardFor(RefOutTargetMethod),"{}",Limits,true);
+				runtime.InstallCompiledHook(RefOutTargetMethod,document,source,1,0);
+				var left=7;
+				Fixture.RefOut(ref left,out var right);
+				Assert.Equal(8,left);
+				Assert.Equal("8",right);
+			}
+		}
+
+		[Fact]
+		public void GeneratedTemplateUsesValidNamesForKeywordsMissingAndInvalidMetadataNames() {
+			var target=new HookTemplateTarget("Fixture",true,"System.Void",new[] {
+				new HookTemplateParameter("class","System.Int32",""),
+				new HookTemplateParameter("","System.Int32",""),
+				new HookTemplateParameter("not valid","System.Int32","")
+			});
+			var source=HookSourceTemplate.Generate(target,"Prefix");
+			Assert.Contains("System.Int32 @class",source,StringComparison.Ordinal);
+			Assert.Contains("System.Int32 @__1",source,StringComparison.Ordinal);
+			Assert.Contains("System.Int32 @__2",source,StringComparison.Ordinal);
+		}
+
+		[Fact]
+		public void GeneratedTemplateRejectsUnknownSelection() {
+			var target=new HookTemplateTarget("Fixture",true,"System.Void",Array.Empty<HookTemplateParameter>());
+			Assert.Throws<ArgumentException>(()=>HookSourceTemplate.Generate(target,"Transpiler"));
 		}
 
 		[Fact]
@@ -475,6 +512,7 @@ namespace HookLab.Probe.Tests {
 			[MethodImpl(MethodImplOptions.NoInlining)] public static object Echo(object value) => value;
 			[MethodImpl(MethodImplOptions.NoInlining)] public static int Caller() => Add(1, 2);
 			[MethodImpl(MethodImplOptions.NoInlining)] public static void Throwing() { throw new FixtureException(); }
+			[MethodImpl(MethodImplOptions.NoInlining)] public static void RefOut(ref int left,out string right) { left++; right=left.ToString(); }
 		}
 		public sealed class InstanceFixture {
 			public InstanceFixture(int offset) { Offset = offset; }
