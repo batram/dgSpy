@@ -14,6 +14,7 @@ using Xunit;
 namespace HookLab.Probe.Tests {
 	public sealed class ProbeCoreTests {
 		static readonly MethodInfo TargetMethod = typeof(Fixture).GetMethod(nameof(Fixture.Add))!;
+		static readonly MethodInfo InstanceTargetMethod = typeof(InstanceFixture).GetMethod(nameof(InstanceFixture.Calculate))!;
 		static readonly HookLimits Limits = new HookLimits(1000, 4096, 4, 8, 32, 3);
 
 		[Fact]
@@ -173,6 +174,24 @@ namespace HookLab.Probe.Tests {
 			using (var runtime = Runtime()) {
 				runtime.InstallCompiledHook(TargetMethod, Document(HookKind.Postfix), "public static class UserHook { public static void Postfix(int left, ref int __result) { __result += left; } }", 1, 0);
 				Assert.Equal(4, Fixture.Add(1, 2));
+			}
+		}
+
+		[Fact]
+		public void CompiledPrefixReceivesTheTargetInstance() {
+			using (var runtime = Runtime()) {
+				var document = new HookDocument(1, "instance", HookKind.Prefix, GuardFor(InstanceTargetMethod), "{}", Limits, true);
+				runtime.InstallCompiledHook(InstanceTargetMethod, document, "public static class UserHook { public static void Prefix(HookLab.Probe.Tests.ProbeCoreTests.InstanceFixture __instance) { __instance.Offset += 10; } }", 1, 0);
+				Assert.Equal(16, new InstanceFixture(5).Calculate(1));
+			}
+		}
+
+		[Fact]
+		public void CompiledPostfixReceivesTheTargetInstance() {
+			using (var runtime = Runtime()) {
+				var document = new HookDocument(1, "instance", HookKind.Postfix, GuardFor(InstanceTargetMethod), "{}", Limits, true);
+				runtime.InstallCompiledHook(InstanceTargetMethod, document, "public static class UserHook { public static void Postfix(HookLab.Probe.Tests.ProbeCoreTests.InstanceFixture __instance, ref int __result) { __result += __instance.Offset; } }", 1, 0);
+				Assert.Equal(11, new InstanceFixture(5).Calculate(1));
 			}
 		}
 
@@ -386,6 +405,11 @@ namespace HookLab.Probe.Tests {
 			[MethodImpl(MethodImplOptions.NoInlining)] public static object Echo(object value) => value;
 			[MethodImpl(MethodImplOptions.NoInlining)] public static int Caller() => Add(1, 2);
 			[MethodImpl(MethodImplOptions.NoInlining)] public static void Throwing() { throw new FixtureException(); }
+		}
+		public sealed class InstanceFixture {
+			public InstanceFixture(int offset) { Offset = offset; }
+			public int Offset;
+			[MethodImpl(MethodImplOptions.NoInlining)] public int Calculate(int value) => value + Offset;
 		}
 		sealed class FixtureException : Exception { }
 	}
