@@ -25,6 +25,12 @@ git submodule update --init --recursive
 dotnet run --project Build\DgSpyTool -- pipeline
 ```
 
+Run restore, build, test, and pipeline commands under the normal Windows identity from the first
+attempt. The Codex sandbox blocks NuGet HTTPS requests and may not be able to overwrite `bin`/`obj`
+intermediates produced by the normal identity. A socket-denied `NU1301` or cross-identity access
+failure is an execution-environment failure; rerun the unchanged command under the normal identity.
+Do not weaken NuGet verification or add an offline dependency path for this repository.
+
 The completed outputs are:
 
 - `artifacts\host-raw\local`: immutable host compiler artifact.

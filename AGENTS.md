@@ -29,6 +29,12 @@ dotnet run --project Build\DgSpyTool -- pipeline
 This is the only supported dgSpy build/package path. It publishes immutable compiler inputs,
 composes a fresh layout, verifies every file, and publishes a package without mutating build output.
 
+Run dgSpy restore, build, test, and pipeline commands under the normal Windows identity from the
+first attempt. The Codex sandbox blocks NuGet HTTPS requests and can also be unable to overwrite
+`bin`/`obj` intermediates created by the normal identity. Treat socket-denied `NU1301` and those
+cross-identity access failures as execution-environment failures, not repository defects. Do not
+weaken NuGet checks, maintain an offline package feed, or redesign build outputs to work around them.
+
 Submodules must be present, or the build fails with `MSB3202` on seven missing projects:
 
 ```bash
