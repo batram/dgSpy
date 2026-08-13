@@ -116,6 +116,8 @@ public class CompositionTests {
 		Assert.Contains("dgSpy.Extension.ToolWindows.CreateCustomHookFromCodeCommand", names);
 		Assert.Contains("dgSpy.Extension.ToolWindows.HookLabToolWindowProvider", names);
 		Assert.Contains("dgSpy.Extension.ToolWindows.HookLabToolWindowLoader", names);
+		Assert.Contains("dgSpy.Extension.ToolWindows.HookLabGlyphMarker", names);
+		Assert.Contains("dgSpy.Extension.ToolWindows.ShowHookLabGlyphCommand", names);
 	}
 
 	[Fact]

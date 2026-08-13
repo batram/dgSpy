@@ -200,8 +200,11 @@ namespace dgSpy.Extension {
 				var parameters=definition.Parameters("unused");
 				var runtime=ForOperation(source.Arguments);
 				var report=await SendAsync(runtime,compiled?"install_compiled_prefix":"install",ParameterText(parameters),token).ConfigureAwait(false);
+				MethodDef? markerMethod=null;
+				try { markerMethod=await host.OnDebuggerAsync(()=>{ var module=host.FindModule(source,null); return host.TryMetadata(module)?.ResolveToken(unchecked((uint)definition.MethodToken)) as MethodDef; },token).ConfigureAwait(false); }
+				catch(Exception) { }
 				var installedRecord=new HookRecord(definition,Required(report,"patch_id","The probe installed a hook without reporting its patch ID."));
-				lock(gate) hooks[definition.Key]=installedRecord; HookLabUiBridge.PublishHook(definition.SessionId,definition.ProcessId,definition.HookId,definition.Kind,definition.DeclaringType+"."+definition.Method,installedRecord.PatchId,definition.Revision,compiled,definition.Source);
+				lock(gate) hooks[definition.Key]=installedRecord; HookLabUiBridge.PublishHook(definition.SessionId,definition.ProcessId,definition.HookId,definition.Kind,definition.DeclaringType+"."+definition.Method,installedRecord.PatchId,definition.Revision,compiled,definition.Source,markerMethod);
 				return Installed(installedRecord,true);
 			}
 

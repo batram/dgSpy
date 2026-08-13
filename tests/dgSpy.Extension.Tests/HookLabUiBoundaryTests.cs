@@ -32,6 +32,18 @@ public sealed class HookLabUiBoundaryTests {
 		Assert.Contains("if(sessionKind==\"ui\"){sessionId=null;attachedProgramId=null;sessionKind=null",source,StringComparison.Ordinal);
 	}
 
+	[Fact]
+	public void Installed_hooks_publish_native_method_glyphs() {
+		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","ToolWindows","HookLabGlyphMarker.cs")));
+		Assert.Contains("[ExportDocumentViewerListener]",source,StringComparison.Ordinal);
+		Assert.Contains("DotNetTokenGlyphTextMarkerLocationInfo",source,StringComparison.Ordinal);
+		Assert.Contains("newImageReference(typeof(HookLabGlyphMarker).Assembly,\"HookLabHook\")",source,StringComparison.Ordinal);
+		Assert.Contains("HookLabUiBridge.Changed+=Changed",source,StringComparison.Ordinal);
+		Assert.Contains("HookLabUiBridge.Snapshot().Hooks",source,StringComparison.Ordinal);
+		Assert.Contains("OnMouseLeftButtonUp",source,StringComparison.Ordinal);
+		Assert.Contains("Header=\"ShowinHookLab\"",source,StringComparison.Ordinal);
+	}
+
 	static string Normalize(string value)=>String.Concat(value.Where(character=>!Char.IsWhiteSpace(character)));
 
 	static string RepoFile(params string[] parts) {

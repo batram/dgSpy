@@ -84,10 +84,12 @@ ID and complete C# unit, and compiles and installs revision 1 through the same s
 failure leaves the dialog and entered source open, and installed rows distinguish compiled C# from
 observational hooks and show the revision. Invoking the editor again for its default installed ID now
 reopens the installed source and automatically submits revision N+1 instead of exposing the resident
-revision invariant to the user. HookLab dialogs use dnSpy's native themed window style. Explicit row
-Edit actions, enable/disable without removal, Finalizer, Transpiler, generic-target handling, and broader
-compilation references remain unfinished. Initialization and packaging are no longer the active design
-problem.
+revision invariant to the user. HookLab dialogs use dnSpy's native themed window style. Hooked methods
+show a dedicated teal hook glyph on the method-definition line; hover summarizes the method's hooks,
+left-click opens HookLab and selects the exact module/token row, and the glyph context menu provides
+**Show in HookLab**. Explicit row Edit actions, enable/disable without removal, Finalizer, Transpiler,
+generic-target handling, and broader compilation references remain unfinished. Initialization and
+packaging are no longer the active design problem.
 
 ## One implementation through-line
 
