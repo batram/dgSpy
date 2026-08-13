@@ -61,10 +61,10 @@ try {
 	if(-not $module) { throw 'fixture module was not found' }
 	Status "ATTACHED session=$sessionId module_id=$($module.module_id)"
 	$base=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate';kind='Prefix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='Calculate';method_token=$facts.Token;signature=$facts.Signature;module_mvid=$facts.Mvid;il_sha256=$facts.IlSha256}
-	$base.source='public static class PowerShellPrefixV1 { public static void Prefix(ref int value) { value += 10; } }'; $base.revision=1
+	$base.source='public static class PowerShellPairV1 { public static void Prefix(ref int value, out int __state) { __state = value; value += 10; } public static void Postfix(int __state, ref int __result) { __result += __state; } }'; $base.revision=1
 	$null=Rpc 'install_hook' $base 70
-	if(-not (Wait-Observed 52)) { throw 'Prefix revision 1 did not mutate value from 41 to 51 before the original returned 52' }
-	Status 'PREFIX_NAMED_ARGUMENT_OK value=52'
+	if(-not (Wait-Observed 93)) { throw 'paired revision 1 did not mutate 41 to 51, return 52, and add shared state 41' }
+	Status 'PREFIX_POSTFIX_STATE_OK value=93'
 
 	$base.kind='Postfix'; $base.source='public static class PowerShellPostfixV2 { public static void Postfix(int value, ref int __result) { __result += value; } }'; $base.revision=2
 	$null=Rpc 'install_hook' $base 70

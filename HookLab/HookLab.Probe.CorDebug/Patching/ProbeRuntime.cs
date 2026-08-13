@@ -69,21 +69,21 @@ namespace HookLab.Probe.CorDebug.Patching {
 				if (hooks.ContainsKey(patchId)) throw new InvalidOperationException("The hook id is already used by an observational hook.");
 				compiledHooks.TryGetValue(patchId, out var old);
 				if (old != null && revision <= old.Revision) throw new InvalidOperationException("Compiled hook revision must increase.");
-				var candidate = new CompiledHookContext(method, patchId, document, source, revision, compiled.Method);
+				var candidate = new CompiledHookContext(method, patchId, document, source, revision, compiled.Methods);
 				try {
-					var patch = new HarmonyMethod(compiled.Method);
-					if (document.Kind == HookKind.Prefix) harmony.Patch(method, prefix: patch);
-					else harmony.Patch(method, postfix: patch);
+					harmony.Patch(method,
+						compiled.Prefix == null ? null : new HarmonyMethod(compiled.Prefix),
+						compiled.Postfix == null ? null : new HarmonyMethod(compiled.Postfix));
 				}
 				catch { throw; }
 				try {
-					if (old != null) harmony.Unpatch(old.Method, old.PatchMethod);
+					if (old != null) foreach (var patchMethod in old.PatchMethods) harmony.Unpatch(old.Method, patchMethod);
 					compiledHooks[patchId] = candidate;
 					hooksVersion++;
 					return new CompiledPatchOperationResult(patchId, hooksVersion, revision, true);
 				}
 				catch {
-					harmony.Unpatch(method, compiled.Method);
+					foreach (var patchMethod in compiled.Methods) harmony.Unpatch(method, patchMethod);
 					throw;
 				}
 			}
@@ -111,7 +111,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 			lock (gate) {
 				ThrowIfDisposed(); CheckVersion(expectedHooksVersion);
 				if (hooks.TryGetValue(patchId, out var context)) RemoveCore(context);
-				else if (compiledHooks.TryGetValue(patchId, out var compiled)) { harmony.Unpatch(compiled.Method, compiled.PatchMethod); compiledHooks.Remove(patchId); }
+				else if (compiledHooks.TryGetValue(patchId, out var compiled)) { foreach (var patchMethod in compiled.PatchMethods) harmony.Unpatch(compiled.Method, patchMethod); compiledHooks.Remove(patchId); }
 				else return new PatchOperationResult(patchId, hooksVersion, false);
 				hooksVersion++; return new PatchOperationResult(patchId, hooksVersion, true);
 			}
@@ -187,18 +187,18 @@ namespace HookLab.Probe.CorDebug.Patching {
 		internal BoundedEventBuffer Buffer => buffer;
 
 		public void Dispose() {
-			lock (gate) { if (disposed) return; foreach (var item in hooks.Values.ToArray()) RemoveCore(item); foreach (var item in compiledHooks.Values.ToArray()) { harmony.Unpatch(item.Method, item.PatchMethod); compiledHooks.Remove(item.PatchId); } disposed = true; }
+			lock (gate) { if (disposed) return; foreach (var item in hooks.Values.ToArray()) RemoveCore(item); foreach (var item in compiledHooks.Values.ToArray()) { foreach (var patchMethod in item.PatchMethods) harmony.Unpatch(item.Method, patchMethod); compiledHooks.Remove(item.PatchId); } disposed = true; }
 		}
 	}
 
 	internal sealed class CompiledHookContext {
-		internal CompiledHookContext(MethodBase method, string patchId, HookDocument document, string source, int revision, MethodInfo patchMethod) { Method = method; PatchId = patchId; Document = document; Source = source; Revision = revision; PatchMethod = patchMethod; }
+		internal CompiledHookContext(MethodBase method, string patchId, HookDocument document, string source, int revision, MethodInfo[] patchMethods) { Method = method; PatchId = patchId; Document = document; Source = source; Revision = revision; PatchMethods = patchMethods; }
 		internal MethodBase Method { get; }
 		internal string PatchId { get; }
 		internal HookDocument Document { get; }
 		internal string Source { get; }
 		internal int Revision { get; }
-		internal MethodInfo PatchMethod { get; }
+		internal MethodInfo[] PatchMethods { get; }
 	}
 
 	internal sealed class HookContext {

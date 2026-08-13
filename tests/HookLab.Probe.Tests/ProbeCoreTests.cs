@@ -196,6 +196,28 @@ namespace HookLab.Probe.Tests {
 		}
 
 		[Fact]
+		public void CompiledPrefixAndPostfixShareHarmonyState() {
+			using (var runtime = Runtime()) {
+				var source = "public static class UserHook { " +
+					"public static void Prefix(int left, out int __state) { __state = left * 10; } " +
+					"public static void Postfix(int __state, ref int __result) { __result += __state; } }";
+				var installed = runtime.InstallCompiledHook(TargetMethod, Document(), source, 1, 0);
+				Assert.Equal(13, Fixture.Add(1, 2));
+				runtime.Uninstall(installed.PatchId, 1);
+				Assert.Equal(3, Fixture.Add(1, 2));
+			}
+		}
+
+		[Fact]
+		public void CompiledSourceRejectsDuplicatePatchPhases() {
+			using (var runtime = Runtime()) {
+				var source = "public static class First { public static void Prefix() { } } public static class Second { public static void Prefix() { } }";
+				var error = Assert.Throws<HookCompilationException>(() => runtime.InstallCompiledHook(TargetMethod, Document(), source, 1, 0));
+				Assert.Contains("at most one", error.Diagnostics.Single(), StringComparison.Ordinal);
+			}
+		}
+
+		[Fact]
 		public void RingOverflowCarriesProvenDropAccounting() {
 			var buffer = new BoundedEventBuffer(2, 1000);
 			for (var index = 0; index < 5; index++) buffer.TryAppend(dropped => Event(index, dropped));

@@ -606,7 +606,7 @@
     },
     {
       "name": "install_hook",
-      "description": "SIDE EFFECTING and audited. Install an observation hook, or create/update a compiled custom Prefix or Postfix when source and a monotonically increasing revision are supplied. Exact MVID, token, signature, and IL digest guards are required. Prototype custom hooks use the same-user unauthenticated resident pipe.",
+      "description": "SIDE EFFECTING and audited. Install an observation hook, or create/update compiled custom Prefix/Postfix source when source and a monotonically increasing revision are supplied. Exact MVID, token, signature, and IL digest guards are required. Prototype custom hooks use the same-user unauthenticated resident pipe.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -658,7 +658,7 @@
           },
           "source": {
             "type": "string",
-            "description": "Complete C# source declaring exactly one public static Prefix or Postfix method matching kind."
+            "description": "Complete C# source declaring one public static method matching kind and optionally its Prefix/Postfix companion."
           },
           "revision": {
             "type": "integer",
