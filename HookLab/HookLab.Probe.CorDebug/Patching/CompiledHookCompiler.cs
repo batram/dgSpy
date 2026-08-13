@@ -22,9 +22,11 @@ namespace HookLab.Probe.CorDebug.Patching {
 		const int MaximumDiagnostics = 20;
 		const int MaximumDiagnosticLength = 1000;
 
-		internal static CompiledHook CompilePrefix(string source, MethodBase target) {
+		internal static CompiledHook Compile(string source, MethodBase target, HookLab.Contracts.HookKind kind) {
 			if (string.IsNullOrWhiteSpace(source)) throw new ArgumentException("Hook source is required.", nameof(source));
 			if (target == null) throw new ArgumentNullException(nameof(target));
+			if (kind != HookLab.Contracts.HookKind.Prefix && kind != HookLab.Contracts.HookKind.Postfix) throw new NotSupportedException("Compiled hooks currently support Prefix and Postfix only.");
+			var methodName = kind.ToString();
 			using (var provider = new CSharpCodeProvider()) {
 				var parameters = new CompilerParameters { GenerateExecutable = false, GenerateInMemory = true, TreatWarningsAsErrors = false };
 				foreach (var reference in References(target)) parameters.ReferencedAssemblies.Add(reference);
@@ -33,8 +35,8 @@ namespace HookLab.Probe.CorDebug.Patching {
 				if (errors.Length != 0) throw new HookCompilationException(errors);
 				var methods = result.CompiledAssembly.GetTypes()
 					.SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
-					.Where(method => string.Equals(method.Name, "Prefix", StringComparison.Ordinal)).ToArray();
-				if (methods.Length != 1) throw new HookCompilationException(new[] { "Source must declare exactly one public static Prefix method." });
+					.Where(method => string.Equals(method.Name, methodName, StringComparison.Ordinal)).ToArray();
+				if (methods.Length != 1) throw new HookCompilationException(new[] { "Source must declare exactly one public static " + methodName + " method." });
 				return new CompiledHook(result.CompiledAssembly, methods[0]);
 			}
 		}

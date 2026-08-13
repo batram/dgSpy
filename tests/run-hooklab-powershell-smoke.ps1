@@ -64,17 +64,22 @@ try {
 	$base.source='public static class PowerShellPrefixV1 { public static bool Prefix(ref int __result) { __result=777; return false; } }'; $base.revision=1
 	$null=Rpc 'install_hook' $base 70
 	if(-not (Wait-Observed 777)) { throw 'revision 1 did not produce 777' }
-	Status 'REVISION_1_OK value=777'
+	Status 'PREFIX_REVISION_1_OK value=777'
 
-	$base.source='this is not C#'; $base.revision=2
-	try { $null=Rpc 'install_hook' $base 70; throw 'broken revision unexpectedly installed' } catch { if($_.Exception.Message -notlike '*CS*') { throw }; Status 'BROKEN_UPDATE_REJECTED diagnostics=CS' }
-	if(-not (Wait-Observed 777)) { throw 'broken update did not preserve 777' }
-	Status 'ROLLBACK_OK value=777'
-
-	$base.source='public static class PowerShellPrefixV2 { public static bool Prefix(ref int __result) { __result=888; return false; } }'
+	$base.kind='Postfix'; $base.source='public static class PowerShellPostfixV2 { public static void Postfix(ref int __result) { __result += 100; } }'; $base.revision=2
 	$null=Rpc 'install_hook' $base 70
-	if(-not (Wait-Observed 888)) { throw 'revision 2 did not produce 888' }
-	Status 'REVISION_2_OK value=888'
+	if(-not (Wait-Observed 142)) { throw 'Postfix revision 2 did not preserve the original 42 and add 100' }
+	Status 'PREFIX_TO_POSTFIX_UPDATE_OK value=142'
+
+	$base.source='this is not C#'; $base.revision=3
+	try { $null=Rpc 'install_hook' $base 70; throw 'broken revision unexpectedly installed' } catch { if($_.Exception.Message -notlike '*CS*') { throw }; Status 'BROKEN_UPDATE_REJECTED diagnostics=CS' }
+	if(-not (Wait-Observed 142)) { throw 'broken update did not preserve Postfix result 142' }
+	Status 'ROLLBACK_OK value=142'
+
+	$base.source='public static class PowerShellPostfixV3 { public static void Postfix(ref int __result) { __result += 200; } }'
+	$null=Rpc 'install_hook' $base 70
+	if(-not (Wait-Observed 242)) { throw 'Postfix revision 3 did not produce 242' }
+	Status 'POSTFIX_REVISION_3_OK value=242'
 	$null=Rpc 'remove_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate'} 30
 	if(-not (Wait-Observed 42)) { throw 'removal did not restore 42' }
 	Status 'REMOVE_OK value=42'

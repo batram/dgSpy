@@ -383,13 +383,13 @@ namespace HookLab.Bootstrap {
 			ProbeRuntime probe;
 			lock (Gate) probe = runtime as ProbeRuntime ?? throw new InvalidOperationException("The probe is not initialized yet.");
 			var target = ResolveHook(parameters);
-			if (target.Document.Kind != HookKind.Prefix) throw new InvalidOperationException("Compiled hooks currently support Prefix only.");
+			if (target.Document.Kind != HookKind.Prefix && target.Document.Kind != HookKind.Postfix) throw new InvalidOperationException("Compiled hooks currently support Prefix and Postfix only.");
 			var sourceText = parameters.Hook("hook_source_base64");
 			string source;
 			try { source = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(sourceText)); }
 			catch (FormatException ex) { throw new InvalidOperationException("hook_source_base64 is not valid base64.", ex); }
 			var revision = Positive(parameters, "hook_revision", 1);
-			var result = probe.InstallCompiledPrefix(target.Method, target.Document, source, revision, probe.HooksVersion);
+			var result = probe.InstallCompiledHook(target.Method, target.Document, source, revision, probe.HooksVersion);
 			return "status=ok\npatch_id=" + result.PatchId + "\nhooks_version=" + result.HooksVersion.ToString(CultureInfo.InvariantCulture) +
 				"\nrevision=" + result.Revision.ToString(CultureInfo.InvariantCulture) + "\nchanged=" + (result.Changed ? "true" : "false") +
 				"\nresidency_commit=completed\nbehavior_commit=completed\nprototype_compromises=unauthenticated_pipe,identity_partly_self_asserted,no_residency_rollback\n";

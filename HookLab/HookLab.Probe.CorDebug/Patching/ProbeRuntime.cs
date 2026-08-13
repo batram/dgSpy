@@ -53,14 +53,14 @@ namespace HookLab.Probe.CorDebug.Patching {
 		public bool IsAutoDisabled(string patchId) { lock (gate) return hooks.TryGetValue(patchId, out var context) && context.Disabled; }
 		public int? CompiledRevision(string patchId) { lock (gate) return compiledHooks.TryGetValue(patchId, out var context) ? context.Revision : (int?)null; }
 
-		public CompiledPatchOperationResult InstallCompiledPrefix(MethodBase method, HookDocument document, string source, int revision, long expectedHooksVersion) {
+		public CompiledPatchOperationResult InstallCompiledHook(MethodBase method, HookDocument document, string source, int revision, long expectedHooksVersion) {
 			if (method == null) throw new ArgumentNullException(nameof(method));
 			if (document == null) throw new ArgumentNullException(nameof(document));
-			if (document.Kind != HookKind.Prefix) throw new NotSupportedException("Compiled hooks currently support Prefix only.");
+			if (document.Kind != HookKind.Prefix && document.Kind != HookKind.Postfix) throw new NotSupportedException("Compiled hooks currently support Prefix and Postfix only.");
 			if (revision <= 0) throw new ArgumentOutOfRangeException(nameof(revision));
 			// Compilation deliberately happens before taking the mutation lock. A failed candidate cannot
 			// alter the resident hook set or advance hooks_version.
-			var compiled = CompiledHookCompiler.CompilePrefix(source, method);
+			var compiled = CompiledHookCompiler.Compile(source, method, document.Kind);
 			lock (gate) {
 				ThrowIfDisposed(); CheckVersion(expectedHooksVersion);
 				MethodGuards.ValidateTarget(initialization.ExpectedTarget, initialization.IdentityProvider.GetCurrentIdentity());
@@ -70,7 +70,11 @@ namespace HookLab.Probe.CorDebug.Patching {
 				compiledHooks.TryGetValue(patchId, out var old);
 				if (old != null && revision <= old.Revision) throw new InvalidOperationException("Compiled hook revision must increase.");
 				var candidate = new CompiledHookContext(method, patchId, document, source, revision, compiled.Method);
-				try { harmony.Patch(method, prefix: new HarmonyMethod(compiled.Method)); }
+				try {
+					var patch = new HarmonyMethod(compiled.Method);
+					if (document.Kind == HookKind.Prefix) harmony.Patch(method, prefix: patch);
+					else harmony.Patch(method, postfix: patch);
+				}
 				catch { throw; }
 				try {
 					if (old != null) harmony.Unpatch(old.Method, old.PatchMethod);
