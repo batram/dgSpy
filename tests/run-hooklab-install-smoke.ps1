@@ -324,18 +324,36 @@ try {
 			$after = Rpc 'get_session_state' @{ session_id=$sessionId }
 			Check 'initialization restores the running state' ($after.state -eq 'running') ("state=" + $after.state)
 
+			$behaviorMarker = Join-Path $RunDirectory 'compiled-prefix-v1.txt'
+			$behaviorMarkerV2 = Join-Path $RunDirectory 'compiled-prefix-v2.txt'
+			$escapedMarker = $behaviorMarker.Replace('\','\\').Replace('"','\"')
+			$escapedMarkerV2 = $behaviorMarkerV2.Replace('\','\\').Replace('"','\"')
+			$prefixSource = 'public static class ResidentCustomPrefix { public static bool Prefix(int input, ref int __result) { System.IO.File.AppendAllText("' + $escapedMarker + '", input.ToString() + "\n"); __result = 777; return false; } }'
 			$installed = Rpc 'install_hook' @{
 				session_id=$sessionId; process_id=$fixture.Id; hook_id='resident-tick-prefix'; kind='Prefix'
 				module_id=$script:carrierModuleId; assembly='Milestone1Target'; declaring_type='Milestone1Target.Program'
 				method='Tick'; method_token=[int]$tickFacts.Token; signature=$tickFacts.Signature
-				module_mvid=$tickFacts.Mvid; il_sha256=$tickFacts.IlSha256
+				module_mvid=$tickFacts.Mvid; il_sha256=$tickFacts.IlSha256; source=$prefixSource; revision=1
 			} 70
-			Check 'the first hook installs through the resident pipe' ($installed.installed -eq $true -and -not [string]::IsNullOrWhiteSpace($installed.hook.patch_id)) ("patch_id=" + $installed.hook.patch_id)
-			Start-Sleep -Milliseconds 1200
-			$read = Rpc 'get_hook_events' @{ session_id=$sessionId; process_id=$fixture.Id; after_cursor=0; max_events=64 } 10
-			Check 'the pipe-only first hook produces events' (@($read.events).Count -gt 0) ("events=" + @($read.events).Count + " dropped=" + $read.dropped)
+			Check 'custom Prefix revision 1 installs through the resident pipe' ($installed.installed -eq $true -and $installed.hook.compiled -eq $true -and $installed.hook.revision -eq 1) ("patch_id=" + $installed.hook.patch_id)
+			$markerDeadline = [DateTime]::UtcNow.AddSeconds(10)
+			do { Start-Sleep -Milliseconds 100 } while (-not (Test-Path -LiteralPath $behaviorMarker) -and [DateTime]::UtcNow -lt $markerDeadline)
+			Check 'custom Prefix executes inside the running target' (Test-Path -LiteralPath $behaviorMarker) $behaviorMarker
+			$badUpdate = @{
+				session_id=$sessionId; process_id=$fixture.Id; hook_id='resident-tick-prefix'; kind='Prefix'; module_id=$script:carrierModuleId
+				assembly='Milestone1Target'; declaring_type='Milestone1Target.Program'; method='Tick'; method_token=[int]$tickFacts.Token
+				signature=$tickFacts.Signature; module_mvid=$tickFacts.Mvid; il_sha256=$tickFacts.IlSha256; source='this is not C#'; revision=2
+			}
+			Expect-RpcFailure 'failed custom Prefix update reports compiler diagnostics' $badUpdate 'CS'
+			$prefixSourceV2 = 'public static class ResidentCustomPrefixV2 { public static bool Prefix(int input, ref int __result) { System.IO.File.AppendAllText("' + $escapedMarkerV2 + '", input.ToString() + "\n"); __result = 888; return false; } }'
+			$badUpdate.source=$prefixSourceV2
+			$updated = Rpc 'install_hook' $badUpdate 70
+			Check 'custom Prefix revision 2 replaces revision 1' ($updated.installed -eq $true -and $updated.hook.revision -eq 2) ("revision=" + $updated.hook.revision)
+			$markerDeadline = [DateTime]::UtcNow.AddSeconds(10)
+			do { Start-Sleep -Milliseconds 100 } while (-not (Test-Path -LiteralPath $behaviorMarkerV2) -and [DateTime]::UtcNow -lt $markerDeadline)
+			Check 'updated custom Prefix executes inside the running target' (Test-Path -LiteralPath $behaviorMarkerV2) $behaviorMarkerV2
 			$removed = Rpc 'remove_hook' @{ session_id=$sessionId; process_id=$fixture.Id; hook_id='resident-tick-prefix' } 10
-			Check 'the pipe-only hook removes while the target runs' ($removed.removed -eq $true) ("removed=" + $removed.removed)
+			Check 'the custom Prefix removes while the target runs' ($removed.removed -eq $true) ("removed=" + $removed.removed)
 		}
 		finally {
 			try { Detach-Fixture $sessionId $fixture $false } catch { Say ("cleanup detach failed for resident initialize: " + $_.Exception.Message) }

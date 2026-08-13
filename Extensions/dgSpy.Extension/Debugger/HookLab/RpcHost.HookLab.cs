@@ -152,18 +152,21 @@ namespace dgSpy.Extension {
 				var definition=HookDefinition.Parse(source.Arguments);
 				bool initialized; lock(gate) initialized=runtimes.ContainsKey(RuntimeKey(definition.SessionId,definition.ProcessId));
 				if(!initialized) await InitializeAsync(host,source,token).ConfigureAwait(false);
+				var compiled=definition.Source is not null;
 				lock(gate) {
 					if(hooks.TryGetValue(definition.Key,out var existing)) {
-						if(existing.Definition.Equivalent(definition)) return Installed(existing,false);
-						throw new RpcException("hook_exists","Hook ID '"+definition.HookId+"' already names a different installed hook in this process.");
+						if(!compiled && existing.Definition.Equivalent(definition)) return Installed(existing,false);
+						if(compiled && !existing.Definition.SameTarget(definition)) throw new RpcException("hook_exists","Hook ID '"+definition.HookId+"' already names a different target in this process.");
+						if(compiled && definition.Revision<=existing.Definition.Revision) throw new RpcException("invalid_arguments","revision must be greater than the installed revision.");
+						if(!compiled) throw new RpcException("hook_exists","Hook ID '"+definition.HookId+"' already names a different installed hook in this process.");
 					}
 				}
 
 				var parameters=definition.Parameters("unused");
 				var runtime=ForOperation(source.Arguments);
-				var report=await SendAsync(runtime,"install",ParameterText(parameters),token).ConfigureAwait(false);
+				var report=await SendAsync(runtime,compiled?"install_compiled_prefix":"install",ParameterText(parameters),token).ConfigureAwait(false);
 				var installedRecord=new HookRecord(definition,Required(report,"patch_id","The probe installed a hook without reporting its patch ID."));
-				lock(gate) hooks.Add(definition.Key,installedRecord); HookLabUiBridge.PublishHook(definition.SessionId,definition.ProcessId,definition.HookId,definition.Kind,definition.DeclaringType+"."+definition.Method,installedRecord.PatchId);
+				lock(gate) hooks[definition.Key]=installedRecord; HookLabUiBridge.PublishHook(definition.SessionId,definition.ProcessId,definition.HookId,definition.Kind,definition.DeclaringType+"."+definition.Method,installedRecord.PatchId);
 				return Installed(installedRecord,true);
 			}
 
@@ -382,7 +385,7 @@ namespace dgSpy.Extension {
 			static RpcRequest ControlRequest(RpcRequest source)=>new RpcRequest { Operation=source.Operation,Arguments=new JsonObject { ["session_id"]=Required(source.Arguments,"session_id"),["process_id"]=RequiredInt(source.Arguments,"process_id") } };
 			static object Initialized(RuntimeRecord runtime,bool changed,Dictionary<string,string>? status=null)=>new { initialized=true,changed,process_id=runtime.ProcessId,state="ready",hooks_version=runtime.HooksVersion,probe_instance_id=status is null?null:(status.TryGetValue("probe_instance_id",out var value)?value:null) };
 			static object Installed(HookRecord record,bool changed) => new { hook=View(record),installed=changed };
-			static object View(HookRecord record) => new { hook_id=record.Definition.HookId,patch_id=record.PatchId,kind=record.Definition.Kind,process_id=record.Definition.ProcessId,module_id=record.Definition.ModuleId,method_token=record.Definition.MethodToken,declaring_type=record.Definition.DeclaringType,method=record.Definition.Method,state="installed" };
+			static object View(HookRecord record) => new { hook_id=record.Definition.HookId,patch_id=record.PatchId,kind=record.Definition.Kind,revision=record.Definition.Revision,compiled=record.Definition.Source is not null,process_id=record.Definition.ProcessId,module_id=record.Definition.ModuleId,method_token=record.Definition.MethodToken,declaring_type=record.Definition.DeclaringType,method=record.Definition.Method,state="installed" };
 			static void EnsureCompleted(AtomicActionResult result,string operation) { if(result.Status.ActionOutcome!=HookLab.Contracts.ActionOutcome.completed) throw new RpcException("hook_operation_failed",HookLabInstallPresentation.Failure(operation,result.Status.ActionOutcome,result.Status.InterruptionReason,result.Error)); }
 			static Dictionary<string,string> Report(AtomicActionResult result) { var node=JsonNode.Parse(result.VerificationEvidence ?? "{}") as JsonObject; return ParseReport((string?)node?["report"] ?? ""); }
 			static Dictionary<string,string> ParseReport(string text) { var values=new Dictionary<string,string>(StringComparer.Ordinal); foreach(var line in text.Split(new[]{'\n'},StringSplitOptions.RemoveEmptyEntries)) { var separator=line.IndexOf('='); if(separator>0) values[line.Substring(0,separator)]=line.Substring(separator+1); } return values; }
@@ -416,12 +419,14 @@ namespace dgSpy.Extension {
 			sealed class HookEventRecord { public HookEventRecord(long cursor,string sequence,string patchId,string payloadJson,long dropped) { Cursor=cursor; Sequence=sequence; PatchId=patchId; PayloadJson=payloadJson; Dropped=dropped; } public long Cursor { get; } public string Sequence { get; } public string PatchId { get; } public string PayloadJson { get; } public long Dropped { get; } }
 
 			sealed class HookDefinition {
-				public string SessionId="",HookId="",Kind="",ModuleId="",Assembly="",DeclaringType="",Method="",Signature="",Mvid="",IlSha256="",ArrivalModuleId="",ImagePath="",RuntimeId="v4.0.30319";
-				public int ProcessId,MethodToken,ArrivalMethodToken,ArrivalIlOffset,MaximumEventsPerSecond=100,MaximumStringLength=1024; public int[] NearbyOffsets=Array.Empty<int>(); public long ProcessCreationTicks;
+				public string SessionId="",HookId="",Kind="",ModuleId="",Assembly="",DeclaringType="",Method="",Signature="",Mvid="",IlSha256="",ArrivalModuleId="",ImagePath="",RuntimeId="v4.0.30319"; public string? Source;
+				public int ProcessId,MethodToken,ArrivalMethodToken,ArrivalIlOffset,MaximumEventsPerSecond=100,MaximumStringLength=1024,Revision; public int[] NearbyOffsets=Array.Empty<int>(); public long ProcessCreationTicks;
 				public string Key=>HookLabService.Key(SessionId,ProcessId,HookId);
 				public static HookDefinition Parse(JsonObject values) {
 					var value=new HookDefinition { SessionId=Required(values,"session_id"),ProcessId=RequiredInt(values,"process_id"),HookId=Required(values,"hook_id"),Kind=Required(values,"kind"),ModuleId=Required(values,"module_id"),Assembly=Required(values,"assembly"),DeclaringType=Required(values,"declaring_type"),Method=Required(values,"method"),Signature=Required(values,"signature"),Mvid=Required(values,"module_mvid"),IlSha256=Required(values,"il_sha256"),MethodToken=RequiredInt(values,"method_token") };
 					if(value.Kind!="Prefix" && value.Kind!="Postfix" && value.Kind!="Finalizer") throw new RpcException("invalid_arguments","kind must be Prefix, Postfix, or Finalizer.");
+					value.Source=(string?)values["source"];
+					if(value.Source is not null) { if(value.Kind!="Prefix") throw new RpcException("invalid_arguments","Custom source currently supports Prefix only."); value.Revision=RequiredInt(values,"revision"); if(value.Revision<=0) throw new RpcException("invalid_arguments","revision must be positive."); }
 					value.ArrivalModuleId=(string?)values["arrival_module_id"] ?? value.ModuleId; value.ArrivalMethodToken=(int?)values["arrival_method_token"] ?? value.MethodToken; value.ArrivalIlOffset=(int?)values["arrival_il_offset"] ?? 0;
 					value.MaximumEventsPerSecond=Positive(values,"maximum_events_per_second",100); value.MaximumStringLength=Positive(values,"maximum_string_length",1024);
 					value.NearbyOffsets=ProtocolJson.FromNode<int[]>(values["nearby_offsets"]) ?? Array.Empty<int>();
@@ -430,8 +435,9 @@ namespace dgSpy.Extension {
 					return value;
 				}
 				public bool Equivalent(HookDefinition other)=>Kind==other.Kind && ModuleId==other.ModuleId && MethodToken==other.MethodToken && Mvid==other.Mvid && Signature==other.Signature && IlSha256==other.IlSha256;
+				public bool SameTarget(HookDefinition other)=>Kind==other.Kind && ModuleId==other.ModuleId && MethodToken==other.MethodToken && Mvid==other.Mvid && Signature==other.Signature && IlSha256==other.IlSha256;
 				static int Positive(JsonObject values,string name,int fallback) { var value=(int?)values[name] ?? fallback; return value>0 ? value : throw new RpcException("invalid_arguments",name+" must be positive."); }
-				public JsonObject Parameters(string completion)=>new JsonObject { ["host_id"]="dgspy-hooklab",["image_path"]=ImagePath,["process_id"]=ProcessId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=ProcessCreationTicks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]=RuntimeId,["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion,["hook_id"]=HookId,["hook_kind"]=Kind,["hook_assembly"]=Assembly,["hook_type"]=DeclaringType,["hook_method"]=Method,["hook_module_mvid"]=Mvid,["hook_metadata_token"]=MethodToken.ToString(CultureInfo.InvariantCulture),["hook_declaring_type"]=DeclaringType,["hook_method_signature"]=Signature,["hook_il_sha256"]=IlSha256,["maximum_events_per_second"]=MaximumEventsPerSecond.ToString(CultureInfo.InvariantCulture),["maximum_string_length"]=MaximumStringLength.ToString(CultureInfo.InvariantCulture) };
+				public JsonObject Parameters(string completion) { var values=new JsonObject { ["host_id"]="dgspy-hooklab",["image_path"]=ImagePath,["process_id"]=ProcessId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=ProcessCreationTicks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]=RuntimeId,["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion,["hook_id"]=HookId,["hook_kind"]=Kind,["hook_assembly"]=Assembly,["hook_type"]=DeclaringType,["hook_method"]=Method,["hook_module_mvid"]=Mvid,["hook_metadata_token"]=MethodToken.ToString(CultureInfo.InvariantCulture),["hook_declaring_type"]=DeclaringType,["hook_method_signature"]=Signature,["hook_il_sha256"]=IlSha256,["maximum_events_per_second"]=MaximumEventsPerSecond.ToString(CultureInfo.InvariantCulture),["maximum_string_length"]=MaximumStringLength.ToString(CultureInfo.InvariantCulture) }; if(Source is not null) { values["hook_source_base64"]=Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Source)); values["hook_revision"]=Revision.ToString(CultureInfo.InvariantCulture); } return values; }
 			}
 		}
 	}

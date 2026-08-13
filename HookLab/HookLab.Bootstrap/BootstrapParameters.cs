@@ -20,7 +20,7 @@ namespace HookLab.Bootstrap {
 			"appdomain_id", "event_capacity", "byte_capacity", "endpoint", "completion_path",
 			"hook_id", "hook_kind", "hook_assembly", "hook_type", "hook_method", "hook_module_mvid",
 			"hook_metadata_token", "hook_declaring_type", "hook_method_signature", "hook_il_sha256",
-			"maximum_events_per_second", "maximum_string_length",
+			"hook_source_base64", "hook_revision", "maximum_events_per_second", "maximum_string_length",
 		};
 
 		static readonly string[] HookKeys = {

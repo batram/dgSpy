@@ -379,6 +379,22 @@ namespace HookLab.Bootstrap {
 			return OperationReport(result);
 		}
 
+		internal static string InstallCompiledPrepared(BootstrapParameters parameters) {
+			ProbeRuntime probe;
+			lock (Gate) probe = runtime as ProbeRuntime ?? throw new InvalidOperationException("The probe is not initialized yet.");
+			var target = ResolveHook(parameters);
+			if (target.Document.Kind != HookKind.Prefix) throw new InvalidOperationException("Compiled hooks currently support Prefix only.");
+			var sourceText = parameters.Hook("hook_source_base64");
+			string source;
+			try { source = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(sourceText)); }
+			catch (FormatException ex) { throw new InvalidOperationException("hook_source_base64 is not valid base64.", ex); }
+			var revision = Positive(parameters, "hook_revision", 1);
+			var result = probe.InstallCompiledPrefix(target.Method, target.Document, source, revision, probe.HooksVersion);
+			return "status=ok\npatch_id=" + result.PatchId + "\nhooks_version=" + result.HooksVersion.ToString(CultureInfo.InvariantCulture) +
+				"\nrevision=" + result.Revision.ToString(CultureInfo.InvariantCulture) + "\nchanged=" + (result.Changed ? "true" : "false") +
+				"\nresidency_commit=completed\nbehavior_commit=completed\nprototype_compromises=unauthenticated_pipe,identity_partly_self_asserted,no_residency_rollback\n";
+		}
+
 		internal static string UninstallPrepared(string patchId) {
 			if (string.IsNullOrWhiteSpace(patchId)) throw new ArgumentException("A patch id is required.", nameof(patchId));
 			ProbeRuntime probe;
@@ -412,6 +428,11 @@ namespace HookLab.Bootstrap {
 		/// fully valid request then fails nondeterministically. The guard still decides; it just no longer
 		/// has to stand in for a lookup.</summary>
 		static PatchOperationResult InstallHook(ProbeRuntime probe, BootstrapParameters parameters) {
+			var target = ResolveHook(parameters);
+			return probe.Install(target.Method, target.Document, probe.HooksVersion);
+		}
+
+		static ResolvedHook ResolveHook(BootstrapParameters parameters) {
 			var assemblyName = parameters.Hook("hook_assembly");
 			var mvidText = parameters.Hook("hook_module_mvid");
 			Guid mvid;
@@ -464,7 +485,13 @@ namespace HookLab.Bootstrap {
 			var document = new HookDocument(1, parameters.Hook("hook_id"), kind, guard, "{}", limits, true);
 			// ProbeRuntime.Install re-validates the target identity and every method guard field. The values
 			// come from the caller, so a wrong module, token, signature or IL digest refuses here.
-			return probe.Install(method, document, probe.HooksVersion);
+			return new ResolvedHook(method, document);
+		}
+
+		sealed class ResolvedHook {
+			internal ResolvedHook(MethodBase method, HookDocument document) { Method = method; Document = document; }
+			internal MethodBase Method { get; }
+			internal HookDocument Document { get; }
 		}
 
 		static int Positive(BootstrapParameters parameters, string name, int fallback) {
@@ -524,6 +551,8 @@ namespace HookLab.Bootstrap {
 				return new ProbeCommandResult(UninstallPrepared(payloadJson), probe.HooksVersion);
 			if (string.Equals(operation, "install", StringComparison.Ordinal))
 				return new ProbeCommandResult(InstallPrepared(BootstrapParameters.Parse(payloadJson)), probe.HooksVersion);
+			if (string.Equals(operation, "install_compiled_prefix", StringComparison.Ordinal))
+				return new ProbeCommandResult(InstallCompiledPrepared(BootstrapParameters.Parse(payloadJson)), probe.HooksVersion);
 			throw new NotSupportedException("Unsupported probe operation: " + operation);
 		}
 

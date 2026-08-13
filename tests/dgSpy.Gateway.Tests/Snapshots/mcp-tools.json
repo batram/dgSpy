@@ -606,7 +606,7 @@
     },
     {
       "name": "install_hook",
-      "description": "SIDE EFFECTING and audited. Install one Harmony prefix, postfix, or finalizer through an already initialized HookLab runtime. Exact MVID, token, signature, and IL digest guards are required.",
+      "description": "SIDE EFFECTING and audited. Install an observation hook, or create/update a compiled custom Prefix when source and a monotonically increasing revision are supplied. Exact MVID, token, signature, and IL digest guards are required. Prototype custom hooks use the same-user unauthenticated resident pipe.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -655,6 +655,14 @@
           },
           "il_sha256": {
             "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "Complete C# source declaring exactly one public static Prefix method. Prefix hooks only."
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
           },
           "maximum_events_per_second": {
             "type": "integer",

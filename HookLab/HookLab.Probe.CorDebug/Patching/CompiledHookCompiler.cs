@@ -8,7 +8,7 @@ using Microsoft.CSharp;
 
 namespace HookLab.Probe.CorDebug.Patching {
 	public sealed class HookCompilationException : InvalidOperationException {
-		internal HookCompilationException(IReadOnlyList<string> diagnostics) : base("Hook source did not compile.") { Diagnostics = diagnostics; }
+		internal HookCompilationException(IReadOnlyList<string> diagnostics) : base("Hook source did not compile: " + string.Join(" | ", diagnostics)) { Diagnostics = diagnostics; }
 		public IReadOnlyList<string> Diagnostics { get; }
 	}
 
