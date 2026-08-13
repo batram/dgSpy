@@ -41,19 +41,29 @@ takes exact method identity from dgSpy discovery plus source or a built-in templ
 
 ## Current checkpoint
 
-The first architectural slice is implemented and live-proven against the net48 fixture: MCP and GUI
-expose initialization; the host samples for an evaluable frame and falls back to an internally selected
-managed carrier; it preserves run state, loads and starts a zero-hook resident runtime, verifies its
-pipe, and retains it independently of hook count. The first hook then installs, emits events, and removes
-through that pipe while the target runs. Carrier and stop fields are gone from its public schema. The
-GUI now adopts a target attached directly through dnSpy and Add Hook initializes automatically. MCP
-controller contention is warning-first, with an explicit `claim_session(force=true)` lease-only takeover;
-extending that same ownership boundary to human GUI execution commands remains required.
-The next live expansion is the same hook proof against an ordinary attached PowerShell.
+The resident-runtime foundation is implemented and package-proven. MCP and GUI expose idempotent
+initialization and status; the x64 native bootstrap initializes an ordinary CLR v4 process without a
+caller-supplied carrier, while the managed carrier path remains a bounded fallback. Initialization
+preserves the target's running or paused state, verifies the resident pipe, and retains it with zero
+hooks. Every observational hook, including the first, then installs and removes through that pipe while
+the target runs. Carrier, stop, atomic-action, and payload-generation details are absent from the public
+schema.
+
+The verified observational product exposes `install_hook`, `list_hooks`, `get_hook_events`,
+`remove_hook`, and `remove_all_hooks` for guarded Prefix, Postfix, and Finalizer recording hooks. The
+GUI adopts a target attached directly through dnSpy, initializes automatically from Add Hook, receives
+events, and removes one or all hooks through the same service. Commit `c1258b616` completed the single
+immutable C# build/package/install pipeline; its exact 1,902-file package passed the final CorDebug gate,
+including 414 debugger checks, 52 atomic-action checks, and 49 HookLab GUI/install checks.
+
+The remaining product work begins at resident source compilation. No HookLab C# compiler, editable
+hook state, transactional replacement, enable/disable operation, Transpiler support, or source editor
+exists yet. Those features are the next vertical slice; initialization and packaging are no longer the
+active design problem.
 
 ## One implementation through-line
 
-### 1. Make initialization a product operation
+### 1. Initialization product operation - complete
 
 Reuse the existing verified bootstrap, embedded payload, evaluation machinery, and resident pipe.
 `HookLabBootstrap.Prepare()` already creates the runtime and endpoint without installing a hook; make
@@ -70,11 +80,11 @@ that the initialization boundary.
 - return `initialized`, `already_initialized`, or one actionable failure;
 - clean temporary breakpoints, leases, and partial endpoints on every exit.
 
-Carrier selection is internal. Prefer an already-paused evaluable managed frame. Otherwise perform a
-bounded search using current thread/frame/evaluability information and temporary dgSpy-owned
-breakpoints. Never tie the carrier to the method the user later chooses to hook.
+The shipping x64 path uses the native bootstrap first and retains the managed evaluation/carrier path as
+a bounded fallback. Carrier choice is internal and never tied to the method the user later chooses to
+hook.
 
-### 2. Route every hook through the resident runtime
+### 2. Route every hook through the resident runtime - complete for observational hooks
 
 Delete the first-hook prepare/commit special case. Once initialized, the first hook and every later hook
 use the same pipe `install` command. Creating, editing, toggling, and removing hooks must not pause or
@@ -84,16 +94,22 @@ Keep exact MVID, token, signature, and IL digest checks. Resolve the guarded met
 `MethodBase` inside the resident runtime before compiling or patching. Hook IDs are stable and
 conflicting reuse is refused.
 
-### 3. Add resident arbitrary C# hooks
+### 3. Add resident arbitrary C# hooks - active
 
 Follow UnityExplorer's useful model: each hook owns editable source, compiled patch methods, target
 identity, enabled state, diagnostics, and Harmony patch handles. Provide templates for call logger,
 Prefix, Postfix, Finalizer, Transpiler, and custom C#.
 
+Start with one complete compiled Prefix path rather than implementing every phase incompletely. Define
+a resident hook record containing stable ID, guarded target identity, source, revision, compiled patch,
+enabled state, bounded diagnostics, and the last successful revision. Compile and validate a candidate
+before changing the active patch; a failed create changes nothing, and a failed update leaves the
+previous working hook installed. Then add enable/disable without deleting source or diagnostics.
+
 Patch source may use Harmony conventions including `__instance`, `__args`, `__result`, `__exception`,
 field injection, and a boolean Prefix that skips the original. Compilation happens in the target
-context. Compiler errors are bounded structured diagnostics. A failed compile or replacement leaves
-the previous working hook intact.
+context. Compiler errors are bounded structured diagnostics. Once the Prefix create/update/toggle path
+is live-proven, extend the same state machine to Postfix and Finalizer, then add Transpiler last.
 
 Do not reintroduce a generic provider framework, export-project system, credential lifecycle, or
 cross-process compiler service before the resident compiler proves it is needed.
@@ -123,18 +139,25 @@ remove without debugger stops, detach cleanly, and run the focused product gates
 Already reusable:
 
 - verified bootstrap with embedded probe and Harmony;
-- `Prepare()` creates a resident runtime and pipe without a hook;
+- native autonomous initialization plus a bounded managed fallback;
+- `initialize_hooklab` and `get_hooklab_status` in MCP and GUI;
+- `Prepare()` creates and retains a resident runtime and pipe without a hook;
 - resident `install`, `uninstall`, `status`, and event drain;
 - exact guards, bounded observer events, cleanup, packaging, and host-only deployment;
-- shared GUI/MCP service and live-tested observational Prefix/Postfix/Finalizer hooks.
+- shared GUI/MCP service and live-tested observational Prefix/Postfix/Finalizer hooks;
+- one immutable C# build, package, install, and registration pipeline with package-level composition and
+  live CorDebug coverage.
 
 Still missing:
 
-- public autonomous initialization and status;
-- production carrier selection without caller guidance;
-- removal of the first-hook commit path;
 - resident arbitrary C# compilation and editable hook state;
-- UnityExplorer-style edit/toggle/diagnostic GUI and MCP operations.
+- transactional create/update with bounded compiler diagnostics and last-good rollback;
+- enable/disable state that preserves source and diagnostics;
+- public `create_hook`, `update_hook`, `enable_hook`, and `disable_hook` operations;
+- UnityExplorer-style source editor and matching GUI/MCP state;
+- compiled Postfix, Finalizer, and Transpiler after the Prefix path is proven;
+- package-level acceptance for behavior-changing source, failed-update rollback, toggling, and clean
+  detach from an ordinary CLR v4 target.
 
 ## Execution rule
 
