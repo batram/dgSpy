@@ -13,6 +13,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Lib.Harmony" Version="2.3.6" GeneratePathProperty="true" ExcludeAssets="runtime" />
+	<Reference Include="Microsoft.CSharp" />
     <ProjectReference Include="..\HookLab.Contracts\HookLab.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>

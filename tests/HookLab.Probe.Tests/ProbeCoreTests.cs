@@ -111,6 +111,39 @@ namespace HookLab.Probe.Tests {
 		}
 
 		[Fact]
+		public void CompiledPrefixCanReplaceTheResultAndSkipTheOriginal() {
+			using (var runtime = Runtime()) {
+				var installed = runtime.InstallCompiledPrefix(TargetMethod, Document(), PrefixReturning(41), 1, 0);
+				Assert.Equal(41, Fixture.Add(1, 2));
+				Assert.Equal(1, installed.Revision);
+				Assert.Equal(1, runtime.CompiledRevision(installed.PatchId));
+			}
+		}
+
+		[Fact]
+		public void FailedCompiledUpdateLeavesThePreviousRevisionActive() {
+			using (var runtime = Runtime()) {
+				var installed = runtime.InstallCompiledPrefix(TargetMethod, Document(), PrefixReturning(41), 1, 0);
+				var error = Assert.Throws<HookCompilationException>(() => runtime.InstallCompiledPrefix(TargetMethod, Document(), "this is not C#", 2, 1));
+				Assert.NotEmpty(error.Diagnostics);
+				Assert.Equal(1, runtime.HooksVersion);
+				Assert.Equal(1, runtime.CompiledRevision(installed.PatchId));
+				Assert.Equal(41, Fixture.Add(1, 2));
+			}
+		}
+
+		[Fact]
+		public void SuccessfulCompiledUpdateActivatesTheNewRevision() {
+			using (var runtime = Runtime()) {
+				var installed = runtime.InstallCompiledPrefix(TargetMethod, Document(), PrefixReturning(41), 1, 0);
+				var updated = runtime.InstallCompiledPrefix(TargetMethod, Document(), PrefixReturning(73), 2, 1);
+				Assert.Equal(installed.PatchId, updated.PatchId);
+				Assert.Equal(2, updated.Revision);
+				Assert.Equal(73, Fixture.Add(1, 2));
+			}
+		}
+
+		[Fact]
 		public void RingOverflowCarriesProvenDropAccounting() {
 			var buffer = new BoundedEventBuffer(2, 1000);
 			for (var index = 0; index < 5; index++) buffer.TryAppend(dropped => Event(index, dropped));
@@ -266,6 +299,7 @@ namespace HookLab.Probe.Tests {
 		static TargetIdentity Identity() => new TargetIdentity("test", Assembly.GetExecutingAssembly().Location, System.Diagnostics.Process.GetCurrentProcess().Id,
 			System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(), "x64", Environment.Version.ToString(), AppDomain.CurrentDomain.Id.ToString());
 		static HookDocument Document(string behavior = "{}") => new HookDocument(1, "add", HookKind.Prefix, GuardFor(TargetMethod), behavior, Limits, true);
+		static string PrefixReturning(int value) => "public static class UserHook { public static bool Prefix(ref int __result) { __result = " + value + "; return false; } }";
 		static MethodGuard GuardFor(MethodInfo method) => new MethodGuard(method.Module.ModuleVersionId, unchecked((uint)method.MetadataToken), method.DeclaringType!.FullName!, MethodGuards.Signature(method), MethodGuards.IlSha256(method));
 		static void AssertGuard(string name, MethodGuard guard) { var error = Assert.Throws<GuardMismatchException>(() => MethodGuards.ValidateMethod(TargetMethod, guard)); Assert.Equal(name, error.GuardName); }
 		static bool Loaded(string name) => AppDomain.CurrentDomain.GetAssemblies().Any(a => string.Equals(a.GetName().Name, name, StringComparison.Ordinal));

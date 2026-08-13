@@ -15,6 +15,14 @@ namespace HookLab.Probe.CorDebug.Patching {
 		public bool Changed { get; }
 	}
 
+	public sealed class CompiledPatchOperationResult {
+		internal CompiledPatchOperationResult(string patchId, long hooksVersion, int revision, bool changed) { PatchId = patchId; HooksVersion = hooksVersion; Revision = revision; Changed = changed; }
+		public string PatchId { get; }
+		public long HooksVersion { get; }
+		public int Revision { get; }
+		public bool Changed { get; }
+	}
+
 	public sealed class StaleHooksVersionException : InvalidOperationException {
 		public StaleHooksVersionException(long expected, long actual) : base($"Stale hooks_version: expected {expected}, actual {actual}.") { }
 	}
@@ -23,6 +31,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 		readonly object gate = new object();
 		readonly Harmony harmony;
 		readonly Dictionary<string, HookContext> hooks = new Dictionary<string, HookContext>(StringComparer.Ordinal);
+		readonly Dictionary<string, CompiledHookContext> compiledHooks = new Dictionary<string, CompiledHookContext>(StringComparer.Ordinal);
 		readonly ProbeInitialization initialization;
 		readonly BoundedEventBuffer buffer;
 		long hooksVersion;
@@ -42,6 +51,39 @@ namespace HookLab.Probe.CorDebug.Patching {
 		public IHookEventSource Events => buffer;
 		public long HooksVersion { get { lock (gate) return hooksVersion; } }
 		public bool IsAutoDisabled(string patchId) { lock (gate) return hooks.TryGetValue(patchId, out var context) && context.Disabled; }
+		public int? CompiledRevision(string patchId) { lock (gate) return compiledHooks.TryGetValue(patchId, out var context) ? context.Revision : (int?)null; }
+
+		public CompiledPatchOperationResult InstallCompiledPrefix(MethodBase method, HookDocument document, string source, int revision, long expectedHooksVersion) {
+			if (method == null) throw new ArgumentNullException(nameof(method));
+			if (document == null) throw new ArgumentNullException(nameof(document));
+			if (document.Kind != HookKind.Prefix) throw new NotSupportedException("Compiled hooks currently support Prefix only.");
+			if (revision <= 0) throw new ArgumentOutOfRangeException(nameof(revision));
+			// Compilation deliberately happens before taking the mutation lock. A failed candidate cannot
+			// alter the resident hook set or advance hooks_version.
+			var compiled = CompiledHookCompiler.CompilePrefix(source, method);
+			lock (gate) {
+				ThrowIfDisposed(); CheckVersion(expectedHooksVersion);
+				MethodGuards.ValidateTarget(initialization.ExpectedTarget, initialization.IdentityProvider.GetCurrentIdentity());
+				MethodGuards.ValidateMethod(method, document.Target);
+				var patchId = StablePatchId(document.HookId);
+				if (hooks.ContainsKey(patchId)) throw new InvalidOperationException("The hook id is already used by an observational hook.");
+				compiledHooks.TryGetValue(patchId, out var old);
+				if (old != null && revision <= old.Revision) throw new InvalidOperationException("Compiled hook revision must increase.");
+				var candidate = new CompiledHookContext(method, patchId, document, source, revision, compiled.Method);
+				try { harmony.Patch(method, prefix: new HarmonyMethod(compiled.Method)); }
+				catch { throw; }
+				try {
+					if (old != null) harmony.Unpatch(old.Method, old.PatchMethod);
+					compiledHooks[patchId] = candidate;
+					hooksVersion++;
+					return new CompiledPatchOperationResult(patchId, hooksVersion, revision, true);
+				}
+				catch {
+					harmony.Unpatch(method, compiled.Method);
+					throw;
+				}
+			}
+		}
 
 		public PatchOperationResult Install(MethodBase method, HookDocument document, long expectedHooksVersion) {
 			if (method == null) throw new ArgumentNullException(nameof(method));
@@ -64,13 +106,15 @@ namespace HookLab.Probe.CorDebug.Patching {
 		public PatchOperationResult Uninstall(string patchId, long expectedHooksVersion) {
 			lock (gate) {
 				ThrowIfDisposed(); CheckVersion(expectedHooksVersion);
-				if (!hooks.TryGetValue(patchId, out var context)) return new PatchOperationResult(patchId, hooksVersion, false);
-				RemoveCore(context); hooksVersion++; return new PatchOperationResult(patchId, hooksVersion, true);
+				if (hooks.TryGetValue(patchId, out var context)) RemoveCore(context);
+				else if (compiledHooks.TryGetValue(patchId, out var compiled)) { harmony.Unpatch(compiled.Method, compiled.PatchMethod); compiledHooks.Remove(patchId); }
+				else return new PatchOperationResult(patchId, hooksVersion, false);
+				hooksVersion++; return new PatchOperationResult(patchId, hooksVersion, true);
 			}
 		}
 
 		public ProbeState GetState() {
-			lock (gate) return new ProbeState(1, ProbeInstanceId, initialization.IdentityProvider.GetCurrentIdentity(), Inventory.SelectedIdentity, hooksVersion, hooks.Keys.OrderBy(x => x).ToArray());
+			lock (gate) return new ProbeState(1, ProbeInstanceId, initialization.IdentityProvider.GetCurrentIdentity(), Inventory.SelectedIdentity, hooksVersion, hooks.Keys.Concat(compiledHooks.Keys).OrderBy(x => x).ToArray());
 		}
 
 		void ApplyPatch(MethodBase method, HookKind kind) {
@@ -139,8 +183,18 @@ namespace HookLab.Probe.CorDebug.Patching {
 		internal BoundedEventBuffer Buffer => buffer;
 
 		public void Dispose() {
-			lock (gate) { if (disposed) return; foreach (var item in hooks.Values.ToArray()) RemoveCore(item); disposed = true; }
+			lock (gate) { if (disposed) return; foreach (var item in hooks.Values.ToArray()) RemoveCore(item); foreach (var item in compiledHooks.Values.ToArray()) { harmony.Unpatch(item.Method, item.PatchMethod); compiledHooks.Remove(item.PatchId); } disposed = true; }
 		}
+	}
+
+	internal sealed class CompiledHookContext {
+		internal CompiledHookContext(MethodBase method, string patchId, HookDocument document, string source, int revision, MethodInfo patchMethod) { Method = method; PatchId = patchId; Document = document; Source = source; Revision = revision; PatchMethod = patchMethod; }
+		internal MethodBase Method { get; }
+		internal string PatchId { get; }
+		internal HookDocument Document { get; }
+		internal string Source { get; }
+		internal int Revision { get; }
+		internal MethodInfo PatchMethod { get; }
 	}
 
 	internal sealed class HookContext {
