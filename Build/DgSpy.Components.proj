@@ -11,6 +11,7 @@
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\HookLab\HookLab.Bootstrap\HookLab.Bootstrap.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\dgSpy.Gateway\dgSpy.Gateway.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\dgSpy.Cli\dgSpy.Cli.csproj" />
+    <ComponentProject Include="$(MSBuildThisFileDirectory)DgSpyTool\DgSpyTool.csproj" />
   </ItemGroup>
   <Target Name="Restore">
     <MSBuild Projects="@(ComponentProject);$(MSBuildThisFileDirectory)..\Extensions\dgSpy.Extension\dgSpy.Extension.csproj"

@@ -1,13 +1,10 @@
 # End-to-end test for the dgSpy milestone 1 slice and completed Phase 3 event surface.
-# Builds and deploys via build-dgspy.ps1, starts a disposable target, dnSpy and the gateway, then
+# Consumes a verified DgSpyTool layout, starts a disposable target, dnSpy and the gateway, then
 # drives the whole MCP surface and asserts on the results. Everything it starts, it stops.
 param(
 	[int]$GatewayPort = 17350,
 	[int]$RpcPort = 0,
-	# net10 by default because that is the host users actually run: it is what pack-dgspy.ps1 packages
-	# and what launch_local_host deploys. Defaulting to net48 meant this smoke proved a build nobody
-	# ships. net48 stays available as the retained fallback baseline.
-	[ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows'
+	[ValidateSet('net10.0-windows')][string]$TargetFramework = 'net10.0-windows'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,13 +22,8 @@ if ($RpcPort -eq 0) {
 # The net10 host is a self-contained publish, so its runtime tree is the publish directory. Both
 # layouts put dnSpy.exe at the root with the runtime and Extensions\ under bin\.
 $configuredLayout = [Environment]::GetEnvironmentVariable('DGSPY_LAYOUT_ROOT')
-$dnSpyDir = if (-not [string]::IsNullOrWhiteSpace($configuredLayout)) {
-	[IO.Path]::GetFullPath($configuredLayout)
-} elseif ($TargetFramework -eq 'net48') {
-	Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net48'
-} else {
-	Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish'
-}
+if ([string]::IsNullOrWhiteSpace($configuredLayout)) { throw 'DGSPY_LAYOUT_ROOT must name a completed DgSpyTool layout.' }
+$dnSpyDir = [IO.Path]::GetFullPath($configuredLayout)
 $gatewayDll = if (-not [string]::IsNullOrWhiteSpace($configuredLayout)) { Join-Path $configuredLayout 'bin\dgSpy.Gateway.dll' } else { Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net10.0\dgSpy.Gateway.dll' }
 $targetProject = Join-Path $PSScriptRoot 'TestTargets\Milestone1Target\Milestone1Target.csproj'
 $targetExe = Join-Path $PSScriptRoot 'TestTargets\Milestone1Target\bin\Debug\net48\Milestone1Target.exe'
@@ -135,9 +127,6 @@ function Write-StopDiagnostics {
 try {
 	Write-Section 'build and deploy'
 	Write-Host "  host target framework: $TargetFramework ($dnSpyDir)"
-	if ([string]::IsNullOrWhiteSpace($configuredLayout)) {
-		& (Join-Path $repoRoot 'build-dgspy.ps1') -TargetFramework $TargetFramework -DnSpyDir $dnSpyDir | Out-Null
-	}
 	& dotnet build $targetProject -c Debug --nologo -v:quiet
 	if ($LASTEXITCODE) { throw "Target build failed with exit code $LASTEXITCODE" }
 

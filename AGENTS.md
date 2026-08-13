@@ -23,18 +23,11 @@ them. Prefer the smallest change that works and verify it by running it.
 ## Build
 
 ```bash
-.\build.ps1 net-x64 -NoMsbuild
+dotnet run --project Build\DgSpyTool -- pipeline
 ```
 
-```bash
-.\build-dgspy.ps1
-```
-
-`build.ps1` wipes the deployed extension, so `build-dgspy.ps1` has to run after it, in that
-order, every time. The build is deterministic and does not need a second run --- if
-something looks missing after a rebuild, see "Silent failures" below before touching the
-build system. `docs/DGSPY_BASELINE.md` covers the retained net48 host and the one MSBuild
-that works for it.
+This is the only supported dgSpy build/package path. It publishes immutable compiler inputs,
+composes a fresh layout, verifies every file, and publishes a package without mutating build output.
 
 Submodules must be present, or the build fails with `MSB3202` on seven missing projects:
 

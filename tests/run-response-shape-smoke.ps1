@@ -16,7 +16,7 @@ param(
 	[int]$GatewayPort = 17361,
 	[int]$RpcPort = 0,
 	[string]$TargetExe = 'C:\Users\mjb\AppData\Local\Temp\svc-puzzlebox\PuzzleBox.exe',
-	[ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows'
+	[ValidateSet('net10.0-windows')][string]$TargetFramework = 'net10.0-windows'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,12 +29,10 @@ if ($RpcPort -eq 0) {
 	$probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
 	$probe.Start(); $RpcPort = ([Net.IPEndPoint]$probe.LocalEndpoint).Port; $probe.Stop()
 }
-$dnSpyDir = if ($TargetFramework -eq 'net48') {
-	Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net48'
-} else {
-	Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish'
-}
-$gatewayDll = Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net10.0\dgSpy.Gateway.dll'
+$configuredLayout = [Environment]::GetEnvironmentVariable('DGSPY_LAYOUT_ROOT')
+if ([string]::IsNullOrWhiteSpace($configuredLayout)) { throw 'DGSPY_LAYOUT_ROOT must name a completed DgSpyTool layout.' }
+$dnSpyDir = [IO.Path]::GetFullPath($configuredLayout)
+$gatewayDll = Join-Path $dnSpyDir 'bin\dgSpy.Gateway.dll'
 $runDirectory = Join-Path ([IO.Path]::GetTempPath()) ('dgspy-shape-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $runDirectory | Out-Null
 $token = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
@@ -107,7 +105,6 @@ function Step-StageVector {
 
 try {
 	Write-Section 'build and deploy'
-	& (Join-Path $repoRoot 'build-dgspy.ps1') -TargetFramework $TargetFramework -DnSpyDir $dnSpyDir | Out-Null
 	if (-not (Test-Path -LiteralPath $TargetExe)) { throw "PuzzleBox is not at $TargetExe." }
 
 	Write-Section 'start target, dnSpy, gateway'

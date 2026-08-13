@@ -30,8 +30,7 @@ param(
 	# which Invoke-DgSpyRpc honors, so most callers never need the number themselves.
 	[int]$RpcPort = 0,
 
-	# net10 is the shipping host. net48 is the retained fallback baseline.
-	[ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows',
+	[ValidateSet('net10.0-windows')][string]$TargetFramework = 'net10.0-windows',
 
 	[int]$TimeoutSeconds = 40
 )
@@ -44,13 +43,8 @@ $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 # The net10 host is a self-contained publish, so its runtime tree is the publish directory. Both
 # layouts put dnSpy.exe at the root with the runtime and Extensions\ under bin\.
 $configuredLayout = [Environment]::GetEnvironmentVariable('DGSPY_LAYOUT_ROOT')
-$dnSpyDir = if (-not [string]::IsNullOrWhiteSpace($configuredLayout)) {
-	[IO.Path]::GetFullPath($configuredLayout)
-} elseif ($TargetFramework -eq 'net48') {
-	Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net48'
-} else {
-	Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish'
-}
+if ([string]::IsNullOrWhiteSpace($configuredLayout)) { throw 'DGSPY_LAYOUT_ROOT must name a completed DgSpyTool layout.' }
+$dnSpyDir = [IO.Path]::GetFullPath($configuredLayout)
 $dnSpyExe = Join-Path $dnSpyDir 'dnSpy.exe'
 if (-not (Test-Path $dnSpyExe)) {
 	throw "dnSpy host not found at $dnSpyExe. Run the DgSpyTool pipeline and set DGSPY_LAYOUT_ROOT to its completed layout."
@@ -60,7 +54,7 @@ if (-not (Test-Path $dnSpyExe)) {
 # debugger fault rather than a missing build step.
 $extension = Join-Path $dnSpyDir 'bin\Extensions\dgSpy\dgSpy.Extension.x.dll'
 if (-not (Test-Path $extension)) {
-	throw "The dgSpy extension is not deployed to $dnSpyDir. Run .\build-dgspy.ps1 -TargetFramework $TargetFramework."
+	throw "The verified layout has no dgSpy extension: $dnSpyDir"
 }
 
 # A free ephemeral port when none was requested. Binding port 0 and releasing it has a small
@@ -116,7 +110,7 @@ try {
 		throw "Port $RpcPort is served by dnSpy pid $($identity.dnspy_process_id) (extension '$($identity.extension_path)'), not the host this script started (pid $($process.Id)). Another dgSpy holds the port; pick a different one or stop it."
 	}
 	if (-not ([IO.Path]::GetFullPath($identity.extension_path)).StartsWith([IO.Path]::GetFullPath($dnSpyDir), [StringComparison]::OrdinalIgnoreCase)) {
-		throw "The started host loaded its extension from '$($identity.extension_path)', outside the tree it was launched from ($dnSpyDir). The deployment is stale or cross-wired; run .\build-dgspy.ps1 -TargetFramework $TargetFramework."
+		throw "The started host loaded its extension from '$($identity.extension_path)', outside the verified layout it was launched from ($dnSpyDir)."
 	}
 }
 catch {

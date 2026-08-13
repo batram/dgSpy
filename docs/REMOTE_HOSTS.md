@@ -21,14 +21,18 @@ selects authenticated plaintext for trusted isolated networks or pinned mutual T
 Release engineering builds the portable payload once:
 
 ```powershell
-.\pack-dgspy.ps1
+dotnet run --project Build\DgSpyTool -- pipeline --repo . --artifacts artifacts --build-id release
 ```
 
 An installed agent creates a personalized package with one MCP call:
 
 ```text
-create_remote_host_package { host_id: "win11-clean", gateway_address: "192.168.250.1" }
+create_remote_host_package { host_id: "win11-clean", gateway_address: "192.168.250.1", compression: "none" }
 ```
+
+`compression` is optional: `optimal` is the default, `fastest` trades size for quicker extraction,
+and `none` is intended for local-network deployment to slower VMs where extraction time matters more
+than transfer size.
 
 ## Target minimal flow
 

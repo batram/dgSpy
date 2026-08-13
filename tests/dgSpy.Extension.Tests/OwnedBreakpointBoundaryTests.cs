@@ -16,7 +16,7 @@ public sealed class OwnedBreakpointBoundaryTests {
 	static string FindRepositoryRoot() {
 		var directory=new DirectoryInfo(AppContext.BaseDirectory);
 		while(directory is not null) {
-			if(File.Exists(Path.Combine(directory.FullName,"build-dgspy.ps1"))) return directory.FullName;
+			if(File.Exists(Path.Combine(directory.FullName,"AGENTS.md"))) return directory.FullName;
 			directory=directory.Parent;
 		}
 		throw new DirectoryNotFoundException("Could not locate dgSpy repository root.");

@@ -162,10 +162,10 @@ try {
 
     $targetOut = Join-Path $RunDirectory 'target.out'
     $targetErr = Join-Path $RunDirectory 'target.err'
-    $env:DGSPY_OWNED_BP_TARGET_EXE = $targetExe
-    $env:DGSPY_OWNED_BP_TARGET_OUT = $targetOut
-    $env:DGSPY_OWNED_BP_TARGET_ERR = $targetErr
-    $targetLauncherScript = Join-Path $PSScriptRoot 'OwnedBreakpoint.LiveTestExtension\Run-TestTarget.ps1'
+    $env:DGSPY_CORDEBUG_TARGET_EXE = $targetExe
+    $env:DGSPY_CORDEBUG_TARGET_OUT = $targetOut
+    $env:DGSPY_CORDEBUG_TARGET_ERR = $targetErr
+    $targetLauncherScript = Join-Path $PSScriptRoot 'TestSupport\Run-CorDebugTarget.ps1'
     $targetLauncher = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
         -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $targetLauncherScript + '"') -PassThru
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
@@ -422,9 +422,9 @@ finally {
     if ($hostId) { Stop-Process -Id $hostId -Force -ErrorAction SilentlyContinue }
     Remove-Item Env:DGSPY_URL -ErrorAction SilentlyContinue
     Remove-Item Env:DGSPY_TOKEN -ErrorAction SilentlyContinue
-    Remove-Item Env:DGSPY_OWNED_BP_TARGET_EXE -ErrorAction SilentlyContinue
-    Remove-Item Env:DGSPY_OWNED_BP_TARGET_OUT -ErrorAction SilentlyContinue
-    Remove-Item Env:DGSPY_OWNED_BP_TARGET_ERR -ErrorAction SilentlyContinue
+    Remove-Item Env:DGSPY_CORDEBUG_TARGET_EXE -ErrorAction SilentlyContinue
+    Remove-Item Env:DGSPY_CORDEBUG_TARGET_OUT -ErrorAction SilentlyContinue
+    Remove-Item Env:DGSPY_CORDEBUG_TARGET_ERR -ErrorAction SilentlyContinue
     Say "passed=$pass failed=$fail"
     Say "artifacts=$RunDirectory"
 }

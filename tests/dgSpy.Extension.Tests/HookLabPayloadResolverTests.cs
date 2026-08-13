@@ -12,7 +12,7 @@ namespace dgSpy.Extension.Tests;
 /// <summary>Covers T09b: resolving the shipped HookLab payload from the running host's own tree, verifying
 /// it from an open handle, and refusing everything that must be refused.
 ///
-/// Three of these run against real host layouts rather than simulated directories, because the failure the
+/// Two of these run against real host layouts rather than simulated directories, because the failure the
 /// spec review found - an implementation that only knows the packed <c>..\manifest.json</c> convention -
 /// passes every synthetic packed-layout test while breaking the Gateway-deployed layout that
 /// <c>launch_local_host</c> actually produces.</summary>
@@ -25,11 +25,11 @@ public class HookLabPayloadResolverTests {
 	[SkippableFact]
 	public void Resolves_from_a_real_packed_install_layout() {
 		var root = RealLayouts.PackedHostRoot();
-		Skip.If(root is null, "No packed dgSpy install under %LOCALAPPDATA%\\Programs\\*\\cli. Run install-dgspy.ps1. This case is proven against a real packed tree or not at all, so it skips rather than falling back to a simulated directory - which would pass while the real layout was broken.");
+		Skip.If(root is null, "No DgSpyTool installation under %LOCALAPPDATA%\\Programs\\*\\cli.");
 		using var payload = HookLabPayloadResolver.OpenFrom(root!);
 		Assert.Equal(HookLabPayloadLayout.PackedInstall, payload.Layout);
 		Assert.Equal(HookLabPayloadCrossCheck.Verified, payload.CrossCheck);
-		Assert.Equal(Path.Combine(Directory.GetParent(root!)!.FullName, "manifest.json"), payload.IndependentRecordPath);
+		Assert.Equal(Path.Combine(root!, "dgspy-layout.json"), payload.IndependentRecordPath);
 		Assert.Equal(payload.Sha256, payload.IndependentRecordSha256, ignoreCase: true);
 		Assert.Equal(payload.Sha256, Sha256OfFile(payload.PayloadPath));
 	}
@@ -41,19 +41,8 @@ public class HookLabPayloadResolverTests {
 		using var payload = HookLabPayloadResolver.OpenFrom(root!);
 		Assert.Equal(HookLabPayloadLayout.GatewayDeployment, payload.Layout);
 		Assert.Equal(HookLabPayloadCrossCheck.Verified, payload.CrossCheck);
-		Assert.Equal(Path.Combine(root!, "deployment-manifest.json"), payload.IndependentRecordPath);
+		Assert.Equal(Path.Combine(root!, "dgspy-layout.json"), payload.IndependentRecordPath);
 		Assert.Equal(payload.Sha256, payload.IndependentRecordSha256, ignoreCase: true);
-	}
-
-	[SkippableFact]
-	public void Resolves_from_the_real_developer_worktree_and_says_the_cross_check_was_skipped() {
-		var root = RealLayouts.WorktreeHostRoot();
-		Skip.If(root is null, "The dnSpy build output carries no staged HookLab payload. Run build-dgspy.ps1. The worktree layout is proven against real build output or not at all.");
-		using var payload = HookLabPayloadResolver.OpenFrom(root!);
-		Assert.Equal(HookLabPayloadLayout.DeveloperWorktree, payload.Layout);
-		Assert.Equal(HookLabPayloadCrossCheck.SkippedDeveloperWorktree, payload.CrossCheck);
-		Assert.Null(payload.IndependentRecordPath);
-		Assert.Null(payload.IndependentRecordSha256);
 	}
 
 	// ---------------------------------------------------------------------------------------------
@@ -201,8 +190,7 @@ public class HookLabPayloadResolverTests {
 	/// <para>This is the case <c>File.Exists</c> got wrong. File.Exists answers "is there a readable file
 	/// here" and returns false for access and metadata errors as well as for absence, so an existing but
 	/// inaccessible <c>deployment-manifest.json</c> skipped the Gateway branch entirely - and a version
-	/// directory is neither named <c>cli</c> nor adjacent to <c>install-dgspy.ps1</c>, so classification fell
-	/// through to DeveloperWorktree and the cross-check was silently skipped. The assertion below is therefore
+	/// a completed layout manifest must never be treated as optional. The assertion below is therefore
 	/// two-part on purpose: the refusal must be the unreadable one, and it must not be a successful resolution
 	/// that merely reports the cross-check as skipped.</para>
 	///
@@ -252,20 +240,6 @@ public class HookLabPayloadResolverTests {
 	}
 
 	[Fact]
-	public void Refuses_a_gateway_deployment_whose_manifest_records_no_package() {
-		using var layout = TestHostLayout.GatewayDeployed();
-		File.WriteAllText(layout.IndependentRecordPath, "{\"version\":\"bundled-000000000000\",\"payload_sha256\":\"00\"}");
-		Assert.Equal(HookLabPayloadRefusal.PackageRecordMissing, Refusal(layout.HostRoot));
-	}
-
-	[Fact]
-	public void Permits_a_developer_worktree_and_reports_the_skip() {
-		using var layout = TestHostLayout.Worktree();
-		using var payload = HookLabPayloadResolver.OpenFrom(layout.HostRoot);
-		Assert.Equal(HookLabPayloadCrossCheck.SkippedDeveloperWorktree, payload.CrossCheck);
-	}
-
-	[Fact]
 	public void Refuses_a_manifest_that_names_a_payload_outside_the_host_root() {
 		using var layout = TestHostLayout.Packed();
 		layout.RenamePayloadInManifest(@"..\..\escaped.payload");
@@ -305,11 +279,13 @@ public class HookLabPayloadResolverTests {
 
 	[Fact]
 	public void Falls_back_to_the_app_base_when_no_payload_directory_is_found() {
-		using var layout = TestHostLayout.Worktree();
-		var stray = Path.Combine(layout.Base, "no-payload-here");
-		Directory.CreateDirectory(stray);
-		Assert.Equal(stray, HookLabPayloadResolver.ResolveHostRoot(stray));
-		Assert.Equal(HookLabPayloadRefusal.PayloadMissing, Refusal(stray));
+		var stray = Path.Combine(Path.GetTempPath(), "t09b-empty-" + Guid.NewGuid().ToString("N"));
+		try {
+			Directory.CreateDirectory(stray);
+			Assert.Equal(stray, HookLabPayloadResolver.ResolveHostRoot(stray));
+			Assert.Equal(HookLabPayloadRefusal.PayloadMissing, Refusal(stray));
+		}
+		finally { if (Directory.Exists(stray)) Directory.Delete(stray, true); }
 	}
 
 	/// <summary>An ancestor is not a host root just because it contains a directory called <c>hooklab</c>.
@@ -361,7 +337,7 @@ public class HookLabPayloadResolverTests {
 	static string Hex(byte[] bytes) => Convert.ToHexString(bytes).ToLowerInvariant();
 	static string Sha256OfFile(string path) { using var stream = File.OpenRead(path); using var sha = SHA256.Create(); return Hex(sha.ComputeHash(stream)); }
 
-	/// <summary>Builds one of the three real layout shapes in a temp directory, with real digests computed
+	/// <summary>Builds one of the two supported layout shapes in a temp directory, with real digests computed
 	/// over real bytes. Only the success shape is built here - every refusal test mutates it afterwards, so
 	/// no helper can supply the effect its test is meant to detect.</summary>
 	sealed class TestHostLayout : IDisposable {
@@ -370,7 +346,6 @@ public class HookLabPayloadResolverTests {
 		public string PayloadDirectory => Path.Combine(HostRoot, "hooklab");
 		public string PayloadPath => Path.Combine(PayloadDirectory, "hooklab-bootstrap.net48.payload");
 		public string PayloadManifestPath => Path.Combine(PayloadDirectory, "hooklab-payload-manifest.json");
-		/// <summary>Empty for the worktree shape, which has no independent record by design.</summary>
 		public string IndependentRecordPath { get; private set; } = string.Empty;
 
 		TestHostLayout(string hostRootRelative) {
@@ -382,26 +357,21 @@ public class HookLabPayloadResolverTests {
 
 		public static TestHostLayout Packed() {
 			var layout = new TestHostLayout(Path.Combine("install", "cli"));
-			File.WriteAllText(Path.Combine(layout.Base, "install", "install-dgspy.ps1"), "# installer\n");
-			layout.IndependentRecordPath = Path.Combine(layout.Base, "install", "manifest.json");
+			layout.IndependentRecordPath = Path.Combine(layout.HostRoot, "dgspy-layout.json");
 			layout.WriteIndependentRecord(layout.CurrentSha());
 			return layout;
 		}
 
 		public static TestHostLayout GatewayDeployed() {
 			var layout = new TestHostLayout(Path.Combine("versions", "bundled-0123456789ab"));
-			layout.IndependentRecordPath = Path.Combine(layout.HostRoot, "deployment-manifest.json");
+			File.WriteAllText(Path.Combine(layout.HostRoot, "deployment-manifest.json"), "{}");
+			layout.IndependentRecordPath = Path.Combine(layout.HostRoot, "dgspy-layout.json");
 			layout.WriteIndependentRecord(layout.CurrentSha());
 			return layout;
 		}
 
-		public static TestHostLayout Worktree() => new TestHostLayout(Path.Combine("dnSpy", "bin", "Release", "net48"));
-
 		void WriteIndependentRecord(string sha) {
-			var packaged = new JsonObject { ["format_version"] = 1, ["hooklab_payload_sha256"] = sha };
-			var json = IndependentRecordPath.EndsWith("deployment-manifest.json", StringComparison.OrdinalIgnoreCase)
-				? new JsonObject { ["version"] = "bundled-0123456789ab", ["payload_sha256"] = "irrelevant", ["packaged"] = packaged }
-				: packaged;
+			var json = new JsonObject { ["format_version"] = 1, ["files"] = new JsonArray(new JsonObject { ["path"] = "hooklab/hooklab-bootstrap.net48.payload", ["size"] = new FileInfo(PayloadPath).Length, ["sha256"] = sha, ["owner"] = "hooklab" }) };
 			File.WriteAllText(IndependentRecordPath, json.ToJsonString(), new UTF8Encoding(false));
 		}
 
@@ -431,8 +401,7 @@ public class HookLabPayloadResolverTests {
 
 		public void RemoveIndependentRecordDigest() {
 			var root = JsonNode.Parse(File.ReadAllText(IndependentRecordPath))!.AsObject();
-			var target = root.ContainsKey("packaged") ? root["packaged"]!.AsObject() : root;
-			target.Remove("hooklab_payload_sha256");
+			root["files"]!.AsArray()[0]!.AsObject().Remove("sha256");
 			File.WriteAllText(IndependentRecordPath, root.ToJsonString(), new UTF8Encoding(false));
 		}
 
@@ -491,7 +460,7 @@ catch { Write-Output ('FAILED ' + $_.Exception.GetType().FullName + ': ' + $_.Ex
 		}
 	}
 
-	/// <summary>Locates the three real layouts on this machine. Nothing is fabricated: if a layout is not
+	/// <summary>Locates the two supported real layouts on this machine. Nothing is fabricated: if a layout is not
 	/// present the test that needs it fails and names what to run, rather than quietly passing against a
 	/// directory the test built itself.</summary>
 	static class RealLayouts {
@@ -500,12 +469,12 @@ catch { Write-Output ('FAILED ' + $_.Exception.GetType().FullName + ': ' + $_.Ex
 
 		public static string? PackedHostRoot() {
 			var configured = Environment.GetEnvironmentVariable("DGSPY_TEST_PACKED_HOST_ROOT");
-			if (!string.IsNullOrWhiteSpace(configured) && HasPayload(configured!)) return Path.GetFullPath(configured!);
+			if (!string.IsNullOrWhiteSpace(configured) && IsCompletedLayout(configured!)) return Path.GetFullPath(configured!);
 			var programs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs");
 			if (!Directory.Exists(programs)) return null;
 			foreach (var candidate in Directory.EnumerateDirectories(programs)) {
 				var host = Path.Combine(candidate, "cli");
-				if (HasPayload(host) && File.Exists(Path.Combine(candidate, "manifest.json"))) return host;
+				if (IsCompletedLayout(host) && File.Exists(Path.Combine(candidate, "manifest.json"))) return host;
 			}
 			return null;
 		}
@@ -517,21 +486,10 @@ catch { Write-Output ('FAILED ' + $_.Exception.GetType().FullName + ': ' + $_.Ex
 			try { active = (string?)JsonNode.Parse(File.ReadAllText(current))?["active_version"]; } catch { return null; }
 			if (string.IsNullOrWhiteSpace(active)) return null;
 			var root = Path.Combine(InstallRoot(), "versions", active!);
-			return HasPayload(root) && File.Exists(Path.Combine(root, "deployment-manifest.json")) ? root : null;
-		}
-
-		public static string? WorktreeHostRoot() {
-			var configured = Environment.GetEnvironmentVariable("DGSPY_TEST_WORKTREE_HOST_ROOT");
-			if (!string.IsNullOrWhiteSpace(configured) && HasPayload(configured!)) return Path.GetFullPath(configured!);
-			var directory = new DirectoryInfo(AppContext.BaseDirectory);
-			while (directory is not null) {
-				var candidate = Path.Combine(directory.FullName, "dnSpy", "dnSpy", "bin", "Release", "net48");
-				if (HasPayload(candidate)) return candidate;
-				directory = directory.Parent;
-			}
-			return null;
+			return IsCompletedLayout(root) && File.Exists(Path.Combine(root, "deployment-manifest.json")) ? root : null;
 		}
 
 		static bool HasPayload(string root) => File.Exists(Path.Combine(root, "hooklab", "hooklab-bootstrap.net48.payload"));
+		static bool IsCompletedLayout(string root) => HasPayload(root) && File.Exists(Path.Combine(root, "dgspy-layout.json"));
 	}
 }

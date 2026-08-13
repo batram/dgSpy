@@ -29,8 +29,10 @@ if ($RpcPort -eq 0) {
 	$probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
 	$probe.Start(); $RpcPort = ([Net.IPEndPoint]$probe.LocalEndpoint).Port; $probe.Stop()
 }
-$dnSpyDir = Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish'
-$gatewayDll = Join-Path $repoRoot 'dgSpy.Gateway\bin\Release\net10.0\dgSpy.Gateway.dll'
+$configuredLayout = [Environment]::GetEnvironmentVariable('DGSPY_LAYOUT_ROOT')
+if ([string]::IsNullOrWhiteSpace($configuredLayout)) { throw 'DGSPY_LAYOUT_ROOT must name a completed DgSpyTool layout.' }
+$dnSpyDir = [IO.Path]::GetFullPath($configuredLayout)
+$gatewayDll = Join-Path $dnSpyDir 'bin\dgSpy.Gateway.dll'
 $runDirectory = Join-Path ([IO.Path]::GetTempPath()) ('dgspy-launch-output-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $runDirectory | Out-Null
 # The target writes its ground-truth log here, so each run gets a fresh one instead of appending to a
@@ -123,7 +125,6 @@ function Set-Stage {
 
 try {
 	Write-Section 'deploy and start'
-	& (Join-Path $repoRoot 'build-dgspy.ps1') -DnSpyDir $dnSpyDir | Out-Null
 	if (-not (Test-Path -LiteralPath $TargetExe)) { throw "Target not found: $TargetExe" }
 
 	$env:DGSPY_RPC_PORT = [string]$RpcPort

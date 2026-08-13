@@ -1,6 +1,6 @@
 # dgSpy quick start
 
-Install dgSpy and connect it to your agent with one script. The agent starts the Gateway and dnSpy when
+Install dgSpy and connect it to your agent with one command. The agent starts the Gateway and dnSpy when
 you first ask it to use dgSpy.
 
 ## From a GitHub release (fastest)
@@ -11,11 +11,11 @@ you first ask it to use dgSpy.
 3. In PowerShell, run one of:
 
 ```powershell
-.\install-dgspy.ps1 codex
+.\install-dgspy.exe codex
 ```
 
 ```powershell
-.\install-dgspy.ps1 claude
+.\install-dgspy.exe claude
 ```
 
 Restart the agent, then say:
@@ -33,18 +33,17 @@ developer pack. Initialize the submodules, then run the same installer:
 
 ```powershell
 git submodule update --init --recursive
-dotnet run --project Build\DgSpyTool -- pipeline --repo . --artifacts artifacts --build-id local
-dotnet run --project Build\DgSpyTool -- install --package artifacts\packages\dgspy-win-x64\local --install "$env:LOCALAPPDATA\Programs\dgSpyMcp"
+dotnet run --project Build\DgSpyTool -- pipeline
+.\install-dgspy.ps1 codex
 ```
 
-The C# pipeline is authoritative for repository builds and never mutates its compiler outputs. Agent
-registration remains a separate compatibility step until it moves into the C# tool; release archives
-still carry the compatibility installer for that purpose.
+The C# pipeline is authoritative for build, package, installation, and agent registration. A full
+install replaces an older tree; legacy manifests are not migrated.
 
 For development updates after the MCP is already connected, update only the bundled dnSpy host payload:
 
 ```powershell
-.\install-dgspy.ps1 codex -HostOnly
+.\install-dgspy.ps1 host-only
 ```
 
 This leaves the installed CLI, running Gateway, MCP process, and agent registration untouched, so Codex

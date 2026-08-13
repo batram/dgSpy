@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Text;
@@ -25,8 +26,9 @@ public sealed class DeploymentServiceTests : IDisposable {
 	[Fact]
 	public async Task Remote_package_is_created_from_bundled_payload_without_a_plan_or_source_build() {
 		var router=new HostRouter(); using var listener=new RemoteHostListener(router); var service=new DeploymentService(listener);
-		var result=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await service.ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"},{"use_tls",false}},router,default)))!;
-		var archive=(string)result["archive_path"]!; Assert.True(File.Exists(archive)); Assert.Equal("authenticated_plaintext",(string?)result["transport"]); Assert.True((bool?)result["gateway_ready"]); Assert.False((bool?)result["gateway_restart_required"]);
+		var result=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await service.ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"},{"use_tls",false},{"compression","none"}},router,default)))!;
+		var archive=(string)result["archive_path"]!; Assert.True(File.Exists(archive)); Assert.Equal("authenticated_plaintext",(string?)result["transport"]); Assert.Equal("none",(string?)result["compression"]); Assert.True((bool?)result["gateway_ready"]); Assert.False((bool?)result["gateway_restart_required"]);
+		using(var zip=ZipFile.OpenRead(archive)) { var fixture=zip.GetEntry("compression-fixture.bin")!; Assert.Equal(fixture.Length,fixture.CompressedLength); }
 		var registry=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"state","packages","gateway-hosts.json")))!; Assert.Equal("remote-a",(string?)registry["hosts"]?[0]?["host_id"]); Assert.Equal("127.0.0.1",(string?)registry["listener"]?["address"]); Assert.Equal(7352,(int?)registry["listener"]?["plaintext_port"]);
 		Assert.True(router.IsRegistered("remote-a"));
 	}
@@ -618,7 +620,7 @@ public sealed class DeploymentServiceTests : IDisposable {
 		Assert.Contains("package manifest records",(string?)check["recovery"]);
 	}
 
-	string CreatePayload() { var path=Path.Combine(root,"payload"); foreach(var directory in new[]{"bin","bin\\Extensions\\dgSpy","hooklab","launcher"}) Directory.CreateDirectory(Path.Combine(path,directory)); foreach(var file in new[]{"dnSpy.exe","bin\\dnSpy.dll","bin\\dnSpy.Contracts.DnSpy.dll","bin\\hostfxr.dll","bin\\hostpolicy.dll","bin\\coreclr.dll","bin\\clrjit.dll","bin\\Extensions\\dgSpy\\dgSpy.Extension.x.dll","bin\\Extensions\\dgSpy\\HookLab.Contracts.dll","bin\\Extensions\\dgSpy\\HookLab.Host.Transport.dll","launcher\\Start-dgSpyRemoteHost.ps1","launcher\\Start-dgSpyRemoteHost.cmd"}) File.WriteAllText(Path.Combine(path,file),file); File.WriteAllText(Path.Combine(path,"bin\\dgSpy.Protocol.dll"),"one protocol"); File.WriteAllText(Path.Combine(path,"bin\\Extensions\\dgSpy\\dgSpy.Protocol.dll"),"one protocol"); StageHookLabPayload(path,"a HookLab bootstrap payload"); return path; }
+	string CreatePayload() { var path=Path.Combine(root,"payload"); foreach(var directory in new[]{"bin","bin\\Extensions\\dgSpy","hooklab","launcher"}) Directory.CreateDirectory(Path.Combine(path,directory)); foreach(var file in new[]{"dnSpy.exe","bin\\dnSpy.dll","bin\\dnSpy.Contracts.DnSpy.dll","bin\\hostfxr.dll","bin\\hostpolicy.dll","bin\\coreclr.dll","bin\\clrjit.dll","bin\\Extensions\\dgSpy\\dgSpy.Extension.x.dll","bin\\Extensions\\dgSpy\\HookLab.Contracts.dll","bin\\Extensions\\dgSpy\\HookLab.Host.Transport.dll","launcher\\Start-dgSpyRemoteHost.ps1","launcher\\Start-dgSpyRemoteHost.cmd"}) File.WriteAllText(Path.Combine(path,file),file); File.WriteAllBytes(Path.Combine(path,"compression-fixture.bin"),new byte[65536]); File.WriteAllText(Path.Combine(path,"bin\\dgSpy.Protocol.dll"),"one protocol"); File.WriteAllText(Path.Combine(path,"bin\\Extensions\\dgSpy\\dgSpy.Protocol.dll"),"one protocol"); StageHookLabPayload(path,"a HookLab bootstrap payload"); return path; }
 	const string PayloadFile="hooklab\\hooklab-bootstrap.net48.payload";
 	const string PayloadManifestFile="hooklab\\hooklab-payload-manifest.json";
 	/// <summary>Writes the payload and a manifest that describes it, which is what a real staging step does.

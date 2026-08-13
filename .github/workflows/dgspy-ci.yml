@@ -152,44 +152,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  cordebug-live-net48:
-    name: CorDebug live smoke (net48, retained fallback)
-    # Runs on every commit, same as the net10 job. A fallback is only a fallback if it works on the
-    # commit you need it for, and this job is what makes "retained" mean something. It was briefly on a
-    # weekly schedule instead; that reports against a commit nobody just pushed and hands you a batch of
-    # suspects days later, which is worse signal for no saving in wall clock - this job is independent
-    # of the net10 one, so the two run in parallel and only runner minutes differ.
-    runs-on: windows-latest
-    timeout-minutes: 45
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install .NET SDKs
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: |
-            10.0.x
-            7.0.x
-
-      - name: Build, test, and run live CorDebug smoke on net48
-        shell: pwsh
-        env:
-          DGSPY_SMOKE_LOG_ROOT: ${{ runner.temp }}
-        run: .\tests\run-modernization-gate.ps1 -Stage CorDebug -TargetFramework net48
-
-      - name: Upload smoke diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cordebug-net48-smoke-diagnostics-${{ github.run_id }}
-          path: ${{ runner.temp }}/dgspy-smoke-*
-          if-no-files-found: warn
-          retention-days: 7
-
   mono-target-live:
     name: Mono/Unity live smoke (${{ matrix.smoke }})
     # dgSpy is public and uch-debug-target is private, so this job needs an explicit credential

@@ -54,7 +54,7 @@ public sealed class TransportTests {
 		Assert.Equal("false", (string?)harness.Attribute("ReferenceOutputAssembly")); Assert.Equal("true", (string?)harness.Attribute("SkipGetTargetFrameworkProperties"));
 		var harnessProject = XDocument.Load(Path.Combine(root, "tests", "HookLab.Transport.Tests", "Harness", "HookLab.Transport.Harness.csproj"));
 		Assert.Equal("net48", Value(harnessProject, "TargetFramework")); Assert.Equal("x64", Value(harnessProject, "PlatformTarget"));
-		Assert.Contains("$hookLabHostTransportProject", File.ReadAllText(Path.Combine(root, "build-dgspy.ps1")));
+		Assert.Contains("HookLab.Host.Transport", File.ReadAllText(Path.Combine(root, "Build", "DgSpy.Components.proj")));
 		Assert.Contains("tests\\HookLab.Transport.Tests\\HookLab.Transport.Tests.csproj", File.ReadAllText(Path.Combine(root, "tests", "run-modernization-gate.ps1")));
 	}
 

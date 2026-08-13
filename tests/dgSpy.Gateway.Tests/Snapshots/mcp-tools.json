@@ -148,7 +148,7 @@
     },
     {
       "name": "create_remote_host_package",
-      "description": "SIDE EFFECTING and audited. Personalize the bundled self-contained host payload and create a remote ZIP; it never builds, transfers, or executes the host.",
+      "description": "SIDE EFFECTING and audited. Personalize the bundled self-contained host payload and create a remote ZIP; it never builds, transfers, or executes the host. compression defaults to optimal; use none for fastest extraction or fastest for light compression.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -163,6 +163,14 @@
           },
           "output_root": {
             "type": "string"
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "fastest",
+              "optimal"
+            ]
           }
         },
         "required": [

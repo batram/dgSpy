@@ -5,19 +5,13 @@ using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace dgSpy.Extension.PayloadDelivery {
-	/// <summary>Which of the three supported host layouts the payload was resolved from. Detected from what
+	/// <summary>Which completed DgSpyTool host layout the payload was resolved from. Detected from what
 	/// is present in and above the host root, never from a caller-supplied hint: a hint is exactly the thing
 	/// a damaged or substituted install would get wrong.</summary>
 	enum HookLabPayloadLayout {
-		/// <summary>A developer worktree: build-dgspy.ps1 staged the payload into the dnSpy build output.
-		/// Neither independent record exists, so the cross-check is skipped and says so.</summary>
-		DeveloperWorktree,
-		/// <summary>A packed or directly installed tree - host root <c>&lt;install&gt;\cli</c>, package
-		/// manifest at <c>..\manifest.json</c> carrying a top-level <c>hooklab_payload_sha256</c>.</summary>
+		/// <summary>A packaged or directly installed completed layout.</summary>
 		PackedInstall,
-		/// <summary>A Gateway-deployed version directory - <c>deployment-manifest.json</c> in the host root,
-		/// with the original package manifest recorded verbatim under <c>packaged</c>. This is the layout
-		/// <c>launch_local_host</c> actually produces, so it is the one that matters most.</summary>
+		/// <summary>A Gateway-deployed completed layout.</summary>
 		GatewayDeployment,
 	}
 
@@ -25,10 +19,6 @@ namespace dgSpy.Extension.PayloadDelivery {
 	enum HookLabPayloadCrossCheck {
 		/// <summary>The independent record was read and agreed with the payload manifest.</summary>
 		Verified,
-		/// <summary>No independent record exists because this is a developer worktree. Reported rather than
-		/// silently omitted: a caller that cannot tell "checked" from "not checked" will assume the
-		/// stronger one.</summary>
-		SkippedDeveloperWorktree,
 	}
 
 	/// <summary>Every distinguishable reason the payload can be refused. One member per refusal so a caller
@@ -100,9 +90,8 @@ namespace dgSpy.Extension.PayloadDelivery {
 	/// <summary>Resolves and verifies the single HookLab payload file that ships inside the running host's
 	/// own tree.
 	///
-	/// <para><b>Layout authority.</b> The directory name, the payload file name, the manifest file name and
-	/// the manifest shape are owned by <c>packaging\HookLabPayload.ps1</c>. The constants below were read
-	/// from it; if it changes, this must follow.</para>
+	/// <para><b>Layout authority.</b> The directory and manifest shape are emitted and hashed by
+	/// <c>DgSpyTool</c>; the resolver accepts only that completed layout.</para>
 	///
 	/// <para><b>Resolution is relative to the running host, never to the Gateway's <c>active_version</c>.</b>
 	/// An adopted host can be running a different version than the active one, so resolving by active
@@ -123,18 +112,12 @@ namespace dgSpy.Extension.PayloadDelivery {
 	/// byte-loaded assembly has no <c>Location</c> and no access to its own raw bytes, and passing the bytes
 	/// back to hash them defeats the purpose.</para></summary>
 	static class HookLabPayloadResolver {
-		// Read from packaging\HookLabPayload.ps1, which is the authority on all five.
 		public const string PayloadDirectoryName = "hooklab";
 		public const string PayloadFileName = "hooklab-bootstrap.net48.payload";
 		public const string PayloadManifestFileName = "hooklab-payload-manifest.json";
 		public const string PayloadEntryId = "hooklab_bootstrap";
-		// Read from dgSpy.Gateway\DeploymentService.cs and install-dgspy.ps1.
 		public const string DeploymentManifestFileName = "deployment-manifest.json";
-		public const string PackageManifestFileName = "manifest.json";
-		public const string PackagedSectionName = "packaged";
-		public const string PackageDigestPropertyName = "hooklab_payload_sha256";
-		const string InstallerScriptName = "install-dgspy.ps1";
-		const string PackedHostRootName = "cli";
+		public const string LayoutManifestFileName = "dgspy-layout.json";
 		const int HostRootSearchDepth = 4;
 
 		/// <summary>Opens the payload of the host this code is running in.</summary>
@@ -256,57 +239,23 @@ namespace dgSpy.Extension.PayloadDelivery {
 			}
 		}
 
-		/// <summary>Finds and reads the second, independent digest record. Which file that is depends on the
-		/// layout, and getting this wrong is the failure mode a spec review specifically called out: an
-		/// implementation that only knows the packed convention either refuses every Gateway-deployed host or
-		/// silently skips the cross-check on it, while still passing a packed-layout acceptance test.
-		///
-		/// The Gateway-deployed marker is checked first because a deployed tree is a copy of a packed host
-		/// root and could in principle carry either.
-		///
-		/// <para><b>Absence is decided by an open attempt, never by <see cref="File.Exists"/>.</b> File.Exists
-		/// answers "is there a readable file here" and returns false for access and metadata errors as well as
-		/// for absence. Gating the Gateway branch on it meant an existing but inaccessible
-		/// <c>deployment-manifest.json</c> skipped that branch entirely; a version directory is normally
-		/// neither named <c>cli</c> nor adjacent to <c>install-dgspy.ps1</c>, so classification then fell
-		/// through to <see cref="HookLabPayloadLayout.DeveloperWorktree"/> and the independent cross-check was
-		/// silently skipped - the exact fail-open this method exists to prevent, reintroduced through
-		/// File.Exists semantics. The packed path had the same defect in a milder form, reporting an
-		/// inaccessible <c>..\manifest.json</c> as absent rather than unreadable.</para></summary>
+		/// <summary>Reads the completed layout manifest and finds the payload entry in its complete inventory.
+		/// This is independent from the payload-specific manifest and is identical for local packages and
+		/// Gateway deployments.</summary>
 		static (HookLabPayloadLayout Layout, HookLabPayloadCrossCheck CrossCheck, string? Path, string? Sha) ReadIndependentRecord(string hostRoot) {
-			var deployment = SafeChild(hostRoot, DeploymentManifestFileName);
-			var deploymentText = TryReadRecord(deployment, HookLabPayloadRefusal.PackageRecordUnreadable);
-			if (deploymentText is not null) {
-				using var packaged = ParseRecord(deployment, deploymentText, HookLabPayloadRefusal.PackageRecordUnreadable);
-				if (packaged.RootElement.ValueKind != JsonValueKind.Object || !packaged.RootElement.TryGetProperty(PackagedSectionName, out var section) || section.ValueKind != JsonValueKind.Object)
-					throw Refuse(HookLabPayloadRefusal.PackageRecordMissing, $"'{deployment}' records no '{PackagedSectionName}' package manifest, so this deployment cannot prove what package it came from");
-				var packagedSha = ReadDigest(section, deployment);
-				return (HookLabPayloadLayout.GatewayDeployment, HookLabPayloadCrossCheck.Verified, deployment, packagedSha);
+			var manifest = SafeChild(hostRoot, LayoutManifestFileName);
+			var text = TryReadRecord(manifest, HookLabPayloadRefusal.PackageRecordUnreadable)
+				?? throw Refuse(HookLabPayloadRefusal.PackageRecordMissing, $"the completed layout manifest '{manifest}' is absent");
+			using var document = ParseRecord(manifest,text,HookLabPayloadRefusal.PackageRecordUnreadable);
+			if(document.RootElement.ValueKind!=JsonValueKind.Object || !document.RootElement.TryGetProperty("files",out var files) || files.ValueKind!=JsonValueKind.Array)
+				throw Refuse(HookLabPayloadRefusal.PackageRecordUnreadable,$"'{manifest}' has no files inventory");
+			var relative=(PayloadDirectoryName+"/"+PayloadFileName).Replace('\\','/'); string? sha=null; var matches=0;
+			foreach(var file in files.EnumerateArray()) if(file.ValueKind==JsonValueKind.Object && file.TryGetProperty("path",out var path) && string.Equals(path.GetString(),relative,StringComparison.OrdinalIgnoreCase)) {
+				matches++; if(file.TryGetProperty("sha256",out var digest) && digest.ValueKind==JsonValueKind.String) sha=digest.GetString();
 			}
-
-			var parent = Parent(hostRoot);
-			var packageManifest = parent is null ? null : Path.Combine(parent, PackageManifestFileName);
-			// Read before classifying: an inaccessible manifest.json is itself evidence of a packed install
-			// that cannot be verified, and must refuse rather than fall through to "developer worktree".
-			var packageText = packageManifest is null ? null : TryReadRecord(packageManifest, HookLabPayloadRefusal.PackageRecordUnreadable);
-			// A packed install is recognised by more than the record itself, so deleting manifest.json
-			// downgrades to "packed install with a missing record" (a refusal) rather than to "developer
-			// worktree" (a skipped cross-check). install-dgspy.ps1 copies both the manifest and itself beside
-			// the 'cli' host root, so any one of the three surviving is enough to identify the layout.
-			var looksPacked = packageText is not null
-				|| (parent is not null && File.Exists(Path.Combine(parent, InstallerScriptName)))
-				|| string.Equals(Path.GetFileName(hostRoot), PackedHostRootName, StringComparison.OrdinalIgnoreCase);
-			if (looksPacked) {
-				if (packageText is null)
-					throw Refuse(HookLabPayloadRefusal.PackageRecordMissing, $"this is a packed or directly installed host root and its package manifest '{packageManifest ?? PackageManifestFileName}' is absent, so the independent digest record cannot be checked");
-				using var document = ParseRecord(packageManifest!, packageText, HookLabPayloadRefusal.PackageRecordUnreadable);
-				if (document.RootElement.ValueKind != JsonValueKind.Object)
-					throw Refuse(HookLabPayloadRefusal.PackageRecordUnreadable, $"'{packageManifest}' is not a JSON object");
-				var sha = ReadDigest(document.RootElement, packageManifest!);
-				return (HookLabPayloadLayout.PackedInstall, HookLabPayloadCrossCheck.Verified, packageManifest, sha);
-			}
-
-			return (HookLabPayloadLayout.DeveloperWorktree, HookLabPayloadCrossCheck.SkippedDeveloperWorktree, null, null);
+			if(matches!=1 || string.IsNullOrWhiteSpace(sha)) throw Refuse(HookLabPayloadRefusal.PackageRecordMissing,$"'{manifest}' does not contain exactly one hashed '{relative}' entry");
+			var deployed=File.Exists(SafeChild(hostRoot,DeploymentManifestFileName));
+			return (deployed?HookLabPayloadLayout.GatewayDeployment:HookLabPayloadLayout.PackedInstall,HookLabPayloadCrossCheck.Verified,manifest,sha);
 		}
 
 		/// <summary>Reads an independent record, returning null <b>only</b> when the file is genuinely absent.
@@ -329,12 +278,6 @@ namespace dgSpy.Extension.PayloadDelivery {
 			catch (DirectoryNotFoundException) { return null; }
 			catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
 				{ throw Refuse(unreadable, $"'{path}' exists but could not be read ({ex.GetType().Name}: {ex.Message})"); }
-		}
-
-		static string ReadDigest(JsonElement section, string path) {
-			if (!section.TryGetProperty(PackageDigestPropertyName, out var value) || value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(value.GetString()))
-				throw Refuse(HookLabPayloadRefusal.PackageRecordMissing, $"'{path}' carries no '{PackageDigestPropertyName}', so the independent digest record is absent");
-			return value.GetString()!.Trim();
 		}
 
 		static JsonDocument ParseRecord(string path, string text, HookLabPayloadRefusal refusal) {

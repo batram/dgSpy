@@ -11,7 +11,7 @@ namespace HookLab.Bootstrap.Tests {
 		static string RepoRoot {
 			get {
 				var directory = new DirectoryInfo(AppContext.BaseDirectory);
-				while (directory != null && !File.Exists(Path.Combine(directory.FullName, "build-dgspy.ps1"))) directory = directory.Parent;
+				while (directory != null && !File.Exists(Path.Combine(directory.FullName, "AGENTS.md"))) directory = directory.Parent;
 				return directory?.FullName ?? throw new InvalidOperationException("Repository root not found from " + AppContext.BaseDirectory);
 			}
 		}

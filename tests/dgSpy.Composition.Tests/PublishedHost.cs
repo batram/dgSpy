@@ -64,7 +64,7 @@ sealed class PublishedHost {
 	PublishedHost() {
 		BinDirectory = LocateBinDirectory()
 			?? throw new InvalidOperationException(
-				"published host not found. Build it first:  .\\build.ps1 net-x64 -NoMsbuild  then  .\\build-dgspy.ps1");
+				"verified host not found. Run DgSpyTool pipeline or set DGSPY_PUBLISH_BIN.");
 
 		// The published host is self-contained, so every dependency sits next to
 		// the assemblies under test. Resolve from there rather than from the test

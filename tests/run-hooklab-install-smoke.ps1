@@ -96,7 +96,9 @@ function Open-HookLabAndRemove([int]$HostProcessId, [string]$HookId) {
     if ($hookRow) {
         $selection = $null
         $selectable = $hookRow
-        $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+        # WPF can omit the ListViewItem from ControlView while still exposing its text child.
+        # RawView preserves the actual parent chain and reaches the SelectionItem provider.
+        $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
         while ($selectable -and -not $selectable.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$selection)) { $selectable = $walker.GetParent($selectable) }
         if (-not $selection) { throw 'HookLab hook row did not expose a selectable ancestor' }
         ([System.Windows.Automation.SelectionItemPattern]$selection).Select()

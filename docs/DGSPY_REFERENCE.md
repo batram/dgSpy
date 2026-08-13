@@ -12,7 +12,7 @@ The extension is organized by responsibility: MEF lifetime at the root, RPC tran
 `Rpc/`, debugger scheduling and state in `Debugger/`, bounded cursor handling in `Events/`, and stable
 protocol identities in `Identity/`. See `Extensions/dgSpy.Extension/README.md` before adding tools.
 
-Build and deploy with `.\build-dgspy.ps1` (see [DGSPY_BASELINE.md](DGSPY_BASELINE.md)), then start dnSpy
+Build and deploy with `DgSpyTool pipeline` and `DgSpyTool install` (see [DGSPY_BASELINE.md](DGSPY_BASELINE.md)), then start dnSpy
 and the gateway with the same `DGSPY_RPC_PORT`:
 
 ```powershell

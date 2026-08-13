@@ -35,11 +35,7 @@ docs/                          dgSpy documentation
 tools/                         dgSpy developer tooling
 packaging/                     dgSpy packaging assets
 AGENTS.md                      working rules for coding agents
-Start-dgSpy.ps1                dgSpy launcher
-build-dgspy.ps1                dgSpy build and deploy
-install-dgspy.ps1              dgSpy install
-pack-dgspy.ps1                 dgSpy packaging
-pack-remote-host.ps1           dgSpy remote host packaging
+install-dgspy.ps1             argument-only repository shortcut to the packaged installer
 .github/workflows/dgspy-ci.yml dgSpy CI, separate from the inherited build workflow
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,12 @@ internal static class DgSpyBuildTool {
 	public static Task<int> RunAsync(string[] arguments) {
 		try {
 			if(arguments.Length==0) return Task.FromResult(Help());
+			if(arguments.Length>=1 && arguments[0].ToLowerInvariant() is "codex" or "claude") {
+				Install(SimpleInstallOptions(arguments[0],arguments.Skip(1),AppContext.BaseDirectory,Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData))); return Task.FromResult(0);
+			}
+			if(arguments.Length==1 && arguments[0].Equals("host-only",StringComparison.OrdinalIgnoreCase)) {
+				Install(HostOnlyInstallOptions(AppContext.BaseDirectory,Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData))); return Task.FromResult(0);
+			}
 			var options=Options.Parse(arguments.Skip(1).ToArray());
 				switch(arguments[0].ToLowerInvariant()) {
 				case "pipeline": Pipeline(options); break;
@@ -31,17 +37,40 @@ internal static class DgSpyBuildTool {
 		catch(Exception ex) { Console.Error.WriteLine("dgspy-build: "+ex.Message); return Task.FromResult(1); }
 	}
 
-	static int Help() { Console.WriteLine("DgSpyTool pipeline|build|build-host|build-components|compose|verify|package|verify-package|install|snapshot. All paths are explicit; run a command without its required options to see the missing option."); return 2; }
+	internal static Options SimpleInstallOptions(string agent,IEnumerable<string> flags,string packageDirectory,string localAppData) {
+		var values=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase) {
+			{"package",packageDirectory.TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar)},
+			{"install",Path.Combine(localAppData,"Programs","dgSpyMcp")},
+			{"agent",agent.ToLowerInvariant()},
+		};
+		if(flags.Any(value=>value.Equals("--force",StringComparison.OrdinalIgnoreCase))) values["force"]="true";
+		return new Options(values);
+	}
+
+	internal static Options HostOnlyInstallOptions(string packageDirectory,string localAppData)=>new(new(StringComparer.OrdinalIgnoreCase) {
+		{"package",packageDirectory.TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar)},
+		{"install",Path.Combine(localAppData,"Programs","dgSpyMcp")},
+		{"host-only","true"},
+	});
+
+	static int Help() { Console.WriteLine("install-dgspy codex|claude [--force]\ninstall-dgspy host-only\nDgSpyTool pipeline|build|build-host|build-components|compose|verify|package|verify-package|install|snapshot"); return 2; }
 
 	static void Pipeline(Options options) {
-		var repo=Full(options.Required("repo")); var artifacts=Full(options.Required("artifacts")); var buildId=SafeId(options.Required("build-id"));
+		var (repo,artifacts,buildId)=ResolvePipelineOptions(options);
 		Build(new Options(new(StringComparer.OrdinalIgnoreCase){{"repo",repo},{"artifacts",artifacts},{"build-id",buildId}}));
 		var host=Path.Combine(artifacts,"host-raw",buildId,"content"); var components=Path.Combine(artifacts,"dgspy-components",buildId,"content");
 		var layout=Full(options.Value("layout") ?? Path.Combine(artifacts,"layouts",buildId));
-		Compose(new Options(new(StringComparer.OrdinalIgnoreCase){{"host",host},{"components",Path.Combine(components,"extension")},{"cli",Path.Combine(components,"cli")},{"gateway",Path.Combine(components,"gateway")},{"bootstrap",Path.Combine(components,"payload","HookLab.Bootstrap.dll")},{"native-bootstrap",Path.Combine(components,"payload","HookLab.NativeBootstrap.x64.dll")},{"output",layout}}));
+		Compose(new Options(new(StringComparer.OrdinalIgnoreCase){{"host",host},{"components",Path.Combine(components,"extension")},{"cli",Path.Combine(components,"cli")},{"gateway",Path.Combine(components,"gateway")},{"installer",Path.Combine(components,"installer")},{"launcher",Path.Combine(components,"launcher")},{"bootstrap",Path.Combine(components,"payload","HookLab.Bootstrap.dll")},{"native-bootstrap",Path.Combine(components,"payload","HookLab.NativeBootstrap.x64.dll")},{"output",layout}}));
 		var package=Full(options.Value("package") ?? Path.Combine(artifacts,"packages","dgspy-win-x64",buildId));
 		Package(new Options(new(StringComparer.OrdinalIgnoreCase){{"layout",layout},{"output",package}}));
 		Console.WriteLine("pipeline complete: "+package);
+	}
+
+	internal static (string Repo,string Artifacts,string BuildId) ResolvePipelineOptions(Options options) {
+		var repo=Full(options.Value("repo") ?? Environment.CurrentDirectory);
+		var artifacts=Full(options.Value("artifacts") ?? Path.Combine(repo,"artifacts"));
+		var buildId=SafeId(options.Value("build-id") ?? "local");
+		return (repo,artifacts,buildId);
 	}
 
 	static void Build(Options options) {
@@ -73,15 +102,17 @@ internal static class DgSpyBuildTool {
 		Run(repo,"dotnet","msbuild",Path.Combine(repo,"Build","DgSpy.Components.proj"),"/t:Build","/p:Configuration=Release","/m","/nologo","/v:minimal","/clp:ErrorsOnly");
 		BuildNative(repo);
 		PublishDirectory(output,staging=>{
-			var content=Path.Combine(staging,"content"); var extension=Path.Combine(content,"extension"); var payload=Path.Combine(content,"payload");
+			var content=Path.Combine(staging,"content"); var extension=Path.Combine(content,"extension"); var payload=Path.Combine(content,"payload"); var launcher=Path.Combine(content,"launcher");
 			RunMany(new[]{
 				(repo,"dotnet",new[]{"publish",Path.Combine(repo,"dgSpy.Cli","dgSpy.Cli.csproj"),"-c","Release","-r","win-x64","--self-contained","true","--no-restore","-o",Path.Combine(content,"cli"),"--nologo","-v:minimal","-clp:ErrorsOnly"}),
-				(repo,"dotnet",new[]{"publish",Path.Combine(repo,"dgSpy.Gateway","dgSpy.Gateway.csproj"),"-c","Release","-r","win-x64","--self-contained","true","--no-restore","-o",Path.Combine(content,"gateway"),"--nologo","-v:minimal","-clp:ErrorsOnly"})});
-			Directory.CreateDirectory(extension); Directory.CreateDirectory(payload);
+				(repo,"dotnet",new[]{"publish",Path.Combine(repo,"dgSpy.Gateway","dgSpy.Gateway.csproj"),"-c","Release","-r","win-x64","--self-contained","true","--no-restore","-o",Path.Combine(content,"gateway"),"--nologo","-v:minimal","-clp:ErrorsOnly"}),
+				(repo,"dotnet",new[]{"publish",Path.Combine(repo,"Build","DgSpyTool","DgSpyTool.csproj"),"-c","Release","-r","win-x64","--self-contained","true","--no-restore","-p:PublishSingleFile=true","-p:IncludeNativeLibrariesForSelfExtract=true","-o",Path.Combine(content,"installer"),"--nologo","-v:minimal","-clp:ErrorsOnly"})});
+			Directory.CreateDirectory(extension); Directory.CreateDirectory(payload); Directory.CreateDirectory(launcher);
 			var extensionOutput=Path.Combine(repo,"Extensions","dgSpy.Extension","bin","Release","net10.0-windows");
 			foreach(var file in ExtensionFiles) File.Copy(Path.Combine(extensionOutput,file),Path.Combine(extension,file));
 			File.Copy(Path.Combine(repo,"HookLab","HookLab.Bootstrap","bin","Release","net48","HookLab.Bootstrap.dll"),Path.Combine(payload,"HookLab.Bootstrap.dll"));
 			File.Copy(Path.Combine(repo,"HookLab","HookLab.NativeBootstrap","bin","Release","HookLab.NativeBootstrap.x64.dll"),Path.Combine(payload,"HookLab.NativeBootstrap.x64.dll"));
+			foreach(var file in new[]{"Start-dgSpyRemoteHost.ps1","Start-dgSpyRemoteHost.cmd"}) File.Copy(Path.Combine(repo,"packaging","remote-host",file),Path.Combine(launcher,file));
 			var ownership=Directory.EnumerateFiles(content,"*",SearchOption.AllDirectories).ToDictionary(path=>Relative(staging,path),_=>"component",StringComparer.OrdinalIgnoreCase);
 			WriteManifest(staging,ownership); VerifyInventoryOnly(staging);
 		},"build-components --repo "+Quote(repo)+" --host "+Quote(host)+" --output "+Quote(output));
@@ -95,11 +126,14 @@ internal static class DgSpyBuildTool {
 
 	static void Run(string workingDirectory,string executable,params string[] arguments) {
 		var watch=Stopwatch.StartNew(); Console.WriteLine("start "+Path.GetFileName(executable)+" "+String.Join(' ',arguments.Take(2)));
-		var info=new ProcessStartInfo(executable){WorkingDirectory=workingDirectory,UseShellExecute=false};
+		var shell=Path.GetExtension(executable) is ".cmd" or ".bat";
+		var info=new ProcessStartInfo(executable){WorkingDirectory=workingDirectory,UseShellExecute=shell};
 		foreach(var argument in arguments) info.ArgumentList.Add(argument);
-		info.Environment["MSBUILDDISABLENODEREUSE"]="1";
-		// VC's environment import is case-insensitive and rejects duplicate Path/PATH entries.
-		var path=Environment.GetEnvironmentVariable("Path"); info.Environment.Remove("PATH"); if(path is not null) info.Environment["Path"]=path;
+		if(!shell) {
+			info.Environment["MSBUILDDISABLENODEREUSE"]="1";
+			// VC's environment import is case-insensitive and rejects duplicate Path/PATH entries.
+			var path=Environment.GetEnvironmentVariable("Path"); info.Environment.Remove("PATH"); if(path is not null) info.Environment["Path"]=path;
+		}
 		using var process=Process.Start(info) ?? throw new InvalidOperationException("Could not start: "+executable); process.WaitForExit();
 		if(process.ExitCode!=0) throw new InvalidOperationException(Path.GetFileName(executable)+" failed with exit code "+process.ExitCode+".");
 		Console.WriteLine("done  "+Path.GetFileName(executable)+" "+watch.Elapsed.TotalSeconds.ToString("0.0")+"s");
@@ -122,6 +156,8 @@ internal static class DgSpyBuildTool {
 			var bin=Path.Combine(staging,"bin");
 			MergeTree(options.Required("cli"),bin,"cli",ownership);
 			MergeTree(options.Required("gateway"),bin,"gateway",ownership);
+			var installer=options.Value("installer"); if(!string.IsNullOrWhiteSpace(installer)) MergeTree(installer!,bin,"installer",ownership);
+			MergeTree(options.Required("launcher"),Path.Combine(staging,"launcher"),"launcher",ownership);
 			var extension=Path.Combine(bin,"Extensions","dgSpy"); Directory.CreateDirectory(extension);
 			foreach(var name in ExtensionFiles) CopyOwned(Path.Combine(options.Required("components"),name),Path.Combine(extension,name),"extension",staging,ownership,false);
 			var hooklab=Path.Combine(staging,"hooklab"); Directory.CreateDirectory(hooklab);
@@ -155,7 +191,7 @@ internal static class DgSpyBuildTool {
 	static void Verify(string layoutPath) {
 		var root=Full(layoutPath); var manifestPath=Path.Combine(root,ManifestName);
 		var manifest=VerifyInventoryOnly(root);
-		Require(root,"dnSpy.exe"); Require(root,"bin/dnSpy.dll"); Require(root,"bin/dgspy.exe"); Require(root,"bin/dgSpy.Gateway.exe"); Require(root,"bin/Extensions/dgSpy/dgSpy.Extension.x.dll"); Require(root,"hooklab/HookLab.NativeBootstrap.x64.dll");
+		Require(root,"dnSpy.exe"); Require(root,"bin/dnSpy.dll"); Require(root,"bin/dgspy.exe"); Require(root,"bin/dgSpy.Gateway.exe"); Require(root,"bin/Extensions/dgSpy/dgSpy.Extension.x.dll"); Require(root,"hooklab/HookLab.NativeBootstrap.x64.dll"); Require(root,"launcher/Start-dgSpyRemoteHost.ps1"); Require(root,"launcher/Start-dgSpyRemoteHost.cmd");
 		var rootProtocol=Hash(Path.Combine(root,"bin","dgSpy.Protocol.dll")); var extensionProtocol=Hash(Path.Combine(root,"bin","Extensions","dgSpy","dgSpy.Protocol.dll"));
 		if(rootProtocol!=extensionProtocol) throw new InvalidOperationException("App-base and extension protocol assemblies differ.");
 		Console.WriteLine($"verified {manifest.Files.Length} files: {root}");
@@ -173,9 +209,10 @@ internal static class DgSpyBuildTool {
 		var layout=Full(options.Required("layout")); Verify(layout);
 		var output=Full(options.Required("output")); PublishDirectory(output,staging=>{
 			CopyDirectory(layout,Path.Combine(staging,"cli"));
+			File.Copy(Path.Combine(layout,"bin","DgSpyTool.exe"),Path.Combine(staging,"install-dgspy.exe"));
 			var layoutManifest=Path.Combine(staging,"cli",ManifestName);
 			var files=Directory.EnumerateFiles(Path.Combine(staging,"cli"),"*",SearchOption.AllDirectories).ToArray();
-			var manifest=new PackageManifest(1,"win-x64","cli/dnSpy.exe","cli/bin/dgspy.exe","cli/bin/dgSpy.Gateway.exe",Hash(layoutManifest),files.Length,files.Sum(file=>new FileInfo(file).Length));
+			var manifest=new PackageManifest(1,"win-x64","cli/dnSpy.exe","cli/bin/dgspy.exe","cli/bin/dgSpy.Gateway.exe","install-dgspy.exe",Hash(Path.Combine(staging,"install-dgspy.exe")),Hash(layoutManifest),files.Length,files.Sum(file=>new FileInfo(file).Length));
 			File.WriteAllText(Path.Combine(staging,"manifest.json"),JsonSerializer.Serialize(manifest,JsonOptions)+Environment.NewLine);
 			VerifyPackage(staging);
 		},"package --layout "+Quote(layout)+" --output "+Quote(output));
@@ -185,6 +222,7 @@ internal static class DgSpyBuildTool {
 		var root=Full(packagePath); var manifestPath=Path.Combine(root,"manifest.json");
 		var manifest=JsonSerializer.Deserialize<PackageManifest>(File.ReadAllText(manifestPath),JsonOptions) ?? throw new InvalidOperationException("Package manifest is invalid.");
 		if(manifest.FormatVersion!=1) throw new InvalidOperationException("Unsupported package manifest version.");
+		Require(root,manifest.Installer); if(Hash(Path.Combine(root,manifest.Installer))!=manifest.InstallerSha256) throw new InvalidOperationException("Package installer digest differs.");
 		var layout=Path.Combine(root,"cli"); Verify(layout);
 		if(Hash(Path.Combine(layout,ManifestName))!=manifest.LayoutManifestSha256) throw new InvalidOperationException("Package layout manifest digest differs.");
 		var files=Directory.EnumerateFiles(layout,"*",SearchOption.AllDirectories).ToArray();
@@ -196,34 +234,93 @@ internal static class DgSpyBuildTool {
 		var package=Full(options.Required("package")); VerifyPackage(package);
 		var install=Full(options.Required("install")); var source=Path.Combine(package,"cli");
 		if(options.Flag("host-only")) { InstallHostOnly(source,install); return; }
-		PublishDirectory(install,staging=>{
-			CopyDirectory(source,Path.Combine(staging,"cli")); File.Copy(Path.Combine(package,"manifest.json"),Path.Combine(staging,"manifest.json"));
-			Verify(Path.Combine(staging,"cli"));
-		},"install --package "+Quote(package)+" --install "+Quote(install));
+		var agent=options.Value("agent");
+		if(agent is not null && agent is not ("codex" or "claude")) throw new ArgumentException("--agent must be codex or claude.");
+		StopInstallProcesses(install,options.Flag("force"),agent);
+		var parent=Directory.GetParent(install)?.FullName ?? throw new InvalidOperationException("Install path must have a parent directory.");
+		Directory.CreateDirectory(parent);
+		var staging=install+".staging-"+Guid.NewGuid().ToString("N"); var backup=install+".previous-"+Guid.NewGuid().ToString("N");
+		try {
+			Directory.CreateDirectory(staging); CopyDirectory(source,Path.Combine(staging,"cli")); File.Copy(Path.Combine(package,"manifest.json"),Path.Combine(staging,"manifest.json")); Verify(Path.Combine(staging,"cli"));
+			if(Directory.Exists(install)) Directory.Move(install,backup);
+			try {
+				Directory.Move(staging,install);
+				if(agent is not null) RegisterAgent(agent,install);
+			}
+			catch { TryDeleteDirectory(install); if(Directory.Exists(backup)) Directory.Move(backup,install); throw; }
+			TryDeleteDirectory(backup);
+		}
+		catch { Console.Error.WriteLine("Retry unchanged after closing processes: dotnet run --project Build/DgSpyTool -- install --package "+Quote(package)+" --install "+Quote(install)+(agent is null?"":" --agent "+agent)); throw; }
+		finally { TryDeleteDirectory(staging); }
 	}
 
+	static void StopInstallProcesses(string install,bool force,string? agent) {
+		if(!Directory.Exists(install)) return;
+		var prefix=install.TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar)+Path.DirectorySeparatorChar;
+		var holders=Process.GetProcesses().Select(process=>{ try { return (Process:process,Path:process.MainModule?.FileName); } catch { process.Dispose(); return (Process:process,Path:(string?)null); } }).Where(item=>item.Path?.StartsWith(prefix,StringComparison.OrdinalIgnoreCase)==true).ToArray();
+		if(holders.Length==0) return;
+		var detail=String.Join(", ",holders.Select(item=>$"{item.Process.ProcessName} (PID {item.Process.Id})"));
+		if(!force) {
+			var forceCommand=agent is null?"rerun with --force true":$"run .\\install-dgspy.exe {agent} --force";
+			throw new InvalidOperationException($"Cannot replace {install} while these processes run from it: {detail}. For a compatible host-only update without restarting the agent, run .\\install-dgspy.exe host-only. For a full replacement, close the agent and dnSpy, or {forceCommand} and restart the agent afterward.");
+		}
+		foreach(var holder in holders) { try { holder.Process.Kill(true); holder.Process.WaitForExit(15000); } finally { holder.Process.Dispose(); } }
+	}
+
+	static void RegisterAgent(string agent,string install) {
+		var cli=Path.Combine(install,"cli","bin","dgspy.exe");
+		if(agent=="codex") { Run(install,cli,"configure","codex","--apply"); return; }
+		var claude=ResolveCommand("claude") ?? throw new InvalidOperationException("Claude Code CLI was not found on PATH.");
+		RunAllowFailure(install,claude,"mcp","remove","dgspy","--scope","user");
+		Run(install,claude,"mcp","add","dgspy","--scope","user","--",cli,"mcp");
+	}
+
+	static string? ResolveCommand(string name) {
+		foreach(var directory in (Environment.GetEnvironmentVariable("PATH")??"").Split(Path.PathSeparator,StringSplitOptions.RemoveEmptyEntries))
+			foreach(var extension in new[]{".exe",".cmd",".bat",""}) { var candidate=Path.Combine(directory.Trim(),name+extension); if(File.Exists(candidate)) return candidate; }
+		return null;
+	}
+
+	static void RunAllowFailure(string workingDirectory,string executable,params string[] arguments) { try { Run(workingDirectory,executable,arguments); } catch { } }
+
 	static void InstallHostOnly(string sourceLayout,string installRoot) {
-		var installedLayout=Path.Combine(installRoot,"cli"); Verify(installedLayout);
+		var installedLayout=Path.Combine(installRoot,"cli");
+		if(!File.Exists(Path.Combine(installedLayout,ManifestName))) throw new InvalidOperationException("Host-only install requires a new-format DgSpyTool installation. Run one full install first; legacy trees are replaced, not migrated.");
+		VerifyInventoryOnly(installedLayout);
+		Require(installedLayout,"bin/dgspy.exe"); Require(installedLayout,"bin/dgSpy.Gateway.exe"); Require(installedLayout,"bin/dgSpy.Protocol.dll");
 		var sourceManifest=ReadLayout(sourceLayout); var installedManifest=ReadLayout(installedLayout);
 		var sourceProtocol=sourceManifest.Files.Single(file=>file.Path.Equals("bin/dgSpy.Protocol.dll",StringComparison.OrdinalIgnoreCase)).Sha256;
 		var installedProtocol=installedManifest.Files.Single(file=>file.Path.Equals("bin/dgSpy.Protocol.dll",StringComparison.OrdinalIgnoreCase)).Sha256;
 		if(sourceProtocol!=installedProtocol) throw new InvalidOperationException("Host-only install refused: the package changes the protocol contract. No installed files were changed.");
-		var owned=sourceManifest.Files.Where(file=>file.Owner is "host" or "extension" or "hooklab").ToArray();
-		var staging=installRoot+".host-staging-"+Guid.NewGuid().ToString("N");
+		var owned=sourceManifest.Files.Where(file=>IsHostOwned(file.Owner)).ToArray();
+		var oldOwned=installedManifest.Files.Where(file=>IsHostOwned(file.Owner)).Select(file=>file.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+		var sourcePaths=sourceManifest.Files.Select(file=>file.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+		var obsolete=oldOwned.Where(path=>!sourcePaths.Contains(path)).ToArray();
+		var affected=obsolete.Concat(owned.Select(file=>file.Path)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+		var transaction=Path.Combine(installRoot,".host-update-"+Guid.NewGuid().ToString("N")); var backup=Path.Combine(transaction,"backup"); var incoming=Path.Combine(transaction,"incoming");
 		try {
-			CopyDirectory(installedLayout,staging);
-			foreach(var file in owned) { var destination=Path.Combine(staging,file.Path); Directory.CreateDirectory(Path.GetDirectoryName(destination)!); File.Copy(Path.Combine(sourceLayout,file.Path),destination,true); }
-			var ownership=installedManifest.Files.ToDictionary(file=>file.Path,file=>file.Owner,StringComparer.OrdinalIgnoreCase);
+			Directory.CreateDirectory(backup); Directory.CreateDirectory(incoming);
+			File.Copy(Path.Combine(installedLayout,ManifestName),Path.Combine(backup,ManifestName));
+			foreach(var relative in affected) {
+				var current=Path.Combine(installedLayout,relative); if(File.Exists(current)) { var saved=Path.Combine(backup,relative); Directory.CreateDirectory(Path.GetDirectoryName(saved)!); File.Copy(current,saved); }
+			}
+			foreach(var file in owned) { var staged=Path.Combine(incoming,file.Path); Directory.CreateDirectory(Path.GetDirectoryName(staged)!); File.Copy(Path.Combine(sourceLayout,file.Path),staged); }
+			foreach(var relative in obsolete) File.Delete(Path.Combine(installedLayout,relative));
+			foreach(var file in owned) { var destination=Path.Combine(installedLayout,file.Path); Directory.CreateDirectory(Path.GetDirectoryName(destination)!); File.Move(Path.Combine(incoming,file.Path),destination,true); }
+			var ownership=installedManifest.Files.Where(file=>!obsolete.Contains(file.Path,StringComparer.OrdinalIgnoreCase)).ToDictionary(file=>file.Path,file=>file.Owner,StringComparer.OrdinalIgnoreCase);
+			foreach(var file in sourceManifest.Files.Where(file=>ownership.ContainsKey(file.Path))) ownership[file.Path]=file.Owner;
 			foreach(var file in owned) ownership[file.Path]=file.Owner;
-			WriteManifest(staging,ownership);
-			Verify(staging);
-			var backup=installedLayout+".previous-"+Guid.NewGuid().ToString("N"); Directory.Move(installedLayout,backup);
-			try { Directory.Move(staging,installedLayout); }
-			catch { Directory.Move(backup,installedLayout); throw; }
-			TryDeleteDirectory(backup);
+			WriteManifest(installedLayout,ownership);
+			Verify(installedLayout);
 		}
-		finally { TryDeleteDirectory(staging); }
+		catch {
+			foreach(var relative in affected) { var saved=Path.Combine(backup,relative); var destination=Path.Combine(installedLayout,relative); if(File.Exists(saved)) { Directory.CreateDirectory(Path.GetDirectoryName(destination)!); File.Copy(saved,destination,true); } else File.Delete(destination); }
+			var savedManifest=Path.Combine(backup,ManifestName); if(File.Exists(savedManifest)) File.Copy(savedManifest,Path.Combine(installedLayout,ManifestName),true);
+			throw;
+		}
+		finally { TryDeleteDirectory(transaction); }
 	}
+	static bool IsHostOwned(string owner)=>owner is "host" or "extension" or "hooklab" or "launcher";
 
 	static void PublishDirectory(string output,Action<string> build,string retry) {
 		var parent=Directory.GetParent(output)?.FullName ?? throw new InvalidOperationException("Output must have a parent directory."); Directory.CreateDirectory(parent);
@@ -241,10 +338,10 @@ internal static class DgSpyBuildTool {
 	static void MergeTree(string source,string destination,string owner,Dictionary<string,string> ownership) { foreach(var file in Directory.EnumerateFiles(Full(source),"*",SearchOption.AllDirectories)) CopyOwned(file,Path.Combine(destination,Path.GetRelativePath(Full(source),file)),owner,Directory.GetParent(destination)!.FullName,ownership,true); }
 	static void CopyOwned(string source,string destination,string owner,string root,Dictionary<string,string> ownership,bool merge) {
 		if(!File.Exists(source)) throw new FileNotFoundException("Required input is missing.",source); Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-		if(File.Exists(destination)) { if(Hash(source)==Hash(destination)) return; if(!merge||!FrameworkOverrides.Contains(Path.GetFileName(destination))||FileVersionInfo.GetVersionInfo(source).FileVersion!=FileVersionInfo.GetVersionInfo(destination).FileVersion) throw new InvalidOperationException("Incompatible layout collision: "+Relative(root,destination)); return; }
+		if(File.Exists(destination)) { if(Hash(source)==Hash(destination)) { if(merge) ownership[Relative(root,destination)]=owner; return; } if(!merge||!FrameworkOverrides.Contains(Path.GetFileName(destination))||FileVersionInfo.GetVersionInfo(source).FileVersion!=FileVersionInfo.GetVersionInfo(destination).FileVersion) throw new InvalidOperationException("Incompatible layout collision: "+Relative(root,destination)); ownership[Relative(root,destination)]=owner; return; }
 		File.Copy(source,destination); ownership[Relative(root,destination)]=owner;
 	}
-	static void WriteManifest(string root,Dictionary<string,string> ownership) { var files=Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories).Where(path=>!Path.GetFileName(path).Equals(ManifestName,StringComparison.OrdinalIgnoreCase)).AsParallel().Select(path=>new LayoutFile(Relative(root,path),new FileInfo(path).Length,Hash(path),ownership.GetValueOrDefault(Relative(root,path),"generated"))).OrderBy(file=>file.Path,StringComparer.Ordinal).ToArray(); File.WriteAllText(Path.Combine(root,ManifestName),JsonSerializer.Serialize(new LayoutManifest(1,files),JsonOptions)+Environment.NewLine); }
+	static void WriteManifest(string root,Dictionary<string,string> ownership) { var files=Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories).Where(path=>!Path.GetFileName(path).Equals(ManifestName,StringComparison.OrdinalIgnoreCase)).AsParallel().Select(path=>new LayoutFile(Relative(root,path),new FileInfo(path).Length,Hash(path),ownership.GetValueOrDefault(Relative(root,path),"generated"))).OrderBy(file=>file.Path,StringComparer.Ordinal).ToArray(); var destination=Path.Combine(root,ManifestName); var temporary=destination+".tmp-"+Guid.NewGuid().ToString("N"); try { File.WriteAllText(temporary,JsonSerializer.Serialize(new LayoutManifest(1,files),JsonOptions)+Environment.NewLine); File.Move(temporary,destination,true); } finally { if(File.Exists(temporary)) File.Delete(temporary); } }
 	static void Require(string root,string relative) { if(!File.Exists(Path.Combine(root,relative))) throw new InvalidOperationException("Required layout file is missing: "+relative); }
 	static string Hash(string path) { using var stream=File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant(); }
 	static string Full(string path)=>Path.GetFullPath(path);
@@ -252,6 +349,6 @@ internal static class DgSpyBuildTool {
 	static readonly JsonSerializerOptions JsonOptions=new(){PropertyNamingPolicy=JsonNamingPolicy.SnakeCaseLower,WriteIndented=true};
 	sealed record LayoutManifest(int FormatVersion,LayoutFile[] Files);
 	sealed record LayoutFile(string Path,long Size,string Sha256,string Owner);
-	sealed record PackageManifest(int FormatVersion,string Runtime,string Host,string Entrypoint,string Gateway,string LayoutManifestSha256,int FileCount,long PayloadBytes);
-	sealed class Options(Dictionary<string,string> values) { public string Required(string name)=>values.TryGetValue(name,out var value)?value:throw new ArgumentException("--"+name+" is required."); public string? Value(string name)=>values.GetValueOrDefault(name); public bool Flag(string name)=>values.TryGetValue(name,out var value)&&Boolean.TryParse(value,out var parsed)&&parsed; public static Options Parse(string[] args) { var values=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase); for(var i=0;i<args.Length;i+=2) { if(i+1>=args.Length||!args[i].StartsWith("--")) throw new ArgumentException("Options use --name value pairs."); values[args[i][2..]]=args[i+1]; } return new(values); } }
+	sealed record PackageManifest(int FormatVersion,string Runtime,string Host,string Entrypoint,string Gateway,string Installer,string InstallerSha256,string LayoutManifestSha256,int FileCount,long PayloadBytes);
+	internal sealed class Options(Dictionary<string,string> values) { public string Required(string name)=>values.TryGetValue(name,out var value)?value:throw new ArgumentException("--"+name+" is required."); public string? Value(string name)=>values.GetValueOrDefault(name); public bool Flag(string name)=>values.TryGetValue(name,out var value)&&Boolean.TryParse(value,out var parsed)&&parsed; public static Options Parse(string[] args) { var values=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase); for(var i=0;i<args.Length;i+=2) { if(i+1>=args.Length||!args[i].StartsWith("--")) throw new ArgumentException("Options use --name value pairs."); values[args[i][2..]]=args[i+1]; } return new(values); } }
 }

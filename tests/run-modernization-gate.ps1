@@ -1,9 +1,6 @@
 param(
 	[ValidateSet('Shared','CorDebug','Unity','MonoTarget','Full')]
 	[string]$Stage = 'Shared',
-	# net10 is the default host: it is what ships and what launch_local_host runs. net48 is retained as
-	# the fallback baseline.
-	[ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows',
 	[switch]$SkipHostBuild,
 	[string]$LayoutRoot,
 	[switch]$UpdateSnapshots
@@ -55,9 +52,7 @@ try {
 		if ($LASTEXITCODE) { throw "Configured layout verification failed with exit code $LASTEXITCODE" }
 		$env:DGSPY_LAYOUT_ROOT = $completedLayout
 	}
-	# The net10 host publishes through the SDK-native driver and needs no Visual Studio installation at
-	# all. Only the net48 host requires full MSBuild, so that discovery now runs only when it is asked for.
-	if (-not $SkipHostBuild -and $TargetFramework -ne 'net48') {
+	if (-not $SkipHostBuild) {
 		$buildId = "gate-$([Guid]::NewGuid().ToString('N'))"
 		$completedLayout = Join-Path $repoRoot "artifacts\layouts\$buildId"
 		Invoke-Checked 'immutable build, composition, and package pipeline' {
@@ -65,37 +60,6 @@ try {
 		}
 		$env:DGSPY_LAYOUT_ROOT = $completedLayout
 	}
-	elseif (-not $SkipHostBuild) {
-		$msbuildCandidates = @(
-			'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe',
-			'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\amd64\MSBuild.exe',
-			'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe',
-			'C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
-		)
-		$msbuildPath = $msbuildCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-		if (-not $msbuildPath) {
-			$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-			if (Test-Path -LiteralPath $vswhere) {
-				$msbuildPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' | Select-Object -First 1
-			}
-		}
-		if (-not $msbuildPath) { throw 'No supported Visual Studio MSBuild installation was found.' }
-		$previousSdksPath = $env:MSBuildSDKsPath
-		$previousWorkloadResolver = $env:MSBuildEnableWorkloadResolver
-		try {
-			if ($msbuildPath -like '*Visual Studio\18\*') {
-				$dotnetVersion = (& dotnet --version).Trim()
-				$env:MSBuildSDKsPath = Join-Path $env:ProgramFiles "dotnet\sdk\$dotnetVersion\Sdks"
-				$env:MSBuildEnableWorkloadResolver = 'false'
-			}
-			Invoke-Checked 'dnSpy net48 build' { .\build.ps1 netframework -MSBuildPath $msbuildPath }
-		}
-		finally {
-			$env:MSBuildSDKsPath = $previousSdksPath
-			$env:MSBuildEnableWorkloadResolver = $previousWorkloadResolver
-		}
-	}
-	if ($TargetFramework -eq 'net48') { Invoke-Checked 'dgSpy net48 compatibility build' { .\build-dgspy.ps1 -TargetFramework $TargetFramework } }
 	Invoke-Checked 'PowerShell host-launcher tests' { .\tests\TestSupport\Start-DgSpyHost.Tests.ps1 }
 	Invoke-Checked 'immutable pipeline tests' { dotnet test tests\DgSpyTool.Tests\DgSpyTool.Tests.csproj -c Release --nologo -v:minimal }
 
@@ -119,10 +83,7 @@ try {
 		try {
 			$env:DGSPY_PUBLISH_BIN = if ($completedLayout) {
 				Join-Path $completedLayout 'bin'
-			} elseif ($TargetFramework -eq 'net48') {
-				Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net48'
-			}
-			else {
+			} else {
 				Join-Path $repoRoot 'dnSpy\dnSpy\bin\Release\net10.0-windows\win-x64\publish\bin'
 			}
 			Invoke-Checked 'Composition tests' { dotnet test tests\dgSpy.Composition.Tests\dgSpy.Composition.Tests.csproj -c Release --nologo -v:minimal }
@@ -137,22 +98,16 @@ try {
 	}
 
 	if ($Stage -in @('CorDebug','Full')) {
-		Invoke-Checked 'CorDebug live smoke' { .\tests\run-milestone1-smoke.ps1 -TargetFramework $TargetFramework }
+		Invoke-Checked 'CorDebug live smoke' { .\tests\run-milestone1-smoke.ps1 }
 		# Nothing else builds the fixture in Release: run-milestone1-smoke.ps1 builds it Debug, and both
 		# live legs below require bin\Release\net48. It happens to exist on the machine this was written
 		# on, which is exactly why the gap was invisible until a clean clone hit the first Test-Path.
 		Invoke-Checked 'CorDebug fixture (Release)' { dotnet build tests\TestTargets\Milestone1Target\Milestone1Target.csproj -c Release -f net48 --nologo -v:minimal }
-		# T07's multiplex matrix uses the retained net48 CorDebug fixture and test controller. The net10
-		# CorDebug job still runs the general live smoke above; the dedicated net48 CI job makes this
-		# behavioral contract durable without rebuilding the deployment the gate already validated.
-		if ($TargetFramework -eq 'net48') {
-			Invoke-Checked 'Owned-breakpoint live matrix' { .\tests\run-owned-breakpoint-smoke.ps1 -TargetFramework $TargetFramework -SkipBuild }
-		}
 		# T08 shipped with no live leg: every one of the nine defects T08b fixes lived in the
 		# dnSpy-facing half, which no test entered. This runs a real atomic action against the CorDebug
 		# fixture on whichever host framework the gate is exercising.
-		Invoke-Checked 'Atomic-action live smoke' { .\tests\run-atomic-action-smoke.ps1 -TargetFramework $TargetFramework }
-		Invoke-Checked 'HookLab install live smoke' { .\tests\run-hooklab-install-smoke.ps1 -TargetFramework $TargetFramework }
+		Invoke-Checked 'Atomic-action live smoke' { .\tests\run-atomic-action-smoke.ps1 }
+		Invoke-Checked 'HookLab install live smoke' { .\tests\run-hooklab-install-smoke.ps1 }
 	}
 	# Needs a listening uch-debug-target player, which this repo neither builds nor ships: it takes a
 	# Unity editor and a licence, which hosted runners do not have. Launch it first with the target
@@ -162,7 +117,7 @@ try {
 		# A server=y Unity agent accepts one debugger connection per player launch. This local stage can
 		# therefore exercise only the primary debugger smoke against the supplied player. CI launches a
 		# fresh player for each of the debugger, search, and scan-cursor scripts in a three-way matrix.
-		Invoke-Checked 'Mono/Unity live smoke' { .\tests\run-mono-target-smoke.ps1 -TargetFramework $TargetFramework }
+		Invoke-Checked 'Mono/Unity live smoke' { .\tests\run-mono-target-smoke.ps1 }
 	}
 	if ($Stage -in @('Unity','Full')) {
 		Write-Host '== start isolated Unity debugger host ==' -ForegroundColor Cyan
@@ -172,7 +127,7 @@ try {
 		# host instead. Start-DgSpyHost exports DGSPY_RPC_PORT, and Invoke-DgSpyRpc honors it, so
 		# the smoke follows automatically.
 		$unityRpcPort = if ($env:DGSPY_RPC_PORT) { [int]$env:DGSPY_RPC_PORT } else { 7367 }
-		$unityHostId = & .\tests\TestSupport\Start-DgSpyHost.ps1 -RpcPort $unityRpcPort -TargetFramework $TargetFramework
+		$unityHostId = & .\tests\TestSupport\Start-DgSpyHost.ps1 -RpcPort $unityRpcPort
 		try {
 			Invoke-Checked 'Unity read-only modernization smoke' { .\tests\run-uch-modernization-smoke.ps1 }
 		}

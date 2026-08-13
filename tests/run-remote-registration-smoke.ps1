@@ -64,13 +64,8 @@ function Start-Gateway {
 try {
 	if (Test-Path -LiteralPath $runRoot) { Remove-Item -LiteralPath $runRoot -Recurse -Force }
 	New-Item -ItemType Directory -Path $seedRoot,$packageRoot,$deploymentRoot,$stateRoot -Force | Out-Null
-	if ([string]::IsNullOrWhiteSpace($PayloadRoot)) {
-		$seedHost='remote-smoke-payload-seed'
-		if ($UseTls) { & (Join-Path $repoRoot 'pack-remote-host.ps1') -SkipBuild -HostId $seedHost -GatewayAddress '127.0.0.1' -OutputDirectory $seedRoot -UseTls }
-		else { & (Join-Path $repoRoot 'pack-remote-host.ps1') -SkipBuild -HostId $seedHost -GatewayAddress '127.0.0.1' -OutputDirectory $seedRoot }
-		$script:payloadRoot=Join-Path $seedRoot "dgSpy-remote-host-$seedHost-win-x64"
-	}
-	else { $script:payloadRoot=[IO.Path]::GetFullPath($PayloadRoot) }
+	if ([string]::IsNullOrWhiteSpace($PayloadRoot)) { throw 'Pass -PayloadRoot from dgspy pack-host; this smoke no longer builds through a second packaging implementation.' }
+	$script:payloadRoot=[IO.Path]::GetFullPath($PayloadRoot)
 	Start-Gateway
 	$created=Invoke-Tool 'create_remote_host_package' @{host_id=$HostId;gateway_address='127.0.0.1';use_tls=[bool]$UseTls}
 	if (-not $created.gateway_ready -or $created.gateway_restart_required) { throw 'Provisioning did not activate the running Gateway.' }

@@ -14,7 +14,7 @@ target using `PROCESS_QUERY_LIMITED_INFORMATION`, process creation time, and
 | elevated host to medium target | medium | elevated | 50752 | pass |
 | medium host to elevated target | elevated | medium | 13996 | pass |
 
-The harness is not built by `build-dgspy.ps1` or the gate. Build it first from a clean tree, or the
+The harness is not built by the shipping pipeline or the gate. Build it first from a clean tree, or the
 script throws "Harness not built":
 
 ```powershell

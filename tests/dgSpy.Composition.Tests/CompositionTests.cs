@@ -22,10 +22,7 @@ public class CompositionTests {
 	// built would defeat the point. The gate builds before it runs them.
 	static void RequirePublishedHost() =>
 		Assert.True(PublishedHost.LocateBinDirectory() is not null,
-			"published host not found. Build it first:\n" +
-			"    .\\build.ps1 net-x64 -NoMsbuild\n" +
-			"    .\\build-dgspy.ps1\n" +
-			"or point DGSPY_PUBLISH_BIN at an existing publish bin directory.");
+			"verified host not found. Run DgSpyTool pipeline or point DGSPY_PUBLISH_BIN at its bin directory.");
 
 	/// <summary>
 	/// The check dnSpy itself performs only under Debug.Assert, and therefore not

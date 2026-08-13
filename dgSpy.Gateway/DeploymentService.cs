@@ -444,6 +444,8 @@ public sealed class DeploymentService {
 		var hostId=SafeSegment((string?)args["host_id"] ?? throw new GatewayControlException("invalid_arguments","host_id is required."));
 		var address=((string?)args["gateway_address"] ?? throw new GatewayControlException("invalid_arguments","gateway_address is required.")).Trim();
 		if(string.IsNullOrWhiteSpace(address)) throw new GatewayControlException("invalid_arguments","gateway_address is required.");
+		var compression=((string?)args["compression"] ?? "optimal").ToLowerInvariant();
+		var compressionLevel=compression switch { "none"=>CompressionLevel.NoCompression,"fastest"=>CompressionLevel.Fastest,"optimal"=>CompressionLevel.Optimal,_=>throw new GatewayControlException("invalid_arguments","compression must be none, fastest, or optimal.") };
 		var useTls=(bool?)args["use_tls"] ?? true; var output=Path.GetFullPath((string?)args["output_root"] ?? packageRoot);
 		if(output!=packageRoot&&!output.StartsWith(packageRoot+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)) throw new GatewayControlException("path_outside_package_root",$"output_root must stay below '{packageRoot}'.");
 		var payload=RemotePayloadRoot();
@@ -469,13 +471,13 @@ public sealed class DeploymentService {
 				remote["client_certificate_file"]="certificates/client.pfx"; remote["client_certificate_password_file"]="certificates/client.password"; remote["gateway_certificate_file"]="certificates/gateway-server.cer"; gatewayHost["client_certificate_file"]=hostId+"-client.cer";
 			}
 			File.WriteAllText(Path.Combine(staging,"remote-host.json"),remote.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })+"\n",new UTF8Encoding(false)); WriteRemoteManifest(staging,bundleName);
-			ZipFile.CreateFromDirectory(staging,temporaryArchive,CompressionLevel.Optimal,false);
+			ZipFile.CreateFromDirectory(staging,temporaryArchive,compressionLevel,false);
 			File.WriteAllText(Path.Combine(packageRoot,hostId+".token"),credential,new UTF8Encoding(false));
 			if(useTls) { File.WriteAllBytes(Path.Combine(packageRoot,"gateway-server.pfx"),serverPfx!); File.WriteAllBytes(Path.Combine(packageRoot,"gateway-server.cer"),serverCer!); File.WriteAllText(Path.Combine(packageRoot,"gateway-server.password"),serverPassword!,new UTF8Encoding(false)); File.WriteAllBytes(Path.Combine(packageRoot,hostId+"-client.cer"),clientCer!); }
 			UpdateRemoteRegistry(registry,hostId,address,gatewayHost,useTls); File.Move(temporaryArchive,archive,true);
 			var updated=HostRegistry.Load(registry,includeLocal:true); var listener=remoteListener ?? throw new GatewayControlException("listener_unavailable","The running Gateway does not expose its remote listener lifecycle service.");
 			var listenerReadiness=listener.EnsureConfigured(registry); router.Reload(updated);
-			await Task.CompletedTask; return new { host_id=hostId,archive_path=archive,sha256=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archive))),transport=useTls?"mutual_tls":"authenticated_plaintext",replaced_existing_host=replacing,launch_command=@".\launcher\Start-dgSpyRemoteHost.cmd",transferred=false,executed=false,gateway_restart_required=false,gateway_ready=true,listener=listenerReadiness };
+			await Task.CompletedTask; return new { host_id=hostId,archive_path=archive,sha256=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archive))),compression,transport=useTls?"mutual_tls":"authenticated_plaintext",replaced_existing_host=replacing,launch_command=@".\launcher\Start-dgSpyRemoteHost.cmd",transferred=false,executed=false,gateway_restart_required=false,gateway_ready=true,listener=listenerReadiness };
 		} finally { if(Directory.Exists(staging)) Directory.Delete(staging,true); if(File.Exists(temporaryArchive)) File.Delete(temporaryArchive); }
 	}
 	async Task<object> RemoteReadinessAsync(string? hostId,HostRouter router,CancellationToken token) { if(string.IsNullOrWhiteSpace(hostId)) throw new GatewayControlException("invalid_arguments","host_id is required."); var hosts=await router.ListHostsAsync(token); var selected=hosts.Select(item=>System.Text.Json.JsonSerializer.Serialize(item)).FirstOrDefault(json=>json.Contains($"\"host_id\":\"{hostId}\"",StringComparison.Ordinal)); return new { host_id=hostId,registered=selected is not null,connected=selected?.Contains("\"state\":\"connected\"",StringComparison.Ordinal)==true,hosts }; }
@@ -599,7 +601,7 @@ public sealed class DeploymentService {
 	/// failure reads as the action's fault rather than the install's. That is precisely the late failure the
 	/// required-files entry was added to eliminate, surviving one layer down.
 	///
-	/// This mirrors <c>Test-HookLabPayload</c> in <c>packaging\HookLabPayload.ps1</c>: parse the manifest,
+	/// This mirrors the DgSpyTool layout verifier: parse the manifest,
 	/// take the single hooklab_bootstrap entry, compare size, recompute SHA-256 over the bytes, and compare
 	/// against the package manifest's independent record when there is one. It deliberately does not repeat
 	/// that script's reachable-copy scan, which walks every file of a self-contained publish and belongs to
