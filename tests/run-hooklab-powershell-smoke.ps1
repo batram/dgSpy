@@ -61,20 +61,20 @@ try {
 	if(-not $module) { throw 'fixture module was not found' }
 	Status "ATTACHED session=$sessionId module_id=$($module.module_id)"
 	$base=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate';kind='Prefix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='Calculate';method_token=$facts.Token;signature=$facts.Signature;module_mvid=$facts.Mvid;il_sha256=$facts.IlSha256}
-	$base.source='public static class PowerShellPrefixV1 { public static bool Prefix(ref int __result) { __result=777; return false; } }'; $base.revision=1
+	$base.source='public static class PowerShellPrefixV1 { public static void Prefix(ref int value) { value += 10; } }'; $base.revision=1
 	$null=Rpc 'install_hook' $base 70
-	if(-not (Wait-Observed 777)) { throw 'revision 1 did not produce 777' }
-	Status 'PREFIX_REVISION_1_OK value=777'
+	if(-not (Wait-Observed 52)) { throw 'Prefix revision 1 did not mutate value from 41 to 51 before the original returned 52' }
+	Status 'PREFIX_NAMED_ARGUMENT_OK value=52'
 
-	$base.kind='Postfix'; $base.source='public static class PowerShellPostfixV2 { public static void Postfix(ref int __result) { __result += 100; } }'; $base.revision=2
+	$base.kind='Postfix'; $base.source='public static class PowerShellPostfixV2 { public static void Postfix(int value, ref int __result) { __result += value; } }'; $base.revision=2
 	$null=Rpc 'install_hook' $base 70
-	if(-not (Wait-Observed 142)) { throw 'Postfix revision 2 did not preserve the original 42 and add 100' }
-	Status 'PREFIX_TO_POSTFIX_UPDATE_OK value=142'
+	if(-not (Wait-Observed 83)) { throw 'Postfix revision 2 did not preserve the original 42 and add named argument value 41' }
+	Status 'POSTFIX_NAMED_ARGUMENT_OK value=83'
 
 	$base.source='this is not C#'; $base.revision=3
 	try { $null=Rpc 'install_hook' $base 70; throw 'broken revision unexpectedly installed' } catch { if($_.Exception.Message -notlike '*CS*') { throw }; Status 'BROKEN_UPDATE_REJECTED diagnostics=CS' }
-	if(-not (Wait-Observed 142)) { throw 'broken update did not preserve Postfix result 142' }
-	Status 'ROLLBACK_OK value=142'
+	if(-not (Wait-Observed 83)) { throw 'broken update did not preserve Postfix result 83' }
+	Status 'ROLLBACK_OK value=83'
 
 	$base.source='public static class PowerShellPostfixV3 { public static void Postfix(ref int __result) { __result += 200; } }'
 	$null=Rpc 'install_hook' $base 70

@@ -161,6 +161,22 @@ namespace HookLab.Probe.Tests {
 		}
 
 		[Fact]
+		public void CompiledPrefixCanMutateANamedOriginalArgument() {
+			using (var runtime = Runtime()) {
+				runtime.InstallCompiledHook(TargetMethod, Document(), "public static class UserHook { public static void Prefix(ref int left) { left += 10; } }", 1, 0);
+				Assert.Equal(13, Fixture.Add(1, 2));
+			}
+		}
+
+		[Fact]
+		public void CompiledPostfixCanReadANamedOriginalArgument() {
+			using (var runtime = Runtime()) {
+				runtime.InstallCompiledHook(TargetMethod, Document(HookKind.Postfix), "public static class UserHook { public static void Postfix(int left, ref int __result) { __result += left; } }", 1, 0);
+				Assert.Equal(4, Fixture.Add(1, 2));
+			}
+		}
+
+		[Fact]
 		public void RingOverflowCarriesProvenDropAccounting() {
 			var buffer = new BoundedEventBuffer(2, 1000);
 			for (var index = 0; index < 5; index++) buffer.TryAppend(dropped => Event(index, dropped));
