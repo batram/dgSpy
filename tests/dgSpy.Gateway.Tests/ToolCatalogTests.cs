@@ -318,7 +318,7 @@ public sealed class ToolCatalogTests {
 
 	[Fact]
 	public void Every_exact_module_tool_exposes_the_opaque_identity() {
-		foreach(var name in new[]{"run_to_method","run_to_location","set_il_breakpoint","set_instruction_pointer","list_types","list_members","get_il","get_csharp","set_breakpoint","find_references","find_implementations","get_metadata","analyze_symbol","get_raw_module"}) {
+		foreach(var name in new[]{"run_to_method","run_to_location","set_il_breakpoint","set_instruction_pointer","list_types","list_members","get_il","get_csharp","set_breakpoint","find_references","find_implementations","get_metadata","analyze_symbol","get_raw_module","get_hook_template"}) {
 			var tool=ToolCatalog.All.Single(value=>Name(value)==name);
 			Assert.True(InputProperties(tool).ContainsKey("module_id"),$"{name} cannot consume the exact module identity returned by discovery.");
 			var wire=ProtocolJson.ToNode(tool)!.AsObject();

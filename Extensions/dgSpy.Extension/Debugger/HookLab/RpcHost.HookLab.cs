@@ -21,6 +21,18 @@ namespace dgSpy.Extension {
 
 		Task<object> InitializeHookLabAsync(RpcRequest req,CancellationToken token) => hookLab.InitializeAsync(this,req,token);
 		object GetHookLabStatus(RpcRequest req) { CheckSession(req); return hookLab.Status(RequiredSession(req),(int?)req.Arguments["process_id"]); }
+		async Task<object> GetHookTemplateAsync(RpcRequest req,CancellationToken token) {
+			CheckSession(req);
+			var template=(string?)req.Arguments["template"] ?? "PrefixPostfix";
+			return await OnDebuggerAsync(()=>{
+				var loaded=FindModule(req,null);
+				var metadata=TryMetadata(loaded) ?? throw new RpcException("metadata_unavailable","The selected module has no readable metadata.");
+				var tokenValue=(int?)req.Arguments["method_token"] ?? throw new RpcException("invalid_arguments","method_token is required.");
+				var method=metadata.ResolveToken(unchecked((uint)tokenValue)) as MethodDef ?? throw new RpcException("method_not_found",$"Token 0x{tokenValue:X8} is not a method in the selected module.");
+				var target=TemplateTarget(method);
+				return new { template,source=HookSourceTemplate.Generate(target,template),suggested_revision=1,target=new { module_id=ModuleIdOf(loaded),method_token=tokenValue,declaring_type=method.DeclaringType.FullName,method=method.Name.ToString(),signature=MethodSignature(method),module_mvid=method.Module.Mvid?.ToString("D")??"",il_sha256=MethodIlSha256(method) } };
+			},token).ConfigureAwait(false);
+		}
 		Task<object> InstallHookAsync(RpcRequest req,CancellationToken token) => hookLab.InstallAsync(this,req,token);
 		object ListHooks(RpcRequest req) { CheckSession(req); var session=(string?)req.Arguments["session_id"] ?? throw new RpcException("invalid_arguments","session_id is required."); return hookLab.List(session,(int?)req.Arguments["process_id"]); }
 		Task<object> GetHookEventsAsync(RpcRequest req,CancellationToken token) { CheckSession(req); return hookLab.ReadEventsAsync(this,req,token); }
@@ -64,6 +76,22 @@ namespace dgSpy.Extension {
 		}
 		ModuleDef? TryMetadata(dnSpy.Contracts.Debugger.DbgModule module) { try { return metadataService.TryGetMetadata(module); } catch(Exception) { return null; } }
 		static string MethodSignature(MethodDef method)=>method.MethodSig.RetType.FullName+" "+method.Name+"("+String.Join(",",method.MethodSig.Params.Select(parameter=>parameter.FullName))+")";
+		static HookTemplateTarget TemplateTarget(MethodDef method) {
+			if(method.GenericParameters.Count!=0||method.DeclaringType.GenericParameters.Count!=0) throw new RpcException("unsupported_hook_target","Generic methods and methods on generic types do not have generated hook templates yet.");
+			var parameters=method.MethodSig.Params.Select((type,index)=>{
+				var definition=method.ParamDefs.FirstOrDefault(parameter=>parameter.Sequence==index+1);
+				var name=definition is null||String.IsNullOrWhiteSpace(definition.Name?.ToString())?"__"+index.ToString(CultureInfo.InvariantCulture):definition.Name!.ToString();
+				var modifier=type is ByRefSig ? (definition?.IsOut==true?"out":"ref") : "";
+				return new HookTemplateParameter(name,CSharpHookType(type),modifier);
+			}).ToArray();
+			return new HookTemplateTarget(CSharpHookType(method.DeclaringType.ToTypeSig()),method.IsStatic,CSharpHookType(method.MethodSig.RetType),parameters);
+		}
+		static string CSharpHookType(TypeSig type) {
+			var name=type.FullName;
+			if(type is ByRefSig) name=name.TrimEnd('&');
+			if(name.IndexOf('`')>=0||name.IndexOf('!')>=0||name.IndexOf('*')>=0||name.IndexOf('<')>=0) throw new RpcException("unsupported_hook_target","Generic, pointer, and function-pointer types do not have generated hook templates yet.");
+			return name.Replace('/','.');
+		}
 		static string MethodIlSha256(MethodDef method) {
 			if(method.Module is not ModuleDefMD module || method.Body is null) throw new RpcException("metadata_unavailable","The selected method's original IL bytes are unavailable.");
 			var reader=module.Metadata.PEImage.CreateReader(method.RVA+(uint)method.Body.HeaderSize); var bytes=reader.ReadBytes(method.Body.Instructions.Sum(instruction=>instruction.GetSize()));

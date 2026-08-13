@@ -605,6 +605,48 @@
       }
     },
     {
+      "name": "get_hook_template",
+      "description": "Generate editable no-op Prefix, Postfix, or paired Prefix/Postfix C# source for one exactly selected non-generic method. Read-only: resolves metadata only and does not initialize HookLab or modify the target.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
+          "method_token": {
+            "type": "integer"
+          },
+          "template": {
+            "type": "string",
+            "enum": [
+              "Prefix",
+              "Postfix",
+              "PrefixPostfix"
+            ],
+            "description": "Default PrefixPostfix."
+          }
+        },
+        "required": [
+          "session_id",
+          "module_id",
+          "method_token"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
       "name": "install_hook",
       "description": "SIDE EFFECTING and audited. Install an observation hook, or create/update compiled custom Prefix/Postfix source when source and a monotonically increasing revision are supplied. Exact MVID, token, signature, and IL digest guards are required. Prototype custom hooks use the same-user unauthenticated resident pipe.",
       "inputSchema": {

@@ -28,6 +28,7 @@ Initialization is idempotent. Hook operations fail with `hooklab_not_initialized
 
 - `initialize_hooklab`
 - `get_hooklab_status`
+- `get_hook_template`
 - `create_hook`
 - `update_hook`
 - `enable_hook`
@@ -66,7 +67,15 @@ method, lists compiled revision state, and removes every method in a paired patc
 Windows PowerShell acceptance target proves create, update, failed-update rollback, and removal while
 the target runs.
 
-Enable/disable without removal, a source editor, Finalizer, Transpiler, generic-target handling, and
+`get_hook_template` now supplies editable no-op Prefix, Postfix, or paired Prefix/Postfix C# for an
+exactly selected non-generic method. It derives the declaring type, original parameter names and
+`ref`/`out` modifiers, `__instance`, `__result`, and paired `__state` directly from module metadata.
+The packaged PowerShell acceptance proves both static and instance template shapes and proves that
+this read-only operation does not initialize HookLab or alter the target. Generated templates compile
+and patch through the same resident Harmony path as hand-written source.
+
+GUI consumption of the generated templates, enable/disable without removal, a source editor,
+Finalizer, Transpiler, generic-target handling, and
 broader compilation references remain unfinished. Initialization and packaging are no longer the
 active design problem.
 
@@ -151,6 +160,7 @@ Already reusable:
 - verified bootstrap with embedded probe and Harmony;
 - native autonomous initialization plus a bounded managed fallback;
 - `initialize_hooklab` and `get_hooklab_status` in MCP and GUI;
+- read-only `get_hook_template` for metadata-derived Prefix/Postfix source without initialization;
 - `Prepare()` creates and retains a resident runtime and pipe without a hook;
 - resident `install`, `uninstall`, `status`, and event drain;
 - exact guards, bounded observer events, cleanup, packaging, and host-only deployment;
@@ -160,6 +170,7 @@ Already reusable:
 
 Still missing:
 
+- GUI method selection and source editor consuming the shared generated templates;
 - enable/disable state that preserves source and diagnostics;
 - public `create_hook`, `update_hook`, `enable_hook`, and `disable_hook` operations;
 - UnityExplorer-style source editor and matching GUI/MCP state;

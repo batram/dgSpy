@@ -63,6 +63,16 @@ try {
 	$module=@($moduleResult.modules | Where-Object { $_.mvid -eq $facts.Mvid -or $_.filename -like '*HookLabPowerShellFixture*' -or $_.name -like '*HookLabPowerShellFixture*' } | Select-Object -First 1)[0]
 	if(-not $module) { throw 'fixture module was not found' }
 	Status "ATTACHED session=$sessionId module_id=$($module.module_id)"
+	$beforeTemplate=Rpc 'get_hooklab_status' @{session_id=$sessionId;process_id=$child.Id}
+	if($beforeTemplate.initialized) { throw 'HookLab was initialized before the template request' }
+	$template=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$facts.Token;template='PrefixPostfix'}
+	if($template.source -notlike '*public static void Prefix*' -or $template.source -notlike '*public static void Postfix*' -or $template.source -notlike '*out object __state*' -or $template.source -like '*__instance*') { throw 'static PrefixPostfix template shape was incorrect' }
+	$afterTemplate=Rpc 'get_hooklab_status' @{session_id=$sessionId;process_id=$child.Id}
+	if($afterTemplate.initialized) { throw 'read-only template request initialized HookLab' }
+	$instanceFacts=Facts $fixtureDll 'HookLabPowerShellFixture.InstanceTarget' 'System.Int32 Calculate(System.Int32)'
+	$instanceTemplate=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$instanceFacts.Token;template='Postfix'}
+	if($instanceTemplate.source -notlike '*HookLabPowerShellFixture.InstanceTarget __instance*' -or $instanceTemplate.source -notlike '*ref System.Int32 __result*') { throw 'instance Postfix template shape was incorrect' }
+	Status 'HOOK_TEMPLATE_READ_ONLY_OK static=PrefixPostfix instance=Postfix initialized=false'
 	$base=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate';kind='Prefix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='Calculate';method_token=$facts.Token;signature=$facts.Signature;module_mvid=$facts.Mvid;il_sha256=$facts.IlSha256}
 	$base.source='public static class PowerShellPairV1 { public static void Prefix(ref int value, out int __state) { __state = value; value += 10; } public static void Postfix(int __state, ref int __result) { __result += __state; } }'; $base.revision=1
 	$null=Rpc 'install_hook' $base 70
@@ -87,7 +97,6 @@ try {
 	if(-not (Wait-Observed 42)) { throw 'removal did not restore 42' }
 	Status 'REMOVE_OK value=42'
 
-	$instanceFacts=Facts $fixtureDll 'HookLabPowerShellFixture.InstanceTarget' 'System.Int32 Calculate(System.Int32)'
 	$instanceRequest=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-instance-calculate';kind='Postfix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.InstanceTarget';method='Calculate';method_token=$instanceFacts.Token;signature=$instanceFacts.Signature;module_mvid=$instanceFacts.Mvid;il_sha256=$instanceFacts.IlSha256;revision=1;source='public static class PowerShellInstancePostfix { public static void Postfix(HookLabPowerShellFixture.InstanceTarget __instance, ref int __result) { __result += __instance.Offset; } }'}
 	$null=Rpc 'install_hook' $instanceRequest 70
 	if(-not (Wait-Observed 11 $instanceObservedPath)) { throw 'instance Postfix did not receive Offset 5 and produce 11' }

@@ -13,5 +13,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\HookLab\HookLab.Probe.CorDebug\HookLab.Probe.CorDebug.csproj" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\HookLab\HookSourceTemplate.cs" Link="HookSourceTemplate.cs" />
   </ItemGroup>
 </Project>

@@ -10,6 +10,7 @@ using HookLab.Contracts;
 using HookLab.Probe.CorDebug;
 using HookLab.Probe.CorDebug.Patching;
 using Xunit;
+using dgSpy.Extension;
 
 namespace HookLab.Probe.Tests {
 	public sealed class ProbeCoreTests {
@@ -233,6 +234,35 @@ namespace HookLab.Probe.Tests {
 				runtime.InstallCompiledHook(PrivateTargetMethod, document, "public static class UserHook { public static void Prefix(ref int ___offset) { ___offset += 10; } }", 1, 0);
 				Assert.Equal(16, new PrivateInstanceFixture(5).Calculate(1));
 			}
+		}
+
+		[Theory]
+		[InlineData("Prefix")]
+		[InlineData("Postfix")]
+		[InlineData("PrefixPostfix")]
+		public void GeneratedHookTemplatesCompileAndPatch(string template) {
+			var target = new HookTemplateTarget("HookLab.Probe.Tests.ProbeCoreTests.InstanceFixture",false,"System.Int32",new[] { new HookTemplateParameter("value","System.Int32","") });
+			var source = HookSourceTemplate.Generate(target,template);
+			Assert.Contains("InstanceFixture __instance",source,StringComparison.Ordinal);
+			if(template=="PrefixPostfix") { Assert.Contains("out object __state",source,StringComparison.Ordinal); Assert.Contains("object __state",source,StringComparison.Ordinal); }
+			using(var runtime=Runtime()) {
+				var kind=template=="Postfix"?HookKind.Postfix:HookKind.Prefix;
+				var document=new HookDocument(1,"generated",kind,GuardFor(InstanceTargetMethod),"{}",Limits,true);
+				runtime.InstallCompiledHook(InstanceTargetMethod,document,source,1,0);
+				Assert.Equal(6,new InstanceFixture(5).Calculate(1));
+			}
+		}
+
+		[Fact]
+		public void GeneratedTemplatePreservesRefOutAndArraySyntax() {
+			var target=new HookTemplateTarget("Fixture",true,"System.Void",new[] {
+				new HookTemplateParameter("left","System.Int32","ref"),
+				new HookTemplateParameter("right","System.String[]","out")
+			});
+			var source=HookSourceTemplate.Generate(target,"Prefix");
+			Assert.Contains("ref System.Int32 @left",source,StringComparison.Ordinal);
+			Assert.Contains("out System.String[] @right",source,StringComparison.Ordinal);
+			Assert.DoesNotContain("__result",source,StringComparison.Ordinal);
 		}
 
 		[Fact]

@@ -51,6 +51,7 @@
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\HookLab\HookLabDrainPolicy.cs" Link="Debugger\HookLab\HookLabDrainPolicy.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\HookLab\HookLabInstallPresentation.cs" Link="Debugger\HookLab\HookLabInstallPresentation.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\HookLab\HookCarrierSelectionPolicy.cs" Link="Debugger\HookLab\HookCarrierSelectionPolicy.cs" />
+	<Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\HookLab\HookSourceTemplate.cs" Link="Debugger\HookLab\HookSourceTemplate.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcException.cs" Link="Rpc\RpcException.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcSecurity.cs" Link="Rpc\RpcSecurity.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\SymbolSearchQuery.cs" Link="Decompiler\SymbolSearchQuery.cs" />

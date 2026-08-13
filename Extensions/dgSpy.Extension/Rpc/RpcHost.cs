@@ -313,6 +313,7 @@ namespace dgSpy.Extension {
 			case "run_atomic_action": return RpcResponse.Success(req.RequestId,await RunAtomicActionAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "initialize_hooklab": return RpcResponse.Success(req.RequestId,await InitializeHookLabAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "get_hooklab_status": return RpcResponse.Success(req.RequestId,GetHookLabStatus(req));
+			case "get_hook_template": return RpcResponse.Success(req.RequestId,await GetHookTemplateAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "install_hook": return RpcResponse.Success(req.RequestId,await InstallHookAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "list_hooks": return RpcResponse.Success(req.RequestId,ListHooks(req));
 			case "get_hook_events": return RpcResponse.Success(req.RequestId,await GetHookEventsAsync(req,requestCancellation.Token).ConfigureAwait(false));
