@@ -52,6 +52,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 		public long HooksVersion { get { lock (gate) return hooksVersion; } }
 		public bool IsAutoDisabled(string patchId) { lock (gate) return hooks.TryGetValue(patchId, out var context) && context.Disabled; }
 		public int? CompiledRevision(string patchId) { lock (gate) return compiledHooks.TryGetValue(patchId, out var context) ? context.Revision : (int?)null; }
+		public bool? IsEnabled(string patchId) { lock (gate) { if (hooks.TryGetValue(patchId, out var observed)) return observed.Enabled; if (compiledHooks.TryGetValue(patchId, out var compiled)) return compiled.Enabled; return null; } }
 
 		public CompiledPatchOperationResult InstallCompiledHook(MethodBase method, HookDocument document, string source, int revision, long expectedHooksVersion) {
 			if (method == null) throw new ArgumentNullException(nameof(method));
@@ -69,9 +70,9 @@ namespace HookLab.Probe.CorDebug.Patching {
 				if (hooks.ContainsKey(patchId)) throw new InvalidOperationException("The hook id is already used by an observational hook.");
 				compiledHooks.TryGetValue(patchId, out var old);
 				if (old != null && revision <= old.Revision) throw new InvalidOperationException("Compiled hook revision must increase.");
-				var candidate = new CompiledHookContext(method, patchId, document, source, revision, compiled.Methods);
+				var candidate = new CompiledHookContext(method, patchId, document, source, revision, compiled.Methods) { Enabled=old == null || old.Enabled };
 				try {
-					harmony.Patch(method,
+					if(candidate.Enabled) harmony.Patch(method,
 						compiled.Prefix == null ? null : new HarmonyMethod(compiled.Prefix),
 						compiled.Postfix == null ? null : new HarmonyMethod(compiled.Postfix));
 				}
@@ -83,7 +84,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 					return new CompiledPatchOperationResult(patchId, hooksVersion, revision, true);
 				}
 				catch {
-					foreach (var patchMethod in compiled.Methods) harmony.Unpatch(method, patchMethod);
+					if(candidate.Enabled) foreach (var patchMethod in compiled.Methods) harmony.Unpatch(method, patchMethod);
 					throw;
 				}
 			}
@@ -117,6 +118,24 @@ namespace HookLab.Probe.CorDebug.Patching {
 			}
 		}
 
+		public PatchOperationResult SetEnabled(string patchId, bool enabled, long expectedHooksVersion) {
+			lock (gate) {
+				ThrowIfDisposed(); CheckVersion(expectedHooksVersion);
+				if (hooks.TryGetValue(patchId, out var observed)) {
+					if (observed.Enabled == enabled) return new PatchOperationResult(patchId, hooksVersion, false);
+					observed.Enabled = enabled;
+				}
+				else if (compiledHooks.TryGetValue(patchId, out var compiled)) {
+					if (compiled.Enabled == enabled) return new PatchOperationResult(patchId, hooksVersion, false);
+					if (enabled) ApplyCompiled(compiled); else foreach (var patchMethod in compiled.PatchMethods) harmony.Unpatch(compiled.Method, patchMethod);
+					compiled.Enabled = enabled;
+				}
+				else throw new KeyNotFoundException("Hook patch was not found: " + patchId);
+				hooksVersion++;
+				return new PatchOperationResult(patchId, hooksVersion, true);
+			}
+		}
+
 		public ProbeState GetState() {
 			lock (gate) return new ProbeState(1, ProbeInstanceId, initialization.IdentityProvider.GetCurrentIdentity(), Inventory.SelectedIdentity, hooksVersion, hooks.Keys.Concat(compiledHooks.Keys).OrderBy(x => x).ToArray());
 		}
@@ -128,6 +147,11 @@ namespace HookLab.Probe.CorDebug.Patching {
 			else if (kind == HookKind.Postfix) postfix = new HarmonyMethod(dispatch);
 			else finalizer = new HarmonyMethod(dispatch);
 			harmony.Patch(method, prefix, postfix, null, finalizer);
+		}
+		void ApplyCompiled(CompiledHookContext context) {
+			var prefix=context.PatchMethods.SingleOrDefault(method=>method.Name=="Prefix");
+			var postfix=context.PatchMethods.SingleOrDefault(method=>method.Name=="Postfix");
+			harmony.Patch(context.Method,prefix is null?null:new HarmonyMethod(prefix),postfix is null?null:new HarmonyMethod(postfix));
 		}
 
 		void RemoveCore(HookContext context) {
@@ -202,6 +226,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 		internal HookDocument Document { get; }
 		internal string Source { get; }
 		internal int Revision { get; }
+		internal bool Enabled { get; set; }=true;
 		internal MethodInfo[] PatchMethods { get; }
 	}
 
@@ -215,9 +240,9 @@ namespace HookLab.Probe.CorDebug.Patching {
 			Runtime = runtime; Method = method; PatchId = patchId; Document = document; InstalledVersion = installedVersion;
 		}
 		internal ProbeRuntime Runtime { get; } internal MethodBase Method { get; } internal string PatchId { get; }
-		internal HookDocument Document { get; } internal long InstalledVersion { get; } internal bool Disabled { get; private set; }
+		internal HookDocument Document { get; } internal long InstalledVersion { get; } internal bool Disabled { get; private set; } internal bool Enabled { get; set; }=true;
 		internal void Invoke(object? instance, object[] args, object? result, Exception? exception) {
-			if (Disabled) return;
+			if (!Enabled || Disabled) return;
 			if (dispatching) { Runtime.RecordReentrantSuppression(); return; }
 			dispatching = true;
 			try {

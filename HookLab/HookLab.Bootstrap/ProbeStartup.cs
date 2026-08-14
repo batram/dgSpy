@@ -402,6 +402,13 @@ namespace HookLab.Bootstrap {
 			return OperationReport(probe.Uninstall(patchId, probe.HooksVersion));
 		}
 
+		internal static string SetEnabledPrepared(string patchId, bool enabled) {
+			if (string.IsNullOrWhiteSpace(patchId)) throw new ArgumentException("A patch id is required.", nameof(patchId));
+			ProbeRuntime probe;
+			lock (Gate) probe = runtime as ProbeRuntime ?? throw new InvalidOperationException("The probe is not initialized yet.");
+			return OperationReport(probe.SetEnabled(patchId, enabled, probe.HooksVersion));
+		}
+
 		static string OperationReport(PatchOperationResult result) =>
 			"status=ok\npatch_id=" + result.PatchId + "\nhooks_version=" + result.HooksVersion.ToString(CultureInfo.InvariantCulture) +
 			"\nchanged=" + (result.Changed ? "true" : "false") + "\nresidency_commit=completed\nbehavior_commit=completed\n" +
@@ -549,6 +556,10 @@ namespace HookLab.Bootstrap {
 			}
 			if (string.Equals(operation, "uninstall", StringComparison.Ordinal))
 				return new ProbeCommandResult(UninstallPrepared(payloadJson), probe.HooksVersion);
+			if (string.Equals(operation, "enable", StringComparison.Ordinal))
+				return new ProbeCommandResult(SetEnabledPrepared(payloadJson, true), probe.HooksVersion);
+			if (string.Equals(operation, "disable", StringComparison.Ordinal))
+				return new ProbeCommandResult(SetEnabledPrepared(payloadJson, false), probe.HooksVersion);
 			if (string.Equals(operation, "install", StringComparison.Ordinal))
 				return new ProbeCommandResult(InstallPrepared(BootstrapParameters.Parse(payloadJson)), probe.HooksVersion);
 			if (string.Equals(operation, "install_compiled_prefix", StringComparison.Ordinal))

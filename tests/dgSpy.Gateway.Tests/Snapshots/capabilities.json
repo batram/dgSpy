@@ -109,6 +109,20 @@
       "result_schema_version": 1
     },
     {
+      "operation": "create_hook",
+      "max_duration_ms": 65000,
+      "mutates_session": true,
+      "operation_version": 1,
+      "result_schema_version": 1
+    },
+    {
+      "operation": "update_hook",
+      "max_duration_ms": 65000,
+      "mutates_session": true,
+      "operation_version": 1,
+      "result_schema_version": 1
+    },
+    {
       "operation": "list_hooks",
       "max_duration_ms": 5000,
       "mutates_session": false,
@@ -119,6 +133,20 @@
       "operation": "get_hook_events",
       "max_duration_ms": 65000,
       "mutates_session": false,
+      "operation_version": 1,
+      "result_schema_version": 1
+    },
+    {
+      "operation": "enable_hook",
+      "max_duration_ms": 65000,
+      "mutates_session": true,
+      "operation_version": 1,
+      "result_schema_version": 1
+    },
+    {
+      "operation": "disable_hook",
+      "max_duration_ms": 65000,
+      "mutates_session": true,
       "operation_version": 1,
       "result_schema_version": 1
     },

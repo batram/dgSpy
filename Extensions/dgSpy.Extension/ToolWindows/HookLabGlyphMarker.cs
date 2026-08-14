@@ -41,6 +41,8 @@ namespace dgSpy.Extension.ToolWindows {
 		public HookLabGlyphSummary(dnlib.DotNet.MethodDef method,int total,int compiled,int observers) { Method=method; Total=total; Compiled=compiled; Observers=observers; }
 		public dnlib.DotNet.MethodDef Method { get; } public int Total { get; } public int Compiled { get; } public int Observers { get; }
 		public void Show()=>HookLabUiBridge.ShowMethod(Method);
+		public bool CanEdit=>HookLabUiBridge.SingleCompiled(Method) is not null;
+		public void Edit() { var row=HookLabUiBridge.SingleCompiled(Method); if(row is not null) new CustomHookEditorDialog(row).ShowDialog(); else Show(); }
 		public override string ToString()=>"HookLab: "+Total+" hook"+(Total==1?"":"s")+" ("+Compiled+" compiled, "+Observers+" observer)";
 	}
 
@@ -59,5 +61,11 @@ namespace dgSpy.Extension.ToolWindows {
 	sealed class ShowHookLabGlyphCommand : MenuItemBase {
 		public override bool IsVisible(IMenuItemContext context)=>context.Find<HookLabGlyphSummary>() is not null;
 		public override void Execute(IMenuItemContext context)=>context.Find<HookLabGlyphSummary>()?.Show();
+	}
+
+	[ExportMenuItem(OwnerGuid=MenuConstants.GLYPHMARGIN_GUID,Header="Edit Custom Hook...",Group="0,16473E86-060B-4F19-849E-BBBD63390093",Order=10)]
+	sealed class EditHookLabGlyphCommand : MenuItemBase {
+		public override bool IsVisible(IMenuItemContext context)=>context.Find<HookLabGlyphSummary>()?.CanEdit==true;
+		public override void Execute(IMenuItemContext context)=>context.Find<HookLabGlyphSummary>()?.Edit();
 	}
 }

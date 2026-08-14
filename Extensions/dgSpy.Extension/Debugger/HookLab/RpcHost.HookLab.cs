@@ -35,8 +35,12 @@ namespace dgSpy.Extension {
 			},token).ConfigureAwait(false);
 		}
 		Task<object> InstallHookAsync(RpcRequest req,CancellationToken token) => hookLab.InstallAsync(this,req,token);
+		Task<object> CreateHookAsync(RpcRequest req,CancellationToken token) => hookLab.CreateAsync(this,req,token);
+		Task<object> UpdateHookAsync(RpcRequest req,CancellationToken token) => hookLab.UpdateAsync(this,req,token);
 		object ListHooks(RpcRequest req) { CheckSession(req); var session=(string?)req.Arguments["session_id"] ?? throw new RpcException("invalid_arguments","session_id is required."); return hookLab.List(session,(int?)req.Arguments["process_id"]); }
 		Task<object> GetHookEventsAsync(RpcRequest req,CancellationToken token) { CheckSession(req); return hookLab.ReadEventsAsync(this,req,token); }
+		Task<object> EnableHookAsync(RpcRequest req,CancellationToken token) => hookLab.SetEnabledAsync(this,req,true,token);
+		Task<object> DisableHookAsync(RpcRequest req,CancellationToken token) => hookLab.SetEnabledAsync(this,req,false,token);
 		Task<object> RemoveHookAsync(RpcRequest req,CancellationToken token) => hookLab.RemoveAsync(this,req,token);
 		Task<object> RemoveAllHooksAsync(RpcRequest req,CancellationToken token) => hookLab.RemoveAllAsync(this,req,token);
 		static string RequiredSession(RpcRequest req)=>(string?)req.Arguments["session_id"] ?? throw new RpcException("invalid_arguments","session_id is required.");
@@ -181,20 +185,29 @@ namespace dgSpy.Extension {
 				}
 			}
 
-			public async Task<object> InstallAsync(RpcHost host,RpcRequest source,CancellationToken token) {
+			public Task<object> InstallAsync(RpcHost host,RpcRequest source,CancellationToken token) => InstallAsync(host,source,null,token);
+			public Task<object> CreateAsync(RpcHost host,RpcRequest source,CancellationToken token) => InstallAsync(host,source,"create",token);
+			public Task<object> UpdateAsync(RpcHost host,RpcRequest source,CancellationToken token) => InstallAsync(host,source,"update",token);
+
+			async Task<object> InstallAsync(RpcHost host,RpcRequest source,string? lifecycle,CancellationToken token) {
 				host.CheckSession(source);
 				BindUi(host);
 				var definition=HookDefinition.Parse(source.Arguments);
+				if(lifecycle is not null && definition.Source is null) throw new RpcException("invalid_arguments",lifecycle+"_hook requires source and revision.");
+				if(lifecycle=="create" && definition.Revision!=1) throw new RpcException("invalid_arguments","create_hook requires revision 1.");
 				bool initialized; lock(gate) initialized=runtimes.ContainsKey(RuntimeKey(definition.SessionId,definition.ProcessId));
 				if(!initialized) await InitializeAsync(host,source,token).ConfigureAwait(false);
-				var compiled=definition.Source is not null;
+				var compiled=definition.Source is not null; var enabled=true;
 				lock(gate) {
 					if(hooks.TryGetValue(definition.Key,out var existing)) {
+						if(lifecycle=="create") throw new RpcException("hook_exists","Hook ID '"+definition.HookId+"' is already installed in this process. Use update_hook to replace its compiled source.");
+						enabled=existing.Enabled;
 						if(!compiled && existing.Definition.Equivalent(definition)) return Installed(existing,false);
 						if(compiled && !existing.Definition.SameTarget(definition)) throw new RpcException("hook_exists","Hook ID '"+definition.HookId+"' already names a different target in this process.");
 						if(compiled && definition.Revision<=existing.Definition.Revision) throw new RpcException("invalid_arguments","revision must be greater than the installed revision.");
 						if(!compiled) throw new RpcException("hook_exists","Hook ID '"+definition.HookId+"' already names a different installed hook in this process.");
 					}
+					else if(lifecycle=="update") throw new RpcException("hook_not_found","Hook ID '"+definition.HookId+"' is not installed in this process. Use create_hook for its first revision.");
 				}
 
 				var parameters=definition.Parameters("unused");
@@ -203,9 +216,21 @@ namespace dgSpy.Extension {
 				MethodDef? markerMethod=null;
 				try { markerMethod=await host.OnDebuggerAsync(()=>{ var module=host.FindModule(source,null); return host.TryMetadata(module)?.ResolveToken(unchecked((uint)definition.MethodToken)) as MethodDef; },token).ConfigureAwait(false); }
 				catch(Exception) { }
-				var installedRecord=new HookRecord(definition,Required(report,"patch_id","The probe installed a hook without reporting its patch ID."));
-				lock(gate) hooks[definition.Key]=installedRecord; HookLabUiBridge.PublishHook(definition.SessionId,definition.ProcessId,definition.HookId,definition.Kind,definition.DeclaringType+"."+definition.Method,installedRecord.PatchId,definition.Revision,compiled,definition.Source,markerMethod);
+				var installedRecord=new HookRecord(definition,Required(report,"patch_id","The probe installed a hook without reporting its patch ID.")) { MethodDefinition=markerMethod,Enabled=enabled };
+				lock(gate) hooks[definition.Key]=installedRecord; HookLabUiBridge.PublishHook(definition.SessionId,definition.ProcessId,definition.HookId,definition.Kind,definition.DeclaringType+"."+definition.Method,installedRecord.PatchId,definition.Revision,compiled,definition.Source,enabled,markerMethod);
 				return Installed(installedRecord,true);
+			}
+
+			public async Task<object> SetEnabledAsync(RpcHost host,RpcRequest source,bool enabled,CancellationToken token) {
+				host.CheckSession(source);
+				var session=Required(source.Arguments,"session_id"); var process=RequiredInt(source.Arguments,"process_id"); var hookId=Required(source.Arguments,"hook_id");
+				HookRecord record; lock(gate) if(!hooks.TryGetValue(Key(session,process,hookId),out record!)) throw new RpcException("hook_not_found","Hook ID '"+hookId+"' is not installed in this process.");
+				if(record.Enabled==enabled) return new { hook=View(record),changed=false };
+				var runtime=ForOperation(source.Arguments);
+				await SendAsync(runtime,enabled?"enable":"disable",record.PatchId,token).ConfigureAwait(false);
+				lock(gate) record.Enabled=enabled;
+				HookLabUiBridge.PublishHook(session,process,hookId,record.Definition.Kind,record.Definition.DeclaringType+"."+record.Definition.Method,record.PatchId,record.Definition.Revision,record.Definition.Source is not null,record.Definition.Source,enabled,record.MethodDefinition);
+				return new { hook=View(record),changed=true };
 			}
 
 			public object List(string sessionId,int? processId) {
@@ -265,6 +290,7 @@ namespace dgSpy.Extension {
 				(method,id,kind,rate,stringLength)=>host.InstallSelectedHookAsync(method,id,kind,rate,stringLength,CancellationToken.None),
 				(method,template)=>host.GenerateSelectedHookTemplate(method,template),
 				(method,id,kind,source,revision)=>host.InstallSelectedHookAsync(method,id,kind,100,1024,source,revision,CancellationToken.None),
+				async (session,process,hookId,enabled)=>{ var args=new JsonObject { ["session_id"]=session,["process_id"]=process,["hook_id"]=hookId }; await SetEnabledAsync(host,new RpcRequest { Operation=enabled?"enable_hook":"disable_hook",Arguments=args },enabled,CancellationToken.None).ConfigureAwait(false); },
 				async (session,process,hookId)=>{ var args=new JsonObject { ["session_id"]=session,["process_id"]=process,["hook_id"]=hookId }; await RemoveAsync(host,new RpcRequest { Operation="remove_hook",Arguments=args },CancellationToken.None).ConfigureAwait(false); },
 				async (session,process)=>{ var args=new JsonObject { ["session_id"]=session,["process_id"]=process }; await RemoveAllAsync(host,new RpcRequest { Operation="remove_all_hooks",Arguments=args },CancellationToken.None).ConfigureAwait(false); });
 
@@ -425,7 +451,7 @@ namespace dgSpy.Extension {
 			static RpcRequest ControlRequest(RpcRequest source)=>new RpcRequest { Operation=source.Operation,Arguments=new JsonObject { ["session_id"]=Required(source.Arguments,"session_id"),["process_id"]=RequiredInt(source.Arguments,"process_id") } };
 			static object Initialized(RuntimeRecord runtime,bool changed,Dictionary<string,string>? status=null)=>new { initialized=true,changed,process_id=runtime.ProcessId,state="ready",hooks_version=runtime.HooksVersion,probe_instance_id=status is null?null:(status.TryGetValue("probe_instance_id",out var value)?value:null) };
 			static object Installed(HookRecord record,bool changed) => new { hook=View(record),installed=changed };
-			static object View(HookRecord record) => new { hook_id=record.Definition.HookId,patch_id=record.PatchId,kind=record.Definition.Kind,revision=record.Definition.Revision,compiled=record.Definition.Source is not null,process_id=record.Definition.ProcessId,module_id=record.Definition.ModuleId,method_token=record.Definition.MethodToken,declaring_type=record.Definition.DeclaringType,method=record.Definition.Method,state="installed" };
+			static object View(HookRecord record) => new { hook_id=record.Definition.HookId,patch_id=record.PatchId,kind=record.Definition.Kind,revision=record.Definition.Revision,compiled=record.Definition.Source is not null,source=record.Definition.Source,diagnostics=Array.Empty<string>(),enabled=record.Enabled,process_id=record.Definition.ProcessId,module_id=record.Definition.ModuleId,method_token=record.Definition.MethodToken,declaring_type=record.Definition.DeclaringType,method=record.Definition.Method,state=record.Enabled?"enabled":"disabled" };
 			static void EnsureCompleted(AtomicActionResult result,string operation) { if(result.Status.ActionOutcome!=HookLab.Contracts.ActionOutcome.completed) throw new RpcException("hook_operation_failed",HookLabInstallPresentation.Failure(operation,result.Status.ActionOutcome,result.Status.InterruptionReason,result.Error)); }
 			static Dictionary<string,string> Report(AtomicActionResult result) { var node=JsonNode.Parse(result.VerificationEvidence ?? "{}") as JsonObject; return ParseReport((string?)node?["report"] ?? ""); }
 			static Dictionary<string,string> ParseReport(string text) { var values=new Dictionary<string,string>(StringComparer.Ordinal); foreach(var line in text.Split(new[]{'\n'},StringSplitOptions.RemoveEmptyEntries)) { var separator=line.IndexOf('='); if(separator>0) values[line.Substring(0,separator)]=line.Substring(separator+1); } return values; }
@@ -453,7 +479,7 @@ namespace dgSpy.Extension {
 			static string Key(string session,int process,string hookId)=>session+"\n"+process.ToString(CultureInfo.InvariantCulture)+"\n"+hookId;
 			static string RuntimeKey(string session,int process)=>session+"\n"+process.ToString(CultureInfo.InvariantCulture);
 
-			sealed class HookRecord { public HookRecord(HookDefinition definition,string patchId) { Definition=definition; PatchId=patchId; } public HookDefinition Definition { get; } public string PatchId { get; } }
+			sealed class HookRecord { public HookRecord(HookDefinition definition,string patchId) { Definition=definition; PatchId=patchId; } public HookDefinition Definition { get; } public string PatchId { get; } public bool Enabled=true; public MethodDef? MethodDefinition; }
 			sealed class HookCarrier { public HookCarrier(string moduleId,int methodToken,int ilOffset,int[] nearbyOffsets,string appDomainId) { ModuleId=moduleId; MethodToken=methodToken; IlOffset=ilOffset; NearbyOffsets=nearbyOffsets; AppDomainId=appDomainId; } public string ModuleId { get; } public int MethodToken { get; } public int IlOffset { get; } public int[] NearbyOffsets { get; } public string AppDomainId { get; } }
 			sealed class RuntimeRecord : IDisposable { public RuntimeRecord(string sessionId,int processId,ProbeConnection connection,long hooksVersion) { SessionId=sessionId; ProcessId=processId; Connection=connection; HooksVersion=hooksVersion; } public string SessionId { get; } public int ProcessId { get; } public ProbeConnection Connection { get; } public long HooksVersion; public SemaphoreSlim OperationGate { get; }=new SemaphoreSlim(1,1); public CancellationTokenSource Cancellation { get; }=new CancellationTokenSource(); public Task? Pump; public void Dispose() { Cancellation.Cancel(); Connection.Dispose(); OperationGate.Dispose(); Cancellation.Dispose(); } }
 			sealed class HookEventRecord { public HookEventRecord(long cursor,string sequence,string patchId,string payloadJson,long dropped) { Cursor=cursor; Sequence=sequence; PatchId=patchId; PayloadJson=payloadJson; Dropped=dropped; } public long Cursor { get; } public string Sequence { get; } public string PatchId { get; } public string PayloadJson { get; } public long Dropped { get; } }

@@ -26,6 +26,17 @@ public sealed class HookLabUiBoundaryTests {
 		Assert.Contains("newCustomHookEditorDialog(value).ShowDialog()",source,StringComparison.Ordinal);
 		Assert.Contains("existing.Revision+1,existing.Source,existing.Kind",source,StringComparison.Ordinal);
 		Assert.Contains("id.IsReadOnly=existingisnotnull",source,StringComparison.Ordinal);
+		Assert.Contains("Header=\"EditCustomHook...\"",source,StringComparison.Ordinal);
+		Assert.Contains("Header=\"ShowMethodinSource\"",source,StringComparison.Ordinal);
+		Assert.Contains("hookList.PreviewMouseRightButtonDown",source,StringComparison.Ordinal);
+		Assert.Contains("item.IsSelected=true",source,StringComparison.Ordinal);
+		Assert.Contains("hookList.MouseDoubleClick+=(s,e)=>vm.ActivateSelected()",source,StringComparison.Ordinal);
+		Assert.Contains("TextWrapping=TextWrapping.Wrap",source,StringComparison.Ordinal);
+		Assert.Contains("VerticalContentAlignment=VerticalAlignment.Top",source,StringComparison.Ordinal);
+		Assert.Contains("toggleHook.SetBinding(Button.ContentProperty,\"ToggleLabel\")",source,StringComparison.Ordinal);
+		Assert.Contains("toggleHook.SetBinding(IsEnabledProperty,\"CanToggle\")",source,StringComparison.Ordinal);
+		Assert.Contains("Header=\"State\"",source,StringComparison.Ordinal);
+		Assert.Contains("record.Enabled?\"enabled\":\"disabled\"",Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs"))),StringComparison.Ordinal);
 	}
 
 	[Fact]
@@ -35,6 +46,16 @@ public sealed class HookLabUiBoundaryTests {
 		Assert.Contains("awaitinitialization.WaitAsync(token)",source,StringComparison.Ordinal);
 		Assert.Contains("finally{initialization.Release();}",source,StringComparison.Ordinal);
 		Assert.Contains("report.ContainsKey(\"pipe_name\")",source,StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void Compiled_hook_api_separates_create_update_and_publishes_editable_state() {
+		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
+		Assert.Contains("CreateAsync(RpcHosthost,RpcRequestsource,CancellationTokentoken)=>InstallAsync(host,source,\"create\",token)",source,StringComparison.Ordinal);
+		Assert.Contains("UpdateAsync(RpcHosthost,RpcRequestsource,CancellationTokentoken)=>InstallAsync(host,source,\"update\",token)",source,StringComparison.Ordinal);
+		Assert.Contains("if(lifecycle==\"create\")thrownewRpcException(\"hook_exists\"",source,StringComparison.Ordinal);
+		Assert.Contains("elseif(lifecycle==\"update\")thrownewRpcException(\"hook_not_found\"",source,StringComparison.Ordinal);
+		Assert.Contains("source=record.Definition.Source,diagnostics=Array.Empty<string>()",source,StringComparison.Ordinal);
 	}
 
 	[Fact]
@@ -53,6 +74,8 @@ public sealed class HookLabUiBoundaryTests {
 		Assert.Contains("HookLabUiBridge.Snapshot().Hooks",source,StringComparison.Ordinal);
 		Assert.Contains("OnMouseLeftButtonUp",source,StringComparison.Ordinal);
 		Assert.Contains("Header=\"ShowinHookLab\"",source,StringComparison.Ordinal);
+		Assert.Contains("Header=\"EditCustomHook...\"",source,StringComparison.Ordinal);
+		Assert.Contains("HookLabUiBridge.SingleCompiled(Method)",source,StringComparison.Ordinal);
 	}
 
 	static string Normalize(string value)=>String.Concat(value.Where(character=>!Char.IsWhiteSpace(character)));

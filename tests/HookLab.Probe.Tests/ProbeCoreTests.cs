@@ -115,12 +115,51 @@ namespace HookLab.Probe.Tests {
 		}
 
 		[Fact]
+		public void ObservationalHookCanBeDisabledAndEnabledWithoutLosingItsRecord() {
+			using (var runtime = Runtime()) {
+				var installed = runtime.Install(TargetMethod, Document(), 0);
+				Fixture.Add(2, 3); Assert.Single(runtime.Events.Drain(10));
+				var disabled = runtime.SetEnabled(installed.PatchId, false, 1);
+				Assert.True(disabled.Changed); Assert.False(runtime.IsEnabled(installed.PatchId));
+				Fixture.Add(2, 3); Assert.Empty(runtime.Events.Drain(10));
+				Assert.False(runtime.SetEnabled(installed.PatchId, false, 2).Changed);
+				var enabled = runtime.SetEnabled(installed.PatchId, true, 2);
+				Assert.True(enabled.Changed); Assert.True(runtime.IsEnabled(installed.PatchId));
+				Fixture.Add(2, 3); Assert.Single(runtime.Events.Drain(10));
+			}
+		}
+
+		[Fact]
 		public void CompiledPrefixCanReplaceTheResultAndSkipTheOriginal() {
 			using (var runtime = Runtime()) {
 				var installed = runtime.InstallCompiledHook(TargetMethod, Document(), PrefixReturning(41), 1, 0);
 				Assert.Equal(41, Fixture.Add(1, 2));
 				Assert.Equal(1, installed.Revision);
 				Assert.Equal(1, runtime.CompiledRevision(installed.PatchId));
+			}
+		}
+
+		[Fact]
+		public void CompiledHookCanBeDisabledAndEnabledWithoutRecompilationOrRevisionLoss() {
+			using (var runtime = Runtime()) {
+				var installed = runtime.InstallCompiledHook(TargetMethod, Document(), PrefixReturning(41), 1, 0);
+				Assert.Equal(41, Fixture.Add(1, 2));
+				runtime.SetEnabled(installed.PatchId, false, 1);
+				Assert.Equal(3, Fixture.Add(1, 2)); Assert.Equal(1, runtime.CompiledRevision(installed.PatchId)); Assert.False(runtime.IsEnabled(installed.PatchId));
+				runtime.SetEnabled(installed.PatchId, true, 2);
+				Assert.Equal(41, Fixture.Add(1, 2)); Assert.Equal(1, runtime.CompiledRevision(installed.PatchId)); Assert.True(runtime.IsEnabled(installed.PatchId));
+			}
+		}
+
+		[Fact]
+		public void UpdatingADisabledCompiledHookKeepsTheNewRevisionDisabled() {
+			using (var runtime = Runtime()) {
+				var installed = runtime.InstallCompiledHook(TargetMethod, Document(), PrefixReturning(41), 1, 0);
+				runtime.SetEnabled(installed.PatchId, false, 1);
+				var updated = runtime.InstallCompiledHook(TargetMethod, Document(), PrefixReturning(73), 2, 2);
+				Assert.False(runtime.IsEnabled(updated.PatchId)); Assert.Equal(2, runtime.CompiledRevision(updated.PatchId)); Assert.Equal(3, Fixture.Add(1, 2));
+				runtime.SetEnabled(updated.PatchId, true, 3);
+				Assert.Equal(73, Fixture.Add(1, 2));
 			}
 		}
 

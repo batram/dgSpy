@@ -231,8 +231,12 @@ namespace dgSpy.Protocol {
 			Op("get_hooklab_status",5000,version:1),
 			Op("get_hook_template",5000,version:1),
 			Op("install_hook",65000,mutates:true,version:1),
+			Op("create_hook",65000,mutates:true,version:1),
+			Op("update_hook",65000,mutates:true,version:1),
 			Op("list_hooks",5000,version:1),
 			Op("get_hook_events",65000,version:1),
+			Op("enable_hook",65000,mutates:true,version:1),
+			Op("disable_hook",65000,mutates:true,version:1),
 			Op("remove_hook",65000,mutates:true,version:1),
 			Op("remove_all_hooks",65000,mutates:true,version:1),
 			// start_atomic_action returns after registration, not after the action - so its bound is the

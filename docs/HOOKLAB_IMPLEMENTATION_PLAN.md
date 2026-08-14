@@ -78,8 +78,9 @@ and patch through the same resident Harmony path as hand-written source, includi
 both `ref` and original `out` parameters. Invalid template selections, non-method tokens, and generic
 targets fail with stable public errors.
 
-The first GUI source-editor slice is complete. **Create Custom Hook...** on the selected dnSpy method
-opens the shared generated Prefix, Postfix, or paired Prefix/Postfix source, permits editing the hook
+The first GUI source-editor and public compiled-hook lifecycle slice is complete. **Create Custom Hook...**
+on the selected dnSpy method opens the shared generated Prefix, Postfix, or paired Prefix/Postfix source,
+permits editing the hook
 ID and complete C# unit, and compiles and installs revision 1 through the same service as MCP. Compiler
 failure leaves the dialog and entered source open, and installed rows distinguish compiled C# from
 observational hooks and show the revision. Invoking the editor again for its default installed ID now
@@ -88,8 +89,13 @@ revision invariant to the user. HookLab dialogs use dnSpy's native themed window
 show a dedicated teal hook glyph on the method-definition line; hover summarizes the method's hooks,
 left-click opens HookLab and selects the exact module/token row, and the glyph context menu provides
 **Show in HookLab**. Any selected compiled row can now be reopened with **Edit**, preserving its exact
-ID and source and automatically advancing to revision N+1; observer rows remain non-editable. Enable/
-disable without removal, Finalizer, Transpiler,
+ID and source and automatically advancing to revision N+1; observer rows remain non-editable. Hook rows
+show and toggle Enabled/Disabled state without discarding source, revision, compiled methods, or target
+identity. MCP now exposes explicit `create_hook` and `update_hook` operations: create accepts only revision
+1 and refuses an existing ID, while update requires an existing hook, a higher revision, and the same
+exactly guarded target. Both return editable source and successful diagnostic state; compiler failure
+leaves the last good revision untouched. `install_hook` remains the observational and compatibility path.
+Finalizer, Transpiler,
 generic-target handling, and broader compilation references remain unfinished. Initialization and
 packaging are no longer the active design problem.
 
@@ -136,7 +142,8 @@ Start with one complete compiled Prefix path rather than implementing every phas
 a resident hook record containing stable ID, guarded target identity, source, revision, compiled patch,
 enabled state, bounded diagnostics, and the last successful revision. Compile and validate a candidate
 before changing the active patch; a failed create changes nothing, and a failed update leaves the
-previous working hook installed. Then add enable/disable without deleting source or diagnostics.
+previous working hook installed. Enable/disable preserves that record and does not recompile on enable;
+updating a disabled compiled hook keeps its successful new revision disabled until explicitly enabled.
 
 Verified Prefix/Postfix source may use Harmony conventions including named original arguments, `ref`
 argument mutation, `__instance`, `__args`, `__result`, paired `__state`, `___fieldName` injection, and
@@ -147,7 +154,7 @@ binding or IL machinery that duplicates Harmony.
 Do not reintroduce a generic provider framework, export-project system, credential lifecycle, or
 cross-process compiler service before the resident compiler proves it is needed.
 
-### 4. Make the GUI a hook editor - create slice complete
+### 4. Make the GUI a hook editor - create/update slice complete
 
 The HookLab window first shows Not initialized, Initializing, Ready, or Failed with Retry. It provides
 **Initialize HookLab** and may offer initialization when Create Hook is chosen.
@@ -185,9 +192,6 @@ Already reusable:
 Still missing:
 
 - live GUI acceptance for the explicit Edit action (the row-owned source/revision path is implemented);
-- enable/disable state that preserves source and diagnostics;
-- public `create_hook`, `update_hook`, `enable_hook`, and `disable_hook` operations;
-- matching editable source and diagnostics in GUI and MCP hook state;
 - compiled Finalizer and Transpiler after Prefix/Postfix are proven;
 - generic-target handling and broader compilation references when a concrete hook requires them;
 - package-level acceptance for toggling; behavior-changing source, failed-update rollback, removal,
@@ -195,10 +199,9 @@ Still missing:
 
 ## Work order and build-boundary seam
 
-Keep the active HookLab editor/state work together. First prove the already-implemented explicit Edit
-action through the packaged GUI. Then add enable/disable without deleting the resident hook record, and
-split compiled-source creation and revision replacement into public `create_hook` and `update_hook`
-operations while retaining `install_hook` temporarily for compatibility.
+Keep the active HookLab editor/state work together. The explicit Edit action, enable/disable, and public
+`create_hook` / `update_hook` lifecycle are implemented; prove them together through the packaged GUI.
+Retain `install_hook` temporarily for observational hooks and compatibility.
 
 After that coherent Prefix/Postfix state and API slice is package-proven, finish the remaining build
 dependency cleanup from [BUILD_PIPELINE_TODO.md](BUILD_PIPELINE_TODO.md): the packaged component build

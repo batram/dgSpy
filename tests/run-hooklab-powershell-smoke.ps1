@@ -83,24 +83,37 @@ try {
 	Status 'HOOK_TEMPLATE_READ_ONLY_OK static=PrefixPostfix instance=Postfix invalid=refused non_method=refused generic=refused initialized=false'
 	$base=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate';kind='Prefix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='Calculate';method_token=$facts.Token;signature=$facts.Signature;module_mvid=$facts.Mvid;il_sha256=$facts.IlSha256}
 	$base.source='public static class PowerShellPairV1 { public static void Prefix(ref int value, out int __state) { __state = value; value += 10; } public static void Postfix(int __state, ref int __result) { __result += __state; } }'; $base.revision=1
-	$null=Rpc 'install_hook' $base 70
+	$created=Rpc 'create_hook' $base 70
+	if($created.hook.revision -ne 1 -or $created.hook.source -ne $base.source -or $created.hook.diagnostics.Count -ne 0) { throw 'create_hook did not publish editable source and successful diagnostics state' }
+	try { $null=Rpc 'create_hook' $base 70; throw 'duplicate create unexpectedly succeeded' } catch { if($_.Exception.Message -notlike '*hook_exists*') { throw } }
+	$missing=@{}; foreach($pair in $base.GetEnumerator()) { $missing[$pair.Key]=$pair.Value }; $missing.hook_id='missing-compiled-hook'; $missing.revision=2
+	try { $null=Rpc 'update_hook' $missing 70; throw 'missing update unexpectedly succeeded' } catch { if($_.Exception.Message -notlike '*hook_not_found*') { throw } }
+	Status 'CREATE_UPDATE_LIFECYCLE_OK duplicate=refused missing=refused source=listed diagnostics=empty'
 	if(-not (Wait-Observed 93)) { throw 'paired revision 1 did not mutate 41 to 51, return 52, and add shared state 41' }
 	Status 'PREFIX_POSTFIX_STATE_OK value=93'
 
 	$base.kind='Postfix'; $base.source='public static class PowerShellPostfixV2 { public static void Postfix(int value, ref int __result) { __result += value; } }'; $base.revision=2
-	$null=Rpc 'install_hook' $base 70
+	$null=Rpc 'update_hook' $base 70
 	if(-not (Wait-Observed 83)) { throw 'Postfix revision 2 did not preserve the original 42 and add named argument value 41' }
 	Status 'POSTFIX_NAMED_ARGUMENT_OK value=83'
 
 	$base.source='this is not C#'; $base.revision=3
-	try { $null=Rpc 'install_hook' $base 70; throw 'broken revision unexpectedly installed' } catch { if($_.Exception.Message -notlike '*CS*') { throw }; Status 'BROKEN_UPDATE_REJECTED diagnostics=CS' }
+	try { $null=Rpc 'update_hook' $base 70; throw 'broken revision unexpectedly installed' } catch { if($_.Exception.Message -notlike '*CS*') { throw }; Status 'BROKEN_UPDATE_REJECTED diagnostics=CS' }
 	if(-not (Wait-Observed 83)) { throw 'broken update did not preserve Postfix result 83' }
 	Status 'ROLLBACK_OK value=83'
 
 	$base.source='public static class PowerShellPostfixV3 { public static void Postfix(ref int __result) { __result += 200; } }'
-	$null=Rpc 'install_hook' $base 70
+	$null=Rpc 'update_hook' $base 70
 	if(-not (Wait-Observed 242)) { throw 'Postfix revision 3 did not produce 242' }
 	Status 'POSTFIX_REVISION_3_OK value=242'
+	$disabled=Rpc 'disable_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate'} 30
+	if($disabled.changed -ne $true -or $disabled.hook.enabled -ne $false -or $disabled.hook.revision -ne 3 -or -not (Wait-Observed 42)) { throw 'disable did not preserve revision 3 while restoring original behavior 42' }
+	$idempotent=Rpc 'disable_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate'} 30
+	if($idempotent.changed -ne $false) { throw 'repeated disable was not idempotent' }
+	Status 'DISABLE_PRESERVES_COMPILED_STATE_OK revision=3 value=42'
+	$enabled=Rpc 'enable_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate'} 30
+	if($enabled.changed -ne $true -or $enabled.hook.enabled -ne $true -or $enabled.hook.revision -ne 3 -or -not (Wait-Observed 242)) { throw 'enable did not reactivate revision 3 without recompilation' }
+	Status 'ENABLE_RESTORES_COMPILED_STATE_OK revision=3 value=242'
 	$observer=@{}; foreach($pair in $base.GetEnumerator()) { $observer[$pair.Key]=$pair.Value }
 	$observer.Remove('source'); $observer.Remove('revision'); $observer.hook_id='powershell-calculate-observer'; $observer.kind='Postfix'
 	$null=Rpc 'install_hook' $observer 30

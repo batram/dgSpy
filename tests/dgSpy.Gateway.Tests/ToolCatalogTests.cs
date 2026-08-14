@@ -317,6 +317,23 @@ public sealed class ToolCatalogTests {
 	}
 
 	[Fact]
+	public void HookLab_compiled_lifecycle_has_explicit_create_and_update_contracts() {
+		var create=ToolCatalog.All.Single(tool=>Name(tool)=="create_hook");
+		var update=ToolCatalog.All.Single(tool=>Name(tool)=="update_hook");
+		foreach(var tool in new[]{create,update}) {
+			var properties=InputProperties(tool);
+			Assert.True(properties.ContainsKey("source"));
+			Assert.True(properties.ContainsKey("revision"));
+			var required=ProtocolJson.FromNode<string[]>(ProtocolJson.ToNode(tool)!["inputSchema"]?["required"]) ?? Array.Empty<string>();
+			Assert.Contains("source",required);
+			Assert.Contains("revision",required);
+			Assert.DoesNotContain("arrival_method_token",properties.Keys);
+			Assert.DoesNotContain("expected_stop_id",properties.Keys);
+		}
+		Assert.Equal(1,InputProperties(create)["revision"].GetType().GetProperty("const")!.GetValue(InputProperties(create)["revision"]));
+	}
+
+	[Fact]
 	public void Every_exact_module_tool_exposes_the_opaque_identity() {
 		foreach(var name in new[]{"run_to_method","run_to_location","set_il_breakpoint","set_instruction_pointer","list_types","list_members","get_il","get_csharp","set_breakpoint","find_references","find_implementations","get_metadata","analyze_symbol","get_raw_module","get_hook_template"}) {
 			var tool=ToolCatalog.All.Single(value=>Name(value)==name);

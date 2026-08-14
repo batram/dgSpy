@@ -742,6 +742,198 @@
       }
     },
     {
+      "name": "create_hook",
+      "description": "SIDE EFFECTING and audited. Compile and create revision 1 of a custom Prefix or Postfix hook. Fails if hook_id already exists; use update_hook for replacement. Exact MVID, token, signature, and IL digest guards are required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "hook_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "Prefix",
+              "Postfix"
+            ]
+          },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
+          "assembly": {
+            "type": "string"
+          },
+          "declaring_type": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "method_token": {
+            "type": "integer"
+          },
+          "signature": {
+            "type": "string"
+          },
+          "module_mvid": {
+            "type": "string"
+          },
+          "il_sha256": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "Complete C# source declaring the custom Prefix or Postfix and optionally its companion."
+          },
+          "revision": {
+            "type": "integer",
+            "const": 1
+          },
+          "maximum_events_per_second": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maximum_string_length": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          }
+        },
+        "required": [
+          "session_id",
+          "process_id",
+          "hook_id",
+          "kind",
+          "module_id",
+          "assembly",
+          "declaring_type",
+          "method",
+          "method_token",
+          "signature",
+          "module_mvid",
+          "il_sha256",
+          "source",
+          "revision",
+          "expected_execution_version"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "update_hook",
+      "description": "SIDE EFFECTING and audited. Compile a higher revision and atomically replace an existing custom Prefix or Postfix hook. Compiler failure leaves the last good revision and enabled state unchanged. Exact target identity must match the existing hook.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "hook_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "Prefix",
+              "Postfix"
+            ]
+          },
+          "module_id": {
+            "type": "string",
+            "description": "Opaque exact identity returned by list_modules, search, frames, and symbol results. It is scoped to one debugger session; refresh discovery after stale_module_id."
+          },
+          "assembly": {
+            "type": "string"
+          },
+          "declaring_type": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "method_token": {
+            "type": "integer"
+          },
+          "signature": {
+            "type": "string"
+          },
+          "module_mvid": {
+            "type": "string"
+          },
+          "il_sha256": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "Complete replacement C# source."
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 2
+          },
+          "maximum_events_per_second": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maximum_string_length": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          }
+        },
+        "required": [
+          "session_id",
+          "process_id",
+          "hook_id",
+          "kind",
+          "module_id",
+          "assembly",
+          "declaring_type",
+          "method",
+          "method_token",
+          "signature",
+          "module_mvid",
+          "il_sha256",
+          "source",
+          "revision",
+          "expected_execution_version"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
       "name": "list_hooks",
       "description": "List HookLab observation hooks owned by this dgSpy session.",
       "inputSchema": {
@@ -764,6 +956,80 @@
       },
       "annotations": {
         "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "enable_hook",
+      "description": "SIDE EFFECTING and audited. Re-enable an installed HookLab hook without recompiling it or changing its source, revision, diagnostics, or target identity.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "hook_id": {
+            "type": "string"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          }
+        },
+        "required": [
+          "session_id",
+          "process_id",
+          "hook_id",
+          "expected_execution_version"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "disable_hook",
+      "description": "SIDE EFFECTING and audited. Disable an installed HookLab hook while preserving its source, revision, diagnostics, and target identity for later re-enable or edit.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "hook_id": {
+            "type": "string"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          }
+        },
+        "required": [
+          "session_id",
+          "process_id",
+          "hook_id",
+          "expected_execution_version"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
         "destructiveHint": false,
         "idempotentHint": false
       }
