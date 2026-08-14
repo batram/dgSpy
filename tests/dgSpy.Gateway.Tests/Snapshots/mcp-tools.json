@@ -148,18 +148,21 @@
     },
     {
       "name": "create_remote_host_package",
-      "description": "SIDE EFFECTING and audited. Personalize the bundled self-contained host payload and create a remote ZIP; it never builds, transfers, or executes the host. compression defaults to optimal; use none for fastest extraction or fastest for light compression.",
+      "description": "SIDE EFFECTING and audited. Create or replace a personalized ZIP for a remote Windows debugger host; the host does not need to be connected. gateway_address is an IP address or DNS hostname only, never a URL or host:port: this tool selects port 7353 for mutual TLS or 7352 for authenticated plaintext. It never builds, transfers, or executes the host. compression defaults to optimal; use none for fastest extraction or fastest for light compression.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "host_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Stable logical identity for the remote debugger host, for example winagain-iis. The host does not need to be currently connected."
           },
           "gateway_address": {
-            "type": "string"
+            "type": "string",
+            "description": "IP address or DNS hostname of this Gateway as reachable from the remote Windows host. Supply only the address, with no URL scheme and no port. The tool selects port 7353 for mutual TLS or 7352 for authenticated plaintext."
           },
           "use_tls": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Remote host transport. true or omitted uses mutual TLS on port 7353; false uses authenticated plaintext on port 7352. This protocol is not HTTP."
           },
           "output_root": {
             "type": "string"

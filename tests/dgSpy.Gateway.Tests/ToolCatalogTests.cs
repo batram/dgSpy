@@ -157,6 +157,23 @@ public sealed class ToolCatalogTests {
 		Assert.Contains("final preceding",snapDescription,StringComparison.Ordinal);
 	}
 
+	[Fact]
+	public void Remote_package_schema_exposes_the_complete_endpoint_contract() {
+		var tool=ToolCatalog.All.Single(t=>Name(t)=="create_remote_host_package");
+		var description=Description(tool);
+		Assert.Contains("does not need to be connected",description,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("never a URL or host:port",description,StringComparison.OrdinalIgnoreCase);
+		var properties=InputProperties(tool);
+		var hostDescription=(string)properties["host_id"].GetType().GetProperty("description")!.GetValue(properties["host_id"])!;
+		var addressDescription=(string)properties["gateway_address"].GetType().GetProperty("description")!.GetValue(properties["gateway_address"])!;
+		var transportDescription=(string)properties["use_tls"].GetType().GetProperty("description")!.GetValue(properties["use_tls"])!;
+		Assert.Contains("does not need to be currently connected",hostDescription,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("no URL scheme and no port",addressDescription,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("7353",addressDescription,StringComparison.Ordinal);
+		Assert.Contains("7352",addressDescription,StringComparison.Ordinal);
+		Assert.Contains("not HTTP",transportDescription,StringComparison.OrdinalIgnoreCase);
+	}
+
 	[Theory]
 	[InlineData("list_threads")]
 	[InlineData("invoke_method")]

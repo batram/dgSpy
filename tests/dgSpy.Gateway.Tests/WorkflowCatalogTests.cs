@@ -46,4 +46,13 @@ public sealed class WorkflowCatalogTests {
 		Assert.Contains("retry safe detach without closing dnSpy",WorkflowCatalog.Lookup("shutdown").Guidance,StringComparison.Ordinal);
 		Assert.Contains("terminate destroys the target",WorkflowCatalog.Lookup("cleanup").Guidance,StringComparison.Ordinal);
 	}
+
+	[Fact]
+	public void Remote_deployment_guidance_does_not_invent_endpoint_questions() {
+		var guidance=WorkflowCatalog.Lookup("remote_deployment").Guidance;
+		Assert.Contains("ask only for values not already supplied",guidance,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("never includes a URL scheme or port",guidance,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("disconnected or unavailable",guidance,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("does not block packaging",guidance,StringComparison.OrdinalIgnoreCase);
+	}
 }
