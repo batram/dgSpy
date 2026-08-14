@@ -17,8 +17,8 @@ operation exposes carrier methods, atomic actions, prepare/commit, payload gener
    its command channel, and restores the target's previous running or paused state.
 4. Select a method in dnSpy or identify it through MCP.
 5. Create a hook from a template or editable C# source.
-6. The resident runtime compiles and applies Prefix and Postfix methods directly. Finalizer and
-   Transpiler remain later slices.
+6. The resident runtime compiles and applies Prefix, Postfix, and Finalizer methods directly.
+   Transpiler remains a later slice.
 7. Edit, recompile, enable, disable, inspect, or remove hooks while the target keeps running.
 
 Initialization is idempotent. Hook operations fail with `hooklab_not_initialized` and point to
@@ -59,7 +59,8 @@ immutable C# build/package/install pipeline; its exact 1,902-file package passed
 including 414 debugger checks, 52 atomic-action checks, and 49 HookLab GUI/install checks.
 
 Resident source compilation is now package-proven for complete C# units containing one public static
-Prefix, one public static Postfix, or one of each. Harmony supplies named argument binding, `ref`
+Prefix, Postfix, or Finalizer method, or paired Prefix/Postfix methods. Harmony supplies named argument
+binding, `ref`
 argument mutation, `__instance`, `__args`, `__result`, paired `__state`, and `___fieldName` injection.
 HookLab compiles before mutation, requires monotonically increasing revisions, preserves the last good
 revision after compiler failure, permits Prefix/Postfix phase replacement on the same exactly guarded
@@ -67,7 +68,8 @@ method, lists compiled revision state, and removes every method in a paired patc
 Windows PowerShell acceptance target proves create, update, failed-update rollback, and removal while
 the target runs.
 
-`get_hook_template` now supplies editable no-op Prefix, Postfix, or paired Prefix/Postfix C# for an
+`get_hook_template` now supplies editable no-op Prefix, Postfix, paired Prefix/Postfix, or
+exception-preserving Finalizer C# for an
 exactly selected non-generic method. It derives the declaring type, original parameter names and
 CLR by-reference arguments as Harmony-compatible `ref` parameters, `__instance`, `__result`, and
 paired `__state` directly from module metadata. Missing or invalid C# parameter names receive stable
@@ -102,8 +104,7 @@ Enabled methods use the bright teal glyph; an all-disabled method uses a muted s
 clickable margin reflects runtime state without opening HookLab.
 The plain C# editor fills its available height regardless of source length. Rich syntax formatting remains
 a separate editor-integration slice.
-Finalizer, Transpiler,
-generic-target handling, and broader compilation references remain unfinished. Initialization and
+Transpiler, generic-target handling, and broader compilation references remain unfinished. Initialization and
 packaging are no longer the active design problem.
 
 ## One implementation through-line
@@ -139,7 +140,7 @@ Keep exact MVID, token, signature, and IL digest checks. Resolve the guarded met
 `MethodBase` inside the resident runtime before compiling or patching. Hook IDs are stable and
 conflicting reuse is refused.
 
-### 3. Add resident arbitrary C# hooks - complete for Prefix and Postfix
+### 3. Add resident arbitrary C# hooks - complete for Prefix, Postfix, and Finalizer
 
 Follow UnityExplorer's useful model: each hook owns editable source, compiled patch methods, target
 identity, enabled state, diagnostics, and Harmony patch handles. Provide templates for call logger,
@@ -155,7 +156,8 @@ updating a disabled compiled hook keeps its successful new revision disabled unt
 Verified Prefix/Postfix source may use Harmony conventions including named original arguments, `ref`
 argument mutation, `__instance`, `__args`, `__result`, paired `__state`, `___fieldName` injection, and
 a boolean Prefix that skips the original. Compilation happens in the target context. Compiler errors
-are bounded structured diagnostics. Finalizer and Transpiler remain later phases; do not add custom
+are bounded structured diagnostics. Finalizer can preserve, replace, or suppress an exception through
+Harmony's `__exception` convention. Transpiler remains a later phase; do not add custom
 binding or IL machinery that duplicates Harmony.
 
 Do not reintroduce a generic provider framework, export-project system, credential lifecycle, or
@@ -199,7 +201,7 @@ Already reusable:
 Still missing:
 
 - live GUI acceptance for the explicit Edit action (the row-owned source/revision path is implemented);
-- compiled Finalizer and Transpiler after Prefix/Postfix are proven;
+- compiled Transpiler after the source lifecycle and Finalizer are proven;
 - generic-target handling and broader compilation references when a concrete hook requires them;
 - package-level acceptance for toggling; behavior-changing source, failed-update rollback, removal,
   and clean detach are already proven against an ordinary CLR v4 PowerShell target.
@@ -216,9 +218,8 @@ compile-dependency file references from immutable `host-raw`, while dgSpy and Ho
 remain normal project references. The global `BuildProjectReferences=false` workaround is gone and a
 structural regression test protects the boundary.
 
-Human GUI acceptance is the final checkpoint before starting compiled Finalizer or Transpiler work.
-Those larger phases now begin on the intended build graph rather than extending temporary dependency
-suppression.
+Compiled Finalizer is the next completed vertical slice on the intended build graph. Transpiler remains
+separate because its instruction-oriented validation is a distinct complexity boundary.
 
 ## Execution rule
 

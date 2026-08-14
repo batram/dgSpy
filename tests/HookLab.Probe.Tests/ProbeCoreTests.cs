@@ -204,6 +204,29 @@ namespace HookLab.Probe.Tests {
 		}
 
 		[Fact]
+		public void CompiledFinalizerCanSuppressAndThenReplaceAnException() {
+			var method=typeof(Fixture).GetMethod(nameof(Fixture.Throwing))!;
+			var document=new HookDocument(1,"compiled-finalizer",HookKind.Finalizer,GuardFor(method),"{}",Limits,true);
+			using(var runtime=Runtime()) {
+				var installed=runtime.InstallCompiledHook(method,document,"public static class UserHook { public static System.Exception Finalizer(System.Exception __exception) { return null; } }",1,0);
+				Fixture.Throwing();
+				var updated=runtime.InstallCompiledHook(method,document,"public static class UserHook { public static System.Exception Finalizer(System.Exception __exception) { return new System.InvalidOperationException(\"replaced\", __exception); } }",2,1);
+				var error=Assert.Throws<InvalidOperationException>(()=>Fixture.Throwing()); Assert.Equal("replaced",error.Message); Assert.IsType<FixtureException>(error.InnerException);
+				Assert.Equal(installed.PatchId,updated.PatchId); Assert.Equal(2,updated.Revision);
+			}
+		}
+
+		[Fact]
+		public void CompiledFinalizerToggleRestoresAndSuppressesTheOriginalException() {
+			var method=typeof(Fixture).GetMethod(nameof(Fixture.Throwing))!;
+			var document=new HookDocument(1,"toggle-finalizer",HookKind.Finalizer,GuardFor(method),"{}",Limits,true);
+			using(var runtime=Runtime()) {
+				var installed=runtime.InstallCompiledHook(method,document,"public static class UserHook { public static System.Exception Finalizer(System.Exception __exception) { return null; } }",1,0);
+				Fixture.Throwing(); runtime.SetEnabled(installed.PatchId,false,1); Assert.Throws<FixtureException>(()=>Fixture.Throwing()); runtime.SetEnabled(installed.PatchId,true,2); Fixture.Throwing();
+			}
+		}
+
+		[Fact]
 		public void ObservationalPostfixCoexistsWithCompiledPostfix() {
 			using (var runtime = Runtime()) {
 				var compiled = new HookDocument(1, "compiled", HookKind.Postfix, GuardFor(TargetMethod), "{}", Limits, true);
@@ -294,17 +317,27 @@ namespace HookLab.Probe.Tests {
 		[InlineData("Prefix")]
 		[InlineData("Postfix")]
 		[InlineData("PrefixPostfix")]
+		[InlineData("Finalizer")]
 		public void GeneratedHookTemplatesCompileAndPatch(string template) {
 			var target = new HookTemplateTarget("HookLab.Probe.Tests.ProbeCoreTests.InstanceFixture",false,"System.Int32",new[] { new HookTemplateParameter("value","System.Int32","") });
 			var source = HookSourceTemplate.Generate(target,template);
 			Assert.Contains("InstanceFixture __instance",source,StringComparison.Ordinal);
 			if(template=="PrefixPostfix") { Assert.Contains("out object __state",source,StringComparison.Ordinal); Assert.Contains("object __state",source,StringComparison.Ordinal); }
 			using(var runtime=Runtime()) {
-				var kind=template=="Postfix"?HookKind.Postfix:HookKind.Prefix;
+				var kind=template=="Postfix"?HookKind.Postfix:template=="Finalizer"?HookKind.Finalizer:HookKind.Prefix;
 				var document=new HookDocument(1,"generated",kind,GuardFor(InstanceTargetMethod),"{}",Limits,true);
 				runtime.InstallCompiledHook(InstanceTargetMethod,document,source,1,0);
 				Assert.Equal(6,new InstanceFixture(5).Calculate(1));
 			}
+		}
+
+		[Fact]
+		public void GeneratedFinalizerTemplatePreservesExceptionsByDefault() {
+			var target=new HookTemplateTarget("HookLab.Probe.Tests.ProbeCoreTests.Fixture",true,"System.Void",Array.Empty<HookTemplateParameter>());
+			var source=HookSourceTemplate.Generate(target,"Finalizer");
+			Assert.Contains("System.Exception Finalizer(System.Exception __exception)",source,StringComparison.Ordinal); Assert.Contains("return __exception;",source,StringComparison.Ordinal);
+			var method=typeof(Fixture).GetMethod(nameof(Fixture.Throwing))!; var document=new HookDocument(1,"generated-finalizer",HookKind.Finalizer,GuardFor(method),"{}",Limits,true);
+			using(var runtime=Runtime()) { runtime.InstallCompiledHook(method,document,source,1,0); Assert.Throws<FixtureException>(()=>Fixture.Throwing()); }
 		}
 
 		[Fact]

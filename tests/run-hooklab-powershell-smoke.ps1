@@ -11,6 +11,7 @@ New-Item -ItemType Directory -Force -Path $RunDirectory | Out-Null
 $statusPath = Join-Path $RunDirectory 'status.log'
 $observedPath = Join-Path $RunDirectory 'observed.txt'
 $instanceObservedPath = Join-Path $RunDirectory 'instance-observed.txt'
+$finalizerObservedPath = Join-Path $RunDirectory 'finalizer-observed.txt'
 $stopPath = Join-Path $RunDirectory 'stop'
 $childScript = Join-Path $RunDirectory 'child.ps1'
 $hostProcessId = 0
@@ -32,17 +33,18 @@ function Wait-Observed([int]$Expected,[string]$Path=$observedPath,[int]$Seconds=
 	do { if(Test-Path -LiteralPath $Path) { $value=[int](Get-Content -LiteralPath $Path -Raw); if($value -eq $Expected) { return $true } }; Start-Sleep -Milliseconds 100 } while([DateTime]::UtcNow -lt $deadline)
 	return $false
 }
-function Facts([string]$Path,[string]$TypeName,[string]$Signature) {
-	$assembly=[Reflection.Assembly]::LoadFrom($Path); $method=$assembly.GetType($TypeName,$true).GetMethod('Calculate')
+function Wait-Text([string]$Expected,[string]$Path,[int]$Seconds=10) { $deadline=[DateTime]::UtcNow.AddSeconds($Seconds); do { if((Test-Path $Path)-and(Get-Content $Path -Raw)-eq$Expected){return $true};Start-Sleep -Milliseconds 100 }while([DateTime]::UtcNow-lt$deadline);return $false }
+function Facts([string]$Path,[string]$TypeName,[string]$Signature,[string]$MethodName='Calculate') {
+	$assembly=[Reflection.Assembly]::LoadFrom($Path); $method=$assembly.GetType($TypeName,$true).GetMethod($MethodName)
 	$il=$method.GetMethodBody().GetILAsByteArray(); $sha=[Security.Cryptography.SHA256]::Create()
 	try { $digest=[BitConverter]::ToString($sha.ComputeHash($il)).Replace('-','').ToLowerInvariant() } finally { $sha.Dispose() }
 	[pscustomobject]@{ Token=[int]$method.MetadataToken; Mvid=$method.Module.ModuleVersionId.ToString('D'); Signature=$Signature; IlSha256=$digest }
 }
 
 try {
-	Remove-Item -LiteralPath $statusPath,$observedPath,$instanceObservedPath,$stopPath -Force -ErrorAction SilentlyContinue
-	$fixtureEscaped=$fixtureDll.Replace("'","''"); $observedEscaped=$observedPath.Replace("'","''"); $instanceObservedEscaped=$instanceObservedPath.Replace("'","''"); $stopEscaped=$stopPath.Replace("'","''")
-	$childBody = "Add-Type -Path '$fixtureEscaped'`n`$instance=[HookLabPowerShellFixture.InstanceTarget]::new(5)`nwhile(-not (Test-Path -LiteralPath '$stopEscaped')) { [IO.File]::WriteAllText('$observedEscaped',[HookLabPowerShellFixture.Target]::Calculate(41).ToString()); [IO.File]::WriteAllText('$instanceObservedEscaped',`$instance.Calculate(1).ToString()); Start-Sleep -Milliseconds 100 }"
+	Remove-Item -LiteralPath $statusPath,$observedPath,$instanceObservedPath,$finalizerObservedPath,$stopPath -Force -ErrorAction SilentlyContinue
+	$fixtureEscaped=$fixtureDll.Replace("'","''"); $observedEscaped=$observedPath.Replace("'","''"); $instanceObservedEscaped=$instanceObservedPath.Replace("'","''"); $finalizerObservedEscaped=$finalizerObservedPath.Replace("'","''"); $stopEscaped=$stopPath.Replace("'","''")
+	$childBody = "Add-Type -Path '$fixtureEscaped'`n`$instance=[HookLabPowerShellFixture.InstanceTarget]::new(5)`nwhile(-not (Test-Path -LiteralPath '$stopEscaped')) { [IO.File]::WriteAllText('$observedEscaped',[HookLabPowerShellFixture.Target]::Calculate(41).ToString()); [IO.File]::WriteAllText('$instanceObservedEscaped',`$instance.Calculate(1).ToString()); try { `$finalizerValue=[HookLabPowerShellFixture.Target]::ThrowOrReturn(`$true).ToString() } catch { `$finalizerValue='THREW:'+`$_.Exception.GetBaseException().GetType().Name }; [IO.File]::WriteAllText('$finalizerObservedEscaped',`$finalizerValue); Start-Sleep -Milliseconds 100 }"
 	[IO.File]::WriteAllText($childScript,$childBody,[Text.UTF8Encoding]::new($false))
 	$child=Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$childScript+'"') -PassThru -WindowStyle Hidden
 	Status "CHILD_STARTED pid=$($child.Id)"
@@ -50,6 +52,8 @@ try {
 	Status 'BASELINE_OK value=42'
 	if(-not (Wait-Observed 6 $instanceObservedPath)) { throw 'instance baseline did not become 6' }
 	Status 'INSTANCE_BASELINE_OK value=6'
+	if(-not (Wait-Text 'THREW:InvalidOperationException' $finalizerObservedPath)) { throw 'finalizer baseline did not throw InvalidOperationException' }
+	Status 'FINALIZER_BASELINE_OK exception=InvalidOperationException'
 
 	$hostProcessId=& (Join-Path $PSScriptRoot 'TestSupport\Start-DgSpyHost.ps1') -TargetFramework net10.0-windows
 	$rpcPort=[int]$env:DGSPY_RPC_PORT
@@ -72,6 +76,9 @@ try {
 	$instanceFacts=Facts $fixtureDll 'HookLabPowerShellFixture.InstanceTarget' 'System.Int32 Calculate(System.Int32)'
 	$instanceTemplate=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$instanceFacts.Token;template='Postfix'}
 	if($instanceTemplate.source -notlike '*HookLabPowerShellFixture.InstanceTarget __instance*' -or $instanceTemplate.source -notlike '*ref System.Int32 __result*') { throw 'instance Postfix template shape was incorrect' }
+	$finalizerFacts=Facts $fixtureDll 'HookLabPowerShellFixture.Target' 'System.Int32 ThrowOrReturn(System.Boolean)' 'ThrowOrReturn'
+	$finalizerTemplate=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$finalizerFacts.Token;template='Finalizer'}
+	if($finalizerTemplate.source -notlike '*System.Exception Finalizer*' -or $finalizerTemplate.source -notlike '*System.Exception __exception*' -or $finalizerTemplate.source -notlike '*return __exception*') { throw 'Finalizer template shape was incorrect' }
 	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$facts.Token;template='Transpiler'}; throw 'invalid template unexpectedly succeeded' } catch { if($_.Exception.Message -notlike '*invalid_arguments*') { throw } }
 	$fixtureAssembly=[Reflection.Assembly]::LoadFrom($fixtureDll)
 	$fieldToken=[int]$fixtureAssembly.GetType('HookLabPowerShellFixture.InstanceTarget',$true).GetField('Offset').MetadataToken
@@ -80,7 +87,7 @@ try {
 	if(-not $genericMethod) { throw 'fixture is stale: generic Identity method is missing; rebuild HookLabPowerShellFixture' }
 	$genericToken=[int]$genericMethod.MetadataToken
 	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$genericToken}; throw 'generic method unexpectedly produced a template' } catch { if($_.Exception.Message -notlike '*unsupported_hook_target*') { throw } }
-	Status 'HOOK_TEMPLATE_READ_ONLY_OK static=PrefixPostfix instance=Postfix invalid=refused non_method=refused generic=refused initialized=false'
+	Status 'HOOK_TEMPLATE_READ_ONLY_OK static=PrefixPostfix instance=Postfix finalizer=preserving invalid=refused non_method=refused generic=refused initialized=false'
 	$base=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate';kind='Prefix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='Calculate';method_token=$facts.Token;signature=$facts.Signature;module_mvid=$facts.Mvid;il_sha256=$facts.IlSha256}
 	$base.source='public static class PowerShellPairV1 { public static void Prefix(ref int value, out int __state) { __state = value; value += 10; } public static void Postfix(int __state, ref int __result) { __result += __state; } }'; $base.revision=1
 	$created=Rpc 'create_hook' $base 70
@@ -125,6 +132,18 @@ try {
 	$null=Rpc 'remove_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate'} 30
 	if(-not (Wait-Observed 42)) { throw 'removal did not restore 42' }
 	Status 'REMOVE_OK value=42'
+	$finalizer=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-finalizer';kind='Finalizer';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='ThrowOrReturn';method_token=$finalizerFacts.Token;signature=$finalizerFacts.Signature;module_mvid=$finalizerFacts.Mvid;il_sha256=$finalizerFacts.IlSha256;revision=1;source='public static class PowerShellFinalizerV1 { public static System.Exception Finalizer(System.Exception __exception) { return null; } }'}
+	$null=Rpc 'create_hook' $finalizer 70
+	if(-not(Wait-Text '0' $finalizerObservedPath)){throw 'compiled Finalizer did not suppress the exception and expose the default int result'}
+	Status 'FINALIZER_SUPPRESS_OK value=0'
+	$finalizer.source='this is not C#';$finalizer.revision=2;try{$null=Rpc 'update_hook' $finalizer 70;throw'broken Finalizer unexpectedly installed'}catch{if($_.Exception.Message-notlike'*CS*'){throw}}
+	if(-not(Wait-Text '0' $finalizerObservedPath)){throw 'failed Finalizer update did not retain suppression'}
+	Status 'FINALIZER_ROLLBACK_OK value=0'
+	$null=Rpc 'disable_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-finalizer'} 30;if(-not(Wait-Text 'THREW:InvalidOperationException' $finalizerObservedPath)){throw 'disabled Finalizer did not restore original exception'}
+	$null=Rpc 'enable_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-finalizer'} 30;if(-not(Wait-Text '0' $finalizerObservedPath)){throw 're-enabled Finalizer did not restore suppression'}
+	Status 'FINALIZER_TOGGLE_OK disabled=throws enabled=value0'
+	$null=Rpc 'remove_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-finalizer'} 30;if(-not(Wait-Text 'THREW:InvalidOperationException' $finalizerObservedPath)){throw 'Finalizer removal did not restore original exception'}
+	Status 'FINALIZER_REMOVE_OK exception=InvalidOperationException'
 
 	$instanceRequest=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-instance-calculate';kind='Postfix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.InstanceTarget';method='Calculate';method_token=$instanceFacts.Token;signature=$instanceFacts.Signature;module_mvid=$instanceFacts.Mvid;il_sha256=$instanceFacts.IlSha256;revision=1;source='public static class PowerShellInstancePostfix { public static void Postfix(HookLabPowerShellFixture.InstanceTarget __instance, ref int __result) { __result += __instance.Offset; } }'}
 	$null=Rpc 'install_hook' $instanceRequest 70

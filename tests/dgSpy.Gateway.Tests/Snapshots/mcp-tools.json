@@ -606,7 +606,7 @@
     },
     {
       "name": "get_hook_template",
-      "description": "Generate editable no-op Prefix, Postfix, or paired Prefix/Postfix C# source for one exactly selected non-generic method. Read-only: resolves metadata only and does not initialize HookLab or modify the target.",
+      "description": "Generate editable no-op Prefix, Postfix, paired Prefix/Postfix, or exception-preserving Finalizer C# source for one exactly selected non-generic method. Read-only: resolves metadata only and does not initialize HookLab or modify the target.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -629,7 +629,8 @@
             "enum": [
               "Prefix",
               "Postfix",
-              "PrefixPostfix"
+              "PrefixPostfix",
+              "Finalizer"
             ],
             "description": "Default PrefixPostfix."
           }
@@ -648,7 +649,7 @@
     },
     {
       "name": "install_hook",
-      "description": "SIDE EFFECTING and audited. Install an observation hook, or create/update compiled custom Prefix/Postfix source when source and a monotonically increasing revision are supplied. Exact MVID, token, signature, and IL digest guards are required. Prototype custom hooks use the same-user unauthenticated resident pipe.",
+      "description": "SIDE EFFECTING and audited. Install an observation hook, or create/update compiled custom Prefix, Postfix, or Finalizer source when source and a monotonically increasing revision are supplied. Exact MVID, token, signature, and IL digest guards are required. Prototype custom hooks use the same-user unauthenticated resident pipe.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -743,7 +744,7 @@
     },
     {
       "name": "create_hook",
-      "description": "SIDE EFFECTING and audited. Compile and create revision 1 of a custom Prefix or Postfix hook. Fails if hook_id already exists; use update_hook for replacement. Exact MVID, token, signature, and IL digest guards are required.",
+      "description": "SIDE EFFECTING and audited. Compile and create revision 1 of a custom Prefix, Postfix, or Finalizer hook. Fails if hook_id already exists; use update_hook for replacement. Exact MVID, token, signature, and IL digest guards are required.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -764,7 +765,8 @@
             "type": "string",
             "enum": [
               "Prefix",
-              "Postfix"
+              "Postfix",
+              "Finalizer"
             ]
           },
           "module_id": {
@@ -794,7 +796,7 @@
           },
           "source": {
             "type": "string",
-            "description": "Complete C# source declaring the custom Prefix or Postfix and optionally its companion."
+            "description": "Complete C# source declaring the custom patch method and optional companion phases."
           },
           "revision": {
             "type": "integer",
@@ -839,7 +841,7 @@
     },
     {
       "name": "update_hook",
-      "description": "SIDE EFFECTING and audited. Compile a higher revision and atomically replace an existing custom Prefix or Postfix hook. Compiler failure leaves the last good revision and enabled state unchanged. Exact target identity must match the existing hook.",
+      "description": "SIDE EFFECTING and audited. Compile a higher revision and atomically replace an existing custom Prefix, Postfix, or Finalizer hook. Compiler failure leaves the last good revision and enabled state unchanged. Exact target identity must match the existing hook.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -860,7 +862,8 @@
             "type": "string",
             "enum": [
               "Prefix",
-              "Postfix"
+              "Postfix",
+              "Finalizer"
             ]
           },
           "module_id": {

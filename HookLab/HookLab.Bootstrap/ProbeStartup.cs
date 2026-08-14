@@ -383,7 +383,7 @@ namespace HookLab.Bootstrap {
 			ProbeRuntime probe;
 			lock (Gate) probe = runtime as ProbeRuntime ?? throw new InvalidOperationException("The probe is not initialized yet.");
 			var target = ResolveHook(parameters);
-			if (target.Document.Kind != HookKind.Prefix && target.Document.Kind != HookKind.Postfix) throw new InvalidOperationException("Compiled hooks currently support Prefix and Postfix only.");
+			if (target.Document.Kind != HookKind.Prefix && target.Document.Kind != HookKind.Postfix && target.Document.Kind != HookKind.Finalizer) throw new InvalidOperationException("Compiled hooks currently support Prefix, Postfix, and Finalizer only.");
 			var sourceText = parameters.Hook("hook_source_base64");
 			string source;
 			try { source = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(sourceText)); }

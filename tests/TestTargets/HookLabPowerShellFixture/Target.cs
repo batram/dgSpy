@@ -6,6 +6,9 @@ namespace HookLabPowerShellFixture {
 		public static int Calculate(int value) => value + 1;
 
 		[MethodImpl(MethodImplOptions.NoInlining)]
+		public static int ThrowOrReturn(bool throwNow) { if(throwNow) throw new System.InvalidOperationException("fixture failure"); return 5; }
+
+		[MethodImpl(MethodImplOptions.NoInlining)]
 		public static T Identity<T>(T value) => value;
 	}
 

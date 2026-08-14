@@ -118,7 +118,7 @@ namespace dgSpy.Extension.ToolWindows {
 		readonly MethodDef method;
 		readonly HookLabEditorState state;
 		readonly TextBox id=new TextBox { Margin=new Thickness(6) };
-		readonly ComboBox template=new ComboBox { Margin=new Thickness(6),ItemsSource=new[]{"Prefix","Postfix","PrefixPostfix"} };
+		readonly ComboBox template=new ComboBox { Margin=new Thickness(6),ItemsSource=new[]{"Prefix","Postfix","PrefixPostfix","Finalizer"} };
 		readonly TextBox source=new TextBox { Margin=new Thickness(6),MinHeight=200,VerticalAlignment=VerticalAlignment.Stretch,HorizontalAlignment=HorizontalAlignment.Stretch,AcceptsReturn=true,AcceptsTab=true,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,TextWrapping=TextWrapping.Wrap,VerticalContentAlignment=VerticalAlignment.Top,FontFamily=new System.Windows.Media.FontFamily("Consolas"),FontSize=13 };
 		readonly TextBox diagnostics=new TextBox { Margin=new Thickness(6),Height=95,IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto };
 		readonly Button install=new Button { Content="Compile & Install",IsDefault=true,MinWidth=125,Margin=new Thickness(6) };

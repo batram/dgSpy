@@ -57,7 +57,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 		public CompiledPatchOperationResult InstallCompiledHook(MethodBase method, HookDocument document, string source, int revision, long expectedHooksVersion) {
 			if (method == null) throw new ArgumentNullException(nameof(method));
 			if (document == null) throw new ArgumentNullException(nameof(document));
-			if (document.Kind != HookKind.Prefix && document.Kind != HookKind.Postfix) throw new NotSupportedException("Compiled hooks currently support Prefix and Postfix only.");
+			if (document.Kind != HookKind.Prefix && document.Kind != HookKind.Postfix && document.Kind != HookKind.Finalizer) throw new NotSupportedException("Compiled hooks currently support Prefix, Postfix, and Finalizer only.");
 			if (revision <= 0) throw new ArgumentOutOfRangeException(nameof(revision));
 			// Compilation deliberately happens before taking the mutation lock. A failed candidate cannot
 			// alter the resident hook set or advance hooks_version.
@@ -74,7 +74,8 @@ namespace HookLab.Probe.CorDebug.Patching {
 				try {
 					if(candidate.Enabled) harmony.Patch(method,
 						compiled.Prefix == null ? null : new HarmonyMethod(compiled.Prefix),
-						compiled.Postfix == null ? null : new HarmonyMethod(compiled.Postfix));
+						compiled.Postfix == null ? null : new HarmonyMethod(compiled.Postfix),null,
+						compiled.Finalizer == null ? null : new HarmonyMethod(compiled.Finalizer));
 				}
 				catch { throw; }
 				try {
@@ -151,7 +152,8 @@ namespace HookLab.Probe.CorDebug.Patching {
 		void ApplyCompiled(CompiledHookContext context) {
 			var prefix=context.PatchMethods.SingleOrDefault(method=>method.Name=="Prefix");
 			var postfix=context.PatchMethods.SingleOrDefault(method=>method.Name=="Postfix");
-			harmony.Patch(context.Method,prefix is null?null:new HarmonyMethod(prefix),postfix is null?null:new HarmonyMethod(postfix));
+			var finalizer=context.PatchMethods.SingleOrDefault(method=>method.Name=="Finalizer");
+			harmony.Patch(context.Method,prefix is null?null:new HarmonyMethod(prefix),postfix is null?null:new HarmonyMethod(postfix),null,finalizer is null?null:new HarmonyMethod(finalizer));
 		}
 
 		void RemoveCore(HookContext context) {

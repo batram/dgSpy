@@ -331,6 +331,11 @@ public sealed class ToolCatalogTests {
 			Assert.DoesNotContain("expected_stop_id",properties.Keys);
 		}
 		Assert.Equal(1,InputProperties(create)["revision"].GetType().GetProperty("const")!.GetValue(InputProperties(create)["revision"]));
+		foreach(var tool in new[]{create,update}) {
+			var kind=InputProperties(tool)["kind"];
+			var values=(string[])kind.GetType().GetProperty("enum")!.GetValue(kind)!;
+			Assert.Equal(new[]{"Prefix","Postfix","Finalizer"},values);
+		}
 	}
 
 	[Fact]
