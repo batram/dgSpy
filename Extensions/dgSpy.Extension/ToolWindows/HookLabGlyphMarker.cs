@@ -14,6 +14,7 @@ namespace dgSpy.Extension.ToolWindows {
 	[ExportDocumentViewerListener]
 	sealed class HookLabGlyphMarker : IDocumentViewerListener {
 		static readonly ImageReference hookImage=new ImageReference(typeof(HookLabGlyphMarker).Assembly,"HookLabHook");
+		static readonly ImageReference disabledHookImage=new ImageReference(typeof(HookLabGlyphMarker).Assembly,"HookLabHookDisabled");
 		readonly IGlyphTextMarkerService markerService;
 		readonly IModuleIdProvider moduleIdProvider;
 		readonly Dictionary<string,IGlyphTextMarker> markers=new Dictionary<string,IGlyphTextMarker>(StringComparer.Ordinal);
@@ -32,7 +33,8 @@ namespace dgSpy.Extension.ToolWindows {
 				var rows=group.ToArray(); var method=rows[0].MethodDefinition!;
 				var location=new DotNetTokenGlyphTextMarkerLocationInfo(moduleIdProvider.Create(method.Module),(int)method.MDToken.Raw);
 				var summary=new HookLabGlyphSummary(method,rows);
-				markers[group.Key]=markerService.AddMarker(location,hookImage,null,null,null,2520,summary,handler,null);
+				var image=rows.Any(row=>row.Enabled)?hookImage:disabledHookImage;
+				markers[group.Key]=markerService.AddMarker(location,image,null,null,null,2520,summary,handler,null);
 			}
 		}
 	}

@@ -98,6 +98,8 @@ leaves the last good revision untouched. `install_hook` remains the observationa
 The GUI labels observation hooks separately from custom C# hooks. Row menus expose every real row action,
 including removal. A single-hook method glyph behaves like a breakpoint toggle and provides Edit,
 Enable/Disable, and Remove; a multi-hook glyph opens HookLab instead of applying an ambiguous mutation.
+Enabled methods use the bright teal glyph; an all-disabled method uses a muted slashed glyph, so the
+clickable margin reflects runtime state without opening HookLab.
 The plain C# editor fills its available height regardless of source length. Rich syntax formatting remains
 a separate editor-integration slice.
 Finalizer, Transpiler,

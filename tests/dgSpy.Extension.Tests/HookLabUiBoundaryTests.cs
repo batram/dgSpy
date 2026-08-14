@@ -75,6 +75,8 @@ public sealed class HookLabUiBoundaryTests {
 		Assert.Contains("[ExportDocumentViewerListener]",source,StringComparison.Ordinal);
 		Assert.Contains("DotNetTokenGlyphTextMarkerLocationInfo",source,StringComparison.Ordinal);
 		Assert.Contains("newImageReference(typeof(HookLabGlyphMarker).Assembly,\"HookLabHook\")",source,StringComparison.Ordinal);
+		Assert.Contains("newImageReference(typeof(HookLabGlyphMarker).Assembly,\"HookLabHookDisabled\")",source,StringComparison.Ordinal);
+		Assert.Contains("rows.Any(row=>row.Enabled)?hookImage:disabledHookImage",source,StringComparison.Ordinal);
 		Assert.Contains("HookLabUiBridge.Changed+=Changed",source,StringComparison.Ordinal);
 		Assert.Contains("HookLabUiBridge.Snapshot().Hooks",source,StringComparison.Ordinal);
 		Assert.Contains("OnMouseLeftButtonUp",source,StringComparison.Ordinal);
