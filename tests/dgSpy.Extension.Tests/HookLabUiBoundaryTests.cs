@@ -26,13 +26,18 @@ public sealed class HookLabUiBoundaryTests {
 		Assert.Contains("newCustomHookEditorDialog(value).ShowDialog()",source,StringComparison.Ordinal);
 		Assert.Contains("existing.Revision+1,existing.Source,existing.Kind",source,StringComparison.Ordinal);
 		Assert.Contains("id.IsReadOnly=existingisnotnull",source,StringComparison.Ordinal);
-		Assert.Contains("Header=\"EditCustomHook...\"",source,StringComparison.Ordinal);
+		Assert.Contains("Header=\"EditCustomC#Hook...\"",source,StringComparison.Ordinal);
 		Assert.Contains("Header=\"ShowMethodinSource\"",source,StringComparison.Ordinal);
+		Assert.Contains("Header=\"RemoveHook\"",source,StringComparison.Ordinal);
+		Assert.Contains("removeHook.Click+=(s,e)=>vm.RemoveSelected()",source,StringComparison.Ordinal);
 		Assert.Contains("hookList.PreviewMouseRightButtonDown",source,StringComparison.Ordinal);
 		Assert.Contains("item.IsSelected=true",source,StringComparison.Ordinal);
 		Assert.Contains("hookList.MouseDoubleClick+=(s,e)=>vm.ActivateSelected()",source,StringComparison.Ordinal);
 		Assert.Contains("TextWrapping=TextWrapping.Wrap",source,StringComparison.Ordinal);
 		Assert.Contains("VerticalContentAlignment=VerticalAlignment.Top",source,StringComparison.Ordinal);
+		Assert.Contains("VerticalAlignment=VerticalAlignment.Stretch",source,StringComparison.Ordinal);
+		Assert.Contains("HorizontalAlignment=HorizontalAlignment.Stretch",source,StringComparison.Ordinal);
+		Assert.Contains("MinHeight=200",source,StringComparison.Ordinal);
 		Assert.Contains("toggleHook.SetBinding(Button.ContentProperty,\"ToggleLabel\")",source,StringComparison.Ordinal);
 		Assert.Contains("toggleHook.SetBinding(IsEnabledProperty,\"CanToggle\")",source,StringComparison.Ordinal);
 		Assert.Contains("Header=\"State\"",source,StringComparison.Ordinal);
@@ -74,8 +79,20 @@ public sealed class HookLabUiBoundaryTests {
 		Assert.Contains("HookLabUiBridge.Snapshot().Hooks",source,StringComparison.Ordinal);
 		Assert.Contains("OnMouseLeftButtonUp",source,StringComparison.Ordinal);
 		Assert.Contains("Header=\"ShowinHookLab\"",source,StringComparison.Ordinal);
-		Assert.Contains("Header=\"EditCustomHook...\"",source,StringComparison.Ordinal);
+		Assert.Contains("Header=\"EditCustomC#Hook...\"",source,StringComparison.Ordinal);
 		Assert.Contains("HookLabUiBridge.SingleCompiled(Method)",source,StringComparison.Ordinal);
+		Assert.Contains("summary.ToggleOrShow()",source,StringComparison.Ordinal);
+		Assert.Contains("Header=\"ToggleHook\"",source,StringComparison.Ordinal);
+		Assert.Contains("Header=\"RemoveHook\"",source,StringComparison.Ordinal);
+		Assert.Contains("GetHeader(IMenuItemContextcontext)=>context.Find<HookLabGlyphSummary>()?.ToggleHeader",source,StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void Method_menu_distinguishes_observation_from_custom_csharp_hooks() {
+		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","ToolWindows","HookLabToolWindow.cs")));
+		Assert.Contains("Header=\"AddObservationHook...\"",source,StringComparison.Ordinal);
+		Assert.Contains("Header=\"CreateCustomC#Hook...\"",source,StringComparison.Ordinal);
+		Assert.DoesNotContain("Header=\"AddHook...\"",source,StringComparison.Ordinal);
 	}
 
 	static string Normalize(string value)=>String.Concat(value.Where(character=>!Char.IsWhiteSpace(character)));

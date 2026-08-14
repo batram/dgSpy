@@ -95,6 +95,11 @@ identity. MCP now exposes explicit `create_hook` and `update_hook` operations: c
 1 and refuses an existing ID, while update requires an existing hook, a higher revision, and the same
 exactly guarded target. Both return editable source and successful diagnostic state; compiler failure
 leaves the last good revision untouched. `install_hook` remains the observational and compatibility path.
+The GUI labels observation hooks separately from custom C# hooks. Row menus expose every real row action,
+including removal. A single-hook method glyph behaves like a breakpoint toggle and provides Edit,
+Enable/Disable, and Remove; a multi-hook glyph opens HookLab instead of applying an ambiguous mutation.
+The plain C# editor fills its available height regardless of source length. Rich syntax formatting remains
+a separate editor-integration slice.
 Finalizer, Transpiler,
 generic-target handling, and broader compilation references remain unfinished. Initialization and
 packaging are no longer the active design problem.

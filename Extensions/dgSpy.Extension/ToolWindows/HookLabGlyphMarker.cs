@@ -31,19 +31,25 @@ namespace dgSpy.Extension.ToolWindows {
 			foreach(var group in groups) {
 				var rows=group.ToArray(); var method=rows[0].MethodDefinition!;
 				var location=new DotNetTokenGlyphTextMarkerLocationInfo(moduleIdProvider.Create(method.Module),(int)method.MDToken.Raw);
-				var summary=new HookLabGlyphSummary(method,rows.Length,rows.Count(row=>row.Compiled),rows.Count(row=>!row.Compiled));
+				var summary=new HookLabGlyphSummary(method,rows);
 				markers[group.Key]=markerService.AddMarker(location,hookImage,null,null,null,2520,summary,handler,null);
 			}
 		}
 	}
 
 	sealed class HookLabGlyphSummary {
-		public HookLabGlyphSummary(dnlib.DotNet.MethodDef method,int total,int compiled,int observers) { Method=method; Total=total; Compiled=compiled; Observers=observers; }
-		public dnlib.DotNet.MethodDef Method { get; } public int Total { get; } public int Compiled { get; } public int Observers { get; }
+		readonly HookLabHookRow[] rows;
+		public HookLabGlyphSummary(dnlib.DotNet.MethodDef method,HookLabHookRow[] rows) { Method=method; this.rows=rows; }
+		public dnlib.DotNet.MethodDef Method { get; } public int Total=>rows.Length; public int Compiled=>rows.Count(row=>row.Compiled); public int Observers=>rows.Count(row=>!row.Compiled);
+		HookLabHookRow? Single=>rows.Length==1?rows[0]:null;
 		public void Show()=>HookLabUiBridge.ShowMethod(Method);
 		public bool CanEdit=>HookLabUiBridge.SingleCompiled(Method) is not null;
+		public bool CanManage=>Single is not null;
+		public string ToggleHeader=>Single?.Enabled==false?"Enable Hook":"Disable Hook";
 		public void Edit() { var row=HookLabUiBridge.SingleCompiled(Method); if(row is not null) new CustomHookEditorDialog(row).ShowDialog(); else Show(); }
-		public override string ToString()=>"HookLab: "+Total+" hook"+(Total==1?"":"s")+" ("+Compiled+" compiled, "+Observers+" observer)";
+		public async void ToggleOrShow() { var row=Single; if(row is null) { Show(); return; } try { await HookLabUiBridge.ToggleAsync(row); } catch(Exception ex) { HookLabUiBridge.ReportStatus(ex.Message); } }
+		public async void Remove() { var row=Single; if(row is null) { Show(); return; } try { await HookLabUiBridge.RemoveAsync(row); } catch(Exception ex) { HookLabUiBridge.ReportStatus(ex.Message); } }
+		public override string ToString()=>Single is HookLabHookRow row ? "HookLab: "+row.Id+" - "+row.State+" (click to "+(row.Enabled?"disable":"enable")+")" : "HookLab: "+Total+" hooks ("+Compiled+" compiled, "+Observers+" observer) - open HookLab to manage";
 	}
 
 	sealed class HookLabGlyphHandler : IGlyphTextMarkerHandler {
@@ -54,7 +60,7 @@ namespace dgSpy.Extension.ToolWindows {
 	}
 
 	sealed class HookLabGlyphMouseProcessor : GlyphTextMarkerHandlerMouseProcessorBase {
-		public override void OnMouseLeftButtonUp(IGlyphTextMarkerHandlerContext context,IGlyphTextMarker marker,MouseButtonEventArgs e) { if(marker.Tag is HookLabGlyphSummary summary) { summary.Show(); e.Handled=true; } }
+		public override void OnMouseLeftButtonUp(IGlyphTextMarkerHandlerContext context,IGlyphTextMarker marker,MouseButtonEventArgs e) { if(marker.Tag is HookLabGlyphSummary summary) { summary.ToggleOrShow(); e.Handled=true; } }
 	}
 
 	[ExportMenuItem(OwnerGuid=MenuConstants.GLYPHMARGIN_GUID,Header="Show in HookLab",Group="0,16473E86-060B-4F19-849E-BBBD63390093",Order=0)]
@@ -63,9 +69,22 @@ namespace dgSpy.Extension.ToolWindows {
 		public override void Execute(IMenuItemContext context)=>context.Find<HookLabGlyphSummary>()?.Show();
 	}
 
-	[ExportMenuItem(OwnerGuid=MenuConstants.GLYPHMARGIN_GUID,Header="Edit Custom Hook...",Group="0,16473E86-060B-4F19-849E-BBBD63390093",Order=10)]
+	[ExportMenuItem(OwnerGuid=MenuConstants.GLYPHMARGIN_GUID,Header="Edit Custom C# Hook...",Group="0,16473E86-060B-4F19-849E-BBBD63390093",Order=10)]
 	sealed class EditHookLabGlyphCommand : MenuItemBase {
 		public override bool IsVisible(IMenuItemContext context)=>context.Find<HookLabGlyphSummary>()?.CanEdit==true;
 		public override void Execute(IMenuItemContext context)=>context.Find<HookLabGlyphSummary>()?.Edit();
+	}
+
+	[ExportMenuItem(OwnerGuid=MenuConstants.GLYPHMARGIN_GUID,Header="Toggle Hook",Group="0,16473E86-060B-4F19-849E-BBBD63390093",Order=20)]
+	sealed class ToggleHookLabGlyphCommand : MenuItemBase {
+		public override bool IsVisible(IMenuItemContext context)=>context.Find<HookLabGlyphSummary>()?.CanManage==true;
+		public override string? GetHeader(IMenuItemContext context)=>context.Find<HookLabGlyphSummary>()?.ToggleHeader;
+		public override void Execute(IMenuItemContext context)=>context.Find<HookLabGlyphSummary>()?.ToggleOrShow();
+	}
+
+	[ExportMenuItem(OwnerGuid=MenuConstants.GLYPHMARGIN_GUID,Header="Remove Hook",Group="10,16473E86-060B-4F19-849E-BBBD63390093",Order=0)]
+	sealed class RemoveHookLabGlyphCommand : MenuItemBase {
+		public override bool IsVisible(IMenuItemContext context)=>context.Find<HookLabGlyphSummary>()?.CanManage==true;
+		public override void Execute(IMenuItemContext context)=>context.Find<HookLabGlyphSummary>()?.Remove();
 	}
 }
