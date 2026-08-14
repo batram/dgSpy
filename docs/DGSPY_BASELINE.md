@@ -117,6 +117,12 @@ Do not add project references from the extension to dnSpy implementation project
 builds the extension last against the already-built host contracts, preventing project builds from
 writing into the packaged host root.
 
+For packaged builds, `DgSpyTool` passes the immutable `host-raw\<build-id>\content\bin` directory as
+`DgSpyHostContractsRoot`. The extension then uses explicit file references for dnSpy contracts and
+their host compile dependencies; its dgSpy and HookLab dependencies remain normal project references.
+Do not restore a global `BuildProjectReferences=false` workaround: it hides the real dependency graph
+and suppresses owned project dependencies along with upstream ones.
+
 ## Upstream drift
 
 Every intentional difference from the pinned dnSpyEx baseline must be accounted for:

@@ -12,6 +12,23 @@ public sealed class PipelineTests : IDisposable {
 			Assert.Contains("<RuntimeIdentifiers>win-x64</RuntimeIdentifiers>",File.ReadAllText(Path.Combine(repo,project.Replace('/',Path.DirectorySeparatorChar))));
 	}
 	[Fact]
+	public void Packaged_extension_uses_only_file_references_for_upstream_contracts() {
+		var repo=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));
+		var graph=File.ReadAllText(Path.Combine(repo,"Build","DgSpy.Components.proj"));
+		var extension=File.ReadAllText(Path.Combine(repo,"Extensions","dgSpy.Extension","dgSpy.Extension.csproj"));
+		var tool=File.ReadAllText(Path.Combine(repo,"Build","DgSpyTool","Program.cs"));
+		Assert.DoesNotContain("BuildProjectReferences=false",graph,StringComparison.Ordinal);
+		Assert.Contains("DgSpyHostContractsRoot=$(DgSpyHostContractsRoot)",graph,StringComparison.Ordinal);
+		Assert.Contains("/p:DgSpyHostContractsRoot=",tool,StringComparison.Ordinal);
+		Assert.Contains("<ItemGroup Condition=\"'$(DgSpyHostContractsRoot)' != ''\">",extension,StringComparison.Ordinal);
+		foreach(var contract in new[]{"DnSpy","Debugger","Debugger.DotNet","Debugger.DotNet.CorDebug","Debugger.DotNet.Mono","Logic"})
+			Assert.Contains("<Reference Include=\"dnSpy.Contracts."+contract+"\">",extension,StringComparison.Ordinal);
+		foreach(var dependency in new[]{"dnlib","System.ComponentModel.Composition","Microsoft.VisualStudio.Text.Logic","Microsoft.VisualStudio.Text.UI","dnSpy.Debugger.DotNet.Metadata"})
+			Assert.Contains("<Reference Include=\""+dependency+"\">",extension,StringComparison.Ordinal);
+		Assert.Contains("<ProjectReference Include=\"..\\..\\dgSpy.Protocol\\dgSpy.Protocol.csproj\" />",extension,StringComparison.Ordinal);
+		Assert.Contains("<ProjectReference Include=\"..\\..\\HookLab\\HookLab.Contracts\\HookLab.Contracts.csproj\" />",extension,StringComparison.Ordinal);
+	}
+	[Fact]
 	public void Ci_builds_the_net10_package_once_and_reuses_it() {
 		var repo=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));
 		var workflow=File.ReadAllText(Path.Combine(repo,".github","workflows","dgspy-ci.yml"));

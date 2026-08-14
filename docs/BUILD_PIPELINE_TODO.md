@@ -54,7 +54,7 @@ MSBuild remains responsible for compilation, generated resources, dependency ord
 that belongs to a project build. `DgSpyTool` owns directory composition, file-collision policy,
 deterministic manifests, hashing, atomic publication, installation, rollback, and agent registration.
 
-## Dependency cleanup
+## Dependency cleanup - complete
 
 Create a dgSpy-only solution or build project that:
 
@@ -83,8 +83,11 @@ build must be structural.
 10. Full install replaces legacy trees rather than migrating them, registers Codex or Claude, and
     restores the previous tree if registration fails.
 
-Remaining cleanup: structurally separate the dgSpy extension's upstream contract references so the
-last `BuildProjectReferences=false` can disappear.
+The packaged component build now passes the immutable `host-raw` bin directory into MSBuild. The
+dgSpy extension consumes its dnSpy contracts and required host compile dependencies as explicit
+`Private=false` file references from that directory, while dgSpy and HookLab dependencies remain
+ordinary project references. The global `BuildProjectReferences=false` suppression is gone, and a
+structural pipeline test rejects its return or loss of the file-reference boundary.
 
 ## Completed first milestone
 

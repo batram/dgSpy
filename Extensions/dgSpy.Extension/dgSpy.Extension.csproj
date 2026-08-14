@@ -6,6 +6,11 @@
     <ProjectReference Include="..\..\dgSpy.Protocol\dgSpy.Protocol.csproj" />
     <ProjectReference Include="..\..\HookLab\HookLab.Contracts\HookLab.Contracts.csproj" />
 	<ProjectReference Include="..\..\HookLab\HookLab.Host.Transport\HookLab.Host.Transport.csproj" />
+	</ItemGroup>
+	<!-- Packaged component builds consume the immutable host artifact structurally: none of these
+	     references can enter or rebuild the upstream dnSpy project graph. Ordinary IDE/source builds
+	     retain project references so both target frameworks remain convenient to develop. -->
+	<ItemGroup Condition="'$(DgSpyHostContractsRoot)' == ''">
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.DnSpy\dnSpy.Contracts.DnSpy.csproj" />
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.Debugger\dnSpy.Contracts.Debugger.csproj" />
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.Debugger.DotNet\dnSpy.Contracts.Debugger.DotNet.csproj" />
@@ -15,4 +20,17 @@
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.Debugger.DotNet.Mono\dnSpy.Contracts.Debugger.DotNet.Mono.csproj" />
     <ProjectReference Include="..\..\dnSpy\dnSpy.Contracts.Logic\dnSpy.Contracts.Logic.csproj" />
   </ItemGroup>
+	<ItemGroup Condition="'$(DgSpyHostContractsRoot)' != ''">
+		<Reference Include="dnSpy.Contracts.DnSpy"><HintPath>$(DgSpyHostContractsRoot)\dnSpy.Contracts.DnSpy.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="dnSpy.Contracts.Debugger"><HintPath>$(DgSpyHostContractsRoot)\dnSpy.Contracts.Debugger.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="dnSpy.Contracts.Debugger.DotNet"><HintPath>$(DgSpyHostContractsRoot)\dnSpy.Contracts.Debugger.DotNet.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="dnSpy.Contracts.Debugger.DotNet.CorDebug"><HintPath>$(DgSpyHostContractsRoot)\dnSpy.Contracts.Debugger.DotNet.CorDebug.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="dnSpy.Contracts.Debugger.DotNet.Mono"><HintPath>$(DgSpyHostContractsRoot)\dnSpy.Contracts.Debugger.DotNet.Mono.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="dnSpy.Contracts.Logic"><HintPath>$(DgSpyHostContractsRoot)\dnSpy.Contracts.Logic.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="dnlib"><HintPath>$(DgSpyHostContractsRoot)\dnlib.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="System.ComponentModel.Composition"><HintPath>$(DgSpyHostContractsRoot)\System.ComponentModel.Composition.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="Microsoft.VisualStudio.Text.Logic"><HintPath>$(DgSpyHostContractsRoot)\Microsoft.VisualStudio.Text.Logic.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="Microsoft.VisualStudio.Text.UI"><HintPath>$(DgSpyHostContractsRoot)\Microsoft.VisualStudio.Text.UI.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="dnSpy.Debugger.DotNet.Metadata"><HintPath>$(DgSpyHostContractsRoot)\dnSpy.Debugger.DotNet.Metadata.dll</HintPath><Private>false</Private></Reference>
+	</ItemGroup>
 </Project>

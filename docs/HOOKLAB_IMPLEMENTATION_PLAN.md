@@ -203,17 +203,15 @@ Keep the active HookLab editor/state work together. The explicit Edit action, en
 `create_hook` / `update_hook` lifecycle are implemented; prove them together through the packaged GUI.
 Retain `install_hook` temporarily for observational hooks and compatibility.
 
-After that coherent Prefix/Postfix state and API slice is package-proven, finish the remaining build
-dependency cleanup from [BUILD_PIPELINE_TODO.md](BUILD_PIPELINE_TODO.md): the packaged component build
-must compile `dgSpy.Extension` against dnSpy contract assemblies from its explicit immutable
-`host-raw` input, while dgSpy and HookLab dependencies remain normal project references. Remove the
-global `BuildProjectReferences=false` workaround and add a structural regression test proving that the
-component build cannot enter or rebuild upstream dnSpy projects.
+The remaining build dependency cleanup from [BUILD_PIPELINE_TODO.md](BUILD_PIPELINE_TODO.md) is also
+complete: the packaged component build compiles `dgSpy.Extension` against explicit dnSpy contract and
+compile-dependency file references from immutable `host-raw`, while dgSpy and HookLab dependencies
+remain normal project references. The global `BuildProjectReferences=false` workaround is gone and a
+structural regression test protects the boundary.
 
-That build work is not a prerequisite for the current Edit acceptance, so do not interrupt the nearly
-closed editor checkpoint for it. It must, however, be completed before starting compiled Finalizer or
-Transpiler work, so those larger phases begin on the intended build graph rather than extending the
-temporary dependency suppression.
+Human GUI acceptance is the final checkpoint before starting compiled Finalizer or Transpiler work.
+Those larger phases now begin on the intended build graph rather than extending temporary dependency
+suppression.
 
 ## Execution rule
 

@@ -2,6 +2,10 @@
   <PropertyGroup>
     <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
   </PropertyGroup>
+	<Target Name="ValidateHostContractInput" BeforeTargets="Restore;Build">
+		<Error Condition="'$(DgSpyHostContractsRoot)' == ''" Text="DgSpyHostContractsRoot must name the immutable host-raw bin directory." />
+		<Error Condition="!Exists('$(DgSpyHostContractsRoot)\dnSpy.Contracts.DnSpy.dll')" Text="DgSpyHostContractsRoot does not contain dnSpy.Contracts.DnSpy.dll: $(DgSpyHostContractsRoot)" />
+	</Target>
   <ItemGroup>
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\dgSpy.Protocol\dgSpy.Protocol.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\dgSpy.ExtensionContracts\dgSpy.ExtensionContracts.csproj" />
@@ -15,12 +19,13 @@
   </ItemGroup>
   <Target Name="Restore">
     <MSBuild Projects="@(ComponentProject);$(MSBuildThisFileDirectory)..\Extensions\dgSpy.Extension\dgSpy.Extension.csproj"
-             Targets="Restore" BuildInParallel="true" Properties="Configuration=$(Configuration)" />
+             Targets="Restore" BuildInParallel="true"
+			 Properties="Configuration=$(Configuration);DgSpyHostContractsRoot=$(DgSpyHostContractsRoot)" />
   </Target>
   <Target Name="Build" DependsOnTargets="Restore">
     <MSBuild Projects="@(ComponentProject)" Targets="Build" BuildInParallel="true"
              Properties="Configuration=$(Configuration)" />
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\Extensions\dgSpy.Extension\dgSpy.Extension.csproj" Targets="Build"
-             Properties="Configuration=$(Configuration);TargetFramework=net10.0-windows;BuildProjectReferences=false" />
+             Properties="Configuration=$(Configuration);TargetFramework=net10.0-windows;DgSpyHostContractsRoot=$(DgSpyHostContractsRoot)" />
   </Target>
 </Project>
