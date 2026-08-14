@@ -123,10 +123,10 @@ namespace dgSpy.Extension {
 				var session=Required(source.Arguments,"session_id");
 				var processId=RequiredInt(source.Arguments,"process_id");
 				RuntimeRecord existing;
-				lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) return Initialized(existing,false);
+				lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) { HookLabUiBridge.SetInitialized(); return Initialized(existing,false); }
 				await initialization.WaitAsync(token).ConfigureAwait(false);
 				try {
-					lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) return Initialized(existing,false);
+					lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) { HookLabUiBridge.SetInitialized(); return Initialized(existing,false); }
 
 				var wasRunning=await host.OnDebuggerAsync(()=>{ host.CheckVersion(source); return host.SelectProcess(source).IsRunning; },token).ConfigureAwait(false);
 				var completion=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-init-"+Guid.NewGuid().ToString("N")+".completion");
@@ -145,6 +145,7 @@ namespace dgSpy.Extension {
 					lock(gate) runtimes.Add(RuntimeKey(session,processId),runtime);
 					connection=null;
 					StartEventPump(runtime);
+					HookLabUiBridge.SetInitialized();
 					return Initialized(runtime,true,status);
 				}
 				finally {

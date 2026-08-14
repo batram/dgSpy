@@ -107,6 +107,19 @@ public sealed class HookLabUiBoundaryTests {
 		Assert.Contains("value.Kind!=\"Prefix\"&&value.Kind!=\"Postfix\"&&value.Kind!=\"Finalizer\"",service,StringComparison.Ordinal);
 	}
 
+	[Fact]
+	public void HookLab_toolbar_actions_follow_initialized_selection_and_collection_state() {
+		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","ToolWindows","HookLabToolWindow.cs")));
+		Assert.Contains("publicboolCanInitialize=>!busy&&!initialized",source,StringComparison.Ordinal);
+		Assert.Contains("publicstringInitializeLabel=>initialized?\"HookLabInitialized\":initializing?\"Initializing...\":\"InitializeHookLab\"",source,StringComparison.Ordinal);
+		Assert.Contains("initialize.SetBinding(IsEnabledProperty,\"CanInitialize\")",source,StringComparison.Ordinal);
+		Assert.Contains("publicboolCanRemove=>!busy&&selectedisnotnull",source,StringComparison.Ordinal);
+		Assert.Contains("remove.SetBinding(IsEnabledProperty,\"CanRemove\")",source,StringComparison.Ordinal);
+		Assert.Contains("publicboolCanRemoveAll=>!busy&&Hooks.Count>0",source,StringComparison.Ordinal);
+		Assert.Contains("all.SetBinding(IsEnabledProperty,\"CanRemoveAll\")",source,StringComparison.Ordinal);
+		Assert.Contains("lock(gate){initialized=false;hooks.Clear();events.Clear();}",source,StringComparison.Ordinal);
+	}
+
 	static string Normalize(string value)=>String.Concat(value.Where(character=>!Char.IsWhiteSpace(character)));
 
 	static string RepoFile(params string[] parts) {

@@ -105,6 +105,8 @@ clickable margin reflects runtime state without opening HookLab. Methods with mu
 high-contrast stack badge in either state so an ambiguous click is visually apparent before interaction.
 The plain C# editor fills its available height regardless of source length. Rich syntax formatting remains
 a separate editor-integration slice.
+The toolbar reflects actionable state: initialization becomes a disabled **HookLab Initialized** state
+once ready, **Remove** requires a selected row, and **Remove All** requires at least one installed hook.
 Transpiler, generic-target handling, and broader compilation references remain unfinished. Initialization and
 packaging are no longer the active design problem.
 
