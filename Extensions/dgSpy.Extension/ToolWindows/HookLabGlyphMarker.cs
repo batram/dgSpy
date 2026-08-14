@@ -15,6 +15,8 @@ namespace dgSpy.Extension.ToolWindows {
 	sealed class HookLabGlyphMarker : IDocumentViewerListener {
 		static readonly ImageReference hookImage=new ImageReference(typeof(HookLabGlyphMarker).Assembly,"HookLabHook");
 		static readonly ImageReference disabledHookImage=new ImageReference(typeof(HookLabGlyphMarker).Assembly,"HookLabHookDisabled");
+		static readonly ImageReference stackedHookImage=new ImageReference(typeof(HookLabGlyphMarker).Assembly,"HookLabHookStacked");
+		static readonly ImageReference stackedDisabledHookImage=new ImageReference(typeof(HookLabGlyphMarker).Assembly,"HookLabHookStackedDisabled");
 		readonly IGlyphTextMarkerService markerService;
 		readonly IModuleIdProvider moduleIdProvider;
 		readonly Dictionary<string,IGlyphTextMarker> markers=new Dictionary<string,IGlyphTextMarker>(StringComparer.Ordinal);
@@ -33,7 +35,8 @@ namespace dgSpy.Extension.ToolWindows {
 				var rows=group.ToArray(); var method=rows[0].MethodDefinition!;
 				var location=new DotNetTokenGlyphTextMarkerLocationInfo(moduleIdProvider.Create(method.Module),(int)method.MDToken.Raw);
 				var summary=new HookLabGlyphSummary(method,rows);
-				var image=rows.Any(row=>row.Enabled)?hookImage:disabledHookImage;
+				var anyEnabled=rows.Any(row=>row.Enabled);
+				var image=rows.Length>1 ? (anyEnabled?stackedHookImage:stackedDisabledHookImage) : (anyEnabled?hookImage:disabledHookImage);
 				markers[group.Key]=markerService.AddMarker(location,image,null,null,null,2520,summary,handler,null);
 			}
 		}

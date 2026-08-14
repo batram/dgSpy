@@ -101,7 +101,8 @@ The GUI labels observation hooks separately from custom C# hooks. Row menus expo
 including removal. A single-hook method glyph behaves like a breakpoint toggle and provides Edit,
 Enable/Disable, and Remove; a multi-hook glyph opens HookLab instead of applying an ambiguous mutation.
 Enabled methods use the bright teal glyph; an all-disabled method uses a muted slashed glyph, so the
-clickable margin reflects runtime state without opening HookLab.
+clickable margin reflects runtime state without opening HookLab. Methods with multiple hooks add a
+high-contrast stack badge in either state so an ambiguous click is visually apparent before interaction.
 The plain C# editor fills its available height regardless of source length. Rich syntax formatting remains
 a separate editor-integration slice.
 Transpiler, generic-target handling, and broader compilation references remain unfinished. Initialization and
