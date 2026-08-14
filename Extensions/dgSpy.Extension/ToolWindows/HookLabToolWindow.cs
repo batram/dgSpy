@@ -111,7 +111,7 @@ namespace dgSpy.Extension.ToolWindows {
 
 	sealed class AddHookDialog : WindowBase {
 		readonly TextBox id=new TextBox { MinWidth=300,Margin=new Thickness(6) };
-		readonly ComboBox kind=new ComboBox { Margin=new Thickness(6),ItemsSource=new[]{"Prefix","Postfix","Finalizer"},SelectedIndex=0 };
+		readonly ComboBox kind=new ComboBox { Margin=new Thickness(6),ItemsSource=new[]{"Prefix","Postfix","Finalizer","Transpiler"},SelectedIndex=0 };
 		readonly TextBox rate=new TextBox { Text="100",Margin=new Thickness(6) };
 		readonly TextBox stringLength=new TextBox { Text="1024",Margin=new Thickness(6) };
 		public string HookId=>id.Text.Trim(); public string Kind=>(string)kind.SelectedItem; public int MaximumEventsPerSecond=>Int32.Parse(rate.Text); public int MaximumStringLength=>Int32.Parse(stringLength.Text);
@@ -130,7 +130,7 @@ namespace dgSpy.Extension.ToolWindows {
 		readonly MethodDef method;
 		readonly HookLabEditorState state;
 		readonly TextBox id=new TextBox { Margin=new Thickness(6) };
-		readonly ComboBox template=new ComboBox { Margin=new Thickness(6),ItemsSource=new[]{"Prefix","Postfix","PrefixPostfix","Finalizer"} };
+		readonly ComboBox template=new ComboBox { Margin=new Thickness(6),ItemsSource=new[]{"Prefix","Postfix","PrefixPostfix","Finalizer","Transpiler"} };
 		readonly TextBox source=new TextBox { Margin=new Thickness(6),MinHeight=200,VerticalAlignment=VerticalAlignment.Stretch,HorizontalAlignment=HorizontalAlignment.Stretch,AcceptsReturn=true,AcceptsTab=true,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,TextWrapping=TextWrapping.Wrap,VerticalContentAlignment=VerticalAlignment.Top,FontFamily=new System.Windows.Media.FontFamily("Consolas"),FontSize=13 };
 		readonly TextBox diagnostics=new TextBox { Margin=new Thickness(6),Height=95,IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto };
 		readonly Button install=new Button { Content="Compile & Install",IsDefault=true,MinWidth=125,Margin=new Thickness(6) };

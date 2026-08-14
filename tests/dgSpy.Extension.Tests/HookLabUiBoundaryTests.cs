@@ -100,11 +100,12 @@ public sealed class HookLabUiBoundaryTests {
 	}
 
 	[Fact]
-	public void Custom_hook_editor_and_service_accept_compiled_finalizers() {
+	public void Custom_hook_editor_and_service_accept_all_compiled_patch_kinds() {
 		var ui=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","ToolWindows","HookLabToolWindow.cs")));
 		var service=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
-		Assert.Contains("ItemsSource=new[]{\"Prefix\",\"Postfix\",\"PrefixPostfix\",\"Finalizer\"}",ui,StringComparison.Ordinal);
-		Assert.Contains("value.Kind!=\"Prefix\"&&value.Kind!=\"Postfix\"&&value.Kind!=\"Finalizer\"",service,StringComparison.Ordinal);
+		Assert.Contains("ItemsSource=new[]{\"Prefix\",\"Postfix\",\"PrefixPostfix\",\"Finalizer\",\"Transpiler\"}",ui,StringComparison.Ordinal);
+		Assert.Contains("value.Kind!=\"Prefix\"&&value.Kind!=\"Postfix\"&&value.Kind!=\"Finalizer\"&&value.Kind!=\"Transpiler\"",service,StringComparison.Ordinal);
+		Assert.Contains("Transpilerrequirescompiledcustomsource",service,StringComparison.Ordinal);
 	}
 
 	[Fact]

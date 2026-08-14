@@ -17,8 +17,7 @@ operation exposes carrier methods, atomic actions, prepare/commit, payload gener
    its command channel, and restores the target's previous running or paused state.
 4. Select a method in dnSpy or identify it through MCP.
 5. Create a hook from a template or editable C# source.
-6. The resident runtime compiles and applies Prefix, Postfix, and Finalizer methods directly.
-   Transpiler remains a later slice.
+6. The resident runtime compiles and applies Prefix, Postfix, Finalizer, and Transpiler methods directly.
 7. Edit, recompile, enable, disable, inspect, or remove hooks while the target keeps running.
 
 Initialization is idempotent. Hook operations fail with `hooklab_not_initialized` and point to
@@ -107,7 +106,7 @@ The plain C# editor fills its available height regardless of source length. Rich
 a separate editor-integration slice.
 The toolbar reflects actionable state: initialization becomes a disabled **HookLab Initialized** state
 once ready, **Remove** requires a selected row, and **Remove All** requires at least one installed hook.
-Transpiler, generic-target handling, and broader compilation references remain unfinished. Initialization and
+Generic-target handling and broader compilation references remain unfinished. Initialization and
 packaging are no longer the active design problem.
 
 ## One implementation through-line
@@ -143,7 +142,7 @@ Keep exact MVID, token, signature, and IL digest checks. Resolve the guarded met
 `MethodBase` inside the resident runtime before compiling or patching. Hook IDs are stable and
 conflicting reuse is refused.
 
-### 3. Add resident arbitrary C# hooks - complete for Prefix, Postfix, and Finalizer
+### 3. Add resident arbitrary C# hooks - complete for Prefix, Postfix, Finalizer, and Transpiler
 
 Follow UnityExplorer's useful model: each hook owns editable source, compiled patch methods, target
 identity, enabled state, diagnostics, and Harmony patch handles. Provide templates for call logger,
@@ -160,8 +159,9 @@ Verified Prefix/Postfix source may use Harmony conventions including named origi
 argument mutation, `__instance`, `__args`, `__result`, paired `__state`, `___fieldName` injection, and
 a boolean Prefix that skips the original. Compilation happens in the target context. Compiler errors
 are bounded structured diagnostics. Finalizer can preserve, replace, or suppress an exception through
-Harmony's `__exception` convention. Transpiler remains a later phase; do not add custom
-binding or IL machinery that duplicates Harmony.
+Harmony's `__exception` convention. Transpiler uses Harmony's `IEnumerable<CodeInstruction>` convention
+directly, and its generated template is an identity transform. Do not add custom binding or IL machinery
+that duplicates Harmony.
 
 Do not reintroduce a generic provider framework, export-project system, credential lifecycle, or
 cross-process compiler service before the resident compiler proves it is needed.
@@ -204,7 +204,6 @@ Already reusable:
 Still missing:
 
 - live GUI acceptance for the explicit Edit action (the row-owned source/revision path is implemented);
-- compiled Transpiler after the source lifecycle and Finalizer are proven;
 - generic-target handling and broader compilation references when a concrete hook requires them;
 - package-level acceptance for toggling; behavior-changing source, failed-update rollback, removal,
   and clean detach are already proven against an ordinary CLR v4 PowerShell target.
@@ -221,8 +220,7 @@ compile-dependency file references from immutable `host-raw`, while dgSpy and Ho
 remain normal project references. The global `BuildProjectReferences=false` workaround is gone and a
 structural regression test protects the boundary.
 
-Compiled Finalizer is the next completed vertical slice on the intended build graph. Transpiler remains
-separate because its instruction-oriented validation is a distinct complexity boundary.
+Compiled Finalizer and Transpiler are complete vertical slices on the intended build graph.
 
 ## Execution rule
 

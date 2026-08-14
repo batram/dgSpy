@@ -227,6 +227,22 @@ namespace HookLab.Probe.Tests {
 		}
 
 		[Fact]
+		public void CompiledTranspilerCanUpdateRollbackToggleAndRemove() {
+			var document=new HookDocument(1,"compiled-transpiler",HookKind.Transpiler,GuardFor(TargetMethod),"{}",Limits,true);
+			using(var runtime=Runtime()) {
+				var installed=runtime.InstallCompiledHook(TargetMethod,document,TranspilerReturning(41),1,0);
+				Assert.Equal(41,Fixture.Add(1,2));
+				var error=Assert.Throws<HookCompilationException>(()=>runtime.InstallCompiledHook(TargetMethod,document,"this is not C#",2,1));
+				Assert.NotEmpty(error.Diagnostics); Assert.Equal(1,runtime.CompiledRevision(installed.PatchId)); Assert.Equal(41,Fixture.Add(1,2));
+				var updated=runtime.InstallCompiledHook(TargetMethod,document,TranspilerReturning(73),2,1);
+				Assert.Equal(73,Fixture.Add(1,2)); Assert.Equal(2,runtime.CompiledRevision(updated.PatchId));
+				runtime.SetEnabled(updated.PatchId,false,2); Assert.Equal(3,Fixture.Add(1,2));
+				runtime.SetEnabled(updated.PatchId,true,3); Assert.Equal(73,Fixture.Add(1,2));
+				runtime.Uninstall(updated.PatchId,4); Assert.Equal(3,Fixture.Add(1,2));
+			}
+		}
+
+		[Fact]
 		public void ObservationalPostfixCoexistsWithCompiledPostfix() {
 			using (var runtime = Runtime()) {
 				var compiled = new HookDocument(1, "compiled", HookKind.Postfix, GuardFor(TargetMethod), "{}", Limits, true);
@@ -318,13 +334,14 @@ namespace HookLab.Probe.Tests {
 		[InlineData("Postfix")]
 		[InlineData("PrefixPostfix")]
 		[InlineData("Finalizer")]
+		[InlineData("Transpiler")]
 		public void GeneratedHookTemplatesCompileAndPatch(string template) {
 			var target = new HookTemplateTarget("HookLab.Probe.Tests.ProbeCoreTests.InstanceFixture",false,"System.Int32",new[] { new HookTemplateParameter("value","System.Int32","") });
 			var source = HookSourceTemplate.Generate(target,template);
-			Assert.Contains("InstanceFixture __instance",source,StringComparison.Ordinal);
+			if(template!="Transpiler") Assert.Contains("InstanceFixture __instance",source,StringComparison.Ordinal);
 			if(template=="PrefixPostfix") { Assert.Contains("out object __state",source,StringComparison.Ordinal); Assert.Contains("object __state",source,StringComparison.Ordinal); }
 			using(var runtime=Runtime()) {
-				var kind=template=="Postfix"?HookKind.Postfix:template=="Finalizer"?HookKind.Finalizer:HookKind.Prefix;
+				var kind=template=="Postfix"?HookKind.Postfix:template=="Finalizer"?HookKind.Finalizer:template=="Transpiler"?HookKind.Transpiler:HookKind.Prefix;
 				var document=new HookDocument(1,"generated",kind,GuardFor(InstanceTargetMethod),"{}",Limits,true);
 				runtime.InstallCompiledHook(InstanceTargetMethod,document,source,1,0);
 				Assert.Equal(6,new InstanceFixture(5).Calculate(1));
@@ -385,7 +402,7 @@ namespace HookLab.Probe.Tests {
 		[Fact]
 		public void GeneratedTemplateRejectsUnknownSelection() {
 			var target=new HookTemplateTarget("Fixture",true,"System.Void",Array.Empty<HookTemplateParameter>());
-			Assert.Throws<ArgumentException>(()=>HookSourceTemplate.Generate(target,"Transpiler"));
+			Assert.Throws<ArgumentException>(()=>HookSourceTemplate.Generate(target,"Unknown"));
 		}
 
 		[Fact]
@@ -547,6 +564,7 @@ namespace HookLab.Probe.Tests {
 		static HookDocument Document(HookKind kind, string behavior = "{}") => new HookDocument(1, "add", kind, GuardFor(TargetMethod), behavior, Limits, true);
 		static string PrefixReturning(int value) => "public static class UserHook { public static bool Prefix(ref int __result) { __result = " + value + "; return false; } }";
 		static string PostfixReturning(int value) => "public static class UserHook { public static void Postfix(ref int __result) { __result = " + value + "; } }";
+		static string TranspilerReturning(int value) => "public static class UserHook { public static System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> Transpiler(System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> instructions) { return new[] { new HarmonyLib.CodeInstruction(System.Reflection.Emit.OpCodes.Ldc_I4, " + value + "), new HarmonyLib.CodeInstruction(System.Reflection.Emit.OpCodes.Ret) }; } }";
 		static MethodGuard GuardFor(MethodInfo method) => new MethodGuard(method.Module.ModuleVersionId, unchecked((uint)method.MetadataToken), method.DeclaringType!.FullName!, MethodGuards.Signature(method), MethodGuards.IlSha256(method));
 		static void AssertGuard(string name, MethodGuard guard) { var error = Assert.Throws<GuardMismatchException>(() => MethodGuards.ValidateMethod(TargetMethod, guard)); Assert.Equal(name, error.GuardName); }
 		static bool Loaded(string name) => AppDomain.CurrentDomain.GetAssemblies().Any(a => string.Equals(a.GetName().Name, name, StringComparison.Ordinal));

@@ -5,7 +5,7 @@ namespace HookLab.Contracts {
 	public enum ActionOutcome { trigger_not_reached, reached_not_evaluable, nearby_slot_not_found, action_failed, verification_failed, completed }
 	public enum InterruptionReason { none, timeout, cancelled, client_disconnected, target_exited, appdomain_unloaded, ui_shutdown, dispatcher_degraded, external_debugger_action }
 	public enum CleanupOutcome { not_required, completed, failed, ambiguous }
-	public enum HookKind { Prefix, Postfix, Finalizer }
+	public enum HookKind { Prefix, Postfix, Finalizer, Transpiler }
 	public enum ProbeMessageKind { Request, Response, Event }
 
 	public sealed class AtomicActionStatus {

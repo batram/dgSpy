@@ -69,6 +69,14 @@ public sealed class ToolCatalogTests {
 	[Fact]
 	public void An_unknown_tool_still_gets_a_usable_deadline() => Assert.Equal(8, ToolCatalog.DeadlineSeconds("not_a_tool"));
 
+	[Fact]
+	public void Agent_facing_startup_surfaces_describe_the_opt_in_transcript() {
+		Assert.Contains("development_transcript",Description(ToolCatalog.All.Single(tool=>Name(tool)=="get_started")),StringComparison.Ordinal);
+		Assert.Contains("development transcript",Description(ToolCatalog.All.Single(tool=>Name(tool)=="doctor")),StringComparison.OrdinalIgnoreCase);
+		var resource=ProtocolJson.ToNode(ToolCatalog.ReadResource("dgspy://guide/getting-started"))!;
+		Assert.Contains("DGSPY_TRANSCRIPT_FILE",(string?)resource["text"],StringComparison.Ordinal);
+	}
+
 	[Theory]
 	[InlineData("run_atomic_action")]
 	[InlineData("get_atomic_action_status")]
@@ -334,7 +342,7 @@ public sealed class ToolCatalogTests {
 		foreach(var tool in new[]{create,update}) {
 			var kind=InputProperties(tool)["kind"];
 			var values=(string[])kind.GetType().GetProperty("enum")!.GetValue(kind)!;
-			Assert.Equal(new[]{"Prefix","Postfix","Finalizer"},values);
+			Assert.Equal(new[]{"Prefix","Postfix","Finalizer","Transpiler"},values);
 		}
 	}
 

@@ -25,13 +25,19 @@ namespace dgSpy.Extension {
 			var prefix=template=="Prefix"||template=="PrefixPostfix";
 			var postfix=template=="Postfix"||template=="PrefixPostfix";
 			var finalizer=template=="Finalizer";
-			if(!prefix&&!postfix&&!finalizer) throw new ArgumentException("template must be Prefix, Postfix, PrefixPostfix, or Finalizer.",nameof(template));
+			var transpiler=template=="Transpiler";
+			if(!prefix&&!postfix&&!finalizer&&!transpiler) throw new ArgumentException("template must be Prefix, Postfix, PrefixPostfix, Finalizer, or Transpiler.",nameof(template));
 			var builder=new StringBuilder("public static class DgSpyGeneratedHook\n{\n");
 			if(prefix) AppendMethod(builder,"Prefix",target,includeResult:false,includeState:template=="PrefixPostfix",stateOutput:true);
 			if(prefix&&postfix) builder.AppendLine();
 			if(postfix) AppendMethod(builder,"Postfix",target,includeResult:target.ReturnType!="System.Void",includeState:template=="PrefixPostfix",stateOutput:false);
 			if(finalizer) AppendFinalizer(builder,target);
+			if(transpiler) AppendTranspiler(builder);
 			return builder.Append("}\n").ToString();
+		}
+		static void AppendTranspiler(StringBuilder builder) {
+			builder.AppendLine("    public static System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> Transpiler(System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> instructions)");
+			builder.AppendLine("    {"); builder.AppendLine("        return instructions;"); builder.AppendLine("    }");
 		}
 		static void AppendFinalizer(StringBuilder builder,HookTemplateTarget target) {
 			var parameters=new List<string>();

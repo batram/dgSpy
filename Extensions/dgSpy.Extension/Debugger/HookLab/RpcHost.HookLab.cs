@@ -24,7 +24,7 @@ namespace dgSpy.Extension {
 		async Task<object> GetHookTemplateAsync(RpcRequest req,CancellationToken token) {
 			CheckSession(req);
 			var template=(string?)req.Arguments["template"] ?? "PrefixPostfix";
-			if(template!="Prefix"&&template!="Postfix"&&template!="PrefixPostfix"&&template!="Finalizer") throw new RpcException("invalid_arguments","template must be Prefix, Postfix, PrefixPostfix, or Finalizer.");
+			if(template!="Prefix"&&template!="Postfix"&&template!="PrefixPostfix"&&template!="Finalizer"&&template!="Transpiler") throw new RpcException("invalid_arguments","template must be Prefix, Postfix, PrefixPostfix, Finalizer, or Transpiler.");
 			return await OnDebuggerAsync(()=>{
 				var loaded=FindModule(req,null);
 				var metadata=TryMetadata(loaded) ?? throw new RpcException("metadata_unavailable","The selected module has no readable metadata.");
@@ -491,9 +491,10 @@ namespace dgSpy.Extension {
 				public string Key=>HookLabService.Key(SessionId,ProcessId,HookId);
 				public static HookDefinition Parse(JsonObject values) {
 					var value=new HookDefinition { SessionId=Required(values,"session_id"),ProcessId=RequiredInt(values,"process_id"),HookId=Required(values,"hook_id"),Kind=Required(values,"kind"),ModuleId=Required(values,"module_id"),Assembly=Required(values,"assembly"),DeclaringType=Required(values,"declaring_type"),Method=Required(values,"method"),Signature=Required(values,"signature"),Mvid=Required(values,"module_mvid"),IlSha256=Required(values,"il_sha256"),MethodToken=RequiredInt(values,"method_token") };
-					if(value.Kind!="Prefix" && value.Kind!="Postfix" && value.Kind!="Finalizer") throw new RpcException("invalid_arguments","kind must be Prefix, Postfix, or Finalizer.");
+					if(value.Kind!="Prefix" && value.Kind!="Postfix" && value.Kind!="Finalizer" && value.Kind!="Transpiler") throw new RpcException("invalid_arguments","kind must be Prefix, Postfix, Finalizer, or Transpiler.");
 					value.Source=(string?)values["source"];
-					if(value.Source is not null) { if(value.Kind!="Prefix"&&value.Kind!="Postfix"&&value.Kind!="Finalizer") throw new RpcException("invalid_arguments","Custom source currently supports Prefix, Postfix, and Finalizer only."); value.Revision=RequiredInt(values,"revision"); if(value.Revision<=0) throw new RpcException("invalid_arguments","revision must be positive."); }
+					if(value.Source is null&&value.Kind=="Transpiler") throw new RpcException("invalid_arguments","Transpiler requires compiled custom source; use create_hook or update_hook.");
+					if(value.Source is not null) { if(value.Kind!="Prefix"&&value.Kind!="Postfix"&&value.Kind!="Finalizer"&&value.Kind!="Transpiler") throw new RpcException("invalid_arguments","Custom source currently supports Prefix, Postfix, Finalizer, and Transpiler only."); value.Revision=RequiredInt(values,"revision"); if(value.Revision<=0) throw new RpcException("invalid_arguments","revision must be positive."); }
 					value.ArrivalModuleId=(string?)values["arrival_module_id"] ?? value.ModuleId; value.ArrivalMethodToken=(int?)values["arrival_method_token"] ?? value.MethodToken; value.ArrivalIlOffset=(int?)values["arrival_il_offset"] ?? 0;
 					value.MaximumEventsPerSecond=Positive(values,"maximum_events_per_second",100); value.MaximumStringLength=Positive(values,"maximum_string_length",1024);
 					value.NearbyOffsets=ProtocolJson.FromNode<int[]>(values["nearby_offsets"]) ?? Array.Empty<int>();
