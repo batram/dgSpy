@@ -9,12 +9,22 @@ using dgSpy.Protocol;
 
 namespace dgSpy.Gateway;
 
+internal sealed class LocalHostLaunchGate {
+	readonly SemaphoreSlim gate=new(1,1);
+	public async Task<T> RunAsync<T>(Func<Task<T>> action,CancellationToken token) {
+		await gate.WaitAsync(token);
+		try { return await action(); }
+		finally { gate.Release(); }
+	}
+}
+
 public sealed class DeploymentService {
 	readonly string stateRoot;
 	readonly string installRoot;
 	readonly string packageRoot;
 	readonly RemoteHostListener? remoteListener;
 	readonly GatewayDevelopmentTranscript transcript;
+	readonly LocalHostLaunchGate localHostLaunch=new();
 	internal static string DefaultStateRoot() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy");
 	public DeploymentService(RemoteHostListener? remoteListener=null,GatewayDevelopmentTranscript? transcript=null) {
 		this.remoteListener=remoteListener;
@@ -31,7 +41,7 @@ public sealed class DeploymentService {
 		"doctor" => await DoctorAsync(router,token),
 		"get_workflow_help" => WorkflowCatalog.Lookup((string?)args["topic"]),
 		"get_local_deployment" => GetLocal(),
-		"launch_local_host" => await LaunchLocalAsync(args,router,token),
+		"launch_local_host" => await localHostLaunch.RunAsync(()=>LaunchLocalAsync(args,router,token),token),
 		"rollback_local_deployment" => Rollback(args),
 		"uninstall_local_deployment" => Uninstall(args),
 		"create_remote_host_package" => await CreateRemoteAsync(args,router,token),

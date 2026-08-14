@@ -29,9 +29,7 @@ Directory.CreateDirectory(stateRoot);
 EnsureState(Path.Combine(stateRoot,"host.id"),()=>"local-"+Guid.NewGuid().ToString("N"));
 EnsureState(Path.Combine(stateRoot,"rpc.token"),()=>Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)));
 if (string.IsNullOrEmpty(token)) {
-	Directory.CreateDirectory(Path.GetDirectoryName(tokenFile)!);
-	EnsureState(tokenFile,()=>Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)));
-	token = File.ReadAllText(tokenFile).Trim();
+	token = GatewayTokenStore.ReadOrCreate(tokenFile);
 	Console.WriteLine($"dgSpy gateway token loaded from {tokenFile}");
 }
 Console.WriteLine($"dgSpy gateway listening; send it as the {RequestGuard.TokenHeader} header.");
@@ -90,6 +88,29 @@ catch (Exception ex) {
 }
 static IResult McpError(object? id, int code, string message) => Results.Json(new { jsonrpc="2.0", id, error=new { code, message } });
 static void EnsureState(string path,Func<string> create) { if(File.Exists(path)&&!string.IsNullOrWhiteSpace(File.ReadAllText(path))) return; File.WriteAllText(path,create()); }
+
+internal static class GatewayTokenStore {
+	public static string ReadOrCreate(string path) {
+		Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+		try {
+			var token=Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+			using var stream=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.Read);
+			using var writer=new StreamWriter(stream,new System.Text.UTF8Encoding(false));
+			writer.Write(token); writer.Flush(); stream.Flush(true);
+			return token;
+		}
+		catch(IOException) when(File.Exists(path)) {
+			// Another concurrent MCP launcher may still be flushing the one shared token. Wait for that
+			// atomic owner instead of minting a second secret that invalidates the Gateway which wins bind.
+			for(var attempt=0;attempt<40;attempt++) {
+				try { var existing=File.ReadAllText(path).Trim(); if(existing.Length>0) return existing; }
+				catch(IOException) { }
+				Thread.Sleep(25);
+			}
+			throw new IOException($"Gateway token file exists but did not become readable: {path}");
+		}
+	}
+}
 
 internal static class McpToolResult {
 	// MCP CallToolResult.structuredContent is an object. Preserve object-shaped RPC results and put

@@ -24,7 +24,8 @@ public sealed class ToolCatalogTests {
 	public void GatewayStartupKeepsStableTokenAndCliSerializesStarts() {
 		var gateway=File.ReadAllText(Path.Combine(RepoRoot,"dgSpy.Gateway","Program.cs"));
 		var cli=File.ReadAllText(Path.Combine(RepoRoot,"dgSpy.Cli","Program.cs"));
-		Assert.Contains("EnsureState(tokenFile",gateway,StringComparison.Ordinal);
+		Assert.Contains("GatewayTokenStore.ReadOrCreate(tokenFile)",gateway,StringComparison.Ordinal);
+		Assert.Contains("FileMode.CreateNew",gateway,StringComparison.Ordinal);
 		Assert.DoesNotContain("File.WriteAllText(tokenFile, token)",gateway,StringComparison.Ordinal);
 		Assert.Contains("Local\\dgSpy.Gateway.Start.Semaphore",cli,StringComparison.Ordinal);
 		Assert.Contains("new Semaphore(1,1",cli,StringComparison.Ordinal);
