@@ -21,6 +21,7 @@
 # ---------------------------------------------------------------------------
 # Wholly ours: projects, tests, docs and tooling that upstream has no notion of
 # ---------------------------------------------------------------------------
+.gitattributes                 line-ending policy scoped to dgSpy-owned paths
 dgSpy.Cli/                     dgSpy MCP command line client
 dgSpy.Gateway/                 dgSpy MCP gateway
 dgSpy.Protocol/                dgSpy wire protocol

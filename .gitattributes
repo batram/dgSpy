@@ -1,0 +1,23 @@
+# dgSpy-owned text uses a repository-defined representation instead of each
+# developer's global core.autocrlf setting. Keep the inherited dnSpy tree out of
+# this policy so adopting it does not create broad upstream-only churn.
+/.gitattributes text eol=lf
+/.github/workflows/dgspy-ci.yml text eol=lf
+/AGENTS.md text eol=lf
+/Build/DgSpy.Components.proj text eol=lf
+/Build/DgSpyTool/** text=auto eol=lf
+/Extensions/dgSpy.Extension/** text=auto eol=lf
+/HookLab/** text=auto eol=lf
+/dgSpy.Cli/** text=auto eol=lf
+/dgSpy.ExtensionContracts/** text=auto eol=lf
+/dgSpy.Gateway/** text=auto eol=lf
+/dgSpy.Protocol/** text=auto eol=lf
+/docs/** text=auto eol=lf
+/install-dgspy.ps1 text eol=lf
+/packaging/** text=auto eol=lf
+/tests/** text=auto eol=lf
+/tools/** text=auto eol=lf
+
+# cmd.exe and legacy batch consumers retain their native Windows convention.
+*.bat text eol=crlf
+*.cmd text eol=crlf
