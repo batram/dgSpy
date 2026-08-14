@@ -33,8 +33,14 @@ public sealed class HookLabUiBoundaryTests {
 		Assert.Contains("hookList.PreviewMouseRightButtonDown",source,StringComparison.Ordinal);
 		Assert.Contains("item.IsSelected=true",source,StringComparison.Ordinal);
 		Assert.Contains("hookList.MouseDoubleClick+=(s,e)=>vm.ActivateSelected()",source,StringComparison.Ordinal);
-		Assert.Contains("TextWrapping=TextWrapping.Wrap",source,StringComparison.Ordinal);
-		Assert.Contains("VerticalContentAlignment=VerticalAlignment.Top",source,StringComparison.Ordinal);
+		Assert.Contains("readonlyICodeEditorsource",source,StringComparison.Ordinal);
+		Assert.Contains("HookLabToolWindowLoader(IDsToolWindowServicewindows,IDocumentTabServicedocumentTabs,ICodeEditorProvidercodeEditorProvider)",source,StringComparison.Ordinal);
+		Assert.Contains("ContentTypeString=ContentTypes.CSharpRoslyn",source,StringComparison.Ordinal);
+		Assert.Contains("source.TextViewHost.HostControl",source,StringComparison.Ordinal);
+		Assert.Contains("AutomationProperties.SetName(source.TextView.VisualElement,\"CustomhookC#source\")",source,StringComparison.Ordinal);
+		Assert.Contains("source.TextBuffer.CurrentSnapshot.GetText()",source,StringComparison.Ordinal);
+		Assert.Contains("source.TextBuffer.Replace(newSpan(0,snapshot.Length),value)",source,StringComparison.Ordinal);
+		Assert.Contains("protectedoverridevoidOnClosed(EventArgse){source.Dispose();base.OnClosed(e);}",source,StringComparison.Ordinal);
 		Assert.Contains("VerticalAlignment=VerticalAlignment.Stretch",source,StringComparison.Ordinal);
 		Assert.Contains("HorizontalAlignment=HorizontalAlignment.Stretch",source,StringComparison.Ordinal);
 		Assert.Contains("MinHeight=200",source,StringComparison.Ordinal);
@@ -96,6 +102,7 @@ public sealed class HookLabUiBoundaryTests {
 		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","ToolWindows","HookLabToolWindow.cs")));
 		Assert.Contains("Header=\"AddObservationHook...\"",source,StringComparison.Ordinal);
 		Assert.Contains("Header=\"CreateCustomC#Hook...\"",source,StringComparison.Ordinal);
+		Assert.Equal(2,Count(source,"Icon=\"HookLabHook\""));
 		Assert.DoesNotContain("Header=\"AddHook...\"",source,StringComparison.Ordinal);
 	}
 
@@ -122,6 +129,7 @@ public sealed class HookLabUiBoundaryTests {
 	}
 
 	static string Normalize(string value)=>String.Concat(value.Where(character=>!Char.IsWhiteSpace(character)));
+	static int Count(string value,string needle) { int count=0,index=0; while((index=value.IndexOf(needle,index,StringComparison.Ordinal))>=0) { count++; index+=needle.Length; } return count; }
 
 	static string RepoFile(params string[] parts) {
 		var root=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));

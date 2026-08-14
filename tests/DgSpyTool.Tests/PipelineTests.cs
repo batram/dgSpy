@@ -23,7 +23,7 @@ public sealed class PipelineTests : IDisposable {
 		Assert.Contains("<ItemGroup Condition=\"'$(DgSpyHostContractsRoot)' != ''\">",extension,StringComparison.Ordinal);
 		foreach(var contract in new[]{"DnSpy","Debugger","Debugger.DotNet","Debugger.DotNet.CorDebug","Debugger.DotNet.Mono","Logic"})
 			Assert.Contains("<Reference Include=\"dnSpy.Contracts."+contract+"\">",extension,StringComparison.Ordinal);
-		foreach(var dependency in new[]{"dnlib","System.ComponentModel.Composition","Microsoft.VisualStudio.Text.Logic","Microsoft.VisualStudio.Text.UI","dnSpy.Debugger.DotNet.Metadata"})
+		foreach(var dependency in new[]{"dnlib","System.ComponentModel.Composition","Microsoft.VisualStudio.CoreUtility","Microsoft.VisualStudio.Text.Data","Microsoft.VisualStudio.Text.Logic","Microsoft.VisualStudio.Text.UI","Microsoft.VisualStudio.Text.UI.Wpf","dnSpy.Debugger.DotNet.Metadata"})
 			Assert.Contains("<Reference Include=\""+dependency+"\">",extension,StringComparison.Ordinal);
 		Assert.Contains("<ProjectReference Include=\"..\\..\\dgSpy.Protocol\\dgSpy.Protocol.csproj\" />",extension,StringComparison.Ordinal);
 		Assert.Contains("<ProjectReference Include=\"..\\..\\HookLab\\HookLab.Contracts\\HookLab.Contracts.csproj\" />",extension,StringComparison.Ordinal);

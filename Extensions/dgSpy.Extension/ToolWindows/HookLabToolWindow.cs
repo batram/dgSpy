@@ -17,18 +17,23 @@ using dnSpy.Contracts.Documents.Tabs.DocViewer;
 using dnSpy.Contracts.Controls;
 using dnSpy.Contracts.Extension;
 using dnSpy.Contracts.Menus;
+using dnSpy.Contracts.Text;
+using dnSpy.Contracts.Text.Editor;
 using dnSpy.Contracts.ToolWindows;
 using dnSpy.Contracts.ToolWindows.App;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Editor;
 
 namespace dgSpy.Extension.ToolWindows {
 	static class HookLabUiBridge {
 		static readonly object gate=new object();
 		static readonly List<HookLabHookRow> hooks=new List<HookLabHookRow>();
 		static readonly List<HookLabEventRow> events=new List<HookLabEventRow>();
-		static Func<Task<object>>? initialize; static Func<MethodDef,string,string,int,int,Task<object>>? install; static Func<MethodDef,string,string>? generate; static Func<MethodDef,string,string,string,int,Task<object>>? installSource; static Func<string,int,string,bool,Task>? toggle; static Func<string,int,string,Task>? remove; static Func<string,int,Task>? removeAll; static Action? show; static Action<MethodDef>? showSource; static MethodDef? selectedMethod; static string status="Initialize HookLab, then select a method and use Add Hook..."; static bool initialized;
+		static Func<Task<object>>? initialize; static Func<MethodDef,string,string,int,int,Task<object>>? install; static Func<MethodDef,string,string>? generate; static Func<MethodDef,string,string,string,int,Task<object>>? installSource; static Func<string,int,string,bool,Task>? toggle; static Func<string,int,string,Task>? remove; static Func<string,int,Task>? removeAll; static Action? show; static Action<MethodDef>? showSource; static ICodeEditorProvider? codeEditorProvider; static MethodDef? selectedMethod; static string status="Initialize HookLab, then select a method and use Add Hook..."; static bool initialized;
 		public static event Action? Changed;
 		public static void Bind(Func<Task<object>> initializeHookLab,Func<MethodDef,string,string,int,int,Task<object>> installHook,Func<MethodDef,string,string> generateSource,Func<MethodDef,string,string,string,int,Task<object>> installCustomSource,Func<string,int,string,bool,Task> toggleHook,Func<string,int,string,Task> removeHook,Func<string,int,Task> removeAllHooks) { lock(gate) { initialize=initializeHookLab; install=installHook; generate=generateSource; installSource=installCustomSource; toggle=toggleHook; remove=removeHook; removeAll=removeAllHooks; } }
-		public static void BindWindow(Action showWindow,Action<MethodDef> navigateToSource) { lock(gate) { show=showWindow; showSource=navigateToSource; } }
+		public static void BindWindow(Action showWindow,Action<MethodDef> navigateToSource,ICodeEditorProvider editorProvider) { lock(gate) { show=showWindow; showSource=navigateToSource; codeEditorProvider=editorProvider; } }
+		public static ICodeEditor CreateCodeEditor() { ICodeEditorProvider? provider; lock(gate) provider=codeEditorProvider; if(provider is null) throw new InvalidOperationException("The dnSpy code editor service is unavailable."); var options=new CodeEditorOptions { ContentTypeString=ContentTypes.CSharpRoslyn }; var editor=provider.Create(options); editor.TextView.Options.SetOptionValue(DefaultTextViewHostOptions.LineNumberMarginId,true); editor.TextView.Options.SetOptionValue(DefaultTextViewHostOptions.HorizontalScrollBarId,true); editor.TextView.Options.SetOptionValue(DefaultTextViewHostOptions.VerticalScrollBarId,true); return editor; }
 		public static void PublishHook(string session,int process,string id,string kind,string method,string patch,int revision,bool compiled,string? source,bool enabled,MethodDef? methodDefinition) { Action? open; lock(gate) { initialized=true; hooks.RemoveAll(value=>value.Session==session && value.Process==process && value.Id==id); hooks.Add(new HookLabHookRow(session,process,id,kind,method,patch,revision,compiled,source,enabled,methodDefinition)); open=show; } Changed?.Invoke(); open?.Invoke(); }
 		public static void SetInitialized() { lock(gate) initialized=true; Changed?.Invoke(); }
 		public static HookLabHookRow? FindCompiled(string id,string method) { lock(gate) return hooks.LastOrDefault(value=>value.Id==id && value.Method==method && value.Compiled); }
@@ -53,7 +58,7 @@ namespace dgSpy.Extension.ToolWindows {
 	[ExportAutoLoaded]
 	sealed class HookLabToolWindowLoader : IAutoLoaded {
 		[ImportingConstructor]
-		HookLabToolWindowLoader(IDsToolWindowService windows,IDocumentTabService documentTabs) => HookLabUiBridge.BindWindow(()=>Application.Current.Dispatcher.BeginInvoke(new Action(()=>windows.Show(HookLabToolWindowContent.GuidValue))),method=>documentTabs.FollowReference(method));
+		HookLabToolWindowLoader(IDsToolWindowService windows,IDocumentTabService documentTabs,ICodeEditorProvider codeEditorProvider) => HookLabUiBridge.BindWindow(()=>Application.Current.Dispatcher.BeginInvoke(new Action(()=>windows.Show(HookLabToolWindowContent.GuidValue))),method=>documentTabs.FollowReference(method),codeEditorProvider);
 	}
 
 	sealed class HookLabHookRow { public HookLabHookRow(string session,int process,string id,string kind,string method,string patch,int revision,bool compiled,string? source,bool enabled,MethodDef? methodDefinition) { Session=session; Process=process; Id=id; Kind=kind; Method=method; Patch=patch; Revision=revision; Compiled=compiled; Source=source; Enabled=enabled; MethodDefinition=methodDefinition; } public string Session { get; } public int Process { get; } public string Id { get; } public string Kind { get; } public string Method { get; } public string Patch { get; } public int Revision { get; } public bool Compiled { get; } public string? Source { get; } public bool Enabled { get; } public MethodDef? MethodDefinition { get; } public string SourceKind=>Compiled?"C#":"Observer"; public string State=>Enabled?"Enabled":"Disabled"; }
@@ -131,28 +136,30 @@ namespace dgSpy.Extension.ToolWindows {
 		readonly HookLabEditorState state;
 		readonly TextBox id=new TextBox { Margin=new Thickness(6) };
 		readonly ComboBox template=new ComboBox { Margin=new Thickness(6),ItemsSource=new[]{"Prefix","Postfix","PrefixPostfix","Finalizer","Transpiler"} };
-		readonly TextBox source=new TextBox { Margin=new Thickness(6),MinHeight=200,VerticalAlignment=VerticalAlignment.Stretch,HorizontalAlignment=HorizontalAlignment.Stretch,AcceptsReturn=true,AcceptsTab=true,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,TextWrapping=TextWrapping.Wrap,VerticalContentAlignment=VerticalAlignment.Top,FontFamily=new System.Windows.Media.FontFamily("Consolas"),FontSize=13 };
+		readonly ICodeEditor source;
 		readonly TextBox diagnostics=new TextBox { Margin=new Thickness(6),Height=95,IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto };
 		readonly Button install=new Button { Content="Compile & Install",IsDefault=true,MinWidth=125,Margin=new Thickness(6) };
 		public CustomHookEditorDialog(MethodDef selected) : this(selected,null) { }
 		public CustomHookEditorDialog(HookLabHookRow existing) : this(existing.MethodDefinition ?? throw new ArgumentException("The selected hook has no loaded method.",nameof(existing)),existing) { }
 		CustomHookEditorDialog(MethodDef selected,HookLabHookRow? selectedHook) {
 			SetResourceReference(StyleProperty,"DialogWindowStyle");
+			AutomationProperties.SetName(this,"HookLab custom hook editor");
 			method=selected; var defaultId=DefaultId(selected); var methodName=selected.DeclaringType.FullName+"."+selected.Name; var existing=selectedHook ?? HookLabUiBridge.FindCompiled(defaultId,methodName);
 			state=existing is null ? new HookLabEditorState(defaultId,value=>HookLabUiBridge.GenerateSource(selected,value)) : new HookLabEditorState(existing.Id,value=>HookLabUiBridge.GenerateSource(selected,value),existing.Revision+1,existing.Source,existing.Kind);
+			source=HookLabUiBridge.CreateCodeEditor();
 			Title=existing is null?"Create Custom Hook":"Edit Custom Hook"; Width=920; Height=720; MinWidth=680; MinHeight=520; WindowStartupLocation=WindowStartupLocation.CenterOwner; Owner=Application.Current?.MainWindow;
-			id.Text=state.HookId; id.IsReadOnly=existing is not null; template.SelectedItem=state.Template; source.Text=state.Source;
-			AutomationProperties.SetName(id,"Custom hook ID"); AutomationProperties.SetName(template,"Custom hook template"); AutomationProperties.SetName(source,"Custom hook C# source"); AutomationProperties.SetName(diagnostics,"Custom hook compiler diagnostics"); AutomationProperties.SetName(install,"Compile and install custom hook");
+			id.Text=state.HookId; id.IsReadOnly=existing is not null; template.SelectedItem=state.Template; SetSource(state.Source);
+			AutomationProperties.SetName(id,"Custom hook ID"); AutomationProperties.SetName(template,"Custom hook template"); AutomationProperties.SetName(source.TextViewHost.HostControl,"Custom hook C# source"); AutomationProperties.SetName(source.TextView.VisualElement,"Custom hook C# source"); AutomationProperties.SetName(diagnostics,"Custom hook compiler diagnostics"); AutomationProperties.SetName(install,"Compile and install custom hook");
 			var layout=new Grid { Margin=new Thickness(10) }; layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition()); layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
 			var heading=new StackPanel(); heading.Children.Add(new TextBlock { Text=selected.FullName,Margin=new Thickness(6),TextWrapping=TextWrapping.Wrap }); heading.Children.Add(new TextBlock { Text="Edit the generated complete C# source. HookLab compiles before changing the target; a compiler failure leaves any working revision installed.",Margin=new Thickness(6),TextWrapping=TextWrapping.Wrap }); Grid.SetRow(heading,0); layout.Children.Add(heading);
 			var fields=new Grid(); fields.ColumnDefinitions.Add(new ColumnDefinition()); fields.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(230) }); var idPanel=new StackPanel(); idPanel.Children.Add(new TextBlock { Text="Hook ID",Margin=new Thickness(6,3,6,0) }); idPanel.Children.Add(id); var templatePanel=new StackPanel(); templatePanel.Children.Add(new TextBlock { Text="Template",Margin=new Thickness(6,3,6,0) }); templatePanel.Children.Add(template); Grid.SetColumn(templatePanel,1); fields.Children.Add(idPanel); fields.Children.Add(templatePanel); Grid.SetRow(fields,1); layout.Children.Add(fields);
-			var sourcePanel=new DockPanel(); var sourceLabel=new TextBlock { Text="C# source",Margin=new Thickness(6,3,6,0) }; DockPanel.SetDock(sourceLabel,Dock.Top); sourcePanel.Children.Add(sourceLabel); sourcePanel.Children.Add(source); Grid.SetRow(sourcePanel,2); layout.Children.Add(sourcePanel);
+			var sourcePanel=new DockPanel { Margin=new Thickness(6),MinHeight=200,VerticalAlignment=VerticalAlignment.Stretch,HorizontalAlignment=HorizontalAlignment.Stretch }; var sourceLabel=new TextBlock { Text="C# source",Margin=new Thickness(0,3,0,3) }; DockPanel.SetDock(sourceLabel,Dock.Top); sourcePanel.Children.Add(sourceLabel); sourcePanel.Children.Add(source.TextViewHost.HostControl); Grid.SetRow(sourcePanel,2); layout.Children.Add(sourcePanel);
 			var diagnosticsPanel=new DockPanel(); var diagnosticsLabel=new TextBlock { Text="Compiler diagnostics",Margin=new Thickness(6,3,6,0) }; DockPanel.SetDock(diagnosticsLabel,Dock.Top); diagnosticsPanel.Children.Add(diagnosticsLabel); diagnosticsPanel.Children.Add(diagnostics); Grid.SetRow(diagnosticsPanel,3); layout.Children.Add(diagnosticsPanel);
 			var buttons=new StackPanel { Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right }; install.Click+=Install; var cancel=new Button { Content="Cancel",IsCancel=true,MinWidth=80,Margin=new Thickness(6) }; buttons.Children.Add(install); buttons.Children.Add(cancel); Grid.SetRow(buttons,4); layout.Children.Add(buttons); Content=layout;
-			template.SelectionChanged+=(s,e)=>{ if(template.SelectedItem is string value && value!=state.Template) { state.SelectTemplate(value); source.Text=state.Source; diagnostics.Text=state.Diagnostics; } };
+			template.SelectionChanged+=(s,e)=>{ if(template.SelectedItem is string value && value!=state.Template) { state.SelectTemplate(value); SetSource(state.Source); diagnostics.Text=state.Diagnostics; } };
 		}
 		async void Install(object? sender,RoutedEventArgs e) {
-			state.HookId=id.Text.Trim(); state.Source=source.Text;
+			state.HookId=id.Text.Trim(); state.Source=source.TextBuffer.CurrentSnapshot.GetText();
 			if(!state.TryBegin(out var error)) { diagnostics.Text=error; return; }
 			install.IsEnabled=false; id.IsEnabled=false; template.IsEnabled=false; diagnostics.Text=state.Diagnostics;
 			try {
@@ -164,6 +171,8 @@ namespace dgSpy.Extension.ToolWindows {
 				install.IsEnabled=true; id.IsEnabled=true; template.IsEnabled=true;
 			}
 		}
+		void SetSource(string value) { var snapshot=source.TextBuffer.CurrentSnapshot; source.TextBuffer.Replace(new Span(0,snapshot.Length),value); }
+		protected override void OnClosed(EventArgs e) { source.Dispose(); base.OnClosed(e); }
 		static string DefaultId(MethodDef method)=>(method.DeclaringType.FullName+"."+method.Name+".custom").Replace('`','_');
 	}
 
@@ -175,7 +184,7 @@ namespace dgSpy.Extension.ToolWindows {
 		}
 	}
 
-	[ExportMenuItem(Header="Add Observation Hook...",Group="2100,67C441E9-66EC-4DA0-9693-BEE4E7E57C30",Order=0)]
+	[ExportMenuItem(Header="Add Observation Hook...",Icon="HookLabHook",Group="2100,67C441E9-66EC-4DA0-9693-BEE4E7E57C30",Order=0)]
 	sealed class AddHookFromCodeCommand : MenuItemBase {
 		readonly IDsToolWindowService windows; [ImportingConstructor] AddHookFromCodeCommand(IDsToolWindowService windows)=>this.windows=windows;
 		public override bool IsVisible(IMenuItemContext context)=>HookLabMethodContext.Method(context) is not null;
@@ -186,7 +195,7 @@ namespace dgSpy.Extension.ToolWindows {
 		}
 	}
 
-	[ExportMenuItem(Header="Create Custom C# Hook...",Group="2100,67C441E9-66EC-4DA0-9693-BEE4E7E57C30",Order=10)]
+	[ExportMenuItem(Header="Create Custom C# Hook...",Icon="HookLabHook",Group="2100,67C441E9-66EC-4DA0-9693-BEE4E7E57C30",Order=10)]
 	sealed class CreateCustomHookFromCodeCommand : MenuItemBase {
 		readonly IDsToolWindowService windows; [ImportingConstructor] CreateCustomHookFromCodeCommand(IDsToolWindowService windows)=>this.windows=windows;
 		public override bool IsVisible(IMenuItemContext context)=>HookLabMethodContext.Method(context) is not null;

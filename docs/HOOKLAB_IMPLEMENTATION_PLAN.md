@@ -12,7 +12,8 @@ operation exposes carrier methods, atomic actions, prepare/commit, payload gener
 ## Finished workflow
 
 1. Attach dgSpy to an x64 CLR v4 process.
-2. Run **Initialize HookLab** in the GUI or call MCP `initialize_hooklab`.
+2. Optionally run **Initialize HookLab** in the GUI or call MCP `initialize_hooklab`; the first create
+   or compatibility-install operation can invoke the same autonomous initialization path lazily.
 3. HookLab autonomously finds a usable managed evaluation point, injects the resident runtime, verifies
    its command channel, and restores the target's previous running or paused state.
 4. Select a method in dnSpy or identify it through MCP.
@@ -20,8 +21,9 @@ operation exposes carrier methods, atomic actions, prepare/commit, payload gener
 6. The resident runtime compiles and applies Prefix, Postfix, Finalizer, and Transpiler methods directly.
 7. Edit, recompile, enable, disable, inspect, or remove hooks while the target keeps running.
 
-Initialization is idempotent. Hook operations fail with `hooklab_not_initialized` and point to
-`initialize_hooklab`; they never start an implicit debugger workflow.
+Initialization is idempotent. Status, toggle, event, and removal operations do not create a resident
+runtime. A create or compatibility-install operation initializes lazily when needed, but carrier,
+debugger-stop, bootstrap, and payload details remain internal to that initialization operation.
 
 ## Public operations
 
@@ -37,8 +39,9 @@ Initialization is idempotent. Hook operations fail with `hooklab_not_initialized
 - `remove_hook`
 - `remove_all_hooks`
 
-`install_hook` may remain temporarily as a compatibility alias while `create_hook` lands. Hook creation
-takes exact method identity from dgSpy discovery plus source or a built-in template.
+`install_hook` remains the observational and compatibility operation; explicit compiled-hook lifecycle
+uses `create_hook` and `update_hook`. Hook creation takes exact method identity from dgSpy discovery plus
+source or a built-in template.
 
 ## Current checkpoint
 
@@ -50,12 +53,12 @@ hooks. Every observational hook, including the first, then installs and removes 
 the target runs. Carrier, stop, atomic-action, and payload-generation details are absent from the public
 schema.
 
-The verified observational product exposes `install_hook`, `list_hooks`, `get_hook_events`,
-`remove_hook`, and `remove_all_hooks` for guarded Prefix, Postfix, and Finalizer recording hooks. The
-GUI adopts a target attached directly through dnSpy, initializes automatically from Add Hook, receives
-events, and removes one or all hooks through the same service. Commit `c1258b616` completed the single
-immutable C# build/package/install pipeline; its exact 1,902-file package passed the final CorDebug gate,
-including 414 debugger checks, 52 atomic-action checks, and 49 HookLab GUI/install checks.
+The observational product exposes `install_hook`, `list_hooks`, `get_hook_events`, `remove_hook`, and
+`remove_all_hooks` for guarded Prefix, Postfix, and Finalizer recording hooks. The GUI adopts a target
+attached directly through dnSpy, can initialize explicitly or on first creation, receives events, and
+removes one or all hooks through the same service. Commit `c1258b616` completed the single immutable C#
+build/package/install pipeline. The latest exact 1,902-file package passed the final CorDebug gate,
+including 414 debugger checks, 52 atomic-action checks, and 52 HookLab GUI/install checks.
 
 Resident source compilation is now package-proven for complete C# units containing one public static
 Prefix, Postfix, or Finalizer method, or paired Prefix/Postfix methods. Harmony supplies named argument
@@ -67,9 +70,9 @@ method, lists compiled revision state, and removes every method in a paired patc
 Windows PowerShell acceptance target proves create, update, failed-update rollback, and removal while
 the target runs.
 
-`get_hook_template` now supplies editable no-op Prefix, Postfix, paired Prefix/Postfix, or
-exception-preserving Finalizer C# for an
-exactly selected non-generic method. It derives the declaring type, original parameter names and
+`get_hook_template` supplies editable no-op Prefix, Postfix, paired Prefix/Postfix,
+exception-preserving Finalizer, or identity Transpiler C# for an exactly selected non-generic method.
+It derives the declaring type, original parameter names and
 CLR by-reference arguments as Harmony-compatible `ref` parameters, `__instance`, `__result`, and
 paired `__state` directly from module metadata. Missing or invalid C# parameter names receive stable
 positional names, while keywords are escaped.
@@ -102,12 +105,36 @@ Enable/Disable, and Remove; a multi-hook glyph opens HookLab instead of applying
 Enabled methods use the bright teal glyph; an all-disabled method uses a muted slashed glyph, so the
 clickable margin reflects runtime state without opening HookLab. Methods with multiple hooks add a
 high-contrast stack badge in either state so an ambiguous click is visually apparent before interaction.
-The plain C# editor fills its available height regardless of source length. Rich syntax formatting remains
-a separate editor-integration slice.
+The C# source surface now uses dnSpy's native code editor rather than a wrapping WPF text box. It owns
+the native text buffer and view for the dialog lifetime, uses normal code-editor scrolling, selection,
+clipboard, undo, and indentation behavior, and round-trips generated or installed source through the
+same create/update lifecycle. A Roslyn workspace, semantic diagnostics, completion, and IntelliSense
+remain deliberately out of scope.
 The toolbar reflects actionable state: initialization becomes a disabled **HookLab Initialized** state
 once ready, **Remove** requires a selected row, and **Remove All** requires at least one installed hook.
-Generic-target handling and broader compilation references remain unfinished. Initialization and
-packaging are no longer the active design problem.
+Generic-target handling and any demonstrated need for broader compilation references remain deferred.
+Initialization and packaging are no longer the active design problem.
+
+## Deferred editor UX backlog
+
+These are worthwhile improvements, but neither belongs on the current HookLab implementation path.
+
+- **Roslyn-backed custom-hook editing.** The dialog currently uses dnSpy's native C# text view without
+  a Roslyn project. A later slice can import the exported `ILanguageCompilerProvider`, initialize a
+  one-document C# project, and host the resulting `ICodeDocument` to gain semantic highlighting,
+  completion, signature help, and advisory diagnostics. Give that editor project metadata references
+  for the selected target module, its resolvable dependencies, framework assemblies, and the pinned
+  Harmony assembly. Continue sending the document's raw source to HookLab's target-side CodeDOM
+  compiler: resident compilation and installation remain authoritative because they see the target
+  AppDomain, and Roslyn may accept newer syntax than that compiler. Do not couple this work to dnSpy's
+  assembly-rewriting Edit Class workflow.
+- **Natural generated parameter names.** Templates currently render every original method parameter as
+  a C# verbatim identifier, such as `@input`. This is valid and Harmony binds the compiled name as
+  `input`, but the blanket escaping is noisy and differs from normal Harmony examples. A later cleanup
+  should emit ordinary valid non-keyword names unchanged, use `@` only for C# keywords, retain `__N`
+  fallbacks for missing or invalid metadata names, and prevent collisions with other parameters and
+  Harmony's reserved injected names. Keep the passive `void Prefix(...)` default; behavior-replacing
+  `bool Prefix(ref T __result, ...)` is better offered as a separate explicit template.
 
 ## One implementation through-line
 
@@ -132,11 +159,11 @@ The shipping x64 path uses the native bootstrap first and retains the managed ev
 a bounded fallback. Carrier choice is internal and never tied to the method the user later chooses to
 hook.
 
-### 2. Route every hook through the resident runtime - complete for observational hooks
+### 2. Route every hook through the resident runtime - complete
 
-Delete the first-hook prepare/commit special case. Once initialized, the first hook and every later hook
-use the same pipe `install` command. Creating, editing, toggling, and removing hooks must not pause or
-resume the target.
+The first-hook prepare/commit special case is gone. Initialization may establish the resident runtime;
+once initialized, the first hook and every later hook use the resident command channel. Creating,
+editing, toggling, and removing hooks do not pause or resume the target.
 
 Keep exact MVID, token, signature, and IL digest checks. Resolve the guarded method to a live
 `MethodBase` inside the resident runtime before compiling or patching. Hook IDs are stable and
@@ -145,8 +172,8 @@ conflicting reuse is refused.
 ### 3. Add resident arbitrary C# hooks - complete for Prefix, Postfix, Finalizer, and Transpiler
 
 Follow UnityExplorer's useful model: each hook owns editable source, compiled patch methods, target
-identity, enabled state, diagnostics, and Harmony patch handles. Provide templates for call logger,
-Prefix, Postfix, Finalizer, Transpiler, and custom C#.
+identity, enabled state, diagnostics, and Harmony patch handles. Provide Prefix, Postfix, paired
+Prefix/Postfix, Finalizer, and Transpiler templates plus complete custom C# source.
 
 Start with one complete compiled Prefix path rather than implementing every phase incompletely. Define
 a resident hook record containing stable ID, guarded target identity, source, revision, compiled patch,
@@ -166,34 +193,36 @@ that duplicates Harmony.
 Do not reintroduce a generic provider framework, export-project system, credential lifecycle, or
 cross-process compiler service before the resident compiler proves it is needed.
 
-### 4. Make the GUI a hook editor - create/update slice complete
+### 4. Make the GUI a hook editor - complete for the current scope
 
-The HookLab window first shows Not initialized, Initializing, Ready, or Failed with Retry. It provides
-**Initialize HookLab** and may offer initialization when Create Hook is chosen.
+The HookLab window exposes explicit initialization and reflects ready state. Selecting a method and
+creating a hook can also invoke the same autonomous initialization path when necessary.
 
-Once ready, `Add Hook...` opens an editor with templates and source. Hook rows show Compiling, Enabled,
-Disabled, or Failed and provide Edit, Enable/Disable, and Remove. Diagnostics and runtime events remain
-visible without consulting debugger output. The GUI calls the shared service directly, never MCP.
+**Add Observation Hook...** opens bounded observation options, while **Create Custom C# Hook...** opens
+the native C# source editor with the supported templates. Rows expose Enabled/Disabled state and real
+Edit, Enable/Disable, Show, and Remove actions where applicable. Runtime events remain visible without
+consulting debugger output. The GUI calls the shared service directly, never MCP.
 
-### 5. Verify the real vertical slice
+### 5. Preserve real vertical-slice acceptance
 
 Keep tests for bootstrap with zero hooks, initialization idempotency, state restoration, pipe-only first
 install, compiler diagnostics, replacement rollback, toggling, and removal. Keep boundary tests for MCP
 schemas, MEF composition, and GUI commands.
 
-The hidden-desktop acceptance run must attach to an ordinary x64 CLR v4 PowerShell or fixture without
-helper code, initialize with no caller-supplied carrier, restore run state, compile behavior-changing
-hooks while running, prove compiler-failure rollback, show the same state in GUI and MCP, edit/toggle/
-remove without debugger stops, detach cleanly, and run the focused product gates.
+The hidden-desktop acceptance attaches to an ordinary x64 CLR v4 target without helper code, initializes
+with no caller-supplied carrier, restores run state, compiles behavior-changing hooks while running,
+proves compiler-failure rollback and toggling, exercises packaged GUI visibility/Edit/removal, detaches
+cleanly, and runs the focused product gates. Keep those boundaries covered as later slices land.
 
-## Current starting point
+## Completed foundation and remaining boundaries
 
 Already reusable:
 
 - verified bootstrap with embedded probe and Harmony;
 - native autonomous initialization plus a bounded managed fallback;
 - `initialize_hooklab` and `get_hooklab_status` in MCP and GUI;
-- read-only `get_hook_template` for metadata-derived Prefix/Postfix source without initialization;
+- read-only `get_hook_template` for metadata-derived Prefix, Postfix, paired Prefix/Postfix, Finalizer,
+  and Transpiler source without initialization;
 - `Prepare()` creates and retains a resident runtime and pipe without a hook;
 - resident `install`, `uninstall`, `status`, and event drain;
 - exact guards, bounded observer events, cleanup, packaging, and host-only deployment;
@@ -201,18 +230,19 @@ Already reusable:
 - one immutable C# build, package, install, and registration pipeline with package-level composition and
   live CorDebug coverage.
 
-Still missing:
+Still deferred:
 
-- live GUI acceptance for the explicit Edit action (the row-owned source/revision path is implemented);
-- generic-target handling and broader compilation references when a concrete hook requires them;
-- package-level acceptance for toggling; behavior-changing source, failed-update rollback, removal,
-  and clean detach are already proven against an ordinary CLR v4 PowerShell target.
+- generated templates for generic methods and methods on generic declaring types;
+- broader resident compiler references only when a concrete hook demonstrates that the current
+  target-AppDomain reference set is insufficient;
+- the explicitly parked editor UX items above.
 
-## Work order and build-boundary seam
+## Verification and build-boundary seam
 
-Keep the active HookLab editor/state work together. The explicit Edit action, enable/disable, and public
-`create_hook` / `update_hook` lifecycle are implemented; prove them together through the packaged GUI.
-Retain `install_hook` temporarily for observational hooks and compatibility.
+The explicit Edit action is covered by the packaged GUI smoke through an unchanged-source revision-2
+round trip. Behavior-changing create/update, compiler rollback, enable/disable, removal, and clean detach
+are package-proven through the PowerShell acceptance target. Retain `install_hook` for observational
+hooks and compatibility; use `create_hook` and `update_hook` for explicit compiled lifecycle semantics.
 
 The remaining build dependency cleanup from [BUILD_PIPELINE_TODO.md](BUILD_PIPELINE_TODO.md) is also
 complete: the packaged component build compiles `dgSpy.Extension` against explicit dnSpy contract and

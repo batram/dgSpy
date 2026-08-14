@@ -84,7 +84,7 @@ function Invoke-UiElement($Element) {
     if (-not $Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { throw "UI element '$($Element.Current.Name)' is not invokable" }
     ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
 }
-function Open-HookLabAndRemove([int]$HostProcessId, [string]$HookId) {
+function Open-HookLabEditorAndRemove([int]$HostProcessId, [string]$SessionId, [int]$TargetProcessId, [string]$HookId, [string]$ExpectedSource) {
     Add-Type -AssemblyName UIAutomationClient
     Add-Type -AssemblyName UIAutomationTypes
     $hooks = Get-UiElement $HostProcessId 'Installed hooks'
@@ -103,6 +103,45 @@ function Open-HookLabAndRemove([int]$HostProcessId, [string]$HookId) {
         while ($selectable -and -not $selectable.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$selection)) { $selectable = $walker.GetParent($selectable) }
         if (-not $selection) { throw 'HookLab hook row did not expose a selectable ancestor' }
         ([System.Windows.Automation.SelectionItemPattern]$selection).Select()
+        Start-Sleep -Milliseconds 500
+    }
+    $edit = Get-UiElement $HostProcessId 'Edit selected custom HookLab hook'
+    Check 'compiled HookLab row enables the packaged Edit action' ($null -ne $edit -and $edit.Current.IsEnabled) ("hook_id=" + $HookId)
+    if ($edit -and $edit.Current.IsEnabled) {
+        Invoke-UiElement $edit
+        $editorWindow = Get-UiElement $HostProcessId 'HookLab custom hook editor'
+        $nativeEditorFound = $false
+        $candidateTexts = New-Object System.Collections.Generic.List[string]
+        if ($editorWindow) {
+            foreach ($candidate in @($editorWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition))) {
+                $candidatePattern = $null
+                if ($candidate.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern,[ref]$candidatePattern)) {
+                    $candidateText = ([System.Windows.Automation.TextPattern]$candidatePattern).DocumentRange.GetText(-1)
+                    $candidateTexts.Add('text:' + $candidate.Current.ControlType.ProgrammaticName + ':' + $candidateText.Length)
+                    if ($candidate.Current.ControlType.ProgrammaticName -eq 'ControlType.Edit' -and $candidateText.Length -eq 0) { $nativeEditorFound = $true }
+                }
+                $valuePattern = $null
+                if ($candidate.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$valuePattern)) {
+                    $candidateText = ([System.Windows.Automation.ValuePattern]$valuePattern).Current.Value
+                    $candidateTexts.Add('value:' + $candidate.Current.ControlType.ProgrammaticName + ':' + $candidateText.Length)
+                }
+            }
+        }
+        $editorTree = if ($editorWindow -and -not $nativeEditorFound) { @($editorWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Select-Object -First 80 | ForEach-Object { $_.Current.ControlType.ProgrammaticName + ':' + $_.Current.Name }) -join ';' } else { '' }
+        Check 'Edit opens the packaged native C# editor' ($null -ne $editorWindow -and $nativeEditorFound) ("window=" + ($null -ne $editorWindow) + " native_editor=" + $nativeEditorFound + " candidates=" + ($candidateTexts -join ',') + " tree=" + $editorTree)
+        if ($nativeEditorFound) {
+            $compile = Get-UiElement $HostProcessId 'Compile and install custom hook'
+            if (-not $compile) { throw 'Custom Hook editor Compile and Install button was not present' }
+            Invoke-UiElement $compile
+            $updateDeadline = [DateTime]::UtcNow.AddSeconds(70)
+            do {
+                Start-Sleep -Milliseconds 200
+                $updatedHooks = @((Rpc 'list_hooks' @{ session_id=$SessionId; process_id=$TargetProcessId }).hooks)
+                $updated = @($updatedHooks | Where-Object { $_.hook_id -eq $HookId })[0]
+            } while (($null -eq $updated -or [int]$updated.revision -ne 2) -and [DateTime]::UtcNow -lt $updateDeadline)
+            $updatedLength = if ($updated -and $updated.source) { $updated.source.Length } else { 0 }
+            Check 'native editor round-trips exact source through revision 2' ($null -ne $updated -and [int]$updated.revision -eq 2 -and $updated.source -eq $ExpectedSource) ("revision=" + $updated.revision + " length=" + $updatedLength)
+        }
         Start-Sleep -Milliseconds 500
     }
     $root = [System.Windows.Automation.AutomationElement]::RootElement
@@ -391,15 +430,20 @@ try {
             arrival_il_offset = [int]$carrierOffset
         }
         $installWatch = [Diagnostics.Stopwatch]::StartNew()
-        $installed = Rpc 'install_hook' $installArguments 130
+        $compiledSource = 'public static class InstallSmokeHook { public static void Prefix() { } }'
+        $installArguments.source = $compiledSource
+        $installArguments.revision = 1
+        $installed = Rpc 'create_hook' $installArguments 130
         $installWatch.Stop()
         Say "MEASURE install_hook_ms=$($installWatch.ElapsedMilliseconds)"
-        Check 'public install_hook installs the guarded hook' ($installed.installed -eq $true -and -not [string]::IsNullOrWhiteSpace($installed.hook.patch_id)) ("patch_id=" + $installed.hook.patch_id)
+        Check 'public create_hook installs the guarded compiled hook' ($installed.installed -eq $true -and $installed.hook.compiled -eq $true -and $installed.hook.source -eq $compiledSource -and -not [string]::IsNullOrWhiteSpace($installed.hook.patch_id)) ("patch_id=" + $installed.hook.patch_id)
         foreach ($kind in @('Postfix','Finalizer')) {
             $additional = @{}
             foreach ($key in $installArguments.Keys) { $additional[$key] = $installArguments[$key] }
             $additional.kind = $kind
             $additional.hook_id = 'tick-' + $kind.ToLowerInvariant()
+            $additional.Remove('source')
+            $additional.Remove('revision')
             $extra = Rpc 'install_hook' $additional 70
             Check "public install_hook installs $kind" ($extra.installed -eq $true -and $extra.hook.kind -eq $kind) ("patch_id=" + $extra.hook.patch_id)
         }
@@ -413,6 +457,8 @@ try {
             foreach ($key in $installArguments.Keys) { $bad[$key] = $installArguments[$key] }
             $bad.hook_id = 'bad-' + $case.Field
             $bad[$case.Field] = $case.Value
+            $bad.Remove('source')
+            $bad.Remove('revision')
             Expect-RpcFailure $case.Label $bad $case.Text
         }
         $listed = Rpc 'list_hooks' @{ session_id=$sessionId; process_id=$fixture.Id }
@@ -436,7 +482,7 @@ try {
         $stdoutAfter = Get-Content -LiteralPath $fixture.Out -Raw
         Check 'the recording hook leaves fixture stdout unchanged' ($stdoutAfter -ceq $stdoutBefore) ("before=" + ($stdoutBefore -replace "`r?`n",'|') + " after=" + ($stdoutAfter -replace "`r?`n",'|'))
 
-        Open-HookLabAndRemove $hostId 'tick-prefix'
+        Open-HookLabEditorAndRemove $hostId $sessionId $fixture.Id 'tick-prefix' $compiledSource
         $removeDeadline = [DateTime]::UtcNow.AddSeconds(70)
         do {
             Start-Sleep -Milliseconds 200

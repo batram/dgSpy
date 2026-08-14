@@ -30,7 +30,10 @@
 		<Reference Include="dnlib"><HintPath>$(DgSpyHostContractsRoot)\dnlib.dll</HintPath><Private>false</Private></Reference>
 		<Reference Include="System.ComponentModel.Composition"><HintPath>$(DgSpyHostContractsRoot)\System.ComponentModel.Composition.dll</HintPath><Private>false</Private></Reference>
 		<Reference Include="Microsoft.VisualStudio.Text.Logic"><HintPath>$(DgSpyHostContractsRoot)\Microsoft.VisualStudio.Text.Logic.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="Microsoft.VisualStudio.CoreUtility"><HintPath>$(DgSpyHostContractsRoot)\Microsoft.VisualStudio.CoreUtility.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="Microsoft.VisualStudio.Text.Data"><HintPath>$(DgSpyHostContractsRoot)\Microsoft.VisualStudio.Text.Data.dll</HintPath><Private>false</Private></Reference>
 		<Reference Include="Microsoft.VisualStudio.Text.UI"><HintPath>$(DgSpyHostContractsRoot)\Microsoft.VisualStudio.Text.UI.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="Microsoft.VisualStudio.Text.UI.Wpf"><HintPath>$(DgSpyHostContractsRoot)\Microsoft.VisualStudio.Text.UI.Wpf.dll</HintPath><Private>false</Private></Reference>
 		<Reference Include="dnSpy.Debugger.DotNet.Metadata"><HintPath>$(DgSpyHostContractsRoot)\dnSpy.Debugger.DotNet.Metadata.dll</HintPath><Private>false</Private></Reference>
 	</ItemGroup>
 </Project>
