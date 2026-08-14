@@ -222,8 +222,10 @@ try {
     Check 'an uninterrupted action names no reconciliation operation' (-not $result.reconciliation_operation) ("reconciliation=" + $result.reconciliation_operation)
 
     Say 'no stray owned breakpoint or stray pause survives the action'
-    $breakpoints = @(Rpc 'list_breakpoints' @{})
-    Check 'the action left no user-visible breakpoint behind' ($breakpoints.Count -eq 0) ("count=" + $breakpoints.Count)
+    # Windows PowerShell 5.1 can preserve a ConvertFrom-Json array as one nested pipeline item.
+    # Re-pipeline it before counting, or an empty JSON array is misreported as one breakpoint.
+    $breakpoints = @(Rpc 'list_breakpoints' @{} | ForEach-Object { $_ })
+    Check 'the action left no user-visible breakpoint behind' ($breakpoints.Count -eq 0) ($breakpoints | ConvertTo-Json -Compress -Depth 6)
 
     Say 'exact slot, resume'
     $resumeArguments = ActionArguments $sessionId $token 0 'resume'
@@ -306,7 +308,8 @@ try {
     Check 'a target that never reaches the slot times out' ($timeoutResult.interruption_reason -eq 'timeout') ("interruption=" + $timeoutResult.interruption_reason + " outcome=" + $timeoutResult.action_outcome + " error=" + $timeoutResult.error)
     Check 'a timeout still resumes the target' ($timeoutResult.final_debugger_state.is_running -eq $true) ("running=" + $timeoutResult.final_debugger_state.is_running)
     Check 'a timeout cleans up completely rather than ambiguously' ($timeoutResult.cleanup_outcome -eq 'completed') ("cleanup=" + $timeoutResult.cleanup_outcome + " error=" + $timeoutResult.error)
-    Check 'a timed-out action left no user-visible breakpoint behind' (@(Rpc 'list_breakpoints' @{}).Count -eq 0) $timeoutActionId
+    $breakpoints = @(Rpc 'list_breakpoints' @{} | ForEach-Object { $_ })
+    Check 'a timed-out action left no user-visible breakpoint behind' ($breakpoints.Count -eq 0) ($breakpoints | ConvertTo-Json -Compress -Depth 6)
 
     Say 'disconnect under complete_on_disconnect'
     Ensure-Paused $sessionId
@@ -370,7 +373,8 @@ try {
         Check 'the interruption is the cancellation, not the deadline' ($cancelledRecord.result.interruption_reason -eq 'cancelled') ("interruption=" + $cancelledRecord.result.interruption_reason)
         Check 'a cancelled action still cleaned up' ($cancelledRecord.result.cleanup_outcome -ne 'failed') ("cleanup=" + $cancelledRecord.result.cleanup_outcome + " error=" + $cancelledRecord.result.error)
     }
-    Check 'a cancelled action left no user-visible breakpoint behind' (@(Rpc 'list_breakpoints' @{}).Count -eq 0) $asyncActionId
+    $breakpoints = @(Rpc 'list_breakpoints' @{} | ForEach-Object { $_ })
+    Check 'a cancelled action left no user-visible breakpoint behind' ($breakpoints.Count -eq 0) ($breakpoints | ConvertTo-Json -Compress -Depth 6)
     $idempotent = Rpc 'cancel_atomic_action' @{ operation_version=1; session_id=$sessionId; action_id=$asyncActionId }
     Check 'cancel after terminal completion is truthful rather than an error' ($idempotent.cancel_requested -eq $false -and $idempotent.completed -eq $true) ("requested=" + $idempotent.cancel_requested + " completed=" + $idempotent.completed)
     $unknownCancel = $null
