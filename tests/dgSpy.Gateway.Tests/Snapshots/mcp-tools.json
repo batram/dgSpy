@@ -148,7 +148,7 @@
     },
     {
       "name": "create_remote_host_package",
-      "description": "SIDE EFFECTING and audited. Create or replace a personalized ZIP for a remote Windows debugger host; the host does not need to be connected. gateway_address is an IP address or DNS hostname only, never a URL or host:port: this tool selects port 7353 for mutual TLS or 7352 for authenticated plaintext. It never builds, transfers, or executes the host. compression defaults to optimal; use none for fastest extraction or fastest for light compression.",
+      "description": "SIDE EFFECTING and audited. Create or replace a personalized ZIP for a remote Windows debugger host; the host does not need to be connected. gateway_address is an IP address or DNS hostname only, never a URL or host:port: this tool selects port 7353 for mutual TLS or 7352 for authenticated plaintext. It never builds, transfers, or executes the host. After extraction, dnSpy.exe reads the personalized package and connects automatically; the launcher script is optional. compression defaults to optimal; use none for fastest extraction or fastest for light compression.",
       "inputSchema": {
         "type": "object",
         "properties": {

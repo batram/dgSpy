@@ -163,6 +163,8 @@ public sealed class ToolCatalogTests {
 		var description=Description(tool);
 		Assert.Contains("does not need to be connected",description,StringComparison.OrdinalIgnoreCase);
 		Assert.Contains("never a URL or host:port",description,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("dnSpy.exe",description,StringComparison.Ordinal);
+		Assert.Contains("connects automatically",description,StringComparison.OrdinalIgnoreCase);
 		var properties=InputProperties(tool);
 		var hostDescription=(string)properties["host_id"].GetType().GetProperty("description")!.GetValue(properties["host_id"])!;
 		var addressDescription=(string)properties["gateway_address"].GetType().GetProperty("description")!.GetValue(properties["gateway_address"])!;
@@ -172,6 +174,17 @@ public sealed class ToolCatalogTests {
 		Assert.Contains("7353",addressDescription,StringComparison.Ordinal);
 		Assert.Contains("7352",addressDescription,StringComparison.Ordinal);
 		Assert.Contains("not HTTP",transportDescription,StringComparison.OrdinalIgnoreCase);
+	}
+
+	[Fact]
+	public void Deployment_resource_exposes_direct_remote_host_startup() {
+		var resource=ProtocolJson.ToNode(ToolCatalog.ReadResource("dgspy://guide/deployment"))!;
+		var text=(string)resource["text"]!;
+		Assert.Contains("create_remote_host_package directly",text,StringComparison.Ordinal);
+		Assert.Contains("dnSpy.exe",text,StringComparison.Ordinal);
+		Assert.Contains("connects automatically",text,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("optional",text,StringComparison.OrdinalIgnoreCase);
+		Assert.DoesNotContain("Always plan",text,StringComparison.OrdinalIgnoreCase);
 	}
 
 	[Theory]

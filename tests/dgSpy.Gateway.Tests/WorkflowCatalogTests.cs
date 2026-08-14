@@ -54,5 +54,8 @@ public sealed class WorkflowCatalogTests {
 		Assert.Contains("never includes a URL scheme or port",guidance,StringComparison.OrdinalIgnoreCase);
 		Assert.Contains("disconnected or unavailable",guidance,StringComparison.OrdinalIgnoreCase);
 		Assert.Contains("does not block packaging",guidance,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("dnSpy.exe",guidance,StringComparison.Ordinal);
+		Assert.Contains("connects automatically",guidance,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("optional",guidance,StringComparison.OrdinalIgnoreCase);
 	}
 }

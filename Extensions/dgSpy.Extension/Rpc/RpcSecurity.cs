@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Security.Cryptography;
+using System.Text.Json.Nodes;
 
 namespace dgSpy.Extension {
 	/// <summary>Persistent endpoint identity and gateway credential. Environment variables are useful for
@@ -10,8 +11,9 @@ namespace dgSpy.Extension {
 		public string Token { get; }
 		RpcSecuritySettings(string hostId,string token) { HostId=hostId; Token=token; }
 
-		public static RpcSecuritySettings Load() {
-			var root=Environment.GetEnvironmentVariable("DGSPY_STATE_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy");
+		public static RpcSecuritySettings Load() => Load(RemoteHostPackage.FindBundleRoot());
+		internal static RpcSecuritySettings Load(string? bundleRoot) {
+			var root=Environment.GetEnvironmentVariable("DGSPY_STATE_ROOT") ?? (bundleRoot is null ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy") : Path.Combine(bundleRoot,"state"));
 			Directory.CreateDirectory(root);
 			var hostId=ReadOrCreate("DGSPY_HOST_ID",Path.Combine(root,"host.id"),()=>"host-"+Guid.NewGuid().ToString("N"));
 			var token=ReadOrCreate("DGSPY_RPC_TOKEN",Path.Combine(root,"rpc.token"),CreateToken);
@@ -40,16 +42,44 @@ namespace dgSpy.Extension {
 	sealed class RemoteGatewaySettings {
 		public string Address { get; } public int Port { get; } public bool UseTls { get; } public string? ClientCertificateFile { get; } public string? ClientCertificatePasswordFile { get; } public string? GatewayCertificateFile { get; }
 		RemoteGatewaySettings(string address,int port,bool useTls,string? clientCertificateFile,string? clientCertificatePasswordFile,string? gatewayCertificateFile) { Address=address; Port=port; UseTls=useTls; ClientCertificateFile=clientCertificateFile; ClientCertificatePasswordFile=clientCertificatePasswordFile; GatewayCertificateFile=gatewayCertificateFile; }
-		public static bool TryLoad(out RemoteGatewaySettings settings) {
+		public static bool TryLoad(out RemoteGatewaySettings settings) => TryLoad(RemoteHostPackage.FindBundleRoot(),out settings);
+		internal static bool TryLoad(string? bundleRoot,out RemoteGatewaySettings settings) {
 			var address=Environment.GetEnvironmentVariable("DGSPY_GATEWAY_ADDRESS");
+			JsonObject? package=null;
+			if (string.IsNullOrWhiteSpace(address) && bundleRoot is not null) {
+				package=RemoteHostPackage.ReadConfiguration(bundleRoot);
+				address=(string?)package["gateway_address"];
+			}
 			if (string.IsNullOrWhiteSpace(address)) { settings=null!; return false; }
-			if (!int.TryParse(Environment.GetEnvironmentVariable("DGSPY_GATEWAY_PORT"),out var port)) port=7352;
+			var configuredPort=Environment.GetEnvironmentVariable("DGSPY_GATEWAY_PORT");
+			var port=string.IsNullOrWhiteSpace(configuredPort) ? (int?)package?["gateway_port"] ?? 7352 : int.TryParse(configuredPort,out var parsedPort) ? parsedPort : -1;
 			if (port<1 || port>65535) throw new InvalidOperationException("DGSPY_GATEWAY_PORT is invalid.");
-			var useTls=string.Equals(Environment.GetEnvironmentVariable("DGSPY_GATEWAY_TRANSPORT"),"tls",StringComparison.OrdinalIgnoreCase);
-			var clientCertificateFile=Environment.GetEnvironmentVariable("DGSPY_CLIENT_CERTIFICATE_FILE"); var clientCertificatePasswordFile=Environment.GetEnvironmentVariable("DGSPY_CLIENT_CERTIFICATE_PASSWORD_FILE"); var gatewayCertificateFile=Environment.GetEnvironmentVariable("DGSPY_GATEWAY_CERTIFICATE_FILE");
+			var transport=Environment.GetEnvironmentVariable("DGSPY_GATEWAY_TRANSPORT") ?? (string?)package?["transport"];
+			var useTls=string.Equals(transport,"tls",StringComparison.OrdinalIgnoreCase);
+			var clientCertificateFile=Environment.GetEnvironmentVariable("DGSPY_CLIENT_CERTIFICATE_FILE") ?? RemoteHostPackage.Resolve(bundleRoot,(string?)package?["client_certificate_file"]); var clientCertificatePasswordFile=Environment.GetEnvironmentVariable("DGSPY_CLIENT_CERTIFICATE_PASSWORD_FILE") ?? RemoteHostPackage.Resolve(bundleRoot,(string?)package?["client_certificate_password_file"]); var gatewayCertificateFile=Environment.GetEnvironmentVariable("DGSPY_GATEWAY_CERTIFICATE_FILE") ?? RemoteHostPackage.Resolve(bundleRoot,(string?)package?["gateway_certificate_file"]);
 			if (useTls && (string.IsNullOrWhiteSpace(clientCertificateFile) || string.IsNullOrWhiteSpace(clientCertificatePasswordFile) || string.IsNullOrWhiteSpace(gatewayCertificateFile))) throw new InvalidOperationException("TLS requires client certificate, password, and pinned Gateway certificate files.");
 			settings=new RemoteGatewaySettings(address.Trim(),port,useTls,clientCertificateFile,clientCertificatePasswordFile,gatewayCertificateFile); return true;
 		}
+	}
+
+	static class RemoteHostPackage {
+		const string ConfigurationFile="remote-host.json";
+		internal static string? FindBundleRoot() {
+			var directory=Path.GetDirectoryName(typeof(RemoteHostPackage).Assembly.Location);
+			while (!string.IsNullOrEmpty(directory)) {
+				if (File.Exists(Path.Combine(directory,ConfigurationFile)) && File.Exists(Path.Combine(directory,"dnSpy.exe"))) return directory;
+				var parent=Path.GetDirectoryName(directory);
+				if (string.Equals(parent,directory,StringComparison.OrdinalIgnoreCase)) break;
+				directory=parent;
+			}
+			return null;
+		}
+		internal static JsonObject ReadConfiguration(string bundleRoot) {
+			var path=Path.Combine(bundleRoot,ConfigurationFile);
+			try { return JsonNode.Parse(File.ReadAllText(path))?.AsObject() ?? throw new InvalidOperationException($"{ConfigurationFile} is empty."); }
+			catch (Exception ex) when (!(ex is InvalidOperationException)) { throw new InvalidOperationException($"The remote host configuration '{path}' is invalid: {ex.Message}",ex); }
+		}
+		internal static string? Resolve(string? bundleRoot,string? path) => string.IsNullOrWhiteSpace(path) || bundleRoot is null ? path : Path.GetFullPath(Path.Combine(bundleRoot,path));
 	}
 
 	static class RpcRequestAuthenticator {

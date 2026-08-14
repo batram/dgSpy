@@ -28,6 +28,7 @@ public sealed class DeploymentServiceTests : IDisposable {
 		var router=new HostRouter(); using var listener=new RemoteHostListener(router); var service=new DeploymentService(listener);
 		var result=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await service.ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"},{"use_tls",false},{"compression","none"}},router,default)))!;
 		var archive=(string)result["archive_path"]!; Assert.True(File.Exists(archive)); Assert.Equal("authenticated_plaintext",(string?)result["transport"]); Assert.Equal("none",(string?)result["compression"]); Assert.True((bool?)result["gateway_ready"]); Assert.False((bool?)result["gateway_restart_required"]);
+		Assert.Equal(@".\dnSpy.exe",(string?)result["launch_command"]); Assert.Equal(@".\launcher\Start-dgSpyRemoteHost.cmd",(string?)result["launcher_alternative"]);
 		using(var zip=ZipFile.OpenRead(archive)) { var fixture=zip.GetEntry("compression-fixture.bin")!; Assert.Equal(fixture.Length,fixture.CompressedLength); }
 		var registry=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"state","packages","gateway-hosts.json")))!; Assert.Equal("remote-a",(string?)registry["hosts"]?[0]?["host_id"]); Assert.Equal("127.0.0.1",(string?)registry["listener"]?["address"]); Assert.Equal(7352,(int?)registry["listener"]?["plaintext_port"]);
 		Assert.True(router.IsRegistered("remote-a"));

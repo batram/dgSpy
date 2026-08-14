@@ -92,7 +92,16 @@ dgSpy-remote-host-win11-clean.zip
 The same provisioning operation adds the expected `host_id` and credential to `gateway-hosts.json`.
 It also persists and activates the dedicated host listener in the running Gateway. An ordinary later
 `dgspy start` reads that listener configuration from the registry automatically; no Gateway restart or
-manual `DGSPY_REMOTE_*` environment is required. The remote user only extracts the ZIP and runs:
+manual `DGSPY_REMOTE_*` environment is required. The remote user only extracts the ZIP and runs
+`dnSpy.exe`: the extension recognizes `remote-host.json`, loads the packaged identity and credentials,
+and connects automatically. The launcher remains available for identity overrides, initialize-only use,
+and explicit startup diagnostics. Normal startup is:
+
+```powershell
+.\dnSpy.exe
+```
+
+The optional launcher is:
 
 ```powershell
 .\launcher\Start-dgSpyRemoteHost.cmd
