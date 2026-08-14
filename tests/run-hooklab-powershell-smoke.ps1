@@ -19,6 +19,7 @@ $child = $null
 $sessionId = $null
 $rpcPort = 0
 . (Join-Path $PSScriptRoot 'TestSupport\Invoke-DgSpyRpc.ps1')
+. (Join-Path $PSScriptRoot 'TestSupport\Resolve-DgSpyModuleId.ps1')
 
 function Status([string]$Text) {
 	$line = (Get-Date -Format 'HH:mm:ss.fff') + ' ' + $Text
@@ -61,36 +62,32 @@ try {
 	$program=@(Rpc 'list_programs' @{process_ids=@($child.Id)})[0]
 	$sessionId=(Rpc 'attach' @{program_id=$program.program_id} 60).session_id
 	$facts=Facts $fixtureDll 'HookLabPowerShellFixture.Target' 'System.Int32 Calculate(System.Int32)'
-	$moduleResult=Rpc 'list_modules' @{session_id=$sessionId;count=500}
-	[IO.File]::WriteAllText((Join-Path $RunDirectory 'modules.json'),(ConvertTo-Json -InputObject $moduleResult -Depth 8),[Text.UTF8Encoding]::new($false))
-	Status "MODULE_RESPONSE type=$($moduleResult.GetType().FullName) count=$(@($moduleResult.modules).Count)"
-	$module=@($moduleResult.modules | Where-Object { $_.mvid -eq $facts.Mvid -or $_.filename -like '*HookLabPowerShellFixture*' -or $_.name -like '*HookLabPowerShellFixture*' } | Select-Object -First 1)[0]
-	if(-not $module) { throw 'fixture module was not found' }
-	Status "ATTACHED session=$sessionId module_id=$($module.module_id)"
+	$moduleId=Resolve-DgSpyModuleId -SessionId $sessionId -ExpectedMvid $facts.Mvid -NamePattern 'HookLabPowerShellFixture' -ProcessId $child.Id -InvokeRpc ${function:Rpc}
+	Status "ATTACHED session=$sessionId module_id=$moduleId"
 	$beforeTemplate=Rpc 'get_hooklab_status' @{session_id=$sessionId;process_id=$child.Id}
 	if($beforeTemplate.initialized) { throw 'HookLab was initialized before the template request' }
-	$template=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$facts.Token;template='PrefixPostfix'}
+	$template=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$moduleId;method_token=$facts.Token;template='PrefixPostfix'}
 	if($template.source -notlike '*public static void Prefix*' -or $template.source -notlike '*public static void Postfix*' -or $template.source -notlike '*out object __state*' -or $template.source -like '*__instance*') { throw 'static PrefixPostfix template shape was incorrect' }
 	$afterTemplate=Rpc 'get_hooklab_status' @{session_id=$sessionId;process_id=$child.Id}
 	if($afterTemplate.initialized) { throw 'read-only template request initialized HookLab' }
 	$instanceFacts=Facts $fixtureDll 'HookLabPowerShellFixture.InstanceTarget' 'System.Int32 Calculate(System.Int32)'
-	$instanceTemplate=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$instanceFacts.Token;template='Postfix'}
+	$instanceTemplate=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$moduleId;method_token=$instanceFacts.Token;template='Postfix'}
 	if($instanceTemplate.source -notlike '*HookLabPowerShellFixture.InstanceTarget __instance*' -or $instanceTemplate.source -notlike '*ref System.Int32 __result*') { throw 'instance Postfix template shape was incorrect' }
 	$finalizerFacts=Facts $fixtureDll 'HookLabPowerShellFixture.Target' 'System.Int32 ThrowOrReturn(System.Boolean)' 'ThrowOrReturn'
-	$finalizerTemplate=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$finalizerFacts.Token;template='Finalizer'}
+	$finalizerTemplate=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$moduleId;method_token=$finalizerFacts.Token;template='Finalizer'}
 	if($finalizerTemplate.source -notlike '*System.Exception Finalizer*' -or $finalizerTemplate.source -notlike '*System.Exception __exception*' -or $finalizerTemplate.source -notlike '*return __exception*') { throw 'Finalizer template shape was incorrect' }
-	$transpilerTemplate=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$facts.Token;template='Transpiler'}
+	$transpilerTemplate=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$moduleId;method_token=$facts.Token;template='Transpiler'}
 	if($transpilerTemplate.source -notlike '*IEnumerable<HarmonyLib.CodeInstruction> Transpiler*' -or $transpilerTemplate.source -notlike '*return instructions*') { throw 'Transpiler template shape was incorrect' }
-	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$facts.Token;template='Unknown'}; throw 'invalid template unexpectedly succeeded' } catch { if($_.Exception.Message -notlike '*invalid_arguments*') { throw } }
+	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$moduleId;method_token=$facts.Token;template='Unknown'}; throw 'invalid template unexpectedly succeeded' } catch { if($_.Exception.Message -notlike '*invalid_arguments*') { throw } }
 	$fixtureAssembly=[Reflection.Assembly]::LoadFrom($fixtureDll)
 	$fieldToken=[int]$fixtureAssembly.GetType('HookLabPowerShellFixture.InstanceTarget',$true).GetField('Offset').MetadataToken
-	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$fieldToken}; throw 'field token unexpectedly produced a method template' } catch { if($_.Exception.Message -notlike '*method_not_found*') { throw } }
+	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$moduleId;method_token=$fieldToken}; throw 'field token unexpectedly produced a method template' } catch { if($_.Exception.Message -notlike '*method_not_found*') { throw } }
 	$genericMethod=$fixtureAssembly.GetType('HookLabPowerShellFixture.Target',$true).GetMethod('Identity')
 	if(-not $genericMethod) { throw 'fixture is stale: generic Identity method is missing; rebuild HookLabPowerShellFixture' }
 	$genericToken=[int]$genericMethod.MetadataToken
-	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$genericToken}; throw 'generic method unexpectedly produced a template' } catch { if($_.Exception.Message -notlike '*unsupported_hook_target*') { throw } }
+	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$moduleId;method_token=$genericToken}; throw 'generic method unexpectedly produced a template' } catch { if($_.Exception.Message -notlike '*unsupported_hook_target*') { throw } }
 	Status 'HOOK_TEMPLATE_READ_ONLY_OK static=PrefixPostfix instance=Postfix finalizer=preserving transpiler=identity invalid=refused non_method=refused generic=refused initialized=false'
-	$base=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate';kind='Prefix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='Calculate';method_token=$facts.Token;signature=$facts.Signature;module_mvid=$facts.Mvid;il_sha256=$facts.IlSha256}
+	$base=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate';kind='Prefix';module_id=$moduleId;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='Calculate';method_token=$facts.Token;signature=$facts.Signature;module_mvid=$facts.Mvid;il_sha256=$facts.IlSha256}
 	$base.source='public static class PowerShellPairV1 { public static void Prefix(ref int value, out int __state) { __state = value; value += 10; } public static void Postfix(int __state, ref int __result) { __result += __state; } }'; $base.revision=1
 	$created=Rpc 'create_hook' $base 70
 	if($created.hook.revision -ne 1 -or $created.hook.source -ne $base.source -or $created.hook.diagnostics.Count -ne 0) { throw 'create_hook did not publish editable source and successful diagnostics state' }
@@ -134,7 +131,7 @@ try {
 	$null=Rpc 'remove_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate'} 30
 	if(-not (Wait-Observed 42)) { throw 'removal did not restore 42' }
 	Status 'REMOVE_OK value=42'
-	$finalizer=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-finalizer';kind='Finalizer';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='ThrowOrReturn';method_token=$finalizerFacts.Token;signature=$finalizerFacts.Signature;module_mvid=$finalizerFacts.Mvid;il_sha256=$finalizerFacts.IlSha256;revision=1;source='public static class PowerShellFinalizerV1 { public static System.Exception Finalizer(System.Exception __exception) { return null; } }'}
+	$finalizer=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-finalizer';kind='Finalizer';module_id=$moduleId;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='ThrowOrReturn';method_token=$finalizerFacts.Token;signature=$finalizerFacts.Signature;module_mvid=$finalizerFacts.Mvid;il_sha256=$finalizerFacts.IlSha256;revision=1;source='public static class PowerShellFinalizerV1 { public static System.Exception Finalizer(System.Exception __exception) { return null; } }'}
 	$null=Rpc 'create_hook' $finalizer 70
 	if(-not(Wait-Text '0' $finalizerObservedPath)){throw 'compiled Finalizer did not suppress the exception and expose the default int result'}
 	Status 'FINALIZER_SUPPRESS_OK value=0'
@@ -146,7 +143,7 @@ try {
 	Status 'FINALIZER_TOGGLE_OK disabled=throws enabled=value0'
 	$null=Rpc 'remove_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-finalizer'} 30;if(-not(Wait-Text 'THREW:InvalidOperationException' $finalizerObservedPath)){throw 'Finalizer removal did not restore original exception'}
 	Status 'FINALIZER_REMOVE_OK exception=InvalidOperationException'
-	$transpiler=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-transpiler';kind='Transpiler';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='Calculate';method_token=$facts.Token;signature=$facts.Signature;module_mvid=$facts.Mvid;il_sha256=$facts.IlSha256;revision=1;source='public static class PowerShellTranspilerV1 { public static System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> Transpiler(System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> instructions) { return new[] { new HarmonyLib.CodeInstruction(System.Reflection.Emit.OpCodes.Ldc_I4, 141), new HarmonyLib.CodeInstruction(System.Reflection.Emit.OpCodes.Ret) }; } }'}
+	$transpiler=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-transpiler';kind='Transpiler';module_id=$moduleId;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='Calculate';method_token=$facts.Token;signature=$facts.Signature;module_mvid=$facts.Mvid;il_sha256=$facts.IlSha256;revision=1;source='public static class PowerShellTranspilerV1 { public static System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> Transpiler(System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> instructions) { return new[] { new HarmonyLib.CodeInstruction(System.Reflection.Emit.OpCodes.Ldc_I4, 141), new HarmonyLib.CodeInstruction(System.Reflection.Emit.OpCodes.Ret) }; } }'}
 	$null=Rpc 'create_hook' $transpiler 70;if(-not(Wait-Observed 141)){throw 'compiled Transpiler revision 1 did not replace the method body'}
 	Status 'TRANSPILER_CREATE_OK value=141'
 	$transpiler.source='this is not C#';$transpiler.revision=2;try{$null=Rpc 'update_hook' $transpiler 70;throw'broken Transpiler unexpectedly installed'}catch{if($_.Exception.Message-notlike'*CS*'){throw}}
@@ -160,7 +157,7 @@ try {
 	$null=Rpc 'remove_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-transpiler'} 30;if(-not(Wait-Observed 42)){throw 'Transpiler removal did not restore original behavior'}
 	Status 'TRANSPILER_REMOVE_OK value=42'
 
-	$instanceRequest=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-instance-calculate';kind='Postfix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.InstanceTarget';method='Calculate';method_token=$instanceFacts.Token;signature=$instanceFacts.Signature;module_mvid=$instanceFacts.Mvid;il_sha256=$instanceFacts.IlSha256;revision=1;source='public static class PowerShellInstancePostfix { public static void Postfix(HookLabPowerShellFixture.InstanceTarget __instance, ref int __result) { __result += __instance.Offset; } }'}
+	$instanceRequest=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-instance-calculate';kind='Postfix';module_id=$moduleId;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.InstanceTarget';method='Calculate';method_token=$instanceFacts.Token;signature=$instanceFacts.Signature;module_mvid=$instanceFacts.Mvid;il_sha256=$instanceFacts.IlSha256;revision=1;source='public static class PowerShellInstancePostfix { public static void Postfix(HookLabPowerShellFixture.InstanceTarget __instance, ref int __result) { __result += __instance.Offset; } }'}
 	$null=Rpc 'install_hook' $instanceRequest 70
 	if(-not (Wait-Observed 11 $instanceObservedPath)) { throw 'instance Postfix did not receive Offset 5 and produce 11' }
 	Status 'INSTANCE_POSTFIX_OK value=11'

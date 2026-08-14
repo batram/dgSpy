@@ -43,6 +43,7 @@ $fail = 0
 $startedProcesses = New-Object System.Collections.ArrayList
 
 . (Join-Path $PSScriptRoot 'TestSupport\Invoke-DgSpyRpc.ps1')
+. (Join-Path $PSScriptRoot 'TestSupport\Resolve-DgSpyModuleId.ps1')
 
 function Say([string]$Text) {
     $line = (Get-Date -Format 'HH:mm:ss.fff') + '  ' + $Text
@@ -225,9 +226,7 @@ function Attach-Fixture($Fixture) {
     $program = @(Rpc 'list_programs' @{ process_ids=@($Fixture.Id) })[0]
     if (-not $program) { throw "target pid $($Fixture.Id) was not discoverable" }
     $sessionId = (Rpc 'attach' @{ program_id=$program.program_id } 60).session_id
-    $targetModule = @((Rpc 'list_modules' @{ session_id=$sessionId; name_pattern='Milestone1Target' }).modules | Where-Object { $_.filename -like '*Milestone1Target.exe' } | Select-Object -First 1)[0]
-    if (-not $targetModule -or [string]::IsNullOrWhiteSpace($targetModule.module_id)) { throw "list_modules did not publish Milestone1Target's module_id" }
-    $script:carrierModuleId = $targetModule.module_id
+    $script:carrierModuleId = Resolve-DgSpyModuleId -SessionId $sessionId -ExpectedMvid $script:carrierMvid -NamePattern 'Milestone1Target' -ProcessId $Fixture.Id -InvokeRpc ${function:Rpc}
     $sessionId
 }
 function Get-CarrierOffset([string]$SessionId, [uint32]$CarrierToken) {
@@ -302,6 +301,7 @@ try {
     $tickFacts = Get-MethodFacts $targetExe 'Milestone1Target.Program' 'Tick'
     $otherFacts = Get-MethodFacts $targetExe 'Milestone1Target.Program' 'UseWorker'
     $carrierFacts = Get-MethodFacts $targetExe 'Milestone1Target.Program' 'ViaInMemory'
+    $script:carrierMvid = $carrierFacts.Mvid
     Say "offline dnlib facts token=$($tickFacts.Token) mvid=$($tickFacts.Mvid) il_sha256=$($tickFacts.IlSha256)"
 
     $hostId = & (Join-Path $PSScriptRoot 'TestSupport\Start-DgSpyHost.ps1') -RpcPort $RpcPort -TargetFramework $TargetFramework
