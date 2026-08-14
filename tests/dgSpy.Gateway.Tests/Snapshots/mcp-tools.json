@@ -2,7 +2,7 @@
   "tools": [
     {
       "name": "get_started",
-      "description": "Start with get_started. Choose a local deployment or a provisioned remote host, then attach or launch, inspect capabilities, debug, and detach safely. Stepping and call tracing are best-effort and cannot expose optimized, native, runtime, or missing-sequence-point calls. Summarize Gateway, deployment, and host state and recommend the next safe action. Names the Gateway\u0027s own build, which is where these tool descriptions and response shapes come from, and flags skew against the debugger host builds. Quote gateway_build and build_skew in anything reported about tool behaviour.",
+      "description": "Start with get_started. Choose a local deployment or a provisioned remote host, then attach or launch, inspect capabilities, debug, and detach safely. get_started and doctor report whether the opt-in Gateway development transcript is enabled. Stepping and call tracing are best-effort and cannot expose optimized, native, runtime, or missing-sequence-point calls. Summarize Gateway, deployment, and host state and recommend the next safe action. Names the Gateway\u0027s own build, which is where these tool descriptions and response shapes come from, flags skew against the debugger host builds, and returns development_transcript configuration. Quote gateway_build and build_skew in anything reported about tool behaviour.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -16,7 +16,7 @@
     },
     {
       "name": "doctor",
-      "description": "Run bounded read-only diagnostics for Gateway state, deployment roots, host registry, ports, and registered debugger hosts. Includes a build_skew check that fails when the Gateway and a host come from different commits, or when dgSpy was reinstalled after this Gateway process started.",
+      "description": "Run bounded read-only diagnostics for Gateway state, deployment roots, host registry, ports, registered debugger hosts, and opt-in development transcript configuration. Includes a build_skew check that fails when the Gateway and a host come from different commits, or when dgSpy was reinstalled after this Gateway process started.",
       "inputSchema": {
         "type": "object",
         "properties": {},

@@ -14,9 +14,11 @@ public sealed class DeploymentService {
 	readonly string installRoot;
 	readonly string packageRoot;
 	readonly RemoteHostListener? remoteListener;
+	readonly GatewayDevelopmentTranscript transcript;
 	internal static string DefaultStateRoot() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"dgSpy");
-	public DeploymentService(RemoteHostListener? remoteListener=null) {
+	public DeploymentService(RemoteHostListener? remoteListener=null,GatewayDevelopmentTranscript? transcript=null) {
 		this.remoteListener=remoteListener;
+		this.transcript=transcript ?? new GatewayDevelopmentTranscript();
 		stateRoot=Environment.GetEnvironmentVariable("DGSPY_STATE_ROOT") ?? DefaultStateRoot();
 		installRoot=Environment.GetEnvironmentVariable("DGSPY_INSTALL_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","dgSpy");
 		packageRoot=Path.GetFullPath(Environment.GetEnvironmentVariable("DGSPY_PACKAGE_ROOT") ?? Path.Combine(stateRoot,"packages"));
@@ -48,7 +50,7 @@ public sealed class DeploymentService {
 		// from tool descriptions that were never questioned. A transcript that opens with both commits
 		// makes a later report either reproducible against a known tree or visibly not.
 		var skew=GatewayBuild.Skew(hosts); var skewed=(bool?)System.Text.Json.JsonSerializer.SerializeToNode(skew)!["skewed"]==true;
-		return new { gateway="ready",gateway_build=GatewayBuild.Describe(),build_skew=skew,access_mode=Environment.GetEnvironmentVariable("DGSPY_ACCESS_MODE") ?? "full-control",local_deployment=local,hosts,recommended_next_action=stale ? "the installed payload is newer than the running deployment: call launch_local_host with replace=true before trusting any result, and finish or hand off any live session first because replacing ends it" : skewed ? "the Gateway and the debugger host are not the same build: read build_skew before trusting any tool description or response shape, and quote both commits in anything you report" : connected ? "select a connected host, then attach or launch; once attached, find symbols with search" : degraded ? "inspect dispatcher and evaluation queue faults before issuing debugger control" : "call launch_local_host, or create one remote host package" };
+		return new { gateway="ready",gateway_build=GatewayBuild.Describe(),build_skew=skew,development_transcript=transcript.Describe(),access_mode=Environment.GetEnvironmentVariable("DGSPY_ACCESS_MODE") ?? "full-control",local_deployment=local,hosts,recommended_next_action=stale ? "the installed payload is newer than the running deployment: call launch_local_host with replace=true before trusting any result, and finish or hand off any live session first because replacing ends it" : skewed ? "the Gateway and the debugger host are not the same build: read build_skew before trusting any tool description or response shape, and quote both commits in anything you report" : connected ? "select a connected host, then attach or launch; once attached, find symbols with search" : degraded ? "inspect dispatcher and evaluation queue faults before issuing debugger control" : "call launch_local_host, or create one remote host package" };
 	}
 	async Task<object> DoctorAsync(HostRouter router,CancellationToken token) {
 		var checks=new List<object>();
@@ -74,7 +76,7 @@ public sealed class DeploymentService {
 		checks.Add(Check("build_skew",(bool?)skewJson["skewed"]!=true,
 			$"gateway {GatewayBuild.BuildLabel}; {(string?)skewJson["gateway_vs_hosts"]?["detail"]} {(string?)skewJson["gateway_process_vs_disk"]?["detail"]}".Trim(),
 			(string?)skewJson["gateway_vs_hosts"]?["recovery"] ?? (string?)skewJson["gateway_process_vs_disk"]?["recovery"]));
-		return new { healthy=checks.All(c=>(bool)c.GetType().GetProperty("ok")!.GetValue(c)!),gateway_build=GatewayBuild.Describe(),build_skew=skew,state_root=stateRoot,install_root=installRoot,checks,hosts };
+		return new { healthy=checks.All(c=>(bool)c.GetType().GetProperty("ok")!.GetValue(c)!),gateway_build=GatewayBuild.Describe(),build_skew=skew,development_transcript=transcript.Describe(),state_root=stateRoot,install_root=installRoot,checks,hosts };
 	}
 	static object Check(string name,bool ok,string detail,string? recovery) => new { name,ok,detail,recovery };
 	object GetLocal() { var current=ReadCurrent(); var active=(string?)current?["active_version"]; return new { installed=active is not null,active_version=active,previous_version=(string?)current?["previous_version"],host_id=(string?)current?["host_id"],install_path=active is null ? null : Path.Combine(installRoot,"versions",active),launcher=Path.Combine(installRoot,"current","Start-dgSpy.cmd"),payload=DeploymentFreshness() }; }

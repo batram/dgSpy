@@ -29,6 +29,18 @@ the header share the compatibility identity `legacy-local`. `DGSPY_ACCESS_MODE` 
 releases only ownership. `DGSPY_AUDIT_FILE` overrides the rotating 5 MiB redacted JSONL audit at
 `%LOCALAPPDATA%\dgSpy\gateway-audit.jsonl`.
 
+For development traffic diagnosis, set `DGSPY_TRANSCRIPT_FILE` to enable a separate rotating JSONL
+transcript. It is disabled when unset and does not change the sparse security audit above. Every real
+MCP `tools/call`, including read-only discovery and Gateway rejection, records one correlated,
+recursively redacted request/response record with Gateway build, MCP client, host and session identity,
+duration, outcome, and payload byte/truncation fields. Defaults are 32 KiB per request or response and
+5 MiB per file; override them with `DGSPY_TRANSCRIPT_MAX_PAYLOAD_BYTES` and
+`DGSPY_TRANSCRIPT_MAX_FILE_BYTES`. Rotation retains the previous file as `.1`. Query current and
+rotated records from a repository checkout with
+`tools\query-gateway-transcript.ps1 -Path <path>` and its operation, error,
+client, host, session, correlation and text filters. A full transcript can contain source, expressions,
+values and paths even after token/password redaction, so enable and retain it deliberately.
+
 For packaged-host status and the planned extension-initiated Gateway registration flow, see
 [remote hosts](REMOTE_HOSTS.md).
 

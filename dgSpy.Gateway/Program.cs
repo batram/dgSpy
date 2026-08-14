@@ -10,12 +10,15 @@ builder.Services.AddSingleton<McpClientSessions>();
 builder.Services.AddSingleton<SessionControllers>();
 builder.Services.AddSingleton<GatewayAccessPolicy>();
 builder.Services.AddSingleton<GatewayAuditLog>();
+builder.Services.AddSingleton<GatewayDevelopmentTranscript>();
 builder.Services.AddSingleton<GatewayToolExecutor>();
 builder.Services.AddSingleton<DeploymentService>();
 builder.Services.AddSingleton<RemoteHostListener>();
 builder.Services.AddHostedService(services=>services.GetRequiredService<RemoteHostListener>());
 builder.Services.AddHostedService<GatewayHeartbeat>();
 var app = builder.Build();
+var developmentTranscript=app.Services.GetRequiredService<GatewayDevelopmentTranscript>();
+if(developmentTranscript.Enabled) Console.WriteLine($"dgSpy development transcript enabled: {developmentTranscript.TranscriptPath} (payload {developmentTranscript.MaxPayloadBytes} bytes, rotation {developmentTranscript.MaxBytes} bytes)");
 
 // Clients authenticate with a local secret. Take it from the environment when set, otherwise mint
 // one and write it where a local client can read it — never derive it from anything guessable.
@@ -37,13 +40,14 @@ app.MapGet("/health", () => Results.Json(new { status="ok", protocol_version=Pro
 // dgSpy has no server-initiated MCP messages. Streamable HTTP requires GET to exist, but explicitly
 // permits 405 when a server offers no SSE stream.
 app.MapGet("/mcp", () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed));
-app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, GatewayToolExecutor executor, McpClientSessions clients, CancellationToken cancellationToken) => {
+app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, GatewayToolExecutor executor, McpClientSessions clients, GatewayDevelopmentTranscript transcript, CancellationToken cancellationToken) => {
 	var rejection = RequestGuard.Reject(http.Request.Headers.Origin, http.Request.Headers[RequestGuard.TokenHeader], token, http.Connection.RemoteIpAddress);
 	if (rejection is not null) return Results.Json(new { jsonrpc="2.0", id=(JsonNode?)null, error=new { code=-32600, message=rejection } }, statusCode: StatusCodes.Status403Forbidden);
 	using var reader = new StreamReader(http.Request.Body);
 	var root = JsonNode.Parse(await reader.ReadToEndAsync(cancellationToken))!.AsObject();
 	// JSON-RPC ids are scalar values. Materialize the JsonNode so ASP.NET writes the scalar itself.
 	var id = JsonRpcEnvelope.MaterializeId(root["id"]);
+	TranscriptCall? transcriptCall=null;
 	try {
 		var method = root["method"]?.GetValue<string>();
 		if (method == "initialize") {
@@ -55,21 +59,26 @@ app.MapPost("/mcp", async (HttpContext http, HostRouter rpc, GatewayToolExecutor
 			return Results.BadRequest(new { jsonrpc="2.0", id, error=new { code=-32600, message=$"Unsupported {McpProtocol.VersionHeader}. Supported: {string.Join(", ",McpProtocol.Supported)}." } });
 		// Accepted JSON-RPC notifications have no response body and use 202 in Streamable HTTP.
 		if (id is null) return Results.Accepted();
-		var client=clients.Resolve(http.Request.Headers[McpClientSessions.Header]);
+		if (method!="tools/call") clients.Resolve(http.Request.Headers[McpClientSessions.Header]);
 		if (method == "tools/list") return Results.Json(new { jsonrpc="2.0", id, result=new { tools=ToolCatalog.All } });
 		if (method=="resources/list") return Results.Json(new { jsonrpc="2.0",id,result=new { resources=ToolCatalog.Resources } });
 		if (method=="resources/read") { var uri=(string?)root["params"]?["uri"]; var resource=ToolCatalog.ReadResource(uri); return resource is null ? McpError(id,-32002,"Resource not found") : Results.Json(new { jsonrpc="2.0",id,result=new { contents=new[]{resource} } }); }
 		if (method != "tools/call") return McpError(id, -32601, "Method not found");
 		var name=root["params"]?["name"]?.GetValue<string>() ?? ""; var args=root["params"]?["arguments"] as JsonObject ?? new JsonObject();
+		var presentedClient=(string?)http.Request.Headers[McpClientSessions.Header];
+		transcriptCall=transcript.Begin(id,name,args,presentedClient);
+		var client=clients.Resolve(http.Request.Headers[McpClientSessions.Header]);
 		if (name=="list_hosts") {
 			var hosts=await rpc.ListHostsAsync(cancellationToken);
+			transcriptCall.Complete(new { hosts },"succeeded");
 			return Results.Json(new { jsonrpc="2.0",id,result=new { structuredContent=new { hosts },content=new[] { new { type="text",text=ProtocolJson.Serialize(hosts) } } } });
 		}
 		var response=await executor.ExecuteAsync(name,args,client,cancellationToken);
-		if (response.Error is not null) { var guidance=ToolCatalog.ErrorGuidance(response.Error.Code); return Results.Json(new { jsonrpc="2.0", id, result=new { isError=true, structuredContent=new { error=new { code=response.Error.Code,message=response.Error.Message,likely_cause=guidance.Cause,recovery_action=guidance.Recovery,suggested_tool=guidance.Tool } }, content=new[] { new { type="text", text=$"{response.Error.Code}: {response.Error.Message} Recovery: {guidance.Recovery}" } } } }); }
+		if (response.Error is not null) { transcriptCall.Complete(response,"rejected",response.Error.Code); var guidance=ToolCatalog.ErrorGuidance(response.Error.Code); return Results.Json(new { jsonrpc="2.0", id, result=new { isError=true, structuredContent=new { error=new { code=response.Error.Code,message=response.Error.Message,likely_cause=guidance.Cause,recovery_action=guidance.Recovery,suggested_tool=guidance.Tool } }, content=new[] { new { type="text", text=$"{response.Error.Code}: {response.Error.Message} Recovery: {guidance.Recovery}" } } } }); }
 		var structured=McpToolResult.StructuredContent(response.Result);
+		transcriptCall.Complete(response,"succeeded");
 		return Results.Json(new { jsonrpc="2.0", id, result=new { structuredContent=structured, content=new[] { new { type="text", text=ProtocolJson.Serialize(response.Result) } } } });
-	} catch (Exception ex) { return McpError(id, -32603, ex.Message); }
+	} catch (Exception ex) { transcriptCall?.Complete(new { error=new { code="gateway_exception",message=ex.Message } },"rejected","gateway_exception"); return McpError(id, -32603, ex.Message); }
 });
 try { app.Run(); }
 catch (Exception ex) {
@@ -92,10 +101,10 @@ internal static class McpToolResult {
 }
 
 public static class ToolCatalog {
-	public const string Instructions="Start with get_started. Choose a local deployment or a provisioned remote host, then attach or launch, inspect capabilities, debug, and detach safely. Stepping and call tracing are best-effort and cannot expose optimized, native, runtime, or missing-sequence-point calls.";
+	public const string Instructions="Start with get_started. Choose a local deployment or a provisioned remote host, then attach or launch, inspect capabilities, debug, and detach safely. get_started and doctor report whether the opt-in Gateway development transcript is enabled. Stepping and call tracing are best-effort and cannot expose optimized, native, runtime, or missing-sequence-point calls.";
 	public static readonly object[] Resources={ new { uri="dgspy://guide/getting-started",name="dgSpy getting started",mimeType="text/markdown" },new { uri="dgspy://guide/deployment",name="dgSpy deployment",mimeType="text/markdown" },new { uri="dgspy://guide/workflows",name="dgSpy workflow catalog",mimeType="application/json" } };
 	public static (string Cause,string Recovery,string Tool) ErrorGuidance(string code) => code switch { "host_unavailable" => ("The selected debugger host is absent or disconnected.","Follow the host-specific recovery in the error message; for the managed local host, call launch_local_host.","launch_local_host"), "unknown_host" => ("The selected debugger host is not registered.","Call list_hosts and select a registered host_id.","list_hosts"), "deadline_exceeded" => ("The bounded debugger operation did not finish before its deadline; a mutation may already have applied.","For a mutation, assume it may have applied: read get_session_state and the relevant list/read tool, and retry only if those observations prove the intended change did not occur. For a read-only query, narrow process, module, type, or result filters and retry.","get_session_state"), "stale_state" or "stale_execution" or "stale_lifecycle" or "stale_breakpoints" or "stale_stop" => ("Debugger state changed after the caller's last read.","Read get_session_state again and retry only if the intended target state still matches.","get_session_state"), "session_unowned" or "session_owned" => ("The MCP controller lease is absent or belongs to another active client.","Inspect controller ownership; claim only an unowned or expired session.","get_session_controller"), "invalid_plan" => ("The deployment plan expired, was consumed, or belongs to another workflow.","Create and review a new plan.","get_started"), "detach_timed_out" => ("The debugger engine did not confirm target removal within its bound.","Keep the session; inspect state and retry safe detach without closing dnSpy.","get_session_state"), "cursor_ahead_of_stream" => ("after_event_id is past the session's newest event, so no event could ever satisfy it.","Pass a cursor that came from a response: a previous last_event_id, an event_id, or set_il_breakpoint's cursor_event_id. A version counter is not a cursor. Use 0 to replay the retained session.","get_events"), "event_truncated" => ("The requested event id is older than the bounded retained history.","Resume from the oldest_available_cursor the response supplied.","get_events"), "evaluation_failed" => ("The engine refused or could not complete the expression.","Read the message: it names the gate when one blocked the call. Running target code needs allow_func_eval, and a method call needs allow_side_effects as well, which only evaluate exposes and invoke_method sets for you.","evaluate"), _ => ("The requested operation could not be completed safely.","Run bounded diagnostics and review the returned message.","doctor") };
-	public static object? ReadResource(string? uri) => uri switch { "dgspy://guide/getting-started" => new { uri,mimeType="text/markdown",text=Instructions+"\n\nUse doctor when a host or Gateway is unavailable. Mutating debugger calls require current scoped versions and stop_id values." }, "dgspy://guide/deployment" => new { uri,mimeType="text/markdown",text="Local deployment installs a versioned per-user portable dnSpy host. Remote deployment creates a self-contained ZIP but never transfers or executes it. Always plan before creating either deployment." }, "dgspy://guide/workflows" => new { uri,mimeType="application/json",text=ProtocolJson.Serialize(WorkflowCatalog.RenderCompactCatalog()) }, _=>null };
+	public static object? ReadResource(string? uri) => uri switch { "dgspy://guide/getting-started" => new { uri,mimeType="text/markdown",text=Instructions+"\n\nUse doctor when a host or Gateway is unavailable. For persistent development-only request/response diagnosis, set DGSPY_TRANSCRIPT_FILE before Gateway startup and use tools/query-gateway-transcript.ps1; it is disabled by default and separate from the sparse security audit. Mutating debugger calls require current scoped versions and stop_id values." }, "dgspy://guide/deployment" => new { uri,mimeType="text/markdown",text="Local deployment installs a versioned per-user portable dnSpy host. Remote deployment creates a self-contained ZIP but never transfers or executes it. Always plan before creating either deployment." }, "dgspy://guide/workflows" => new { uri,mimeType="application/json",text=ProtocolJson.Serialize(WorkflowCatalog.RenderCompactCatalog()) }, _=>null };
 	static object Tool(string name,string description,object properties,string[]? required=null,bool routed=true,bool readOnly=false,bool destructive=false,bool idempotent=false) {
 		var routedProperties=new Dictionary<string,object>();
 		if (routed) routedProperties["host_id"]=new { type="string",description="Registered debugger host. Optional only when exactly one host is configured." };
@@ -128,8 +137,8 @@ public static class ToolCatalog {
 		return bound<=0 ? 8 : (int)Math.Ceiling(bound/1000.0)+MarginSeconds;
 	}
 	public static readonly object[] All = {
-		Tool("get_started", Instructions+" Summarize Gateway, deployment, and host state and recommend the next safe action. Names the Gateway's own build, which is where these tool descriptions and response shapes come from, and flags skew against the debugger host builds. Quote gateway_build and build_skew in anything reported about tool behaviour.", new {},routed:false,readOnly:true),
-		Tool("doctor", "Run bounded read-only diagnostics for Gateway state, deployment roots, host registry, ports, and registered debugger hosts. Includes a build_skew check that fails when the Gateway and a host come from different commits, or when dgSpy was reinstalled after this Gateway process started.", new {},routed:false,readOnly:true),
+		Tool("get_started", Instructions+" Summarize Gateway, deployment, and host state and recommend the next safe action. Names the Gateway's own build, which is where these tool descriptions and response shapes come from, flags skew against the debugger host builds, and returns development_transcript configuration. Quote gateway_build and build_skew in anything reported about tool behaviour.", new {},routed:false,readOnly:true),
+		Tool("doctor", "Run bounded read-only diagnostics for Gateway state, deployment roots, host registry, ports, registered debugger hosts, and opt-in development transcript configuration. Includes a build_skew check that fails when the Gateway and a host come from different commits, or when dgSpy was reinstalled after this Gateway process started.", new {},routed:false,readOnly:true),
 		Tool("get_workflow_help", "Return one focused workflow from the same authoritative grouping exposed at dgspy://guide/workflows. Each result includes concise guidance and exact recommended tool names.", new { topic=new { type="string", @enum=WorkflowCatalog.Topics.Select(topic=>topic.Topic).ToArray() } },routed:false,readOnly:true),
 		Tool("get_local_deployment", "Report the active and previous managed local deployment.", new {},routed:false,readOnly:true),
 		Tool("launch_local_host", "SIDE EFFECTING. Ensure exactly one managed local host is running: adopt one that is already running the installed payload, install and launch when none is, and never start a second process beside a running one. Fails with host_already_running when a different build owns the endpoint; replace=true then detaches that host's targets, closes it, and launches the installed payload, which ends its debugging sessions. Pass elevated=true when a target process is missing from list_programs because it belongs to another user or to a service; the result reports the host's actual elevation.", new { replace=new { type="boolean", description="Close a running host that is not the installed payload and launch that payload instead. Detaches its targets first; any debugging session it holds ends." }, allow_terminate=new { type="boolean", description="With replace, proceed even when a target cannot be detached without killing it. Destroys that process." }, elevated=new { type="boolean", description="Launch the host elevated, so it can see and attach to processes owned by other users and by services. Prompts for User Account Control on the interactive desktop; a dismissed prompt fails with elevation_declined. A running host is adopted only when it is already elevated. Requires the default state root and no DGSPY_HOST_ID, DGSPY_RPC_TOKEN or DGSPY_RPC_PORT override, because elevation cannot pass them to the host." } },routed:false,idempotent:true),

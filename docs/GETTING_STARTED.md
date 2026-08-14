@@ -97,4 +97,21 @@ recorded payload is capped, so a `get_raw_module` result appears truncated rathe
 shared secret that authenticates the Gateway is never part of an operation's parameters and is never
 recorded.
 
+For persistent development diagnosis across Gateway or dnSpy restarts, set
+`DGSPY_TRANSCRIPT_FILE` before the Gateway starts. The transcript is disabled by default and remains
+separate from the sparse security audit. It records every real MCP `tools/call`, including read-only
+discovery and Gateway rejection, as one correlated recursively redacted request/response JSONL record.
+`get_started` and `doctor` report its effective path and bounds under `development_transcript`.
+
+```powershell
+$env:DGSPY_TRANSCRIPT_FILE = "$env:LOCALAPPDATA\dgSpy\development-transcript.jsonl"
+# From a dgSpy repository checkout:
+powershell -NoProfile -File tools\query-gateway-transcript.ps1 `
+    -Path $env:DGSPY_TRANSCRIPT_FILE
+```
+
+Payloads and files are bounded and the previous file is retained as `.1`. Credential redaction does
+not remove arbitrary source, expressions, evaluated values, or paths, so enable and retain the
+development transcript deliberately.
+
 For a debugger on another Windows machine, continue with [Remote hosts](REMOTE_HOSTS.md).

@@ -52,6 +52,15 @@ without reading the Gateway audit file. The log is a static singleton rather tha
 deliberately: `RpcHost` is constructed directly by the extension entry point, and an unsatisfiable
 MEF import there would delete the RPC host silently.
 
+The Gateway also has a separate opt-in development transcript at the authenticated MCP `tools/call`
+boundary. `DGSPY_TRANSCRIPT_FILE` enables it; unset means no transcript writer or default file. It
+captures read-only discovery, Gateway rejection, and routed success/failure as one correlated redacted
+request/response JSONL record. Authentication headers never enter the recorder. Request and response
+payloads have independent bounds, the file rotates once, and write failure cannot fail the tool call.
+This must remain separate from `GatewayAuditLog`: the default security audit intentionally records only
+sparse operational facts for mutations, while a development transcript can retain sensitive debugger
+material even after credential-field redaction.
+
 Keep tool families in focused `RpcHost.<Family>.cs` partials under `Debugger/`, `Decompiler/`,
 `Evaluation/`, `Events/`, `Handles/`, or `Identity/`. Keep shared dnSpy objects and shutdown ownership in
 `Rpc/RpcHost.cs`. Pure policy belongs outside WPF/dnSpy implementation dependencies so the .NET 10 test

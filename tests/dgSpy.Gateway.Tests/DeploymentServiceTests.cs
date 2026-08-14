@@ -77,6 +77,7 @@ public sealed class DeploymentServiceTests : IDisposable {
 		Assert.False(string.IsNullOrWhiteSpace((string?)result["gateway_build"]?["build_label"]));
 		Assert.Contains((string?)result["gateway_build"]?["provenance"],new[]{"unpackaged","package_manifest"});
 		Assert.NotNull(result["build_skew"]?["gateway_vs_hosts"]); Assert.NotNull(result["build_skew"]?["gateway_process_vs_disk"]);
+		Assert.False((bool?)result["development_transcript"]?["enabled"]); Assert.Equal(32768,(int?)result["development_transcript"]?["max_payload_bytes"]);
 		// The test assembly is a repository build with no host registered, so there is nothing to be
 		// skewed against. A verdict of "skewed" here would mean the check fires on every dev tree.
 		Assert.False((bool?)result["build_skew"]?["skewed"]);
@@ -87,6 +88,7 @@ public sealed class DeploymentServiceTests : IDisposable {
 		var check=result["checks"]!.AsArray().Single(item=>(string?)item?["name"]=="build_skew")!;
 		Assert.True((bool?)check["ok"]); Assert.Contains("gateway ",(string?)check["detail"]!);
 		Assert.False(string.IsNullOrWhiteSpace((string?)result["gateway_build"]?["version"]));
+		Assert.False((bool?)result["development_transcript"]?["enabled"]); Assert.Equal("repository checkout: tools\\query-gateway-transcript.ps1",(string?)result["development_transcript"]?["query_tool"]);
 	}
 
 	// The regression. The deployment fingerprint was the hash of dnSpy.exe alone - an apphost stub generated
