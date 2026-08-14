@@ -79,7 +79,9 @@ try {
 	$finalizerFacts=Facts $fixtureDll 'HookLabPowerShellFixture.Target' 'System.Int32 ThrowOrReturn(System.Boolean)' 'ThrowOrReturn'
 	$finalizerTemplate=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$finalizerFacts.Token;template='Finalizer'}
 	if($finalizerTemplate.source -notlike '*System.Exception Finalizer*' -or $finalizerTemplate.source -notlike '*System.Exception __exception*' -or $finalizerTemplate.source -notlike '*return __exception*') { throw 'Finalizer template shape was incorrect' }
-	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$facts.Token;template='Transpiler'}; throw 'invalid template unexpectedly succeeded' } catch { if($_.Exception.Message -notlike '*invalid_arguments*') { throw } }
+	$transpilerTemplate=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$facts.Token;template='Transpiler'}
+	if($transpilerTemplate.source -notlike '*IEnumerable<HarmonyLib.CodeInstruction> Transpiler*' -or $transpilerTemplate.source -notlike '*return instructions*') { throw 'Transpiler template shape was incorrect' }
+	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$facts.Token;template='Unknown'}; throw 'invalid template unexpectedly succeeded' } catch { if($_.Exception.Message -notlike '*invalid_arguments*') { throw } }
 	$fixtureAssembly=[Reflection.Assembly]::LoadFrom($fixtureDll)
 	$fieldToken=[int]$fixtureAssembly.GetType('HookLabPowerShellFixture.InstanceTarget',$true).GetField('Offset').MetadataToken
 	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$fieldToken}; throw 'field token unexpectedly produced a method template' } catch { if($_.Exception.Message -notlike '*method_not_found*') { throw } }
@@ -87,7 +89,7 @@ try {
 	if(-not $genericMethod) { throw 'fixture is stale: generic Identity method is missing; rebuild HookLabPowerShellFixture' }
 	$genericToken=[int]$genericMethod.MetadataToken
 	try { $null=Rpc 'get_hook_template' @{session_id=$sessionId;module_id=$module.module_id;method_token=$genericToken}; throw 'generic method unexpectedly produced a template' } catch { if($_.Exception.Message -notlike '*unsupported_hook_target*') { throw } }
-	Status 'HOOK_TEMPLATE_READ_ONLY_OK static=PrefixPostfix instance=Postfix finalizer=preserving invalid=refused non_method=refused generic=refused initialized=false'
+	Status 'HOOK_TEMPLATE_READ_ONLY_OK static=PrefixPostfix instance=Postfix finalizer=preserving transpiler=identity invalid=refused non_method=refused generic=refused initialized=false'
 	$base=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-calculate';kind='Prefix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='Calculate';method_token=$facts.Token;signature=$facts.Signature;module_mvid=$facts.Mvid;il_sha256=$facts.IlSha256}
 	$base.source='public static class PowerShellPairV1 { public static void Prefix(ref int value, out int __state) { __state = value; value += 10; } public static void Postfix(int __state, ref int __result) { __result += __state; } }'; $base.revision=1
 	$created=Rpc 'create_hook' $base 70
@@ -144,6 +146,19 @@ try {
 	Status 'FINALIZER_TOGGLE_OK disabled=throws enabled=value0'
 	$null=Rpc 'remove_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-finalizer'} 30;if(-not(Wait-Text 'THREW:InvalidOperationException' $finalizerObservedPath)){throw 'Finalizer removal did not restore original exception'}
 	Status 'FINALIZER_REMOVE_OK exception=InvalidOperationException'
+	$transpiler=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-transpiler';kind='Transpiler';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.Target';method='Calculate';method_token=$facts.Token;signature=$facts.Signature;module_mvid=$facts.Mvid;il_sha256=$facts.IlSha256;revision=1;source='public static class PowerShellTranspilerV1 { public static System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> Transpiler(System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> instructions) { return new[] { new HarmonyLib.CodeInstruction(System.Reflection.Emit.OpCodes.Ldc_I4, 141), new HarmonyLib.CodeInstruction(System.Reflection.Emit.OpCodes.Ret) }; } }'}
+	$null=Rpc 'create_hook' $transpiler 70;if(-not(Wait-Observed 141)){throw 'compiled Transpiler revision 1 did not replace the method body'}
+	Status 'TRANSPILER_CREATE_OK value=141'
+	$transpiler.source='this is not C#';$transpiler.revision=2;try{$null=Rpc 'update_hook' $transpiler 70;throw'broken Transpiler unexpectedly installed'}catch{if($_.Exception.Message-notlike'*CS*'){throw}}
+	if(-not(Wait-Observed 141)){throw 'failed Transpiler update did not retain revision 1 behavior'}
+	Status 'TRANSPILER_ROLLBACK_OK value=141'
+	$transpiler.source='public static class PowerShellTranspilerV2 { public static System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> Transpiler(System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> instructions) { return new[] { new HarmonyLib.CodeInstruction(System.Reflection.Emit.OpCodes.Ldc_I4, 241), new HarmonyLib.CodeInstruction(System.Reflection.Emit.OpCodes.Ret) }; } }';$null=Rpc 'update_hook' $transpiler 70
+	if(-not(Wait-Observed 241)){throw 'compiled Transpiler revision 2 did not replace revision 1'}
+	$null=Rpc 'disable_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-transpiler'} 30;if(-not(Wait-Observed 42)){throw 'disabled Transpiler did not restore original behavior'}
+	$null=Rpc 'enable_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-transpiler'} 30;if(-not(Wait-Observed 241)){throw 're-enabled Transpiler did not restore revision 2 without recompilation'}
+	Status 'TRANSPILER_UPDATE_TOGGLE_OK revision=2 disabled=42 enabled=241'
+	$null=Rpc 'remove_hook' @{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-transpiler'} 30;if(-not(Wait-Observed 42)){throw 'Transpiler removal did not restore original behavior'}
+	Status 'TRANSPILER_REMOVE_OK value=42'
 
 	$instanceRequest=@{session_id=$sessionId;process_id=$child.Id;hook_id='powershell-instance-calculate';kind='Postfix';module_id=$module.module_id;assembly='HookLabPowerShellFixture';declaring_type='HookLabPowerShellFixture.InstanceTarget';method='Calculate';method_token=$instanceFacts.Token;signature=$instanceFacts.Signature;module_mvid=$instanceFacts.Mvid;il_sha256=$instanceFacts.IlSha256;revision=1;source='public static class PowerShellInstancePostfix { public static void Postfix(HookLabPowerShellFixture.InstanceTarget __instance, ref int __result) { __result += __instance.Offset; } }'}
 	$null=Rpc 'install_hook' $instanceRequest 70
