@@ -34,11 +34,12 @@ namespace HookLab.Probe.CorDebug.Patching {
 			using (var provider = new CSharpCodeProvider()) {
 				var parameters = new CompilerParameters { GenerateExecutable = false, GenerateInMemory = true, TreatWarningsAsErrors = false };
 				foreach (var reference in References(target)) parameters.ReferencedAssemblies.Add(reference);
-				string? temporaryHarmonyReference = null;
-				if (kind == HookLab.Contracts.HookKind.Transpiler && !parameters.ReferencedAssemblies.Cast<string>().Any(IsHarmonyReference)) {
-					temporaryHarmonyReference = MaterializeHarmonyReference();
-					parameters.ReferencedAssemblies.Add(temporaryHarmonyReference);
-				}
+				// Transpiler source names HarmonyLib.CodeInstruction. Always compile it against the
+				// probe's pinned embedded backend: a target AppDomain can expose a stale, deleted, or
+				// otherwise unusable file-backed 0Harmony view after the first compiled revision.
+				// Prefix/Postfix/Finalizer source does not name Harmony types and needs no such reference.
+				var temporaryHarmonyReference = kind == HookLab.Contracts.HookKind.Transpiler ? MaterializeHarmonyReference() : null;
+				if (temporaryHarmonyReference != null) parameters.ReferencedAssemblies.Add(temporaryHarmonyReference);
 				CompilerResults result;
 				try { result = provider.CompileAssemblyFromSource(parameters, source); }
 				finally { if (temporaryHarmonyReference != null) try { File.Delete(temporaryHarmonyReference); } catch { } }
@@ -58,7 +59,6 @@ namespace HookLab.Probe.CorDebug.Patching {
 			}
 		}
 
-		static bool IsHarmonyReference(string path) => string.Equals(Path.GetFileName(path), "0Harmony.dll", StringComparison.OrdinalIgnoreCase);
 		static string MaterializeHarmonyReference() {
 			var path=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-harmony-"+Guid.NewGuid().ToString("N")+".dll");
 			using(var input=typeof(CompiledHookCompiler).Assembly.GetManifestResourceStream(HarmonyResourceName) ?? throw new InvalidOperationException("The pinned Harmony compiler reference is unavailable."))

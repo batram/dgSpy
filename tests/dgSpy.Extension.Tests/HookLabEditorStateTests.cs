@@ -22,6 +22,17 @@ public sealed class HookLabEditorStateTests {
 		Assert.Equal("Postfix",state.Kind);
 	}
 
+	[Theory]
+	[InlineData("Prefix","Prefix")]
+	[InlineData("PrefixPostfix","Prefix")]
+	[InlineData("Postfix","Postfix")]
+	[InlineData("Finalizer","Finalizer")]
+	[InlineData("Transpiler","Transpiler")]
+	public void TemplateMapsToTheSubmittedCompiledKind(string template,string kind) {
+		var state=State(); state.SelectTemplate(template);
+		Assert.Equal(kind,state.Kind);
+	}
+
 	[Fact]
 	public void ValidationKeepsEditableState() {
 		var state=State(); state.HookId=" "; state.Source="user edit";

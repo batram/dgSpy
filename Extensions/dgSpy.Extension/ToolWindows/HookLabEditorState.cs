@@ -14,7 +14,7 @@ namespace dgSpy.Extension.ToolWindows {
 		public string Source { get; set; }="";
 		public string Diagnostics { get; private set; }="";
 		public int Revision { get; }
-		public string Kind=>Template=="Postfix" ? "Postfix" : "Prefix";
+		public string Kind=>Template=="Postfix" ? "Postfix" : Template=="Finalizer" ? "Finalizer" : Template=="Transpiler" ? "Transpiler" : "Prefix";
 		public bool Busy { get; private set; }
 		public void SelectTemplate(string template) { Template=template; Source=generate(template); Diagnostics=""; }
 		public bool TryBegin(out string error) {
