@@ -24,6 +24,9 @@ operation exposes carrier methods, atomic actions, prepare/commit, payload gener
 Initialization is idempotent. Status, toggle, event, and removal operations do not create a resident
 runtime. A create or compatibility-install operation initializes lazily when needed, but carrier,
 debugger-stop, bootstrap, and payload details remain internal to that initialization operation.
+Before staging, resuming, or injecting, initialization verifies that the selected active debugger
+process is x64 and exposes a desktop CLR v4 runtime. Unsupported architectures and CoreCLR-only targets
+fail immediately with `unsupported_hooklab_target` and name the observed architecture or runtimes.
 
 ## Public operations
 
@@ -114,6 +117,13 @@ The toolbar reflects actionable state: initialization becomes a disabled **HookL
 once ready, **Remove** requires a selected row, and **Remove All** requires at least one installed hook.
 Generic-target handling and any demonstrated need for broader compilation references remain deferred.
 Initialization and packaging are no longer the active design problem.
+
+Live mismatch acceptance attaches the packaged host to an x64 CoreCLR PowerShell process. Before the
+eligibility guard it reached the native bootstrap and failed after about 20.1 seconds with a generic
+worker-ready timeout; the guarded build refuses the same attached target in about 17 ms with
+`unsupported_hooklab_target`, without creating the completion file, resuming, or injecting. The final
+fresh-package CorDebug gate passes with Extension 445/445, composition 12/12, atomic actions 52/52, and
+HookLab GUI/install 52/52.
 
 ## Deferred editor UX backlog
 

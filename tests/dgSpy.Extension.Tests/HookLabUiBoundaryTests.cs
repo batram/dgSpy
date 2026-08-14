@@ -60,6 +60,19 @@ public sealed class HookLabUiBoundaryTests {
 	}
 
 	[Fact]
+	public void HookLab_rejects_an_unsupported_attached_target_before_resuming_or_injecting() {
+		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
+		var initialize=source.IndexOf("publicasyncTask<object>InitializeAsync",StringComparison.Ordinal);
+		var eligibility=source.IndexOf("HookLabTargetEligibility.UnsupportedReason",initialize,StringComparison.Ordinal);
+		var refusal=source.IndexOf("thrownewRpcException(\"unsupported_hooklab_target\"",eligibility,StringComparison.Ordinal);
+		var completion=source.IndexOf("dgspy-hooklab-init-",initialize,StringComparison.Ordinal);
+		var resume=source.IndexOf("awaitResumeAsync(host,source,token)",initialize,StringComparison.Ordinal);
+		var inject=source.IndexOf("awaitInitializeAutonomouslyAsync",initialize,StringComparison.Ordinal);
+		Assert.True(initialize>=0 && eligibility>initialize && refusal>eligibility,"Initialization must apply the explicit target policy.");
+		Assert.True(completion>refusal && resume>refusal && inject>refusal,"Unsupported targets must be refused before staging, resume, or injection.");
+	}
+
+	[Fact]
 	public void Compiled_hook_api_separates_create_update_and_publishes_editable_state() {
 		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
 		Assert.Contains("CreateAsync(RpcHosthost,RpcRequestsource,CancellationTokentoken)=>InstallAsync(host,source,\"create\",token)",source,StringComparison.Ordinal);

@@ -128,7 +128,13 @@ namespace dgSpy.Extension {
 				try {
 					lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) { HookLabUiBridge.SetInitialized(); return Initialized(existing,false); }
 
-				var wasRunning=await host.OnDebuggerAsync(()=>{ host.CheckVersion(source); return host.SelectProcess(source).IsRunning; },token).ConfigureAwait(false);
+				var wasRunning=await host.OnDebuggerAsync(()=>{
+					host.CheckVersion(source);
+					var process=host.SelectProcess(source);
+					var unsupported=HookLabTargetEligibility.UnsupportedReason(process.Bitness,process.Architecture.ToString(),process.Runtimes.Select(runtime=>new HookLabRuntimeIdentity(runtime.Guid,runtime.Name)));
+					if(unsupported is not null) throw new RpcException("unsupported_hooklab_target",unsupported);
+					return process.IsRunning;
+				},token).ConfigureAwait(false);
 				var completion=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-init-"+Guid.NewGuid().ToString("N")+".completion");
 				ProbeConnection? connection=null;
 				try {
