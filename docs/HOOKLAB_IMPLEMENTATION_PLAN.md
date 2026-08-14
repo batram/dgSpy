@@ -193,6 +193,25 @@ Still missing:
 - package-level acceptance for toggling; behavior-changing source, failed-update rollback, removal,
   and clean detach are already proven against an ordinary CLR v4 PowerShell target.
 
+## Work order and build-boundary seam
+
+Keep the active HookLab editor/state work together. First prove the already-implemented explicit Edit
+action through the packaged GUI. Then add enable/disable without deleting the resident hook record, and
+split compiled-source creation and revision replacement into public `create_hook` and `update_hook`
+operations while retaining `install_hook` temporarily for compatibility.
+
+After that coherent Prefix/Postfix state and API slice is package-proven, finish the remaining build
+dependency cleanup from [BUILD_PIPELINE_TODO.md](BUILD_PIPELINE_TODO.md): the packaged component build
+must compile `dgSpy.Extension` against dnSpy contract assemblies from its explicit immutable
+`host-raw` input, while dgSpy and HookLab dependencies remain normal project references. Remove the
+global `BuildProjectReferences=false` workaround and add a structural regression test proving that the
+component build cannot enter or rebuild upstream dnSpy projects.
+
+That build work is not a prerequisite for the current Edit acceptance, so do not interrupt the nearly
+closed editor checkpoint for it. It must, however, be completed before starting compiled Finalizer or
+Transpiler work, so those larger phases begin on the intended build graph rather than extending the
+temporary dependency suppression.
+
 ## Execution rule
 
 One capable agent owns this through-line at a time. Keep the repository buildable at useful
