@@ -120,7 +120,7 @@ try {
 		# fresh player for each of the debugger, search, and scan-cursor scripts in a three-way matrix.
 		Invoke-Checked 'Mono/Unity live smoke' { .\tests\run-mono-target-smoke.ps1 }
 	}
-	if ($Stage -in @('Unity','Full')) {
+	if ($Stage -eq 'Unity') {
 		Write-Host '== start isolated Unity debugger host ==' -ForegroundColor Cyan
 		# A dedicated port like the MonoTarget smokes use (7361/7363/7365), not 7351: an installed
 		# dgSpy holding 7351 makes this stage silently test the WRONG host - the second dnSpy cannot
