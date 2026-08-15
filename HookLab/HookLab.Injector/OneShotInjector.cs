@@ -8,20 +8,23 @@ using System.Text;
 namespace HookLab.Injector;
 
 public static class OneShotInjector {
-	public static string Apply(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory)=>ApplyCore(processId,definition,definitionPath,payloadDirectory,"none",null).Result;
-	public static ResidentInjection ApplyResident(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,byte[] endpointSecret,string residentStagingDirectory) {
+	public static string Apply(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory)=>ApplyCore(processId,definition,definitionPath,payloadDirectory,"none",null,clrReadinessTimeoutMs:5000,initializationTimeoutMs:5000).Result;
+	public static ResidentInjection ApplyResident(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,byte[] endpointSecret,string residentStagingDirectory,int clrReadinessTimeoutMs=5000,int initializationTimeoutMs=5000) {
 		if(endpointSecret is null||endpointSecret.Length!=32) throw new ArgumentException("The resident endpoint secret must be exactly 32 bytes.",nameof(endpointSecret));
 		if(String.IsNullOrWhiteSpace(residentStagingDirectory)) throw new ArgumentException("A resident staging directory is required.",nameof(residentStagingDirectory));
-		var outcome=ApplyCore(processId,definition,definitionPath,payloadDirectory,"pipe",endpointSecret,residentStagingDirectory);
+		var outcome=ApplyCore(processId,definition,definitionPath,payloadDirectory,"pipe",endpointSecret,residentStagingDirectory,clrReadinessTimeoutMs,initializationTimeoutMs);
 		return new ResidentInjection(outcome.Result,outcome.ImagePath,outcome.CreationTicks,Required(outcome.Report,"probe_instance_id"),Required(outcome.Report,"pipe_name"),Convert.FromBase64String(Required(outcome.Report,"pipe_nonce_base64")),Required(outcome.Report,"patch_id"),Int64.Parse(Required(outcome.Report,"hooks_version"),CultureInfo.InvariantCulture));
 	}
-	static InjectionOutcome ApplyCore(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,string endpoint,byte[]? endpointSecret,string? residentStagingDirectory=null) {
+	static InjectionOutcome ApplyCore(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,string endpoint,byte[]? endpointSecret,string? residentStagingDirectory=null,int clrReadinessTimeoutMs=5000,int initializationTimeoutMs=5000) {
+		if(clrReadinessTimeoutMs is < 250 or > 30000) throw new ArgumentOutOfRangeException(nameof(clrReadinessTimeoutMs));
+		if(initializationTimeoutMs is < 1000 or > 30000) throw new ArgumentOutOfRangeException(nameof(initializationTimeoutMs));
 		using var process=Process.GetProcessById(processId);
 		string imagePath; long creationTicks;
 		try { imagePath=process.MainModule?.FileName ?? throw new InvalidOperationException("The target image path is unavailable."); creationTicks=process.StartTime.ToUniversalTime().Ticks; }
 		catch(Win32Exception ex) { throw new InvalidOperationException("Could not read target process identity. Run ApplyOnce elevated when the target is elevated.",ex); }
 		if(!String.Equals(Path.GetFileName(imagePath),definition.Process!.FileName,StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("PID "+processId+" is not "+definition.Process.FileName+"; observed "+imagePath+".");
 		EnsureX64(processId);
+		WaitForClr(process,TimeSpan.FromMilliseconds(clrReadinessTimeoutMs));
 		var payload=payloadDirectory is null?FindPayload():PayloadFiles.InDirectory(payloadDirectory);
 		var staging=residentStagingDirectory is null?Path.Combine(Path.GetTempPath(),"hooklab-apply-once-"+processId.ToString(CultureInfo.InvariantCulture)+"-"+Guid.NewGuid().ToString("N")):Path.GetFullPath(residentStagingDirectory);
 		Directory.CreateDirectory(staging);
@@ -34,7 +37,7 @@ public static class OneShotInjector {
 			File.WriteAllText(Path.Combine(staging,"initialize.params"),Parameters(imagePath,processId,creationTicks,completion,definition,endpoint,endpointSecret),new UTF8Encoding(false));
 			NativeLoader.Load(processId,nativePath);
 			var wait=Stopwatch.StartNew();
-			var report=WaitForCompletion(process,completion,TimeSpan.FromSeconds(5));
+			var report=WaitForCompletion(process,completion,TimeSpan.FromMilliseconds(initializationTimeoutMs));
 			completed=true;
 			var values=ParseReport(report);
 			if(!values.TryGetValue("status",out var status)||status!="ok") throw new InvalidOperationException("The target reported: "+report.Replace('\r',' ').Replace('\n',' '));
@@ -70,6 +73,7 @@ public static class OneShotInjector {
 	static string Sha256(string path) { using var sha=SHA256.Create(); return Convert.ToHexString(sha.ComputeHash(File.ReadAllBytes(path))).ToLowerInvariant(); }
 	static Dictionary<string,string> ParseReport(string text) { var result=new Dictionary<string,string>(StringComparer.Ordinal); foreach(var line in text.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries)) { var separator=line.IndexOf('='); if(separator>0) result[line[..separator]]=line[(separator+1)..]; } return result; }
 	static string Required(Dictionary<string,string> values,string key)=>values.TryGetValue(key,out var value)&&!String.IsNullOrWhiteSpace(value)?value:throw new InvalidOperationException("The target completion report omitted "+key+".");
+	static void WaitForClr(Process process,TimeSpan timeout) { var watch=Stopwatch.StartNew(); while(watch.Elapsed<timeout) { if(HasExited(process)) throw new InvalidOperationException("Target exited before CLR v4 became ready."); try { if(process.Modules.Cast<ProcessModule>().Any(module=>String.Equals(module.ModuleName,"clr.dll",StringComparison.OrdinalIgnoreCase))) return; } catch(Win32Exception) { } Thread.Sleep(25); } throw new ClrReadinessTimeoutException("Target CLR v4 was not ready within "+timeout.TotalMilliseconds.ToString(CultureInfo.InvariantCulture)+" ms; no native injection was attempted."); }
 	static string WaitForCompletion(Process process,string path,TimeSpan timeout) { var watch=Stopwatch.StartNew(); while(watch.Elapsed<timeout) { if(process.HasExited) throw new InvalidOperationException("Target exited before HookLab initialization completed."); if(File.Exists(path)) return File.ReadAllText(path); Thread.Sleep(25); } throw new TimeoutException("HookLab did not publish its completion report within "+timeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)+" seconds. Staging was preserved; do not retry this PID blindly."); }
 	public static bool HasExited(Process process) { try { return process.HasExited; } catch(InvalidOperationException) { return true; } }
 	static void TryDeleteDirectory(string path) { try { Directory.Delete(path,true); } catch { Console.Error.WriteLine("Warning: temporary bootstrap files remain at "+path); } }
@@ -94,6 +98,7 @@ public static class OneShotInjector {
 
 public sealed record ResidentInjection(string Result,string ImagePath,long CreationTicks,string ProbeInstanceId,string PipeName,byte[] EndpointNonce,string PatchId,long HooksVersion);
 public sealed class TargetExitedException : Exception { public TargetExitedException(string message,Exception innerException):base(message,innerException) { } }
+public sealed class ClrReadinessTimeoutException : TimeoutException { public ClrReadinessTimeoutException(string message):base(message) { } }
 
 internal static class NativeLoader {
 	const uint ProcessAccess=0x0002|0x0008|0x0020|0x0400, CommitReserve=0x1000|0x2000;

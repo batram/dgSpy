@@ -37,7 +37,8 @@ public sealed class ResidentCoordinator {
 		try {
 			ResidentInjection injected;
 			var staging=payloads.Create(request.ProcessId,request.ProcessCreationUtcTicks);
-			try { injected=OneShotInjector.ApplyResident(request.ProcessId,request.Definition,request.DefinitionPath,payloadDirectory,secret,staging); }
+			try { injected=OneShotInjector.ApplyResident(request.ProcessId,request.Definition,request.DefinitionPath,payloadDirectory,secret,staging,request.ClrReadinessTimeoutMs,request.InitializationTimeoutMs); }
+			catch(ClrReadinessTimeoutException) { payloads.Delete(staging); throw; }
 			catch(TargetExitedException) { payloads.Delete(staging); return new("target_exited",digest,null,null,null,request.ProcessId,request.ProcessCreationUtcTicks,expected.ImagePath); }
 			var target=new TargetIdentity(HostId,injected.ImagePath,request.ProcessId,new DateTime(injected.CreationTicks,DateTimeKind.Utc),"x64","v4.0.30319","1");
 			var record=new ProbeDiscoveryRecord(target,injected.ProbeInstanceId,injected.PipeName,injected.EndpointNonce,secret,1,DateTime.UtcNow.Add(ProbeDiscoveryStore.DiscoveryRecordLifetime));

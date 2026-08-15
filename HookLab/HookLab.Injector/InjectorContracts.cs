@@ -6,7 +6,9 @@ public sealed record InjectorRequest(
 	string DefinitionPath,
 	string DefinitionSha256,
 	HookDefinition Definition,
-	string? PermittedImagePath=null);
+	string? PermittedImagePath=null,
+	int ClrReadinessTimeoutMs=5000,
+	int InitializationTimeoutMs=5000);
 
 public sealed record InjectorResult(
 	string Status,

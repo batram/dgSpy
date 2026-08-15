@@ -125,7 +125,7 @@ internal static class ProfileCatalog {
 			if(package.PackageId!=profile.PackageId||package.Digest!=profile.PackageDigest?.ToLowerInvariant()) throw new InvalidDataException("Profile package identity or digest does not match verified package content: "+profile.Id);
 			if((profile.PermittedExecutablePaths??new()).Any(path=>!Path.IsPathFullyQualified(path))) throw new InvalidDataException("Profile permitted executable paths must be fully qualified: "+profile.Id);
 			var permitted=(profile.PermittedExecutablePaths??new()).Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(); if(permitted.Length==0) throw new InvalidDataException("Enabled profile requires at least one permitted executable path: "+profile.Id);
-			result.Add(new WatchDefinition(package.ManifestPath,package.Definition,package.Digest,profile.Id,package.PackageId,permitted));
+			result.Add(new WatchDefinition(package.ManifestPath,package.Definition,package.Digest,profile.Id,package.PackageId,permitted,profile.NotificationPolicy!,profile.ClrReadinessTimeoutMs,profile.InitializationTimeoutMs));
 		}
 		var duplicateHook=result.GroupBy(value=>value.Value.Id!,StringComparer.Ordinal).FirstOrDefault(group=>group.Count()>1); if(duplicateHook is not null) throw new InvalidDataException("Enabled profiles contain duplicate hook ID: "+duplicateHook.Key);
 		return result;

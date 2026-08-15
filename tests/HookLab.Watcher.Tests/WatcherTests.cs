@@ -24,6 +24,7 @@ public sealed class WatcherTests {
 	[Theory]
 	[InlineData(typeof(InvalidDataException),"invalid_input",CommandExitCodes.InvalidInput)]
 	[InlineData(typeof(UnauthorizedAccessException),"access_denied",CommandExitCodes.AccessDenied)]
+	[InlineData(typeof(ClrReadinessTimeoutException),"runtime_not_ready",CommandExitCodes.Timeout)]
 	[InlineData(typeof(TimeoutException),"timeout_known_state_required",CommandExitCodes.Timeout)]
 	public void Command_failures_have_stable_categories(Type exceptionType,string code,int exitCode) {
 		var exception=(Exception)Activator.CreateInstance(exceptionType,"test")!; var failure=CommandFailure.Classify(exception); Assert.Equal(code,failure.Code); Assert.Equal(exitCode,failure.ExitCode);
@@ -106,6 +107,7 @@ public sealed class WatcherTests {
 		for(var attempt=0;attempt<3;attempt++) { var work=Assert.Single(tracker.Select(new[]{process},now:now)); tracker.Complete(work,AttemptDisposition.Retryable,now); now=now.AddSeconds(5); }
 		Assert.Empty(tracker.Select(new[]{process},now:now));
 		Assert.Equal(AttemptDisposition.Retryable,WatchRunner.Classify(new IOException("temporary transport failure")));
+		Assert.Equal(AttemptDisposition.Retryable,WatchRunner.Classify(new ClrReadinessTimeoutException("not ready")));
 		Assert.Equal(AttemptDisposition.AmbiguousNoRetry,WatchRunner.Classify(new TimeoutException("unknown completion")));
 		Assert.Equal(AttemptDisposition.DeterministicRefusal,WatchRunner.Classify(new InvalidDataException("bad definition")));
 	}
@@ -132,11 +134,26 @@ public sealed class WatcherTests {
 	}
 
 	[Fact]
-	public async Task Run_reconciles_initial_snapshot_and_drains_on_cancellation() {
-		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl")); using var cancellation=new CancellationTokenSource(); var calls=0;
+	public async Task Cancellation_during_discovery_prevents_new_work_and_publishes_stopped() {
+		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl")); using var cancellation=new CancellationTokenSource(); var calls=0; var statusPath=System.IO.Path.Combine(directory.Path,"status.json");
 		IReadOnlyList<ProcessIdentity> Snapshot() { cancellation.Cancel(); return new[]{new ProcessIdentity(4,4,"Target.exe",1)}; }
-		var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,25,1,audit,null,Snapshot,work=>{ Interlocked.Increment(ref calls); return Result("ok"); });
-		await runner.RunAsync(cancellation.Token); Assert.Equal(1,calls);
+		var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,25,1,audit,null,Snapshot,work=>{ Interlocked.Increment(ref calls); return Result("ok"); },statusStore:new WatcherStatusStore(statusPath));
+		await runner.RunAsync(cancellation.Token); Assert.Equal(0,calls); Assert.Equal("stopped",WatcherStatusStore.Read(statusPath)!.Value.GetProperty("lifecycle").GetString());
+	}
+
+	[Fact]
+	public void Profile_deadlines_flow_to_authoritative_injector_request() {
+		var definition=Definition("alpha","Target.exe") with { ClrReadinessTimeoutMs=750,InitializationTimeoutMs=1250 }; var request=WatchRunner.Request(new(definition,new ProcessIdentity(9,10,"Target.exe",1,"C:\\Target.exe")));
+		Assert.Equal(750,request.ClrReadinessTimeoutMs); Assert.Equal(1250,request.InitializationTimeoutMs);
+	}
+
+	[Fact]
+	public async Task Notification_policy_emits_only_selected_results() {
+		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl")); var sink=new RecordingNotificationSink();
+		var definitions=new[]{Definition("all","All.exe") with { NotificationPolicy="all" },Definition("errors","Errors.exe") with { NotificationPolicy="errors" },Definition("none","None.exe") with { NotificationPolicy="none" }};
+		var runner=new WatchRunner(definitions,1,25,3,audit,null,apply:work=>work.Definition.Value.Id=="all"?Result("installed"):throw new IOException("failed"),notifications:sink);
+		runner.Schedule(new[]{new ProcessIdentity(1,1,"All.exe",1),new ProcessIdentity(2,2,"Errors.exe",1),new ProcessIdentity(3,3,"None.exe",1)}); await runner.DrainAsync();
+		Assert.Equal(new[]{"all:installed","errors:error"},sink.Values.OrderBy(value=>value));
 	}
 
 	[Fact]
@@ -179,5 +196,6 @@ public sealed class WatcherTests {
 	static WatchApplyResult Result(string status)=>new(status,new string('a',64),null,null,null);
 	static HookDefinition Valid(string id,string fileName)=>new() { SchemaVersion=1,Id=id,Process=new ProcessDefinition { FileName=fileName },Target=new TargetDefinition { Assembly="Target",ModuleMvid=Guid.NewGuid().ToString("D"),DeclaringType="Example.Target",Method="Run",MetadataToken=0x06000001,Signature="System.Void Run()",IlSha256=new string('a',64) },Hook=new PatchDefinition { Kind="Prefix",Revision=1,Source="public static class H{public static bool Prefix(){return true;}}",MaximumEventsPerSecond=10,MaximumStringLength=100 } };
 	static void WriteDefinition(string directory,string name,string id,string fileName) { var options=new JsonSerializerOptions { PropertyNamingPolicy=JsonNamingPolicy.CamelCase }; File.WriteAllText(System.IO.Path.Combine(directory,name),JsonSerializer.Serialize(Valid(id,fileName),options)); }
+	sealed class RecordingNotificationSink : IWatchNotificationSink { public ConcurrentBag<string> Values { get; }=new(); public void Publish(WatchNotification notification)=>Values.Add(notification.DefinitionId+":"+notification.Status); }
 	sealed class TemporaryDirectory : IDisposable { public string Path { get; }=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"hooklab-watcher-tests-"+Guid.NewGuid().ToString("N")); public TemporaryDirectory()=>Directory.CreateDirectory(Path); public void Dispose()=>Directory.Delete(Path,true); }
 }

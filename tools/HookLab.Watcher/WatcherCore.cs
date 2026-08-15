@@ -6,7 +6,7 @@ using HookLab.Injector;
 
 namespace HookLab.Watcher;
 
-internal sealed record WatchDefinition(string Path,HookDefinition Value,string DefinitionSha256,string? ProfileId=null,string? PackageId=null,IReadOnlyList<string>? PermittedExecutablePaths=null);
+internal sealed record WatchDefinition(string Path,HookDefinition Value,string DefinitionSha256,string? ProfileId=null,string? PackageId=null,IReadOnlyList<string>? PermittedExecutablePaths=null,string NotificationPolicy="errors",int ClrReadinessTimeoutMs=5000,int InitializationTimeoutMs=5000);
 internal readonly record struct ProcessIdentity(int ProcessId,long CreationUtcTicks,string FileName,int SessionId,string? ImagePath=null);
 internal readonly record struct WatchKey(string DefinitionId,string DefinitionSha256,int ProcessId,long CreationUtcTicks);
 internal readonly record struct WatchWork(WatchDefinition Definition,ProcessIdentity Process);
@@ -88,19 +88,21 @@ internal sealed class AuditWriter : IDisposable {
 internal sealed class WatchRunner {
 	readonly IWatchCatalog catalog; readonly CandidateTracker tracker; readonly int pollMilliseconds; readonly SemaphoreSlim parallel; readonly AuditWriter audit; readonly string? payloadDirectory; readonly WatchControlStore control; readonly WatcherStatusStore? statusStore;
 	readonly Func<IReadOnlyList<ProcessIdentity>>? snapshot;
-	readonly Func<WatchWork,WatchApplyResult> apply;
+	readonly Func<WatchWork,WatchApplyResult> apply; readonly IWatchNotificationSink notifications;
 	readonly ConcurrentDictionary<WatchKey,Task> running=new();
-	public WatchRunner(IReadOnlyList<WatchDefinition> definitions,int sessionId,int pollMilliseconds,int maximumParallel,AuditWriter audit,string? payloadDirectory,Func<IReadOnlyList<ProcessIdentity>>? snapshot=null,Func<WatchWork,WatchApplyResult>? apply=null,WatchControlStore? control=null,WatcherStatusStore? statusStore=null):this(new StaticWatchCatalog(definitions),sessionId,pollMilliseconds,maximumParallel,audit,payloadDirectory,snapshot,apply,control,statusStore) { }
-	public WatchRunner(IWatchCatalog catalog,int sessionId,int pollMilliseconds,int maximumParallel,AuditWriter audit,string? payloadDirectory,Func<IReadOnlyList<ProcessIdentity>>? snapshot=null,Func<WatchWork,WatchApplyResult>? apply=null,WatchControlStore? control=null,WatcherStatusStore? statusStore=null) { this.catalog=catalog; var initial=catalog.Current(); tracker=new CandidateTracker(initial.Definitions,sessionId); this.pollMilliseconds=pollMilliseconds; parallel=new SemaphoreSlim(maximumParallel); this.audit=audit; this.payloadDirectory=payloadDirectory; this.snapshot=snapshot; var coordinator=new ResidentCoordinator(payloadDirectory); this.apply=apply??(work=>Map(coordinator.Apply(Request(work)))); this.control=control??new WatchControlStore(Path.Combine(Path.GetTempPath(),"hooklab-watcher-control-"+Guid.NewGuid().ToString("N")+".json")); this.statusStore=statusStore; }
-	internal static InjectorRequest Request(WatchWork work)=>new(work.Process.ProcessId,work.Process.CreationUtcTicks,work.Definition.Path,work.Definition.DefinitionSha256,work.Definition.Value,work.Definition.PermittedExecutablePaths is { Count:>0 }?work.Process.ImagePath:null);
+	public WatchRunner(IReadOnlyList<WatchDefinition> definitions,int sessionId,int pollMilliseconds,int maximumParallel,AuditWriter audit,string? payloadDirectory,Func<IReadOnlyList<ProcessIdentity>>? snapshot=null,Func<WatchWork,WatchApplyResult>? apply=null,WatchControlStore? control=null,WatcherStatusStore? statusStore=null,IWatchNotificationSink? notifications=null):this(new StaticWatchCatalog(definitions),sessionId,pollMilliseconds,maximumParallel,audit,payloadDirectory,snapshot,apply,control,statusStore,notifications) { }
+	public WatchRunner(IWatchCatalog catalog,int sessionId,int pollMilliseconds,int maximumParallel,AuditWriter audit,string? payloadDirectory,Func<IReadOnlyList<ProcessIdentity>>? snapshot=null,Func<WatchWork,WatchApplyResult>? apply=null,WatchControlStore? control=null,WatcherStatusStore? statusStore=null,IWatchNotificationSink? notifications=null) { this.catalog=catalog; var initial=catalog.Current(); tracker=new CandidateTracker(initial.Definitions,sessionId); this.pollMilliseconds=pollMilliseconds; parallel=new SemaphoreSlim(maximumParallel); this.audit=audit; this.payloadDirectory=payloadDirectory; this.snapshot=snapshot; var coordinator=new ResidentCoordinator(payloadDirectory); this.apply=apply??(work=>Map(coordinator.Apply(Request(work)))); this.control=control??new WatchControlStore(Path.Combine(Path.GetTempPath(),"hooklab-watcher-control-"+Guid.NewGuid().ToString("N")+".json")); this.statusStore=statusStore; this.notifications=notifications??new ConsoleWatchNotificationSink(); }
+	internal static InjectorRequest Request(WatchWork work)=>new(work.Process.ProcessId,work.Process.CreationUtcTicks,work.Definition.Path,work.Definition.DefinitionSha256,work.Definition.Value,work.Definition.PermittedExecutablePaths is { Count:>0 }?work.Process.ImagePath:null,work.Definition.ClrReadinessTimeoutMs,work.Definition.InitializationTimeoutMs);
 	internal static WatchApplyResult Map(InjectorResult result)=>new(result.Status,result.DefinitionSha256,result.ProbeInstanceId,result.PatchId,result.HooksVersion);
 	public async Task RunAsync(CancellationToken cancellation) {
-		while(!cancellation.IsCancellationRequested) {
-			var current=catalog.Current(); tracker.Update(current.Definitions); var controlState=control.Read(); statusStore?.Publish(controlState,current); if(!controlState.Paused) Schedule(snapshot?.Invoke()??ProcessDiscovery.Snapshot(current.Definitions.Select(value=>value.Value.Process!.FileName!)),controlState);
+		statusStore?.SetLifecycle("running");
+		try { while(!cancellation.IsCancellationRequested) {
+			var current=catalog.Current(); tracker.Update(current.Definitions); var controlState=control.Read(); statusStore?.Publish(controlState,current); var processes=snapshot?.Invoke()??ProcessDiscovery.Snapshot(current.Definitions.Select(value=>value.Value.Process!.FileName!)); if(!cancellation.IsCancellationRequested&&!controlState.Paused) Schedule(processes,controlState);
 			try { await Task.Delay(pollMilliseconds,cancellation); } catch(OperationCanceledException) { break; }
-		}
-		await Task.WhenAll(running.Values);
+		} }
+		finally { PublishLifecycle("stopping"); await DrainAsync(); PublishLifecycle("stopped"); }
 	}
+	void PublishLifecycle(string lifecycle) { if(statusStore is null) return; try { statusStore.SetLifecycle(lifecycle); statusStore.Publish(control.Read(),catalog.Current()); } catch(Exception ex) { Console.Error.WriteLine("HookLab watcher could not persist "+lifecycle+" lifecycle state: "+ex.Message); } }
 	internal void Schedule(IEnumerable<ProcessIdentity> processes,WatchControl? controlState=null) {
 		foreach(var work in tracker.Select(processes,controlState)) {
 			var key=new WatchKey(work.Definition.Value.Id!,work.Definition.DefinitionSha256,work.Process.ProcessId,work.Process.CreationUtcTicks);
@@ -115,12 +117,13 @@ internal sealed class WatchRunner {
 			WatchApplyResult result; Exception? failure=null; AttemptDisposition disposition;
 			try { result=await Task.Run(()=>apply(work)); disposition=result.Status=="target_exited"?AttemptDisposition.TargetExited:AttemptDisposition.Completed; }
 			catch(Exception ex) { failure=ex; result=new("error",work.Definition.DefinitionSha256,null,null,null); disposition=Classify(ex); }
-			tracker.Complete(work,disposition); PersistResult(work,result,watch.ElapsedMilliseconds,failure?.Message);
+			tracker.Complete(work,disposition); PersistResult(work,result,watch.ElapsedMilliseconds,failure?.Message); Notify(work,result,failure?.Message);
 			if(failure is null) Console.WriteLine("HookLab watcher "+result.Status+" "+work.Definition.Value.Id+" for PID "+work.Process.ProcessId+" in "+watch.ElapsedMilliseconds+" ms.");
 			else Console.Error.WriteLine("HookLab watcher failed "+work.Definition.Value.Id+" for PID "+work.Process.ProcessId+": "+failure.Message);
 		}
 		finally { parallel.Release(); }
 	}
 	void PersistResult(WatchWork work,WatchApplyResult result,long elapsedMs,string? message) { try { audit.Write(work,result,elapsedMs,message); statusStore?.Publish(control.Read(),catalog.Current(),work,result.Status,elapsedMs,message); } catch(Exception ex) { Console.Error.WriteLine("HookLab watcher could not persist result for "+work.Definition.Value.Id+" PID "+work.Process.ProcessId+": "+ex.Message); } }
-	internal static AttemptDisposition Classify(Exception ex) { var failure=CommandFailure.Classify(ex); return failure.Code switch { "target_exited"=>AttemptDisposition.TargetExited,"deterministic_conflict" or "invalid_input" or "access_denied"=>AttemptDisposition.DeterministicRefusal,"timeout_known_state_required"=>AttemptDisposition.AmbiguousNoRetry,_ when ex is IOException=>AttemptDisposition.Retryable,_=>AttemptDisposition.AmbiguousNoRetry }; }
+	void Notify(WatchWork work,WatchApplyResult result,string? message) { var policy=work.Definition.NotificationPolicy; if(policy=="none"||policy=="errors"&&result.Status!="error") return; try { notifications.Publish(new(work.Definition.ProfileId,work.Definition.Value.Id!,work.Process.ProcessId,result.Status,message)); } catch(Exception ex) { Console.Error.WriteLine("HookLab watcher notification failed for "+work.Definition.Value.Id+" PID "+work.Process.ProcessId+": "+ex.Message); } }
+	internal static AttemptDisposition Classify(Exception ex) { var failure=CommandFailure.Classify(ex); return failure.Code switch { "target_exited"=>AttemptDisposition.TargetExited,"deterministic_conflict" or "invalid_input" or "access_denied"=>AttemptDisposition.DeterministicRefusal,"runtime_not_ready"=>AttemptDisposition.Retryable,"timeout_known_state_required"=>AttemptDisposition.AmbiguousNoRetry,_ when ex is IOException=>AttemptDisposition.Retryable,_=>AttemptDisposition.AmbiguousNoRetry }; }
 }

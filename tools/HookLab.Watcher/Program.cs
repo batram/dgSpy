@@ -51,6 +51,7 @@ internal sealed record CommandFailure(string Code,int ExitCode) {
 		if(chain.Any(value=>value is InvalidDataException or DirectoryNotFoundException or FileNotFoundException)) return new("invalid_input",CommandExitCodes.InvalidInput);
 		if(chain.Any(value=>value is UnauthorizedAccessException||value is Win32Exception win32&&win32.NativeErrorCode==5)) return new("access_denied",CommandExitCodes.AccessDenied);
 		if(chain.Any(value=>value is TargetExitedException)||exception is ArgumentException&&exception.Message.Contains("process",StringComparison.OrdinalIgnoreCase)) return new("target_exited",CommandExitCodes.TargetExited);
+		if(chain.Any(value=>value is ClrReadinessTimeoutException)) return new("runtime_not_ready",CommandExitCodes.Timeout);
 		if(chain.Any(value=>value is TimeoutException)) return new("timeout_known_state_required",CommandExitCodes.Timeout);
 		if(exception is InvalidOperationException&&exception.Message.StartsWith("No authenticated HookLab resident",StringComparison.Ordinal)) return new("not_found",CommandExitCodes.NotFound);
 		if(exception is InvalidOperationException&&(exception.Message.Contains("conflict",StringComparison.OrdinalIgnoreCase)||exception.Message.Contains("refusing",StringComparison.OrdinalIgnoreCase)||exception.Message.Contains("different source",StringComparison.OrdinalIgnoreCase)||exception.Message.Contains("newer than desired",StringComparison.OrdinalIgnoreCase))) return new("deterministic_conflict",CommandExitCodes.Conflict);

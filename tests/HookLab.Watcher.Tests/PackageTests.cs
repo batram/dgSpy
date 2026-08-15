@@ -44,7 +44,7 @@ public sealed class PackageTests {
 	public void Profile_binds_exact_package_digest_and_narrows_process_path() {
 		using var directory=new TemporaryDirectory(); var package=WritePackage(directory.Path); var loaded=PackageLoader.Load(package); var allowed=Path.Combine(directory.Path,"allowed","Target.exe");
 		WriteProfile(directory.Path,Profile(package,directory.Path,loaded,allowed));
-		var definition=Assert.Single(ProfileCatalog.Load(directory.Path)); Assert.Equal("sample-profile",definition.ProfileId); Assert.Equal(loaded.Digest,definition.DefinitionSha256);
+		var definition=Assert.Single(ProfileCatalog.Load(directory.Path)); Assert.Equal("sample-profile",definition.ProfileId); Assert.Equal(loaded.Digest,definition.DefinitionSha256); Assert.Equal("errors",definition.NotificationPolicy); Assert.Equal(5000,definition.ClrReadinessTimeoutMs); Assert.Equal(10000,definition.InitializationTimeoutMs);
 		var tracker=new CandidateTracker(new[]{definition},7);
 		Assert.Empty(tracker.Select(new[]{new ProcessIdentity(1,1,"Target.exe",7,Path.Combine(directory.Path,"wrong","Target.exe"))}));
 		Assert.Empty(tracker.Select(new[]{new ProcessIdentity(2,2,"Target.exe",7,null)}));
