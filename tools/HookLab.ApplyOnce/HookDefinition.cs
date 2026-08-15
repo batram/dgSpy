@@ -75,4 +75,5 @@ internal sealed class PatchDefinition {
 	public string? Source { get; set; }
 	public int MaximumEventsPerSecond { get; set; }=100;
 	public int MaximumStringLength { get; set; }=1024;
+	public bool Enabled { get; set; }=true;
 }

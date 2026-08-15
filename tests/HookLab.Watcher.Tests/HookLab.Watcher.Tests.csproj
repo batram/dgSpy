@@ -16,5 +16,6 @@
   </ItemGroup>
   <Target Name="BuildApplyOnceTarget" BeforeTargets="Build">
     <MSBuild Projects="..\TestTargets\HookLab.ApplyOnceTarget\HookLab.ApplyOnceTarget.csproj" Targets="Build" Properties="Configuration=$(Configuration)" />
+	<MSBuild Projects="..\..\HookLab\HookLab.Bootstrap\HookLab.Bootstrap.csproj" Targets="Build" Properties="Configuration=$(Configuration)" />
   </Target>
 </Project>

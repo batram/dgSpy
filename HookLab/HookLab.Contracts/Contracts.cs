@@ -98,15 +98,21 @@ namespace HookLab.Contracts {
 	}
 
 	public sealed class ProbeState {
-		public ProbeState(int protocolVersion, string probeInstanceId, TargetIdentity target, string backendIdentity, long hooksVersion, IReadOnlyList<string>? patchIds) {
+		public ProbeState(int protocolVersion, string probeInstanceId, TargetIdentity target, string backendIdentity, long hooksVersion, IReadOnlyList<string>? patchIds, IReadOnlyList<CompiledHookState>? compiledHooks = null) {
 			if (protocolVersion <= 0) throw new ArgumentOutOfRangeException(nameof(protocolVersion)); ProtocolVersion = protocolVersion;
 			ProbeInstanceId = Required(probeInstanceId, nameof(probeInstanceId)); Target = target ?? throw new ArgumentNullException(nameof(target));
 			BackendIdentity = Required(backendIdentity, nameof(backendIdentity)); HooksVersion = hooksVersion;
-			PatchIds = new List<string>(patchIds ?? Array.Empty<string>()).AsReadOnly();
+			PatchIds = new List<string>(patchIds ?? Array.Empty<string>()).AsReadOnly(); CompiledHooks = new List<CompiledHookState>(compiledHooks ?? Array.Empty<CompiledHookState>()).AsReadOnly();
 		}
 		public int ProtocolVersion { get; } public string ProbeInstanceId { get; } public TargetIdentity Target { get; } public string BackendIdentity { get; }
-		public long HooksVersion { get; } public IReadOnlyList<string> PatchIds { get; }
+		public long HooksVersion { get; } public IReadOnlyList<string> PatchIds { get; } public IReadOnlyList<CompiledHookState> CompiledHooks { get; }
 		static string Required(string value, string name) => string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value is required.", name) : value;
+	}
+
+	public sealed class CompiledHookState {
+		public CompiledHookState(string patchId, HookKind kind, MethodGuard target, string sourceSha256, int revision, bool enabled) { PatchId=Required(patchId,nameof(patchId)); Kind=kind; Target=target??throw new ArgumentNullException(nameof(target)); SourceSha256=Required(sourceSha256,nameof(sourceSha256)); Revision=revision; Enabled=enabled; }
+		public string PatchId { get; } public HookKind Kind { get; } public MethodGuard Target { get; } public string SourceSha256 { get; } public int Revision { get; } public bool Enabled { get; }
+		static string Required(string value,string name)=>string.IsNullOrWhiteSpace(value)?throw new ArgumentException("Value is required.",name):value;
 	}
 
 	public sealed class HookEvent {

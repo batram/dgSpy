@@ -13,6 +13,7 @@ public sealed class HookDefinitionTests {
 		Assert.Equal("dc470534-4dc7-403f-a529-c2b0259fa97d",definition.Target!.ModuleMvid);
 		Assert.Equal(0x06000155,definition.Target.MetadataToken);
 		Assert.Equal("Prefix",definition.Hook!.Kind);
+		Assert.True(definition.Hook.Enabled);
 		Assert.Contains("SyncSessionDisplaySettings",definition.Hook.Source,StringComparison.Ordinal);
 	}
 

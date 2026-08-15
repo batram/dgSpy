@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using System.Security.Cryptography;
+using System.Text;
 using HarmonyLib;
 using HookLab.Contracts;
 
@@ -139,8 +141,9 @@ namespace HookLab.Probe.CorDebug.Patching {
 		}
 
 		public ProbeState GetState() {
-			lock (gate) return new ProbeState(1, ProbeInstanceId, initialization.IdentityProvider.GetCurrentIdentity(), Inventory.SelectedIdentity, hooksVersion, hooks.Keys.Concat(compiledHooks.Keys).OrderBy(x => x).ToArray());
+			lock (gate) return new ProbeState(1, ProbeInstanceId, initialization.IdentityProvider.GetCurrentIdentity(), Inventory.SelectedIdentity, hooksVersion, hooks.Keys.Concat(compiledHooks.Keys).OrderBy(x => x).ToArray(),compiledHooks.Values.OrderBy(x=>x.PatchId).Select(x=>new CompiledHookState(x.PatchId,x.Document.Kind,x.Document.Target,Sha256(x.Source),x.Revision,x.Enabled)).ToArray());
 		}
+		static string Sha256(string value) { using(var sha=SHA256.Create()) return string.Concat(sha.ComputeHash(Encoding.UTF8.GetBytes(value)).Select(x=>x.ToString("x2")).ToArray()); }
 
 		void ApplyPatch(MethodBase method, HookKind kind) {
 			HarmonyMethod? prefix = null, postfix = null, finalizer = null;

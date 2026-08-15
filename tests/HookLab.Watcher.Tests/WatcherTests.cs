@@ -38,9 +38,9 @@ public sealed class WatcherTests {
 	}
 
 	[Fact]
-	public void Catalog_rejects_overlapping_process_selectors() {
+	public void Catalog_accepts_multiple_definitions_for_one_process() {
 		using var directory=new TemporaryDirectory(); WriteDefinition(directory.Path,"one.json","alpha","Target.exe"); WriteDefinition(directory.Path,"two.json","beta","target.EXE");
-		Assert.Contains("one definition per target process",Assert.Throws<InvalidDataException>(()=>DefinitionCatalog.Load(directory.Path)).Message,StringComparison.Ordinal);
+		Assert.Equal(2,DefinitionCatalog.Load(directory.Path).Count);
 	}
 
 	[Fact]

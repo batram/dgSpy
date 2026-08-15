@@ -20,8 +20,6 @@ internal static class DefinitionCatalog {
 		var result=paths.Select(path=>new WatchDefinition(path,HookDefinition.Load(path),Sha256(path))).ToArray();
 		var duplicate=result.GroupBy(value=>value.Value.Id!,StringComparer.Ordinal).FirstOrDefault(group=>group.Count()>1);
 		if(duplicate is not null) throw new InvalidDataException("Duplicate definition id: "+duplicate.Key);
-		var overlapping=result.GroupBy(value=>value.Value.Process!.FileName!,StringComparer.OrdinalIgnoreCase).FirstOrDefault(group=>group.Count()>1);
-		if(overlapping is not null) throw new InvalidDataException("Multiple definitions target executable basename "+overlapping.Key+". This one-shot watcher supports one definition per target process; multi-hook reconciliation requires resident adoption.");
 		return result;
 	}
 	static string Sha256(string path) { using var sha=SHA256.Create(); return Convert.ToHexString(sha.ComputeHash(File.ReadAllBytes(path))).ToLowerInvariant(); }
