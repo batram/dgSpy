@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Text.RegularExpressions;
+using System.Text;
 using Xunit;
 
 namespace HookLab.Bootstrap.Tests {
@@ -61,6 +62,26 @@ namespace HookLab.Bootstrap.Tests {
 					Assert.Equal("ok", report["status"]);
 					Assert.Equal("completed", report["behavior_commit"]);
 					Assert.Contains("async-hook", report["patch_id"], StringComparison.Ordinal);
+				}
+			}
+			finally { try { File.Delete(completion); File.Delete(completion + ".tmp"); } catch { } }
+		}
+
+		[Fact]
+		public void One_shot_commit_installs_compiled_source_instead_of_observer() {
+			var completion = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".hooklab-completion");
+			try {
+				using (var runner = BootstrapRunner.Create("bootstrap-one-shot-compiled")) {
+					const string source = "public static class H{public static bool Prefix(ref int __result){__result=123;return false;}}";
+					var parameters = Parameters(runner, completion).WithHook("compiled-one-shot")
+						.With("hook_source_base64", Convert.ToBase64String(Encoding.UTF8.GetBytes(source))).With("hook_revision", "1").ToString();
+					runner.Prepare(parameters);
+					runner.Commit();
+					var watch = Stopwatch.StartNew(); while (!File.Exists(completion) && watch.Elapsed < TimeSpan.FromSeconds(10)) Thread.Sleep(10);
+					var report = Report.Parse(File.ReadAllText(completion));
+					Assert.Equal("ok", report["status"]);
+					Assert.Contains("compiled-one-shot", report["patch_id"], StringComparison.Ordinal);
+					Assert.Equal(new[] { 123, 123 }, runner.InvokeFixture(2));
 				}
 			}
 			finally { try { File.Delete(completion); File.Delete(completion + ".tmp"); } catch { } }

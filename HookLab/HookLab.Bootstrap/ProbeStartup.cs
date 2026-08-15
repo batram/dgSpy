@@ -346,9 +346,16 @@ namespace HookLab.Bootstrap {
 			lock (Gate) { outcome.PipeName = preparedPipeName; outcome.EndpointNonceBase64 = preparedEndpointNonceBase64; }
 			if (parameters.HasHook) {
 				ResidentLauncher.NotePatchInstall();
-				var result = InstallHook(probe, parameters);
-				outcome.PatchId = result.PatchId;
-				outcome.HooksVersion = result.HooksVersion;
+				if (parameters.OptionalHook("hook_source_base64") != null) {
+					var compiled = InstallCompiledHook(probe, parameters);
+					outcome.PatchId = compiled.PatchId;
+					outcome.HooksVersion = compiled.HooksVersion;
+				}
+				else {
+					var observed = InstallHook(probe, parameters);
+					outcome.PatchId = observed.PatchId;
+					outcome.HooksVersion = observed.HooksVersion;
+				}
 			}
 			return outcome;
 		}
@@ -382,6 +389,13 @@ namespace HookLab.Bootstrap {
 		internal static string InstallCompiledPrepared(BootstrapParameters parameters) {
 			ProbeRuntime probe;
 			lock (Gate) probe = runtime as ProbeRuntime ?? throw new InvalidOperationException("The probe is not initialized yet.");
+			var result = InstallCompiledHook(probe, parameters);
+			return "status=ok\npatch_id=" + result.PatchId + "\nhooks_version=" + result.HooksVersion.ToString(CultureInfo.InvariantCulture) +
+				"\nrevision=" + result.Revision.ToString(CultureInfo.InvariantCulture) + "\nchanged=" + (result.Changed ? "true" : "false") +
+				"\nresidency_commit=completed\nbehavior_commit=completed\nprototype_compromises=unauthenticated_pipe,identity_partly_self_asserted,no_residency_rollback\n";
+		}
+
+		static CompiledPatchOperationResult InstallCompiledHook(ProbeRuntime probe, BootstrapParameters parameters) {
 			var target = ResolveHook(parameters);
 			if (target.Document.Kind != HookKind.Prefix && target.Document.Kind != HookKind.Postfix && target.Document.Kind != HookKind.Finalizer && target.Document.Kind != HookKind.Transpiler) throw new InvalidOperationException("Compiled hooks currently support Prefix, Postfix, Finalizer, and Transpiler only.");
 			var sourceText = parameters.Hook("hook_source_base64");
@@ -389,10 +403,7 @@ namespace HookLab.Bootstrap {
 			try { source = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(sourceText)); }
 			catch (FormatException ex) { throw new InvalidOperationException("hook_source_base64 is not valid base64.", ex); }
 			var revision = Positive(parameters, "hook_revision", 1);
-			var result = probe.InstallCompiledHook(target.Method, target.Document, source, revision, probe.HooksVersion);
-			return "status=ok\npatch_id=" + result.PatchId + "\nhooks_version=" + result.HooksVersion.ToString(CultureInfo.InvariantCulture) +
-				"\nrevision=" + result.Revision.ToString(CultureInfo.InvariantCulture) + "\nchanged=" + (result.Changed ? "true" : "false") +
-				"\nresidency_commit=completed\nbehavior_commit=completed\nprototype_compromises=unauthenticated_pipe,identity_partly_self_asserted,no_residency_rollback\n";
+			return probe.InstallCompiledHook(target.Method, target.Document, source, revision, probe.HooksVersion);
 		}
 
 		internal static string UninstallPrepared(string patchId) {
