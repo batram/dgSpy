@@ -6,12 +6,13 @@
     <PlatformTarget>x64</PlatformTarget>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>HookLab.ApplyOnce</AssemblyName>
+    <AssemblyName>HookLab.Watcher</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="HookLab.ApplyOnce.Tests" />
-    <InternalsVisibleTo Include="HookLab.Watcher" />
+    <ProjectReference Include="..\HookLab.ApplyOnce\HookLab.ApplyOnce.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="HookLab.Watcher.Tests" />
   </ItemGroup>
 </Project>
