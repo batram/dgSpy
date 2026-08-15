@@ -9,12 +9,13 @@ namespace HookLab.ApplyOnce;
 
 internal static class OneShotInjector {
 	public static string Apply(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory)=>ApplyCore(processId,definition,definitionPath,payloadDirectory,"none",null).Result;
-	internal static ResidentInjection ApplyResident(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,byte[] endpointSecret) {
+	internal static ResidentInjection ApplyResident(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,byte[] endpointSecret,string residentStagingDirectory) {
 		if(endpointSecret is null||endpointSecret.Length!=32) throw new ArgumentException("The resident endpoint secret must be exactly 32 bytes.",nameof(endpointSecret));
-		var outcome=ApplyCore(processId,definition,definitionPath,payloadDirectory,"pipe",endpointSecret);
+		if(String.IsNullOrWhiteSpace(residentStagingDirectory)) throw new ArgumentException("A resident staging directory is required.",nameof(residentStagingDirectory));
+		var outcome=ApplyCore(processId,definition,definitionPath,payloadDirectory,"pipe",endpointSecret,residentStagingDirectory);
 		return new ResidentInjection(outcome.Result,outcome.ImagePath,outcome.CreationTicks,Required(outcome.Report,"probe_instance_id"),Required(outcome.Report,"pipe_name"),Convert.FromBase64String(Required(outcome.Report,"pipe_nonce_base64")),Required(outcome.Report,"patch_id"),Int64.Parse(Required(outcome.Report,"hooks_version"),CultureInfo.InvariantCulture));
 	}
-	static InjectionOutcome ApplyCore(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,string endpoint,byte[]? endpointSecret) {
+	static InjectionOutcome ApplyCore(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,string endpoint,byte[]? endpointSecret,string? residentStagingDirectory=null) {
 		using var process=Process.GetProcessById(processId);
 		string imagePath; long creationTicks;
 		try { imagePath=process.MainModule?.FileName ?? throw new InvalidOperationException("The target image path is unavailable."); creationTicks=process.StartTime.ToUniversalTime().Ticks; }
@@ -22,7 +23,7 @@ internal static class OneShotInjector {
 		if(!String.Equals(Path.GetFileName(imagePath),definition.Process!.FileName,StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("PID "+processId+" is not "+definition.Process.FileName+"; observed "+imagePath+".");
 		EnsureX64(processId);
 		var payload=payloadDirectory is null?FindPayload():PayloadFiles.InDirectory(payloadDirectory);
-		var staging=Path.Combine(Path.GetTempPath(),"hooklab-apply-once-"+processId.ToString(CultureInfo.InvariantCulture)+"-"+Guid.NewGuid().ToString("N"));
+		var staging=residentStagingDirectory is null?Path.Combine(Path.GetTempPath(),"hooklab-apply-once-"+processId.ToString(CultureInfo.InvariantCulture)+"-"+Guid.NewGuid().ToString("N")):Path.GetFullPath(residentStagingDirectory);
 		Directory.CreateDirectory(staging);
 		var completion=Path.Combine(staging,"completion.txt");
 		var completed=false; var targetExited=false;
@@ -44,8 +45,9 @@ internal static class OneShotInjector {
 		}
 		catch(Exception ex) when(HasExited(process)) { targetExited=true; throw new TargetExitedException("Target exited during HookLab initialization.",ex); }
 		finally {
-			if(completed||targetExited) TryDeleteDirectory(staging);
-			else Console.Error.WriteLine("Preserved ambiguous HookLab staging directory: "+staging);
+			if(residentStagingDirectory is null&&(completed||targetExited)) TryDeleteDirectory(staging);
+			else if(residentStagingDirectory is not null&&targetExited) TryDeleteDirectory(staging);
+			else if(!completed) Console.Error.WriteLine("Preserved ambiguous HookLab staging directory: "+staging);
 		}
 	}
 

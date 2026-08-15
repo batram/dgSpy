@@ -23,10 +23,13 @@ public sealed class WatcherEndToEndTests {
 			var restartedCoordinator=new ResidentCoordinator(null,stateRoot); var restarted=new WatchRunner(definitions,Process.GetCurrentProcess().SessionId,25,2,audit,null,apply:restartedCoordinator.Apply);
 			restarted.Schedule(new[]{identity}); await restarted.DrainAsync().WaitAsync(TimeSpan.FromSeconds(5));
 		}
+		var residentDirectory=Assert.Single(Directory.EnumerateDirectories(Path.Combine(stateRoot,"hooklab","resident-payloads"))); Assert.True(File.Exists(Path.Combine(residentDirectory,"HookLab.NativeBootstrap.x64.dll"))); Assert.True(File.Exists(Path.Combine(residentDirectory,"HookLab.Bootstrap.dll")));
 		var behavior=target.ReleaseAndRead();
 		Assert.Equal(expectedAlpha,behavior["alpha"]); Assert.Equal(expectedBeta,behavior["beta"]);
+		new ResidentPayloadStore(stateRoot).CleanupExited(); Assert.Empty(Directory.EnumerateDirectories(Path.Combine(stateRoot,"hooklab","resident-payloads")));
 		var auditText=File.ReadAllText(auditPath); var lines=auditText.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries); Assert.Equal(2,lines.Length);
 		using var installed=JsonDocument.Parse(lines[0]); using var adopted=JsonDocument.Parse(lines[1]); Assert.Equal("installed",installed.RootElement.GetProperty("status").GetString()); Assert.Equal("adopted",adopted.RootElement.GetProperty("status").GetString());
+		Assert.Equal(installed.RootElement.GetProperty("definitionSha256").GetString(),adopted.RootElement.GetProperty("definitionSha256").GetString()); Assert.Equal(installed.RootElement.GetProperty("probeInstanceId").GetString(),adopted.RootElement.GetProperty("probeInstanceId").GetString()); Assert.Equal(installed.RootElement.GetProperty("patchId").GetString(),adopted.RootElement.GetProperty("patchId").GetString()); Assert.Equal(installed.RootElement.GetProperty("hooksVersion").GetInt64(),adopted.RootElement.GetProperty("hooksVersion").GetInt64());
 	}
 
 	sealed class TargetRun : IDisposable {

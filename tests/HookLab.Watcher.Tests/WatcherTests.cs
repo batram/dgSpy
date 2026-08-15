@@ -63,7 +63,7 @@ public sealed class WatcherTests {
 	public async Task Runner_bounds_parallelism_and_isolates_failure() {
 		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl"));
 		var definitions=new[]{Definition("alpha","Target.exe"),Definition("beta","Other.exe")}; var current=0; var maximum=0; var calls=new ConcurrentBag<string>();
-		string Apply(WatchWork work) { var now=Interlocked.Increment(ref current); maximum=Math.Max(maximum,now); calls.Add(work.Definition.Value.Id!); Thread.Sleep(40); Interlocked.Decrement(ref current); if(work.Process.ProcessId==2) throw new InvalidOperationException("contained failure"); return "ok"; }
+		WatchApplyResult Apply(WatchWork work) { var now=Interlocked.Increment(ref current); maximum=Math.Max(maximum,now); calls.Add(work.Definition.Value.Id!); Thread.Sleep(40); Interlocked.Decrement(ref current); if(work.Process.ProcessId==2) throw new InvalidOperationException("contained failure"); return Result("ok"); }
 		var runner=new WatchRunner(definitions,1,25,2,audit,null,apply:Apply);
 		runner.Schedule(new[]{new ProcessIdentity(1,1,"Target.exe",1),new ProcessIdentity(2,2,"Other.exe",1),new ProcessIdentity(3,3,"Target.exe",1)});
 		await runner.DrainAsync();
@@ -76,14 +76,14 @@ public sealed class WatcherTests {
 	public async Task Run_reconciles_initial_snapshot_and_drains_on_cancellation() {
 		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl")); using var cancellation=new CancellationTokenSource(); var calls=0;
 		IReadOnlyList<ProcessIdentity> Snapshot() { cancellation.Cancel(); return new[]{new ProcessIdentity(4,4,"Target.exe",1)}; }
-		var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,25,1,audit,null,Snapshot,work=>{ Interlocked.Increment(ref calls); return "ok"; });
+		var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,25,1,audit,null,Snapshot,work=>{ Interlocked.Increment(ref calls); return Result("ok"); });
 		await runner.RunAsync(cancellation.Token); Assert.Equal(1,calls);
 	}
 
 	[Fact]
 	public async Task Immediately_completed_work_is_removed_after_registration() {
 		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl"));
-		var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,25,1,audit,null,apply:work=>"ok");
+		var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,25,1,audit,null,apply:work=>Result("ok"));
 		runner.Schedule(new[]{new ProcessIdentity(9,9,"Target.exe",1)});
 		await runner.DrainAsync().WaitAsync(TimeSpan.FromSeconds(1));
 	}
@@ -91,18 +91,19 @@ public sealed class WatcherTests {
 	[Fact]
 	public void Audit_is_json_lines_and_sanitizes_messages() {
 		using var directory=new TemporaryDirectory(); var path=System.IO.Path.Combine(directory.Path,"audit.jsonl");
-		using(var audit=new AuditWriter(path)) audit.Write(new WatchWork(Definition("alpha","Target.exe"),new ProcessIdentity(5,6,"Target.exe",1)),"error",9,"bad\r\nmessage");
-		using var document=JsonDocument.Parse(File.ReadAllText(path)); Assert.Equal("bad  message",document.RootElement.GetProperty("message").GetString());
+		using(var audit=new AuditWriter(path)) audit.Write(new WatchWork(Definition("alpha","Target.exe"),new ProcessIdentity(5,6,"Target.exe",1)),new("error",new string('b',64),"probe","probe:alpha",7),9,"bad\r\nmessage");
+		using var document=JsonDocument.Parse(File.ReadAllText(path)); Assert.Equal("bad  message",document.RootElement.GetProperty("message").GetString()); Assert.Equal(new string('b',64),document.RootElement.GetProperty("definitionSha256").GetString()); Assert.Equal("probe",document.RootElement.GetProperty("probeInstanceId").GetString()); Assert.Equal("probe:alpha",document.RootElement.GetProperty("patchId").GetString()); Assert.Equal(7,document.RootElement.GetProperty("hooksVersion").GetInt64());
 	}
 
 	[Fact]
 	public async Task Target_exit_is_a_non_error_terminal_disposition() {
 		using var directory=new TemporaryDirectory(); var path=System.IO.Path.Combine(directory.Path,"audit.jsonl");
-		using(var audit=new AuditWriter(path)) { var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,25,1,audit,null,apply:work=>"target_exited"); runner.Schedule(new[]{new ProcessIdentity(44,55,"Target.exe",1)}); await runner.DrainAsync(); }
+		using(var audit=new AuditWriter(path)) { var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,25,1,audit,null,apply:work=>Result("target_exited")); runner.Schedule(new[]{new ProcessIdentity(44,55,"Target.exe",1)}); await runner.DrainAsync(); }
 		using var document=JsonDocument.Parse(File.ReadAllText(path)); Assert.Equal("target_exited",document.RootElement.GetProperty("status").GetString()); Assert.Equal(JsonValueKind.Null,document.RootElement.GetProperty("message").ValueKind);
 	}
 
-	static WatchDefinition Definition(string id,string fileName)=>new(id+".json",Valid(id,fileName));
+	static WatchDefinition Definition(string id,string fileName)=>new(id+".json",Valid(id,fileName),new string('a',64));
+	static WatchApplyResult Result(string status)=>new(status,new string('a',64),null,null,null);
 	static HookDefinition Valid(string id,string fileName)=>new() { SchemaVersion=1,Id=id,Process=new ProcessDefinition { FileName=fileName },Target=new TargetDefinition { Assembly="Target",ModuleMvid=Guid.NewGuid().ToString("D"),DeclaringType="Example.Target",Method="Run",MetadataToken=0x06000001,Signature="System.Void Run()",IlSha256=new string('a',64) },Hook=new PatchDefinition { Kind="Prefix",Revision=1,Source="public static class H{public static bool Prefix(){return true;}}",MaximumEventsPerSecond=10,MaximumStringLength=100 } };
 	static void WriteDefinition(string directory,string name,string id,string fileName) { var options=new JsonSerializerOptions { PropertyNamingPolicy=JsonNamingPolicy.CamelCase }; File.WriteAllText(System.IO.Path.Combine(directory,name),JsonSerializer.Serialize(Valid(id,fileName),options)); }
 	sealed class TemporaryDirectory : IDisposable { public string Path { get; }=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"hooklab-watcher-tests-"+Guid.NewGuid().ToString("N")); public TemporaryDirectory()=>Directory.CreateDirectory(Path); public void Dispose()=>Directory.Delete(Path,true); }

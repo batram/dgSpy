@@ -1,11 +1,12 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Security.Cryptography;
 using HookLab.ApplyOnce;
 
 namespace HookLab.Watcher;
 
-internal sealed record WatchDefinition(string Path,HookDefinition Value);
+internal sealed record WatchDefinition(string Path,HookDefinition Value,string DefinitionSha256);
 internal readonly record struct ProcessIdentity(int ProcessId,long CreationUtcTicks,string FileName,int SessionId);
 internal readonly record struct WatchKey(string DefinitionId,int ProcessId,long CreationUtcTicks);
 internal readonly record struct WatchWork(WatchDefinition Definition,ProcessIdentity Process);
@@ -16,13 +17,14 @@ internal static class DefinitionCatalog {
 		if(!Directory.Exists(root)) throw new DirectoryNotFoundException("Definitions directory does not exist: "+root);
 		var paths=Directory.GetFiles(root,"*.json",SearchOption.TopDirectoryOnly).OrderBy(value=>value,StringComparer.OrdinalIgnoreCase).ToArray();
 		if(paths.Length==0) throw new InvalidDataException("Definitions directory contains no JSON definitions: "+root);
-		var result=paths.Select(path=>new WatchDefinition(path,HookDefinition.Load(path))).ToArray();
+		var result=paths.Select(path=>new WatchDefinition(path,HookDefinition.Load(path),Sha256(path))).ToArray();
 		var duplicate=result.GroupBy(value=>value.Value.Id!,StringComparer.Ordinal).FirstOrDefault(group=>group.Count()>1);
 		if(duplicate is not null) throw new InvalidDataException("Duplicate definition id: "+duplicate.Key);
 		var overlapping=result.GroupBy(value=>value.Value.Process!.FileName!,StringComparer.OrdinalIgnoreCase).FirstOrDefault(group=>group.Count()>1);
 		if(overlapping is not null) throw new InvalidDataException("Multiple definitions target executable basename "+overlapping.Key+". This one-shot watcher supports one definition per target process; multi-hook reconciliation requires resident adoption.");
 		return result;
 	}
+	static string Sha256(string path) { using var sha=SHA256.Create(); return Convert.ToHexString(sha.ComputeHash(File.ReadAllBytes(path))).ToLowerInvariant(); }
 }
 
 internal sealed class CandidateTracker {
@@ -66,8 +68,8 @@ internal static class ProcessDiscovery {
 internal sealed class AuditWriter : IDisposable {
 	readonly object gate=new(); readonly StreamWriter writer;
 	public AuditWriter(string path) { var full=Path.GetFullPath(path); Directory.CreateDirectory(Path.GetDirectoryName(full)!); writer=new StreamWriter(new FileStream(full,FileMode.Append,FileAccess.Write,FileShare.Read)); writer.AutoFlush=true; }
-	public void Write(WatchWork work,string status,long elapsedMs,string? message) {
-		var value=new { timestampUtc=DateTime.UtcNow.ToString("O"),status,definitionId=work.Definition.Value.Id,definitionPath=work.Definition.Path,processId=work.Process.ProcessId,processCreationUtcTicks=work.Process.CreationUtcTicks,elapsedMs,message=Sanitize(message) };
+	public void Write(WatchWork work,WatchApplyResult result,long elapsedMs,string? message) {
+		var value=new { timestampUtc=DateTime.UtcNow.ToString("O"),status=result.Status,definitionId=work.Definition.Value.Id,definitionPath=work.Definition.Path,definitionSha256=result.DefinitionSha256,processId=work.Process.ProcessId,processCreationUtcTicks=work.Process.CreationUtcTicks,probeInstanceId=result.ProbeInstanceId,patchId=result.PatchId,hooksVersion=result.HooksVersion,elapsedMs,message=Sanitize(message) };
 		lock(gate) writer.WriteLine(JsonSerializer.Serialize(value));
 	}
 	public void Dispose()=>writer.Dispose();
@@ -77,9 +79,9 @@ internal sealed class AuditWriter : IDisposable {
 internal sealed class WatchRunner {
 	readonly IReadOnlyList<WatchDefinition> definitions; readonly CandidateTracker tracker; readonly int pollMilliseconds; readonly SemaphoreSlim parallel; readonly AuditWriter audit; readonly string? payloadDirectory;
 	readonly Func<IReadOnlyList<ProcessIdentity>> snapshot;
-	readonly Func<WatchWork,string> apply;
+	readonly Func<WatchWork,WatchApplyResult> apply;
 	readonly ConcurrentDictionary<WatchKey,Task> running=new();
-	public WatchRunner(IReadOnlyList<WatchDefinition> definitions,int sessionId,int pollMilliseconds,int maximumParallel,AuditWriter audit,string? payloadDirectory,Func<IReadOnlyList<ProcessIdentity>>? snapshot=null,Func<WatchWork,string>? apply=null) { this.definitions=definitions; tracker=new CandidateTracker(definitions,sessionId); this.pollMilliseconds=pollMilliseconds; parallel=new SemaphoreSlim(maximumParallel); this.audit=audit; this.payloadDirectory=payloadDirectory; var names=definitions.Select(value=>value.Value.Process!.FileName!).ToArray(); this.snapshot=snapshot??(()=>ProcessDiscovery.Snapshot(names)); var coordinator=new ResidentCoordinator(payloadDirectory); this.apply=apply??coordinator.Apply; }
+	public WatchRunner(IReadOnlyList<WatchDefinition> definitions,int sessionId,int pollMilliseconds,int maximumParallel,AuditWriter audit,string? payloadDirectory,Func<IReadOnlyList<ProcessIdentity>>? snapshot=null,Func<WatchWork,WatchApplyResult>? apply=null) { this.definitions=definitions; tracker=new CandidateTracker(definitions,sessionId); this.pollMilliseconds=pollMilliseconds; parallel=new SemaphoreSlim(maximumParallel); this.audit=audit; this.payloadDirectory=payloadDirectory; var names=definitions.Select(value=>value.Value.Process!.FileName!).ToArray(); this.snapshot=snapshot??(()=>ProcessDiscovery.Snapshot(names)); var coordinator=new ResidentCoordinator(payloadDirectory); this.apply=apply??coordinator.Apply; }
 	public async Task RunAsync(CancellationToken cancellation) {
 		while(!cancellation.IsCancellationRequested) {
 			Schedule(snapshot());
@@ -97,8 +99,8 @@ internal sealed class WatchRunner {
 	internal async Task DrainAsync() { while(!running.IsEmpty) await Task.WhenAll(running.Values); }
 	async Task ApplyAsync(WatchWork work) {
 		await parallel.WaitAsync(); var watch=Stopwatch.StartNew();
-		try { var disposition=await Task.Run(()=>apply(work)); audit.Write(work,disposition,watch.ElapsedMilliseconds,null); Console.WriteLine("HookLab watcher "+disposition+" "+work.Definition.Value.Id+" for PID "+work.Process.ProcessId+" in "+watch.ElapsedMilliseconds+" ms."); }
-		catch(Exception ex) { audit.Write(work,"error",watch.ElapsedMilliseconds,ex.Message); Console.Error.WriteLine("HookLab watcher failed "+work.Definition.Value.Id+" for PID "+work.Process.ProcessId+": "+ex.Message); }
+		try { var result=await Task.Run(()=>apply(work)); audit.Write(work,result,watch.ElapsedMilliseconds,null); Console.WriteLine("HookLab watcher "+result.Status+" "+work.Definition.Value.Id+" for PID "+work.Process.ProcessId+" in "+watch.ElapsedMilliseconds+" ms."); }
+		catch(Exception ex) { audit.Write(work,new("error",work.Definition.DefinitionSha256,null,null,null),watch.ElapsedMilliseconds,ex.Message); Console.Error.WriteLine("HookLab watcher failed "+work.Definition.Value.Id+" for PID "+work.Process.ProcessId+": "+ex.Message); }
 		finally { parallel.Release(); }
 	}
 }
