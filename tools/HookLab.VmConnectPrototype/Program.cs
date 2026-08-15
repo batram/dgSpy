@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 
 internal static class Program {
 	const string HookSource="public static class H{public static bool Prefix(object __instance,ref bool __result){var t=__instance.GetType();if(!(bool)t.GetProperty(\"FullScreen\",(System.Reflection.BindingFlags)20).GetValue(__instance,null))return __result=false;var c=t.GetField(\"m_RdpClient\",(System.Reflection.BindingFlags)36).GetValue(__instance);if(c==null)return __result=false;var ct=c.GetType();var s=ct.GetMethod(\"SyncSessionDisplaySettings\",(System.Reflection.BindingFlags)20);var l=ct.GetProperty(\"Location\",(System.Reflection.BindingFlags)20);for(int n=0;n<20;n++){try{s.Invoke(c,null);l.SetValue(c,System.Activator.CreateInstance(l.PropertyType),null);__result=true;return false;}catch{System.Threading.Thread.Sleep(250);}}return __result=false;}}";
@@ -18,10 +19,17 @@ internal static class Program {
 
 	static int Run(string[] arguments,out string result) {
 		result="status=error\nmessage=invalid arguments\n";
-		if(arguments.Length is < 1 or > 3 || !Int32.TryParse(arguments[0],NumberStyles.None,CultureInfo.InvariantCulture,out var processId) || processId<=0 || (arguments.Length>1 && (arguments.Length!=3 || !String.Equals(arguments[1],"--payload-dir",StringComparison.Ordinal)))) {
-			Console.Error.WriteLine("Usage: HookLab.VmConnectPrototype.exe <vmconnect-pid> [--payload-dir <directory>]");
+		if(arguments.Length is < 1 or > 5 || arguments.Length%2==0 || !Int32.TryParse(arguments[0],NumberStyles.None,CultureInfo.InvariantCulture,out var processId) || processId<=0) {
+			Console.Error.WriteLine("Usage: HookLab.VmConnectPrototype.exe <vmconnect-pid> [--definition <hook.json>] [--payload-dir <directory>]");
 			return 2;
 		}
+		string? definitionPath=null, payloadDirectory=null;
+		for(var index=1;index<arguments.Length;index+=2) {
+			if(arguments[index]=="--definition" && definitionPath is null) definitionPath=Path.GetFullPath(arguments[index+1]);
+			else if(arguments[index]=="--payload-dir" && payloadDirectory is null) payloadDirectory=Path.GetFullPath(arguments[index+1]);
+			else { Console.Error.WriteLine("Unknown or repeated option: "+arguments[index]); return 2; }
+		}
+		var hookSource=definitionPath is null ? HookSource : ReadHookSource(definitionPath);
 
 		using var process=Process.GetProcessById(processId);
 		string imagePath; long creationTicks;
@@ -30,17 +38,20 @@ internal static class Program {
 		if(!String.Equals(Path.GetFileName(imagePath),"VmConnect.exe",StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("PID "+processId.ToString(CultureInfo.InvariantCulture)+" is not VmConnect.exe; observed "+imagePath+".");
 		EnsureX64(processId);
 
-		var payload=arguments.Length==3 ? PayloadFiles.InDirectory(Path.GetFullPath(arguments[2])) : FindPayload();
+		var payload=payloadDirectory is null ? FindPayload() : PayloadFiles.InDirectory(payloadDirectory);
 		var staging=Path.Combine(Path.GetTempPath(),"hooklab-vmconnect-"+processId.ToString(CultureInfo.InvariantCulture)+"-"+Guid.NewGuid().ToString("N"));
 		Directory.CreateDirectory(staging);
 		var completion=Path.Combine(staging,"completion.txt");
+		var completed=false;
 		try {
 			var nativePath=Path.Combine(staging,"HookLab.NativeBootstrap.x64.dll");
 			File.Copy(payload.Native,nativePath,false);
 			File.Copy(payload.Managed,Path.Combine(staging,"HookLab.Bootstrap.dll"),false);
-			File.WriteAllText(Path.Combine(staging,"initialize.params"),Parameters(imagePath,processId,creationTicks,completion),new UTF8Encoding(false));
+			File.WriteAllText(Path.Combine(staging,"initialize.params"),Parameters(imagePath,processId,creationTicks,completion,hookSource),new UTF8Encoding(false));
 			NativeLoader.Load(processId,nativePath);
-			var report=WaitForCompletion(process,completion,TimeSpan.FromSeconds(30));
+			var wait=Stopwatch.StartNew();
+			var report=WaitForCompletion(process,completion,TimeSpan.FromSeconds(5));
+			completed=true;
 			var values=ParseReport(report);
 			if(!values.TryGetValue("status",out var status) || !String.Equals(status,"ok",StringComparison.Ordinal)) throw new InvalidOperationException("The target reported: "+report.Replace('\r',' ').Replace('\n',' '));
 			if(!values.TryGetValue("patch_id",out var patchId) || String.IsNullOrWhiteSpace(patchId)) throw new InvalidOperationException("The target reported success without a patch_id.");
@@ -48,15 +59,21 @@ internal static class Program {
 			Console.WriteLine("process_id="+processId.ToString(CultureInfo.InvariantCulture));
 			Console.WriteLine("patch_id="+patchId);
 			if(values.TryGetValue("hooks_version",out var hooksVersion)) Console.WriteLine("hooks_version="+hooksVersion);
-			result="status=ok\nprocess_id="+processId.ToString(CultureInfo.InvariantCulture)+"\npatch_id="+patchId+"\nhooks_version="+(values.TryGetValue("hooks_version",out var version)?version:"unknown")+"\n";
+			Console.WriteLine("launcher_wait_ms="+wait.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
+			if(values.TryGetValue("worker_queue_ms",out var workerQueue)) Console.WriteLine("worker_queue_ms="+workerQueue);
+			if(values.TryGetValue("behavior_elapsed_ms",out var behaviorElapsed)) Console.WriteLine("behavior_elapsed_ms="+behaviorElapsed);
+			result="status=ok\nprocess_id="+processId.ToString(CultureInfo.InvariantCulture)+"\npatch_id="+patchId+"\nhooks_version="+(values.TryGetValue("hooks_version",out var version)?version:"unknown")+"\nlauncher_wait_ms="+wait.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)+"\nworker_queue_ms="+(values.TryGetValue("worker_queue_ms",out var queue)?queue:"missing")+"\nbehavior_elapsed_ms="+(values.TryGetValue("behavior_elapsed_ms",out var elapsed)?elapsed:"missing")+"\ndefinition_path="+(definitionPath??"embedded")+"\n";
 			return 0;
 		}
-		finally { TryDeleteDirectory(staging); }
+		finally {
+			if(completed) TryDeleteDirectory(staging);
+			else Console.Error.WriteLine("Preserved ambiguous HookLab staging directory: "+staging);
+		}
 	}
 
-	static string Parameters(string imagePath,int processId,long creationTicks,string completion) {
-		var source=Convert.ToBase64String(Encoding.UTF8.GetBytes(HookSource));
-		if(source.Length>1024) throw new InvalidOperationException("The embedded hook source exceeds the bootstrap value limit.");
+	static string Parameters(string imagePath,int processId,long creationTicks,string completion,string hookSource) {
+		var source=Convert.ToBase64String(Encoding.UTF8.GetBytes(hookSource));
+		if(source.Length>2048) throw new InvalidOperationException("The embedded hook source exceeds the bootstrap value limit.");
 		var values=new[] {
 			Pair("host_id","vmconnect-prototype"), Pair("image_path",imagePath), Pair("process_id",processId.ToString(CultureInfo.InvariantCulture)),
 			Pair("process_creation_utc_ticks",creationTicks.ToString(CultureInfo.InvariantCulture)), Pair("architecture","x64"), Pair("runtime_id","v4.0.30319"),
@@ -67,6 +84,12 @@ internal static class Program {
 			Pair("hook_il_sha256",ExpectedIlSha256), Pair("hook_source_base64",source), Pair("hook_revision","1"), Pair("maximum_events_per_second","100"), Pair("maximum_string_length","1024")
 		};
 		return String.Join("\n",values)+"\n";
+	}
+
+	static string ReadHookSource(string path) {
+		using var document=JsonDocument.Parse(File.ReadAllBytes(path));
+		if(!document.RootElement.TryGetProperty("hook",out var hook) || !hook.TryGetProperty("source",out var source) || source.ValueKind!=JsonValueKind.String) throw new InvalidDataException("Definition hook.source is missing.");
+		return source.GetString() ?? throw new InvalidDataException("Definition hook.source is null.");
 	}
 
 	static string Pair(string key,string value) {
@@ -102,7 +125,7 @@ internal static class Program {
 			if(File.Exists(path)) return File.ReadAllText(path);
 			Thread.Sleep(50);
 		}
-		throw new TimeoutException("HookLab did not publish its completion report within "+timeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)+" seconds. Do not retry this PID blindly; restart VMConnect for a clean retry.");
+		throw new TimeoutException("HookLab did not publish its completion report within "+timeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)+" seconds. Staging was preserved for diagnosis; do not retry this PID blindly.");
 	}
 
 	static Dictionary<string,string> ParseReport(string text) {

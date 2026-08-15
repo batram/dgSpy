@@ -80,6 +80,17 @@ namespace HookLab.Bootstrap.Tests {
 			return results;
 		}
 
+		public long[] MeasureFixtureCalls() {
+			if (inner != null) return inner.MeasureFixtureCalls();
+			IFixtureWorker worker = new FixtureWorker();
+			var watch = System.Diagnostics.Stopwatch.StartNew();
+			var first = worker.Run(1);
+			var firstTicks = watch.ElapsedTicks;
+			watch.Restart();
+			var second = worker.Run(2);
+			return new[] { (long)first, firstTicks, (long)second, watch.ElapsedTicks };
+		}
+
 		/// <summary>Byte-loads the bootstrap and drives it through reflection alone - the shape a debugger
 		/// func-eval has to use. Nothing here names a bootstrap type, so a signature reflection cannot reach
 		/// fails this even though the compiler was happy.</summary>

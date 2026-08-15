@@ -13,7 +13,7 @@ namespace HookLab.Bootstrap {
 		internal const int MaximumBytes = 8192;
 		internal const int MaximumLines = 64;
 		internal const int MaximumKeyLength = 64;
-		internal const int MaximumValueLength = 1024;
+		internal const int MaximumValueLength = 2048;
 
 		static readonly string[] KnownKeys = {
 			"host_id", "image_path", "process_id", "process_creation_utc_ticks", "architecture", "runtime_id",

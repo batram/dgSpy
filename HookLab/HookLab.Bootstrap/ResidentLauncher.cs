@@ -13,6 +13,7 @@ namespace HookLab.Bootstrap {
 		static BootstrapParameters? parameters;
 		static Thread? worker;
 		static int workerStarts;
+		static long commitTimestamp;
 		[ThreadStatic] static bool committing;
 		internal static int CommitFileIoCount;
 		internal static int CommitAssemblyLoadCount;
@@ -39,6 +40,7 @@ namespace HookLab.Bootstrap {
 					if (worker != null) return "status=ok\nworker_started=false\nresidency_commit=completed\nbehavior_commit=asynchronous_pending_or_completed\nprototype_compromises=endpoint_none,identity_partly_self_asserted,no_residency_rollback\ncommit_elapsed_ticks=" + stopwatch.ElapsedTicks + "\n";
 					worker = new Thread(Work) { IsBackground = true, Name = "HookLab bootstrap worker" };
 					workerStarts++;
+					commitTimestamp = Stopwatch.GetTimestamp();
 					worker.Start(parameters);
 					return "status=ok\nworker_started=true\nresidency_commit=completed\nbehavior_commit=asynchronous_pending_or_completed\nprototype_compromises=endpoint_none,identity_partly_self_asserted,no_residency_rollback\ncommit_elapsed_ticks=" + stopwatch.ElapsedTicks + "\n";
 				}
@@ -48,10 +50,27 @@ namespace HookLab.Bootstrap {
 
 		static void Work(object? state) {
 			var value = (BootstrapParameters)state!;
+			var queueMilliseconds = ElapsedMilliseconds(commitTimestamp);
+			var behavior = Stopwatch.StartNew();
 			string report;
 			try { report = HookLabBootstrap.RunPrepared(value); }
 			catch (Exception ex) { report = HookLabBootstrap.WorkerError(ex); }
-			WriteCompletion(value.CompletionPath!, report);
+			report += "worker_queue_ms=" + queueMilliseconds + "\nbehavior_elapsed_ms=" + behavior.ElapsedMilliseconds + "\n";
+			try { WriteCompletion(value.CompletionPath!, report); }
+			catch (Exception ex) { TryWriteCompletionFailure(value.CompletionPath!, ex); }
+		}
+
+		static long ElapsedMilliseconds(long started) {
+			if (started == 0) return 0;
+			return (Stopwatch.GetTimestamp() - started) * 1000L / Stopwatch.Frequency;
+		}
+
+		static void TryWriteCompletionFailure(string path, Exception error) {
+			try {
+				var fallback = Path.Combine(Path.GetTempPath(), "HookLab-completion-" + Process.GetCurrentProcess().Id + ".error.txt");
+				File.WriteAllText(fallback, error.GetType().FullName + ": " + error.Message);
+			}
+			catch { }
 		}
 
 		internal static void NoteAssemblyLoad() { if (committing) CommitAssemblyLoadCount++; }

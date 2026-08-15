@@ -8,6 +8,8 @@ using Xunit;
 
 namespace HookLab.Bootstrap.Tests {
 	public sealed class BootstrapPrepareCommitTests {
+		readonly Xunit.Abstractions.ITestOutputHelper output;
+		public BootstrapPrepareCommitTests(Xunit.Abstractions.ITestOutputHelper output) { this.output = output; }
 		static ParameterBuilder Parameters(BootstrapRunner runner, string completion) => ParameterBuilder.ForCurrentProcess()
 			.With("appdomain_id", runner.AppDomainId).With("endpoint", "none").With("completion_path", completion);
 
@@ -82,6 +84,54 @@ namespace HookLab.Bootstrap.Tests {
 					Assert.Equal("ok", report["status"]);
 					Assert.Contains("compiled-one-shot", report["patch_id"], StringComparison.Ordinal);
 					Assert.Equal(new[] { 123, 123 }, runner.InvokeFixture(2));
+				}
+			}
+			finally { try { File.Delete(completion); File.Delete(completion + ".tmp"); } catch { } }
+		}
+
+		[Fact]
+		public void Cold_one_shot_timing_reports_install_and_patches_the_first_call() {
+			for (var sample = 1; sample <= 5; sample++) {
+				var completion = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".hooklab-completion");
+				try {
+					using (var runner = BootstrapRunner.Create("bootstrap-one-shot-timing-" + sample)) {
+						const string source = "public static class H{public static bool Prefix(ref int __result){__result=123;return false;}}";
+						var parameters = Parameters(runner, completion).WithHook("compiled-timing-" + sample)
+							.With("hook_source_base64", Convert.ToBase64String(Encoding.UTF8.GetBytes(source))).With("hook_revision", "1").ToString();
+						runner.Prepare(parameters);
+						var endToEnd = Stopwatch.StartNew();
+						runner.Commit();
+						while (!File.Exists(completion) && endToEnd.Elapsed < TimeSpan.FromSeconds(10)) Thread.Sleep(5);
+						Assert.True(File.Exists(completion), "Cold worker did not complete within ten seconds.");
+						var report = Report.Parse(File.ReadAllText(completion));
+						var calls = runner.MeasureFixtureCalls();
+						output.WriteLine("sample={0} end_to_end_ms={1} queue_ms={2} behavior_ms={3} first_result={4} first_ticks={5} second_result={6} second_ticks={7}", sample, endToEnd.ElapsedMilliseconds, report["worker_queue_ms"], report["behavior_elapsed_ms"], calls[0], calls[1], calls[2], calls[3]);
+						Assert.Equal(123, calls[0]);
+						Assert.Equal(123, calls[2]);
+					}
+				}
+				finally { try { File.Delete(completion); File.Delete(completion + ".tmp"); } catch { } }
+			}
+		}
+
+		[Fact]
+		public void Calls_during_async_install_are_not_retroactively_hooked_but_completion_is_a_ready_barrier() {
+			var completion = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".hooklab-completion");
+			try {
+				using (var runner = BootstrapRunner.Create("bootstrap-one-shot-race")) {
+					const string source = "public static class H{public static bool Prefix(ref int __result){__result=123;return false;}}";
+					var parameters = Parameters(runner, completion).WithHook("compiled-race")
+						.With("hook_source_base64", Convert.ToBase64String(Encoding.UTF8.GetBytes(source))).With("hook_revision", "1").ToString();
+					runner.Prepare(parameters);
+					var watch = Stopwatch.StartNew();
+					runner.Commit();
+					var duringInstall = runner.InvokeFixture(1)[0];
+					while (!File.Exists(completion) && watch.Elapsed < TimeSpan.FromSeconds(5)) Thread.Sleep(5);
+					Assert.True(File.Exists(completion), "Worker did not publish its ready barrier.");
+					var afterCompletion = runner.InvokeFixture(1)[0];
+					output.WriteLine("during_install_result={0} after_completion_result={1} ready_ms={2}", duringInstall, afterCompletion, watch.ElapsedMilliseconds);
+					Assert.Equal(8, duringInstall);
+					Assert.Equal(123, afterCompletion);
 				}
 			}
 			finally { try { File.Delete(completion); File.Delete(completion + ".tmp"); } catch { } }

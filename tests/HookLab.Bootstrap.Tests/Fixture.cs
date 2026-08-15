@@ -39,13 +39,14 @@ namespace HookLab.Bootstrap.Tests {
 
 		static string TypeName(Type type) => type.FullName ?? type.Name;
 
-		public static IDictionary<string, string> HookLines(string hookId, string kind) {
-			var method = FixtureMethod;
+		public static IDictionary<string, string> HookLines(string hookId, string kind) => HookLines(FixtureMethod, hookId, kind);
+
+		public static IDictionary<string, string> HookLines(MethodInfo method, string hookId, string kind) {
 			return new Dictionary<string, string>(StringComparer.Ordinal) {
 				["hook_id"] = hookId,
 				["hook_kind"] = kind,
-				["hook_assembly"] = typeof(FixtureWorker).Assembly.GetName().Name!,
-				["hook_type"] = typeof(FixtureWorker).FullName!,
+				["hook_assembly"] = method.Module.Assembly.GetName().Name!,
+				["hook_type"] = method.DeclaringType!.FullName!,
 				["hook_method"] = method.Name,
 				["hook_module_mvid"] = method.Module.ModuleVersionId.ToString("D"),
 				["hook_metadata_token"] = unchecked((uint)method.MetadataToken).ToString(CultureInfo.InvariantCulture),
@@ -79,6 +80,11 @@ namespace HookLab.Bootstrap.Tests {
 
 		public ParameterBuilder WithHook(string hookId = "fixture-hook", string kind = "Prefix") {
 			foreach (var pair in GuardFacts.HookLines(hookId, kind)) values[pair.Key] = pair.Value;
+			return this;
+		}
+
+		public ParameterBuilder WithHookFor(MethodInfo method, string hookId, string kind = "Prefix") {
+			foreach (var pair in GuardFacts.HookLines(method, hookId, kind)) values[pair.Key] = pair.Value;
 			return this;
 		}
 
