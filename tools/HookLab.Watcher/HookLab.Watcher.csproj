@@ -18,6 +18,7 @@
     <!-- The watcher directly executes ProbeDiscoveryStore's DPAPI path. Keep the runtime asset explicit:
          an executable project reference did not propagate this transport package into the watcher layout. -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+    <PackageReference Include="System.Management" Version="10.0.0" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="HookLab.Watcher.Tests" />

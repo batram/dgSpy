@@ -34,6 +34,8 @@ public sealed class WatcherTests {
 	public void Watcher_layout_contains_the_DPAPI_runtime_dependency()=>Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory,"System.Security.Cryptography.ProtectedData.dll")));
 	[Fact]
 	public void Watcher_layout_contains_the_authoritative_injector()=>Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory,"HookLab.Injector.dll")));
+	[Fact]
+	public void Watcher_layout_contains_the_process_start_runtime()=>Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory,"System.Management.dll")));
 
 	[Fact]
 	public void Options_are_order_independent_and_bounded() {
@@ -138,7 +140,15 @@ public sealed class WatcherTests {
 		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl")); using var cancellation=new CancellationTokenSource(); var calls=0; var statusPath=System.IO.Path.Combine(directory.Path,"status.json");
 		IReadOnlyList<ProcessIdentity> Snapshot() { cancellation.Cancel(); return new[]{new ProcessIdentity(4,4,"Target.exe",1)}; }
 		var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,25,1,audit,null,Snapshot,work=>{ Interlocked.Increment(ref calls); return Result("ok"); },statusStore:new WatcherStatusStore(statusPath));
-		await runner.RunAsync(cancellation.Token); Assert.Equal(0,calls); Assert.Equal("stopped",WatcherStatusStore.Read(statusPath)!.Value.GetProperty("lifecycle").GetString());
+		await runner.RunAsync(cancellation.Token); Assert.Equal(0,calls); var status=WatcherStatusStore.Read(statusPath)!.Value; Assert.Equal("stopped",status.GetProperty("lifecycle").GetString()); Assert.Equal("polling",status.GetProperty("discoveryMode").GetString());
+	}
+
+	[Fact]
+	public async Task Process_start_signal_wakes_full_reconciliation_without_replacing_polling() {
+		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl")); using var cancellation=new CancellationTokenSource(); var snapshots=0; var calls=new ConcurrentBag<int>(); var signal=new ImmediateProcessStartSignal(); var watch=System.Diagnostics.Stopwatch.StartNew(); var statusPath=System.IO.Path.Combine(directory.Path,"status.json");
+		IReadOnlyList<ProcessIdentity> Snapshot() { snapshots++; return snapshots==1?new[]{new ProcessIdentity(1,1,"Target.exe",1)}:new[]{new ProcessIdentity(1,1,"Target.exe",1),new ProcessIdentity(2,2,"Target.exe",1)}; }
+		var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,5000,1,audit,null,Snapshot,work=>{ calls.Add(work.Process.ProcessId); if(work.Process.ProcessId==2) cancellation.Cancel(); return Result("ok"); },statusStore:new WatcherStatusStore(statusPath),processStarts:signal);
+		await runner.RunAsync(cancellation.Token).WaitAsync(TimeSpan.FromSeconds(2)); Assert.Equal(new[]{1,2},calls.OrderBy(value=>value)); Assert.True(watch.Elapsed<TimeSpan.FromSeconds(2)); Assert.True(signal.Disposed); var status=WatcherStatusStore.Read(statusPath)!.Value; Assert.Equal("subscription",status.GetProperty("lastDiscoveryTrigger").GetString()); Assert.Equal(1,status.GetProperty("subscriptionWakeCount").GetInt64());
 	}
 
 	[Fact]
@@ -197,5 +207,6 @@ public sealed class WatcherTests {
 	static HookDefinition Valid(string id,string fileName)=>new() { SchemaVersion=1,Id=id,Process=new ProcessDefinition { FileName=fileName },Target=new TargetDefinition { Assembly="Target",ModuleMvid=Guid.NewGuid().ToString("D"),DeclaringType="Example.Target",Method="Run",MetadataToken=0x06000001,Signature="System.Void Run()",IlSha256=new string('a',64) },Hook=new PatchDefinition { Kind="Prefix",Revision=1,Source="public static class H{public static bool Prefix(){return true;}}",MaximumEventsPerSecond=10,MaximumStringLength=100 } };
 	static void WriteDefinition(string directory,string name,string id,string fileName) { var options=new JsonSerializerOptions { PropertyNamingPolicy=JsonNamingPolicy.CamelCase }; File.WriteAllText(System.IO.Path.Combine(directory,name),JsonSerializer.Serialize(Valid(id,fileName),options)); }
 	sealed class RecordingNotificationSink : IWatchNotificationSink { public ConcurrentBag<string> Values { get; }=new(); public void Publish(WatchNotification notification)=>Values.Add(notification.DefinitionId+":"+notification.Status); }
+	sealed class ImmediateProcessStartSignal : IProcessStartSignal { int waits; public bool Disposed { get; private set; } public string Mode=>"subscription+polling"; public async Task<bool> WaitAsync(int pollingMilliseconds,CancellationToken cancellation) { if(Interlocked.Increment(ref waits)==1) return true; await Task.Delay(pollingMilliseconds,cancellation); return false; } public void Dispose()=>Disposed=true; }
 	sealed class TemporaryDirectory : IDisposable { public string Path { get; }=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"hooklab-watcher-tests-"+Guid.NewGuid().ToString("N")); public TemporaryDirectory()=>Directory.CreateDirectory(Path); public void Dispose()=>Directory.Delete(Path,true); }
 }

@@ -20,7 +20,7 @@ internal static class Program {
 			using var current=Process.GetCurrentProcess(); using var audit=new AuditWriter(options.AuditPath!); using var cancellation=new CancellationTokenSource();
 			Console.CancelKeyPress+=(sender,eventArguments)=>{ eventArguments.Cancel=true; cancellation.Cancel(); };
 			Console.WriteLine("HookLab watcher loaded "+definitions.Count+" definition(s) for session "+current.SessionId+".");
-			await new WatchRunner(catalog,current.SessionId,options.PollMilliseconds,options.MaximumParallel,audit,options.PayloadDirectory,control:controlStore,statusStore:statusStore).RunAsync(cancellation.Token);
+			await new WatchRunner(catalog,current.SessionId,options.PollMilliseconds,options.MaximumParallel,audit,options.PayloadDirectory,control:controlStore,statusStore:statusStore,processStarts:WmiProcessStartSignal.Create()).RunAsync(cancellation.Token);
 			return 0;
 		}
 		catch(Exception ex) { Console.Error.WriteLine("HookLab watcher failed: "+ex.Message); return 1; }
