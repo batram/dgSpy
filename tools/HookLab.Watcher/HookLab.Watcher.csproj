@@ -22,4 +22,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="HookLab.Watcher.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="deployments\**\*.cs" />
+  </ItemGroup>
 </Project>

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "vmconnect-fullscreen-user",
+  "enabled": true,
+  "scope": "user",
+  "packagePath": "package",
+  "packageId": "vmconnect-fullscreen-sync",
+  "packageDigest": "05dbde5d5cb1354e7efb85169ef3a3a9936ecf646da99ca6f6955ec2b7be0009",
+  "permittedExecutablePaths": [
+    "C:\\Windows\\System32\\vmconnect.exe"
+  ],
+  "notificationPolicy": "errors",
+  "clrReadinessTimeoutMs": 5000,
+  "initializationTimeoutMs": 10000
+}

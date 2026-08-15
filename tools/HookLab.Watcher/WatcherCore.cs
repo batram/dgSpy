@@ -6,8 +6,8 @@ using HookLab.ApplyOnce;
 
 namespace HookLab.Watcher;
 
-internal sealed record WatchDefinition(string Path,HookDefinition Value,string DefinitionSha256);
-internal readonly record struct ProcessIdentity(int ProcessId,long CreationUtcTicks,string FileName,int SessionId);
+internal sealed record WatchDefinition(string Path,HookDefinition Value,string DefinitionSha256,string? ProfileId=null,string? PackageId=null,IReadOnlyList<string>? PermittedExecutablePaths=null);
+internal readonly record struct ProcessIdentity(int ProcessId,long CreationUtcTicks,string FileName,int SessionId,string? ImagePath=null);
 internal readonly record struct WatchKey(string DefinitionId,int ProcessId,long CreationUtcTicks);
 internal readonly record struct WatchWork(WatchDefinition Definition,ProcessIdentity Process);
 
@@ -40,6 +40,7 @@ internal sealed class CandidateTracker {
 		foreach(var process in processes) {
 			if(process.SessionId!=sessionId||!byFileName.TryGetValue(process.FileName,out var definitions)) continue;
 			foreach(var definition in definitions) {
+				if(definition.PermittedExecutablePaths is { Count:>0 } permitted&&(String.IsNullOrWhiteSpace(process.ImagePath)||!permitted.Contains(Path.GetFullPath(process.ImagePath),StringComparer.OrdinalIgnoreCase))) continue;
 				var key=new WatchKey(definition.Value.Id!,process.ProcessId,process.CreationUtcTicks);
 				if(attempted.Add(key)) result.Add(new WatchWork(definition,process));
 			}
@@ -54,7 +55,7 @@ internal static class ProcessDiscovery {
 		foreach(var fileName in fileNames.Distinct(StringComparer.OrdinalIgnoreCase)) {
 			var processName=Path.GetFileNameWithoutExtension(fileName);
 			foreach(var process in Process.GetProcessesByName(processName)) using(process) {
-				try { result.Add(new ProcessIdentity(process.Id,process.StartTime.ToUniversalTime().Ticks,process.ProcessName+".exe",process.SessionId)); }
+				try { result.Add(new ProcessIdentity(process.Id,process.StartTime.ToUniversalTime().Ticks,process.ProcessName+".exe",process.SessionId,process.MainModule?.FileName)); }
 				catch(InvalidOperationException) { }
 				catch(System.ComponentModel.Win32Exception) { }
 			}
@@ -67,7 +68,7 @@ internal sealed class AuditWriter : IDisposable {
 	readonly object gate=new(); readonly StreamWriter writer;
 	public AuditWriter(string path) { var full=Path.GetFullPath(path); Directory.CreateDirectory(Path.GetDirectoryName(full)!); writer=new StreamWriter(new FileStream(full,FileMode.Append,FileAccess.Write,FileShare.Read)); writer.AutoFlush=true; }
 	public void Write(WatchWork work,WatchApplyResult result,long elapsedMs,string? message) {
-		var value=new { timestampUtc=DateTime.UtcNow.ToString("O"),status=result.Status,definitionId=work.Definition.Value.Id,definitionPath=work.Definition.Path,definitionSha256=result.DefinitionSha256,processId=work.Process.ProcessId,processCreationUtcTicks=work.Process.CreationUtcTicks,probeInstanceId=result.ProbeInstanceId,patchId=result.PatchId,hooksVersion=result.HooksVersion,elapsedMs,message=Sanitize(message) };
+		var value=new { timestampUtc=DateTime.UtcNow.ToString("O"),status=result.Status,definitionId=work.Definition.Value.Id,definitionPath=work.Definition.Path,definitionSha256=result.DefinitionSha256,profileId=work.Definition.ProfileId,packageId=work.Definition.PackageId,processId=work.Process.ProcessId,processCreationUtcTicks=work.Process.CreationUtcTicks,probeInstanceId=result.ProbeInstanceId,patchId=result.PatchId,hooksVersion=result.HooksVersion,elapsedMs,message=Sanitize(message) };
 		lock(gate) writer.WriteLine(JsonSerializer.Serialize(value));
 	}
 	public void Dispose()=>writer.Dispose();

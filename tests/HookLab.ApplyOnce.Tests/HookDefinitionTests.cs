@@ -6,6 +6,9 @@ namespace HookLab.ApplyOnce.Tests;
 
 public sealed class HookDefinitionTests {
 	[Fact]
+	public void Hook_source_accepts_normal_source_file_line_breaks() { var definition=Valid(); definition.Hook!.Source="public static class H{\r\npublic static bool Prefix(){return true;}\r\n}"; definition.Validate(); }
+
+	[Fact]
 	public void Checked_in_vmconnect_definition_is_exact_and_valid() {
 		var definition=HookDefinition.Load(Path.Combine(RepoRoot(),"tools","HookLab.ApplyOnce","definitions","vmconnect-fullscreen.json"));
 		Assert.Equal("vmconnect-fullscreen-sync-v1",definition.Id);

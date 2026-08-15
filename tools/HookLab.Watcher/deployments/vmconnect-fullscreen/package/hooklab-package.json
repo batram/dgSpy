@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "packageId": "vmconnect-fullscreen-sync",
+  "revision": 1,
+  "displayName": "VMConnect fullscreen login synchronization",
+  "minimumProtocolVersion": 1,
+  "architecture": "x64",
+  "runtimeFamily": "clr-v4",
+  "process": {
+    "fileName": "VmConnect.exe"
+  },
+  "target": {
+    "assembly": "vmconnect",
+    "moduleMvid": "dc470534-4dc7-403f-a529-c2b0259fa97d",
+    "declaringType": "Microsoft.Virtualization.Client.InteractiveSession.RdpViewerControl",
+    "method": "SyncDisplaySettings",
+    "metadataToken": 100663637,
+    "signature": "System.Boolean SyncDisplaySettings()",
+    "ilSha256": "49de3a2203a1a8d79ac4c35e5d14b844b2bd4a4063fc3ba6e62ad951b92d5c1b"
+  },
+  "hook": {
+    "id": "vmconnect-fullscreen-sync-v1",
+    "kind": "Prefix",
+    "revision": 1,
+    "enabled": true,
+    "sourcePath": "hook.cs",
+    "maximumEventsPerSecond": 100,
+    "maximumStringLength": 1024
+  },
+  "entries": [
+    {
+      "path": "hook.cs",
+      "sha256": "ade5a5ca1aee78a34230cd93dbe3ab06607982f8309d8571b1fe799c4ab69c85"
+    }
+  ]
+}

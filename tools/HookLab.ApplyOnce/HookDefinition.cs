@@ -45,7 +45,7 @@ internal sealed class HookDefinition {
 		Hook.Kind=Required(Hook.Kind,"hook.kind",32);
 		if(Hook.Kind is not ("Prefix" or "Postfix" or "Finalizer" or "Transpiler")) throw new InvalidDataException("hook.kind is unsupported.");
 		if(Hook.Revision<=0) throw new InvalidDataException("hook.revision must be positive.");
-		Hook.Source=Required(Hook.Source,"hook.source",8192);
+		if(String.IsNullOrWhiteSpace(Hook.Source)||Hook.Source.Length>8192) throw new InvalidDataException("hook.source is invalid.");
 		if(Convert.ToBase64String(Encoding.UTF8.GetBytes(Hook.Source)).Length>2048) throw new InvalidDataException("hook.source exceeds the bootstrap value limit after base64 encoding.");
 		if(Hook.MaximumEventsPerSecond<=0) throw new InvalidDataException("hook.maximumEventsPerSecond must be positive.");
 		if(Hook.MaximumStringLength<=0) throw new InvalidDataException("hook.maximumStringLength must be positive.");
