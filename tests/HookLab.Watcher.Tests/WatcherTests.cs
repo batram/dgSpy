@@ -14,6 +14,13 @@ public sealed class WatcherTests {
 		Assert.False(CommandOptions.TryParseApply(new[]{"apply","--package","pkg"},out _)); Assert.False(CommandOptions.TryParseStatus(new[]{"status","--pid","0"},out _));
 	}
 
+	[Fact]
+	public void Control_options_are_strict() {
+		Assert.True(ControlOptions.TryParse(new[]{"pause"},out var pause)); Assert.True(pause.Paused);
+		Assert.True(ControlOptions.TryParse(new[]{"disable-profile","alpha"},out var disable)); Assert.Equal("alpha",disable.DisableProfile);
+		Assert.False(ControlOptions.TryParse(new[]{"disable-profile",""},out _)); Assert.False(ControlOptions.TryParse(new[]{"pause","now"},out _));
+	}
+
 	[Theory]
 	[InlineData(typeof(InvalidDataException),"invalid_input",CommandExitCodes.InvalidInput)]
 	[InlineData(typeof(UnauthorizedAccessException),"access_denied",CommandExitCodes.AccessDenied)]
@@ -78,6 +85,40 @@ public sealed class WatcherTests {
 	}
 
 	[Fact]
+	public void Tracker_honors_control_and_retries_only_retryable_attempts() {
+		var definition=Definition("alpha","Target.exe") with { ProfileId="profile-alpha" }; var tracker=new CandidateTracker(new[]{definition},7); var process=new ProcessIdentity(3,3,"Target.exe",7); var start=DateTime.UtcNow;
+		Assert.Empty(tracker.Select(new[]{process},new(true,new HashSet<string>()),start));
+		Assert.Empty(tracker.Select(new[]{process},new(false,new HashSet<string>{"profile-alpha"}),start));
+		var work=Assert.Single(tracker.Select(new[]{process},now:start)); tracker.Complete(work,AttemptDisposition.Retryable,start);
+		Assert.Empty(tracker.Select(new[]{process},now:start.AddMilliseconds(249))); Assert.Single(tracker.Select(new[]{process},now:start.AddMilliseconds(250)));
+	}
+
+	[Fact]
+	public void Tracker_treats_changed_definition_digest_as_new_work() {
+		var first=Definition("alpha","Target.exe"); var tracker=new CandidateTracker(new[]{first},7); var process=new ProcessIdentity(3,3,"Target.exe",7);
+		var work=Assert.Single(tracker.Select(new[]{process})); tracker.Complete(work,AttemptDisposition.Completed);
+		tracker.Update(new[]{first with { DefinitionSha256=new string('b',64) }}); Assert.Single(tracker.Select(new[]{process}));
+	}
+
+	[Fact]
+	public void Retry_policy_is_bounded_and_ambiguous_failures_do_not_retry() {
+		var tracker=new CandidateTracker(new[]{Definition("alpha","Target.exe")},7); var process=new ProcessIdentity(3,3,"Target.exe",7); var now=DateTime.UtcNow;
+		for(var attempt=0;attempt<3;attempt++) { var work=Assert.Single(tracker.Select(new[]{process},now:now)); tracker.Complete(work,AttemptDisposition.Retryable,now); now=now.AddSeconds(5); }
+		Assert.Empty(tracker.Select(new[]{process},now:now));
+		Assert.Equal(AttemptDisposition.Retryable,WatchRunner.Classify(new IOException("temporary transport failure")));
+		Assert.Equal(AttemptDisposition.AmbiguousNoRetry,WatchRunner.Classify(new TimeoutException("unknown completion")));
+		Assert.Equal(AttemptDisposition.DeterministicRefusal,WatchRunner.Classify(new InvalidDataException("bad definition")));
+	}
+
+	[Fact]
+	public void Control_and_status_stores_round_trip() {
+		using var directory=new TemporaryDirectory(); var controlPath=System.IO.Path.Combine(directory.Path,"control.json"); var statusPath=System.IO.Path.Combine(directory.Path,"status.json"); var store=new WatchControlStore(controlPath);
+		var changed=store.Update(paused:true,disableProfile:"alpha"); Assert.True(changed.Paused); Assert.Contains("alpha",store.Read().DisabledProfiles);
+		var definition=Definition("alpha","Target.exe"); var status=new WatcherStatusStore(statusPath); status.Publish(changed,new StaticWatchCatalog(new[]{definition}).Current(),new WatchWork(definition,new ProcessIdentity(1,2,"Target.exe",7)),"installed",12,null);
+		var value=WatcherStatusStore.Read(statusPath)!.Value; Assert.True(value.GetProperty("paused").GetBoolean()); Assert.Equal("installed",Assert.Single(value.GetProperty("lastResults").EnumerateArray()).GetProperty("status").GetString());
+	}
+
+	[Fact]
 	public async Task Runner_bounds_parallelism_and_isolates_failure() {
 		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl"));
 		var definitions=new[]{Definition("alpha","Target.exe"),Definition("beta","Other.exe")}; var current=0; var maximum=0; var calls=new ConcurrentBag<string>();
@@ -107,10 +148,24 @@ public sealed class WatcherTests {
 	}
 
 	[Fact]
+	public async Task Telemetry_failure_cannot_turn_success_into_retryable_work() {
+		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl")); var statusPath=System.IO.Path.Combine(directory.Path,"status.json"); File.WriteAllText(statusPath,"{}"); using var locked=new FileStream(statusPath,FileMode.Open,FileAccess.Read,FileShare.None); var calls=0;
+		var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,25,1,audit,null,apply:work=>{ calls++; return Result("ok"); },statusStore:new WatcherStatusStore(statusPath)); var process=new ProcessIdentity(9,9,"Target.exe",1);
+		runner.Schedule(new[]{process}); await runner.DrainAsync(); runner.Schedule(new[]{process}); await runner.DrainAsync(); Assert.Equal(1,calls);
+	}
+
+	[Fact]
 	public void Audit_is_json_lines_and_sanitizes_messages() {
 		using var directory=new TemporaryDirectory(); var path=System.IO.Path.Combine(directory.Path,"audit.jsonl");
 		using(var audit=new AuditWriter(path)) audit.Write(new WatchWork(Definition("alpha","Target.exe"),new ProcessIdentity(5,6,"Target.exe",1)),new("error",new string('b',64),"probe","probe:alpha",7),9,"bad\r\nmessage");
 		using var document=JsonDocument.Parse(File.ReadAllText(path)); Assert.Equal("bad  message",document.RootElement.GetProperty("message").GetString()); Assert.Equal(new string('b',64),document.RootElement.GetProperty("definitionSha256").GetString()); Assert.Equal("probe",document.RootElement.GetProperty("probeInstanceId").GetString()); Assert.Equal("probe:alpha",document.RootElement.GetProperty("patchId").GetString()); Assert.Equal(7,document.RootElement.GetProperty("hooksVersion").GetInt64());
+	}
+
+	[Fact]
+	public void Audit_rotates_to_a_bounded_number_of_files() {
+		using var directory=new TemporaryDirectory(); var path=System.IO.Path.Combine(directory.Path,"audit.jsonl"); var work=new WatchWork(Definition("alpha","Target.exe"),new ProcessIdentity(5,6,"Target.exe",1));
+		using(var audit=new AuditWriter(path,200,2)) for(var index=0;index<8;index++) audit.Write(work,Result("ok"),index,new string('x',40));
+		Assert.True(File.Exists(path)); Assert.True(File.Exists(path+".1")); Assert.True(File.Exists(path+".2")); Assert.False(File.Exists(path+".3"));
 	}
 
 	[Fact]

@@ -11,14 +11,16 @@ internal static class Program {
 		if(arguments.Length==2&&arguments[0]=="validate-package") return ValidatePackage(arguments[1]);
 		if(CommandOptions.TryParseApply(arguments,out var apply)) return ApplyPackage(apply);
 		if(CommandOptions.TryParseStatus(arguments,out var status)) return ShowStatus(status);
-		if(arguments.Length>0&&arguments[0] is "apply" or "status" or "validate-package") { WriteJson(new { status="error",code="invalid_arguments",message="Command arguments are invalid." }); return CommandExitCodes.InvalidArguments; }
-		if(!WatchOptions.TryParse(arguments,out var options)) { Console.Error.WriteLine("Usage: HookLab.Watcher.exe validate-package <directory> | apply --package <directory> --pid <pid> [--payload-dir <directory>] | status [--pid <pid>] | run (--profiles <directory> | --definitions <directory>) [--poll-ms <25-5000>] [--max-parallel <1-32>] [--payload-dir <directory>] [--audit <jsonl>]"); return 2; }
+		if(ControlOptions.TryParse(arguments,out var control)) return UpdateControl(control);
+		if(arguments.Length>0&&arguments[0] is "apply" or "status" or "validate-package" or "pause" or "resume" or "disable-profile" or "enable-profile") { WriteJson(new { status="error",code="invalid_arguments",message="Command arguments are invalid." }); return CommandExitCodes.InvalidArguments; }
+		if(!WatchOptions.TryParse(arguments,out var options)) { Console.Error.WriteLine("Usage: HookLab.Watcher.exe validate-package <directory> | apply --package <directory> --pid <pid> [--payload-dir <directory>] | status [--pid <pid>] | pause | resume | disable-profile <id> | enable-profile <id> | run (--profiles <directory> | --definitions <directory>) [--poll-ms <25-5000>] [--max-parallel <1-32>] [--payload-dir <directory>] [--audit <jsonl>]"); return 2; }
 		try {
-			var definitions=options.ProfilesDirectory is null?DefinitionCatalog.Load(options.DefinitionsDirectory!):ProfileCatalog.Load(options.ProfilesDirectory);
+			IWatchCatalog catalog=options.ProfilesDirectory is null?new StaticWatchCatalog(DefinitionCatalog.Load(options.DefinitionsDirectory!)):new ReloadingProfileCatalog(options.ProfilesDirectory);
+			var definitions=catalog.Current().Definitions; var controlStore=new WatchControlStore(); var statusStore=new WatcherStatusStore();
 			using var current=Process.GetCurrentProcess(); using var audit=new AuditWriter(options.AuditPath!); using var cancellation=new CancellationTokenSource();
 			Console.CancelKeyPress+=(sender,eventArguments)=>{ eventArguments.Cancel=true; cancellation.Cancel(); };
 			Console.WriteLine("HookLab watcher loaded "+definitions.Count+" definition(s) for session "+current.SessionId+".");
-			await new WatchRunner(definitions,current.SessionId,options.PollMilliseconds,options.MaximumParallel,audit,options.PayloadDirectory).RunAsync(cancellation.Token);
+			await new WatchRunner(catalog,current.SessionId,options.PollMilliseconds,options.MaximumParallel,audit,options.PayloadDirectory,control:controlStore,statusStore:statusStore).RunAsync(cancellation.Token);
 			return 0;
 		}
 		catch(Exception ex) { Console.Error.WriteLine("HookLab watcher failed: "+ex.Message); return 1; }
@@ -31,10 +33,15 @@ internal static class Program {
 		}
 		catch(Exception ex) { return WriteFailure(ex); }
 	}
-	static int ShowStatus(CommandOptions options) { try { var result=new ResidentCoordinator(null).Status(options.ProcessId); WriteJson(new { status="ok",residents=result }); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
+	static int ShowStatus(CommandOptions options) { try { var result=new ResidentCoordinator(null).Status(options.ProcessId); WriteJson(new { status="ok",watcher=WatcherStatusStore.Read(),residents=result }); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
+	static int UpdateControl(ControlOptions options) { try { var store=new WatchControlStore(); var value=store.Update(options.Paused,options.EnableProfile,options.DisableProfile); WriteJson(new { status="ok",paused=value.Paused,disabledProfiles=value.DisabledProfiles.OrderBy(id=>id,StringComparer.Ordinal) }); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
 	static int WriteFailure(Exception ex) { var failure=CommandFailure.Classify(ex); WriteJson(new { status="error",code=failure.Code,message=Sanitize(ex.Message) }); return failure.ExitCode; }
 	static void WriteJson(object value)=>Console.WriteLine(JsonSerializer.Serialize(value,JsonOptions));
 	static string Sanitize(string value)=>value.Replace('\r',' ').Replace('\n',' ');
+}
+
+internal sealed record ControlOptions(bool? Paused,string? EnableProfile,string? DisableProfile) {
+	public static bool TryParse(string[] values,out ControlOptions result) { result=new(null,null,null); if(values.Length==1&&values[0] is "pause" or "resume") { result=new(values[0]=="pause",null,null); return true; } if(values.Length==2&&values[0] is "enable-profile" or "disable-profile"&&!String.IsNullOrWhiteSpace(values[1])) { result=new(null,values[0]=="enable-profile"?values[1]:null,values[0]=="disable-profile"?values[1]:null); return true; } return false; }
 }
 
 internal static class CommandExitCodes { public const int Success=0,InvalidArguments=2,InvalidInput=3,NotFound=4,AccessDenied=5,TargetExited=6,Conflict=7,Timeout=8,OperationFailed=9; }

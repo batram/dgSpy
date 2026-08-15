@@ -66,6 +66,16 @@ public sealed class PackageTests {
 	}
 
 	[Fact]
+	public void Reloading_catalog_swaps_only_complete_valid_generations() {
+		using var directory=new TemporaryDirectory(); var source=Path.Combine(RepoRoot(),"tools","HookLab.Watcher","deployments","vmconnect-fullscreen"); CopyTree(source,directory.Path);
+		var catalog=new ReloadingProfileCatalog(directory.Path); var original=catalog.Current(); Assert.Single(original.Definitions);
+		var sourceProfile=Assert.Single(Directory.GetFiles(source,"*.json",SearchOption.TopDirectoryOnly)); var profilePath=Path.Combine(directory.Path,Path.GetFileName(sourceProfile)); File.WriteAllText(profilePath,"{",new UTF8Encoding(false)); Thread.Sleep(550);
+		var invalid=catalog.Current(); Assert.Equal(original.Generation,invalid.Generation); Assert.Single(invalid.Definitions); Assert.NotNull(invalid.Error);
+		File.Copy(sourceProfile,profilePath,true); Thread.Sleep(550);
+		var recovered=catalog.Current(); Assert.Single(recovered.Definitions); Assert.Null(recovered.Error);
+	}
+
+	[Fact]
 	public void Profile_rejects_package_traversal_and_relative_executable_policy() {
 		using var directory=new TemporaryDirectory();
 		WriteProfile(directory.Path,new WatchProfile { SchemaVersion=1,Id="escape",Enabled=true,Scope="user",PackagePath="../package",PackageId="sample",PackageDigest=new string('0',64),PermittedExecutablePaths=new(){Path.Combine(directory.Path,"Target.exe")},NotificationPolicy="errors",ClrReadinessTimeoutMs=5000,InitializationTimeoutMs=10000 });
@@ -85,6 +95,7 @@ public sealed class PackageTests {
 	static void WriteManifest(string path,PackageManifest manifest)=>File.WriteAllText(path,JsonSerializer.Serialize(manifest,JsonOptions()),new UTF8Encoding(false));
 	static JsonSerializerOptions JsonOptions()=>new() { PropertyNamingPolicy=JsonNamingPolicy.CamelCase };
 	static string Sha256(string path) { using var stream=File.OpenRead(path); using var sha=SHA256.Create(); return Convert.ToHexString(sha.ComputeHash(stream)).ToLowerInvariant(); }
+	static void CopyTree(string source,string destination) { foreach(var directory in Directory.EnumerateDirectories(source,"*",SearchOption.AllDirectories)) Directory.CreateDirectory(Path.Combine(destination,Path.GetRelativePath(source,directory))); foreach(var file in Directory.EnumerateFiles(source,"*",SearchOption.AllDirectories)) { var target=Path.Combine(destination,Path.GetRelativePath(source,file)); Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file,target); } }
 	static string RepoRoot() { var current=new DirectoryInfo(AppContext.BaseDirectory); while(current is not null&&!File.Exists(Path.Combine(current.FullName,"dnSpy.sln"))) current=current.Parent; return current?.FullName??throw new DirectoryNotFoundException(); }
 	sealed class TemporaryDirectory : IDisposable { public string Path { get; }=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"hooklab-package-tests-"+Guid.NewGuid().ToString("N")); public TemporaryDirectory()=>Directory.CreateDirectory(Path); public void Dispose()=>Directory.Delete(Path,true); }
 }
