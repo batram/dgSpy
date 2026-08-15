@@ -1,10 +1,13 @@
 using System.Text.Json;
-using HookLab.ApplyOnce;
+using HookLab.Injector;
 using Xunit;
 
 namespace HookLab.ApplyOnce.Tests;
 
 public sealed class HookDefinitionTests {
+	[Fact]
+	public void ApplyOnce_layout_contains_the_authoritative_injector()=>Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory,"HookLab.Injector.dll")));
+
 	[Fact]
 	public void Hook_source_accepts_normal_source_file_line_breaks() { var definition=Valid(); definition.Hook!.Source="public static class H{\r\npublic static bool Prefix(){return true;}\r\n}"; definition.Validate(); }
 

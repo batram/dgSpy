@@ -1,18 +1,18 @@
 using System.Diagnostics;
 using System.Globalization;
 
-namespace HookLab.Watcher;
+namespace HookLab.Injector;
 
-internal sealed class ResidentPayloadStore {
+public sealed class ResidentPayloadStore {
 	readonly string root;
 	public ResidentPayloadStore(string? stateRoot=null) {
 		var state=HookLab.Host.Transport.Discovery.DgSpyStateRoot.Resolve(stateRoot);
 		root=Path.Combine(state,"hooklab","resident-payloads");
 		Directory.CreateDirectory(root); RejectReparse(root);
 	}
-	public string Create(ProcessIdentity process) {
+	public string Create(int processId,long creationUtcTicks) {
 		CleanupExited();
-		var name=process.ProcessId.ToString(CultureInfo.InvariantCulture)+"-"+process.CreationUtcTicks.ToString(CultureInfo.InvariantCulture)+"-"+Guid.NewGuid().ToString("N");
+		var name=processId.ToString(CultureInfo.InvariantCulture)+"-"+creationUtcTicks.ToString(CultureInfo.InvariantCulture)+"-"+Guid.NewGuid().ToString("N");
 		var path=SafeChild(name); Directory.CreateDirectory(path); RejectReparse(path); return path;
 	}
 	public void Delete(string path) { var exact=Path.GetFullPath(path); EnsureChild(exact); if(Directory.Exists(exact)) Directory.Delete(exact,true); }

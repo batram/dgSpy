@@ -2,9 +2,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace HookLab.ApplyOnce;
+namespace HookLab.Injector;
 
-internal sealed class HookDefinition {
+public sealed class HookDefinition {
 	static readonly JsonSerializerOptions JsonOptions=new() { PropertyNamingPolicy=JsonNamingPolicy.CamelCase,PropertyNameCaseInsensitive=false,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow };
 
 	public int SchemaVersion { get; set; }
@@ -24,7 +24,7 @@ internal sealed class HookDefinition {
 		return value;
 	}
 
-	internal void Validate() {
+	public void Validate() {
 		if(SchemaVersion!=1) throw new InvalidDataException("schemaVersion must be 1.");
 		Id=Required(Id,"id",128);
 		if(Process is null) throw new InvalidDataException("process is required.");
@@ -59,8 +59,8 @@ internal sealed class HookDefinition {
 	}
 }
 
-internal sealed class ProcessDefinition { public string? FileName { get; set; } }
-internal sealed class TargetDefinition {
+public sealed class ProcessDefinition { public string? FileName { get; set; } }
+public sealed class TargetDefinition {
 	public string? Assembly { get; set; }
 	public string? ModuleMvid { get; set; }
 	public string? DeclaringType { get; set; }
@@ -69,7 +69,7 @@ internal sealed class TargetDefinition {
 	public string? Signature { get; set; }
 	public string? IlSha256 { get; set; }
 }
-internal sealed class PatchDefinition {
+public sealed class PatchDefinition {
 	public string? Kind { get; set; }
 	public int Revision { get; set; }
 	public string? Source { get; set; }

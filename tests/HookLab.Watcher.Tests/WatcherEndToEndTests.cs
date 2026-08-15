@@ -3,7 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Security.Cryptography;
-using HookLab.ApplyOnce;
+using HookLab.Injector;
 using Xunit;
 
 namespace HookLab.Watcher.Tests;
@@ -14,16 +14,17 @@ public sealed class WatcherEndToEndTests {
 		using var target=TargetRun.Start(); using var directory=new TemporaryDirectory(); var stateRoot=Path.Combine(directory.Path,"state"); var auditPath=Path.Combine(directory.Path,"audit.jsonl");
 		Write(directory.Path,"alpha.json",target.Definition("shared-alpha","Alpha",111,1,true)); Write(directory.Path,"beta.json",target.Definition("shared-beta","Beta",222,1,true));
 		var identity=ProcessDiscovery.Snapshot(new[]{"HookLab.ApplyOnceTarget.exe"}).Single(value=>value.ProcessId==target.ProcessId); var definitions=DefinitionCatalog.Load(directory.Path);
-		using(var audit=new AuditWriter(auditPath)) { var coordinator=new ResidentCoordinator(null,stateRoot); var runner=new WatchRunner(definitions,Process.GetCurrentProcess().SessionId,25,2,audit,null,apply:coordinator.Apply); runner.Schedule(new[]{identity}); await runner.DrainAsync().WaitAsync(TimeSpan.FromSeconds(12)); }
+		using(var audit=new AuditWriter(auditPath)) { var coordinator=new ResidentCoordinator(null,stateRoot); var runner=new WatchRunner(definitions,Process.GetCurrentProcess().SessionId,25,2,audit,null,apply:work=>WatchRunner.Map(coordinator.Apply(WatchRunner.Request(work)))); runner.Schedule(new[]{identity}); await runner.DrainAsync().WaitAsync(TimeSpan.FromSeconds(12)); }
+		var residentStatus=Assert.Single(new ResidentCoordinator(null,stateRoot).Status(target.ProcessId)); Assert.Equal(target.ProcessId,residentStatus.ProcessId); Assert.Equal(2,residentStatus.Hooks.Count);
 		var coordinator2=new ResidentCoordinator(null,stateRoot);
-		Assert.Equal("updated",coordinator2.Apply(Work(directory.Path,target.Definition("shared-alpha","Alpha",311,2,true),identity)).Status);
-		Assert.Equal("disabled",coordinator2.Apply(Work(directory.Path,target.Definition("shared-beta","Beta",222,1,false),identity)).Status);
-		Assert.Equal("enabled",coordinator2.Apply(Work(directory.Path,target.Definition("shared-beta","Beta",222,1,true),identity)).Status);
-		Assert.Contains("different source",Assert.Throws<InvalidOperationException>(()=>coordinator2.Apply(Work(directory.Path,target.Definition("shared-alpha","Alpha",999,2,true),identity))).Message,StringComparison.Ordinal);
+		Assert.Equal("updated",Apply(coordinator2,Work(directory.Path,target.Definition("shared-alpha","Alpha",311,2,true),identity)).Status);
+		Assert.Equal("disabled",Apply(coordinator2,Work(directory.Path,target.Definition("shared-beta","Beta",222,1,false),identity)).Status);
+		Assert.Equal("enabled",Apply(coordinator2,Work(directory.Path,target.Definition("shared-beta","Beta",222,1,true),identity)).Status);
+		Assert.Contains("different source",Assert.Throws<InvalidOperationException>(()=>Apply(coordinator2,Work(directory.Path,target.Definition("shared-alpha","Alpha",999,2,true),identity))).Message,StringComparison.Ordinal);
 		var invalid=target.Definition("shared-alpha","Alpha",311,3,true); invalid.Hook!.Source="public static class H { this is not C# }";
-		Assert.Throws<InvalidOperationException>(()=>coordinator2.Apply(Work(directory.Path,invalid,identity)));
-		Assert.Equal("adopted",coordinator2.Apply(Work(directory.Path,target.Definition("shared-alpha","Alpha",311,2,true),identity)).Status);
-		Assert.Contains("different exact target",Assert.Throws<InvalidOperationException>(()=>coordinator2.Apply(Work(directory.Path,target.Definition("shared-alpha","Beta",333,3,true),identity))).Message,StringComparison.Ordinal);
+		Assert.Throws<InvalidOperationException>(()=>Apply(coordinator2,Work(directory.Path,invalid,identity)));
+		Assert.Equal("adopted",Apply(coordinator2,Work(directory.Path,target.Definition("shared-alpha","Alpha",311,2,true),identity)).Status);
+		Assert.Contains("different exact target",Assert.Throws<InvalidOperationException>(()=>Apply(coordinator2,Work(directory.Path,target.Definition("shared-alpha","Beta",333,3,true),identity))).Message,StringComparison.Ordinal);
 		var behavior=target.ReleaseAndRead(); Assert.Equal("311",behavior["alpha"]); Assert.Equal("222",behavior["beta"]);
 	}
 
@@ -37,11 +38,12 @@ public sealed class WatcherEndToEndTests {
 		var definitions=DefinitionCatalog.Load(directory.Path); var auditPath=Path.Combine(directory.Path,"audit.jsonl");
 		var stateRoot=Path.Combine(directory.Path,"state"); var identity=ProcessDiscovery.Snapshot(new[]{"HookLab.ApplyOnceTarget.exe"}).Single(value=>value.ProcessId==target.ProcessId);
 		using(var audit=new AuditWriter(auditPath)) {
-			var firstCoordinator=new ResidentCoordinator(null,stateRoot); var first=new WatchRunner(definitions,Process.GetCurrentProcess().SessionId,25,2,audit,null,apply:firstCoordinator.Apply);
+			var firstCoordinator=new ResidentCoordinator(null,stateRoot); var first=new WatchRunner(definitions,Process.GetCurrentProcess().SessionId,25,2,audit,null,apply:work=>WatchRunner.Map(firstCoordinator.Apply(WatchRunner.Request(work))));
 			first.Schedule(new[]{identity}); await first.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
-			var restartedCoordinator=new ResidentCoordinator(null,stateRoot); var restarted=new WatchRunner(definitions,Process.GetCurrentProcess().SessionId,25,2,audit,null,apply:restartedCoordinator.Apply);
+			var restartedCoordinator=new ResidentCoordinator(null,stateRoot); var restarted=new WatchRunner(definitions,Process.GetCurrentProcess().SessionId,25,2,audit,null,apply:work=>WatchRunner.Map(restartedCoordinator.Apply(WatchRunner.Request(work))));
 			restarted.Schedule(new[]{identity}); await restarted.DrainAsync().WaitAsync(TimeSpan.FromSeconds(5));
 		}
+		var residentStatus=Assert.Single(new ResidentCoordinator(null,stateRoot).Status(target.ProcessId)); Assert.Equal(target.ProcessId,residentStatus.ProcessId); Assert.Single(residentStatus.Hooks);
 		var residentDirectory=Assert.Single(Directory.EnumerateDirectories(Path.Combine(stateRoot,"hooklab","resident-payloads"))); Assert.True(File.Exists(Path.Combine(residentDirectory,"HookLab.NativeBootstrap.x64.dll"))); Assert.True(File.Exists(Path.Combine(residentDirectory,"HookLab.Bootstrap.dll")));
 		var behavior=target.ReleaseAndRead();
 		Assert.Equal(expectedAlpha,behavior["alpha"]); Assert.Equal(expectedBeta,behavior["beta"]);
@@ -67,6 +69,7 @@ public sealed class WatcherEndToEndTests {
 		public void Dispose() { try { if(!process.HasExited) process.Kill(); process.Dispose(); } catch { } try { Directory.Delete(directory,true); } catch { } }
 	}
 	static WatchWork Work(string directory,HookDefinition definition,ProcessIdentity identity) { var path=Path.Combine(directory,"current-"+Guid.NewGuid().ToString("N")+".json"); Write(directory,Path.GetFileName(path),definition); using var sha=SHA256.Create(); var digest=Convert.ToHexString(sha.ComputeHash(File.ReadAllBytes(path))).ToLowerInvariant(); return new(new WatchDefinition(path,definition,digest),identity); }
+	static InjectorResult Apply(ResidentCoordinator coordinator,WatchWork work)=>coordinator.Apply(WatchRunner.Request(work));
 	static void Write(string directory,string name,HookDefinition definition)=>File.WriteAllText(Path.Combine(directory,name),JsonSerializer.Serialize(definition,new JsonSerializerOptions { PropertyNamingPolicy=JsonNamingPolicy.CamelCase }),new UTF8Encoding(false));
 
 	static string ReadWhenReady(string path,Process process,TimeSpan timeout) { var watch=Stopwatch.StartNew(); while(watch.Elapsed<timeout) { if(File.Exists(path)) try { var text=File.ReadAllText(path); if(text.Length!=0) return text; } catch(IOException) { } if(process.HasExited&&!File.Exists(path)) throw new InvalidOperationException("Target exited before writing "+path); Thread.Sleep(10); } throw new TimeoutException("Timed out reading "+path); }

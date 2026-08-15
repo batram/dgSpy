@@ -1,18 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PlatformTarget>x64</PlatformTarget>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>HookLab.ApplyOnce</AssemblyName>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>HookLab.Injector</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\HookLab\HookLab.Injector\HookLab.Injector.csproj" />
+    <ProjectReference Include="..\HookLab.Contracts\HookLab.Contracts.csproj" />
+    <ProjectReference Include="..\HookLab.Host.Transport\HookLab.Host.Transport.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="HookLab.ApplyOnce.Tests" />
+    <InternalsVisibleTo Include="HookLab.Watcher.Tests" />
   </ItemGroup>
 </Project>

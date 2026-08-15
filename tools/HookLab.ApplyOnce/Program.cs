@@ -1,3 +1,5 @@
+using HookLab.Injector;
+
 namespace HookLab.ApplyOnce;
 
 internal static class Program {

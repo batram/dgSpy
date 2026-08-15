@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using HookLab.ApplyOnce;
+using HookLab.Injector;
 using Xunit;
 
 namespace HookLab.Watcher.Tests;

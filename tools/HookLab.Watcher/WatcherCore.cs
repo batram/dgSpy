@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Security.Cryptography;
-using HookLab.ApplyOnce;
+using HookLab.Injector;
 
 namespace HookLab.Watcher;
 
@@ -10,6 +10,7 @@ internal sealed record WatchDefinition(string Path,HookDefinition Value,string D
 internal readonly record struct ProcessIdentity(int ProcessId,long CreationUtcTicks,string FileName,int SessionId,string? ImagePath=null);
 internal readonly record struct WatchKey(string DefinitionId,int ProcessId,long CreationUtcTicks);
 internal readonly record struct WatchWork(WatchDefinition Definition,ProcessIdentity Process);
+internal sealed record WatchApplyResult(string Status,string DefinitionSha256,string? ProbeInstanceId,string? PatchId,long? HooksVersion);
 
 internal static class DefinitionCatalog {
 	public static IReadOnlyList<WatchDefinition> Load(string directory) {
@@ -80,7 +81,9 @@ internal sealed class WatchRunner {
 	readonly Func<IReadOnlyList<ProcessIdentity>> snapshot;
 	readonly Func<WatchWork,WatchApplyResult> apply;
 	readonly ConcurrentDictionary<WatchKey,Task> running=new();
-	public WatchRunner(IReadOnlyList<WatchDefinition> definitions,int sessionId,int pollMilliseconds,int maximumParallel,AuditWriter audit,string? payloadDirectory,Func<IReadOnlyList<ProcessIdentity>>? snapshot=null,Func<WatchWork,WatchApplyResult>? apply=null) { this.definitions=definitions; tracker=new CandidateTracker(definitions,sessionId); this.pollMilliseconds=pollMilliseconds; parallel=new SemaphoreSlim(maximumParallel); this.audit=audit; this.payloadDirectory=payloadDirectory; var names=definitions.Select(value=>value.Value.Process!.FileName!).ToArray(); this.snapshot=snapshot??(()=>ProcessDiscovery.Snapshot(names)); var coordinator=new ResidentCoordinator(payloadDirectory); this.apply=apply??coordinator.Apply; }
+	public WatchRunner(IReadOnlyList<WatchDefinition> definitions,int sessionId,int pollMilliseconds,int maximumParallel,AuditWriter audit,string? payloadDirectory,Func<IReadOnlyList<ProcessIdentity>>? snapshot=null,Func<WatchWork,WatchApplyResult>? apply=null) { this.definitions=definitions; tracker=new CandidateTracker(definitions,sessionId); this.pollMilliseconds=pollMilliseconds; parallel=new SemaphoreSlim(maximumParallel); this.audit=audit; this.payloadDirectory=payloadDirectory; var names=definitions.Select(value=>value.Value.Process!.FileName!).ToArray(); this.snapshot=snapshot??(()=>ProcessDiscovery.Snapshot(names)); var coordinator=new ResidentCoordinator(payloadDirectory); this.apply=apply??(work=>Map(coordinator.Apply(Request(work)))); }
+	internal static InjectorRequest Request(WatchWork work)=>new(work.Process.ProcessId,work.Process.CreationUtcTicks,work.Definition.Path,work.Definition.DefinitionSha256,work.Definition.Value,work.Definition.PermittedExecutablePaths is { Count:>0 }?work.Process.ImagePath:null);
+	internal static WatchApplyResult Map(InjectorResult result)=>new(result.Status,result.DefinitionSha256,result.ProbeInstanceId,result.PatchId,result.HooksVersion);
 	public async Task RunAsync(CancellationToken cancellation) {
 		while(!cancellation.IsCancellationRequested) {
 			Schedule(snapshot());

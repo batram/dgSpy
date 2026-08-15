@@ -5,11 +5,11 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace HookLab.ApplyOnce;
+namespace HookLab.Injector;
 
-internal static class OneShotInjector {
+public static class OneShotInjector {
 	public static string Apply(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory)=>ApplyCore(processId,definition,definitionPath,payloadDirectory,"none",null).Result;
-	internal static ResidentInjection ApplyResident(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,byte[] endpointSecret,string residentStagingDirectory) {
+	public static ResidentInjection ApplyResident(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,byte[] endpointSecret,string residentStagingDirectory) {
 		if(endpointSecret is null||endpointSecret.Length!=32) throw new ArgumentException("The resident endpoint secret must be exactly 32 bytes.",nameof(endpointSecret));
 		if(String.IsNullOrWhiteSpace(residentStagingDirectory)) throw new ArgumentException("A resident staging directory is required.",nameof(residentStagingDirectory));
 		var outcome=ApplyCore(processId,definition,definitionPath,payloadDirectory,"pipe",endpointSecret,residentStagingDirectory);
@@ -51,7 +51,7 @@ internal static class OneShotInjector {
 		}
 	}
 
-	internal static string Parameters(string imagePath,int processId,long creationTicks,string completion,HookDefinition definition,string endpoint="none",byte[]? endpointSecret=null) {
+	public static string Parameters(string imagePath,int processId,long creationTicks,string completion,HookDefinition definition,string endpoint="none",byte[]? endpointSecret=null) {
 		var target=definition.Target!; var hook=definition.Hook!;
 		var source=Convert.ToBase64String(Encoding.UTF8.GetBytes(hook.Source!));
 		var values=new[] {
@@ -64,14 +64,14 @@ internal static class OneShotInjector {
 		return String.Join("\n",endpointSecret is null?values:values.Concat(new[]{Pair("endpoint_secret_base64",Convert.ToBase64String(endpointSecret))}))+"\n";
 	}
 
-	internal static void WriteResult(int processId,string result) { try { File.WriteAllText(ResultPath(processId),result,new UTF8Encoding(false)); } catch { } }
-	internal static string ResultPath(int processId)=>Path.Combine(Path.GetTempPath(),"HookLab.ApplyOnce-"+processId.ToString(CultureInfo.InvariantCulture)+".result.txt");
+	public static void WriteResult(int processId,string result) { try { File.WriteAllText(ResultPath(processId),result,new UTF8Encoding(false)); } catch { } }
+	public static string ResultPath(int processId)=>Path.Combine(Path.GetTempPath(),"HookLab.ApplyOnce-"+processId.ToString(CultureInfo.InvariantCulture)+".result.txt");
 	static string Pair(string key,string value) { if(value.IndexOfAny(new[]{'\r','\n'})>=0) throw new InvalidOperationException("Bootstrap value contains a newline: "+key+"."); return key+"="+value; }
 	static string Sha256(string path) { using var sha=SHA256.Create(); return Convert.ToHexString(sha.ComputeHash(File.ReadAllBytes(path))).ToLowerInvariant(); }
 	static Dictionary<string,string> ParseReport(string text) { var result=new Dictionary<string,string>(StringComparer.Ordinal); foreach(var line in text.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries)) { var separator=line.IndexOf('='); if(separator>0) result[line[..separator]]=line[(separator+1)..]; } return result; }
 	static string Required(Dictionary<string,string> values,string key)=>values.TryGetValue(key,out var value)&&!String.IsNullOrWhiteSpace(value)?value:throw new InvalidOperationException("The target completion report omitted "+key+".");
 	static string WaitForCompletion(Process process,string path,TimeSpan timeout) { var watch=Stopwatch.StartNew(); while(watch.Elapsed<timeout) { if(process.HasExited) throw new InvalidOperationException("Target exited before HookLab initialization completed."); if(File.Exists(path)) return File.ReadAllText(path); Thread.Sleep(25); } throw new TimeoutException("HookLab did not publish its completion report within "+timeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)+" seconds. Staging was preserved; do not retry this PID blindly."); }
-	internal static bool HasExited(Process process) { try { return process.HasExited; } catch(InvalidOperationException) { return true; } }
+	public static bool HasExited(Process process) { try { return process.HasExited; } catch(InvalidOperationException) { return true; } }
 	static void TryDeleteDirectory(string path) { try { Directory.Delete(path,true); } catch { Console.Error.WriteLine("Warning: temporary bootstrap files remain at "+path); } }
 
 	static PayloadFiles FindPayload() {
@@ -92,8 +92,8 @@ internal static class OneShotInjector {
 	readonly record struct InjectionOutcome(string Result,string ImagePath,long CreationTicks,Dictionary<string,string> Report);
 }
 
-internal sealed record ResidentInjection(string Result,string ImagePath,long CreationTicks,string ProbeInstanceId,string PipeName,byte[] EndpointNonce,string PatchId,long HooksVersion);
-internal sealed class TargetExitedException : Exception { public TargetExitedException(string message,Exception innerException):base(message,innerException) { } }
+public sealed record ResidentInjection(string Result,string ImagePath,long CreationTicks,string ProbeInstanceId,string PipeName,byte[] EndpointNonce,string PatchId,long HooksVersion);
+public sealed class TargetExitedException : Exception { public TargetExitedException(string message,Exception innerException):base(message,innerException) { } }
 
 internal static class NativeLoader {
 	const uint ProcessAccess=0x0002|0x0008|0x0020|0x0400, CommitReserve=0x1000|0x2000;

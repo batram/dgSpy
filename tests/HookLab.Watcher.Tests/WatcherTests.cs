@@ -1,13 +1,31 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
-using HookLab.ApplyOnce;
+using HookLab.Injector;
 using Xunit;
 
 namespace HookLab.Watcher.Tests;
 
 public sealed class WatcherTests {
 	[Fact]
+	public void Package_apply_and_status_options_are_strict() {
+		Assert.True(CommandOptions.TryParseApply(new[]{"apply","--pid","42","--package","pkg"},out var apply)); Assert.Equal(42,apply.ProcessId); Assert.EndsWith("pkg",apply.PackagePath);
+		Assert.True(CommandOptions.TryParseStatus(new[]{"status"},out var all)); Assert.Null(all.ProcessId);
+		Assert.True(CommandOptions.TryParseStatus(new[]{"status","--pid","42"},out var one)); Assert.Equal(42,one.ProcessId);
+		Assert.False(CommandOptions.TryParseApply(new[]{"apply","--package","pkg"},out _)); Assert.False(CommandOptions.TryParseStatus(new[]{"status","--pid","0"},out _));
+	}
+
+	[Theory]
+	[InlineData(typeof(InvalidDataException),"invalid_input",CommandExitCodes.InvalidInput)]
+	[InlineData(typeof(UnauthorizedAccessException),"access_denied",CommandExitCodes.AccessDenied)]
+	[InlineData(typeof(TimeoutException),"timeout_known_state_required",CommandExitCodes.Timeout)]
+	public void Command_failures_have_stable_categories(Type exceptionType,string code,int exitCode) {
+		var exception=(Exception)Activator.CreateInstance(exceptionType,"test")!; var failure=CommandFailure.Classify(exception); Assert.Equal(code,failure.Code); Assert.Equal(exitCode,failure.ExitCode);
+	}
+
+	[Fact]
 	public void Watcher_layout_contains_the_DPAPI_runtime_dependency()=>Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory,"System.Security.Cryptography.ProtectedData.dll")));
+	[Fact]
+	public void Watcher_layout_contains_the_authoritative_injector()=>Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory,"HookLab.Injector.dll")));
 
 	[Fact]
 	public void Options_are_order_independent_and_bounded() {

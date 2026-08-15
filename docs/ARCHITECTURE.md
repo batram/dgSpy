@@ -86,6 +86,25 @@ revision. Frame-bound mutations also require the current `stop_id`. Thread and m
 advance `event_id` without invalidating lifecycle or execution commands. A Gateway restart intentionally recovers debugger sessions as unowned, and
 `claim_session` is the only recovery action. Ownership changes never change target state.
 
+## Standalone HookLab injection boundary
+
+`HookLab.Injector` is the package-neutral standalone boundary for x64 desktop CLR v4 targets. It owns
+validated hook definitions, exact live process identity, payload staging and lifetime, native bootstrap
+loading, completion parsing, protected resident discovery, authenticated status, and desired-state
+reconciliation. It has no dnSpy, debugger, Gateway, MCP, MEF, WPF, or decompiler dependency.
+
+`HookLab.ApplyOnce` is a compatibility executable over that boundary. `HookLab.Watcher` owns package and
+profile validation, process discovery, scheduling, audit, and command presentation; it does not own a
+second initializer. Its explicit `apply --package ... --pid ...` and `status [--pid ...]` commands return
+machine-readable JSON with stable exit categories. The dgSpy extension still uses its proven debugger-
+integrated adapter; adapting it to the shared standalone boundary is deliberately deferred until
+standalone parity and operational controls are complete.
+
+The injector re-reads PID, creation time, and full image path immediately before acting. A profile-backed
+watcher request also carries the image selected by the permitted-path filter, and the injector refuses a
+different live image. Discovery credentials and resident status remain owned by
+`HookLab.Host.Transport`; neither CLI invents a parallel credential format.
+
 ## Concurrency and lifetime invariants
 
 - Marshal dnSpy-owned state through `DbgManager.Dispatcher`; never perform socket I/O, response

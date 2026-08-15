@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using HookLab.Injector;
 using Xunit;
 
 namespace HookLab.ApplyOnce.Tests;
