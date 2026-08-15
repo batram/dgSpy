@@ -14,4 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\tools\HookLab.ApplyOnce\HookLab.ApplyOnce.csproj" />
   </ItemGroup>
+  <Target Name="BuildApplyOnceTarget" BeforeTargets="Build">
+    <MSBuild Projects="..\TestTargets\HookLab.ApplyOnceTarget\HookLab.ApplyOnceTarget.csproj" Targets="Build" Properties="Configuration=$(Configuration)" />
+  </Target>
 </Project>

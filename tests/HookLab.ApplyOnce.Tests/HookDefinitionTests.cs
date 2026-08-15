@@ -31,6 +31,75 @@ public sealed class HookDefinitionTests {
 		Assert.Contains("bootstrap value limit",Assert.Throws<InvalidDataException>(definition.Validate).Message,StringComparison.Ordinal);
 	}
 
+	[Theory]
+	[InlineData("schema")]
+	[InlineData("id")]
+	[InlineData("process")]
+	[InlineData("process_path")]
+	[InlineData("target")]
+	[InlineData("assembly")]
+	[InlineData("mvid")]
+	[InlineData("type")]
+	[InlineData("method")]
+	[InlineData("token")]
+	[InlineData("signature")]
+	[InlineData("sha")]
+	[InlineData("hook")]
+	[InlineData("kind")]
+	[InlineData("revision")]
+	[InlineData("source")]
+	[InlineData("event_limit")]
+	[InlineData("string_limit")]
+	public void Every_required_definition_contract_fails_closed(string contract) {
+		var definition=Valid();
+		switch(contract) {
+			case "schema": definition.SchemaVersion=2; break;
+			case "id": definition.Id=""; break;
+			case "process": definition.Process=null; break;
+			case "process_path": definition.Process!.FileName="folder\\Target.exe"; break;
+			case "target": definition.Target=null; break;
+			case "assembly": definition.Target!.Assembly=""; break;
+			case "mvid": definition.Target!.ModuleMvid="not-a-guid"; break;
+			case "type": definition.Target!.DeclaringType=""; break;
+			case "method": definition.Target!.Method=""; break;
+			case "token": definition.Target!.MetadataToken=0; break;
+			case "signature": definition.Target!.Signature=""; break;
+			case "sha": definition.Target!.IlSha256="abc"; break;
+			case "hook": definition.Hook=null; break;
+			case "kind": definition.Hook!.Kind="Around"; break;
+			case "revision": definition.Hook!.Revision=0; break;
+			case "source": definition.Hook!.Source=""; break;
+			case "event_limit": definition.Hook!.MaximumEventsPerSecond=0; break;
+			case "string_limit": definition.Hook!.MaximumStringLength=0; break;
+		}
+		Assert.Throws<InvalidDataException>(definition.Validate);
+	}
+
+	[Theory]
+	[InlineData("empty")]
+	[InlineData("incomplete")]
+	[InlineData("zero_pid")]
+	[InlineData("unknown")]
+	[InlineData("duplicate")]
+	public void Invalid_command_lines_are_rejected(string scenario) {
+		var values=scenario switch {
+			"empty"=>Array.Empty<string>(),
+			"incomplete"=>new[]{"--pid","1"},
+			"zero_pid"=>new[]{"--pid","0","--definition","x.json"},
+			"unknown"=>new[]{"--pid","1","--definition","x.json","--unknown","value"},
+			_=>new[]{"--pid","1","--pid","2"}
+		};
+		Assert.False(Arguments.TryParse(values,out _));
+	}
+
+	[Fact]
+	public void Command_line_order_is_not_positional() {
+		Assert.True(Arguments.TryParse(new[]{"--definition","hook.json","--pid","42","--payload-dir","payload"},out var parsed));
+		Assert.Equal(42,parsed.ProcessId);
+		Assert.Equal("hook.json",parsed.DefinitionPath);
+		Assert.Equal(Path.GetFullPath("payload"),parsed.PayloadDirectory);
+	}
+
 	static HookDefinition Valid()=>new() {
 		SchemaVersion=1,Id="test",Process=new ProcessDefinition { FileName="Target.exe" },
 		Target=new TargetDefinition { Assembly="Target",ModuleMvid=Guid.NewGuid().ToString("D"),DeclaringType="T",Method="M",MetadataToken=0x06000001,Signature="System.Void M()",IlSha256=new string('a',64) },
