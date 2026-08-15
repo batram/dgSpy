@@ -7,6 +7,9 @@ namespace HookLab.Watcher.Tests;
 
 public sealed class WatcherTests {
 	[Fact]
+	public void Watcher_layout_contains_the_DPAPI_runtime_dependency()=>Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory,"System.Security.Cryptography.ProtectedData.dll")));
+
+	[Fact]
 	public void Options_are_order_independent_and_bounded() {
 		Assert.True(WatchOptions.TryParse(new[]{"run","--max-parallel","7","--definitions","defs","--poll-ms","25","--audit","audit.jsonl"},out var value));
 		Assert.Equal(7,value.MaximumParallel); Assert.Equal(25,value.PollMilliseconds); Assert.EndsWith("defs",value.DefinitionsDirectory); Assert.EndsWith("audit.jsonl",value.AuditPath);
@@ -60,7 +63,7 @@ public sealed class WatcherTests {
 	public async Task Runner_bounds_parallelism_and_isolates_failure() {
 		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl"));
 		var definitions=new[]{Definition("alpha","Target.exe"),Definition("beta","Other.exe")}; var current=0; var maximum=0; var calls=new ConcurrentBag<string>();
-		string? Apply(WatchWork work) { var now=Interlocked.Increment(ref current); maximum=Math.Max(maximum,now); calls.Add(work.Definition.Value.Id!); Thread.Sleep(40); Interlocked.Decrement(ref current); if(work.Process.ProcessId==2) throw new InvalidOperationException("contained failure"); return "ok"; }
+		string Apply(WatchWork work) { var now=Interlocked.Increment(ref current); maximum=Math.Max(maximum,now); calls.Add(work.Definition.Value.Id!); Thread.Sleep(40); Interlocked.Decrement(ref current); if(work.Process.ProcessId==2) throw new InvalidOperationException("contained failure"); return "ok"; }
 		var runner=new WatchRunner(definitions,1,25,2,audit,null,apply:Apply);
 		runner.Schedule(new[]{new ProcessIdentity(1,1,"Target.exe",1),new ProcessIdentity(2,2,"Other.exe",1),new ProcessIdentity(3,3,"Target.exe",1)});
 		await runner.DrainAsync();
@@ -90,6 +93,13 @@ public sealed class WatcherTests {
 		using var directory=new TemporaryDirectory(); var path=System.IO.Path.Combine(directory.Path,"audit.jsonl");
 		using(var audit=new AuditWriter(path)) audit.Write(new WatchWork(Definition("alpha","Target.exe"),new ProcessIdentity(5,6,"Target.exe",1)),"error",9,"bad\r\nmessage");
 		using var document=JsonDocument.Parse(File.ReadAllText(path)); Assert.Equal("bad  message",document.RootElement.GetProperty("message").GetString());
+	}
+
+	[Fact]
+	public async Task Target_exit_is_a_non_error_terminal_disposition() {
+		using var directory=new TemporaryDirectory(); var path=System.IO.Path.Combine(directory.Path,"audit.jsonl");
+		using(var audit=new AuditWriter(path)) { var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,25,1,audit,null,apply:work=>"target_exited"); runner.Schedule(new[]{new ProcessIdentity(44,55,"Target.exe",1)}); await runner.DrainAsync(); }
+		using var document=JsonDocument.Parse(File.ReadAllText(path)); Assert.Equal("target_exited",document.RootElement.GetProperty("status").GetString()); Assert.Equal(JsonValueKind.Null,document.RootElement.GetProperty("message").ValueKind);
 	}
 
 	static WatchDefinition Definition(string id,string fileName)=>new(id+".json",Valid(id,fileName));

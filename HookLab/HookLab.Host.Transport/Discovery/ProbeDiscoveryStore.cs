@@ -66,6 +66,17 @@ namespace HookLab.Host.Transport.Discovery {
 		/// DPAPI-protected secret on disk indefinitely - strictly longer than the lifetime that was
 		/// supposed to bound it.</para></summary>
 		public IReadOnlyList<ProbeDiscoveryRecord> Discover(ILiveTargetIdentity liveTargets, DateTime nowUtc) {
+			return DiscoverCore(liveTargets, nowUtc, false);
+		}
+
+		/// <summary>Watcher-safe discovery. Integrity-invalid records are still quarantined, but the scan also
+		/// fails visibly so a caller cannot interpret a hidden corrupt record as proof that no resident exists
+		/// and authorize a second injection. Ordinary expired records for exited targets remain normal cleanup.</summary>
+		public IReadOnlyList<ProbeDiscoveryRecord> DiscoverStrict(ILiveTargetIdentity liveTargets, DateTime nowUtc) {
+			return DiscoverCore(liveTargets, nowUtc, true);
+		}
+
+		IReadOnlyList<ProbeDiscoveryRecord> DiscoverCore(ILiveTargetIdentity liveTargets, DateTime nowUtc, bool failOnQuarantine) {
 			if (liveTargets == null) throw new ArgumentNullException(nameof(liveTargets));
 			if (!Directory.Exists(directory)) return Array.Empty<ProbeDiscoveryRecord>();
 			RejectReparsePoint(directory); var result = new List<ProbeDiscoveryRecord>();
@@ -77,12 +88,13 @@ namespace HookLab.Host.Transport.Discovery {
 					if (!string.Equals(Path.GetFileName(path), FileName(record), StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Discovery record name does not match its identity.");
 					if (record.ProtocolVersion != HookLab.Probe.CorDebug.Transport.ProbeWireProtocol.ProtocolVersion) throw new InvalidDataException("Discovery protocol version is incompatible.");
 					if (!liveTargets.IsCurrent(record.Target)) {
+						if (liveTargets is ILiveTargetLiveness liveness && !liveness.IsAlive(record.Target)) { File.Delete(path); continue; }
 						if (record.ExpiresUtc <= nowUtc.ToUniversalTime()) { File.Delete(path); continue; }
 						throw new InvalidDataException("Discovery target identity is stale.");
 					}
 					result.Add(record);
 				}
-				catch (Exception ex) when (ex is InvalidDataException || ex is CryptographicException || ex is UnauthorizedAccessException || ex is IOException) { Quarantine(path); }
+				catch (Exception ex) when (ex is InvalidDataException || ex is CryptographicException || ex is UnauthorizedAccessException || ex is IOException) { Quarantine(path); if (failOnQuarantine) throw new InvalidDataException("A HookLab discovery record failed integrity validation and was quarantined; refusing an injection decision from an incomplete scan.", ex); }
 			}
 			return result.AsReadOnly();
 		}

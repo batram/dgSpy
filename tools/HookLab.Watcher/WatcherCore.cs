@@ -77,9 +77,9 @@ internal sealed class AuditWriter : IDisposable {
 internal sealed class WatchRunner {
 	readonly IReadOnlyList<WatchDefinition> definitions; readonly CandidateTracker tracker; readonly int pollMilliseconds; readonly SemaphoreSlim parallel; readonly AuditWriter audit; readonly string? payloadDirectory;
 	readonly Func<IReadOnlyList<ProcessIdentity>> snapshot;
-	readonly Func<WatchWork,string?> apply;
+	readonly Func<WatchWork,string> apply;
 	readonly ConcurrentDictionary<WatchKey,Task> running=new();
-	public WatchRunner(IReadOnlyList<WatchDefinition> definitions,int sessionId,int pollMilliseconds,int maximumParallel,AuditWriter audit,string? payloadDirectory,Func<IReadOnlyList<ProcessIdentity>>? snapshot=null,Func<WatchWork,string?>? apply=null) { this.definitions=definitions; tracker=new CandidateTracker(definitions,sessionId); this.pollMilliseconds=pollMilliseconds; parallel=new SemaphoreSlim(maximumParallel); this.audit=audit; this.payloadDirectory=payloadDirectory; var names=definitions.Select(value=>value.Value.Process!.FileName!).ToArray(); this.snapshot=snapshot??(()=>ProcessDiscovery.Snapshot(names)); this.apply=apply??(work=>OneShotInjector.Apply(work.Process.ProcessId,work.Definition.Value,work.Definition.Path,payloadDirectory)); }
+	public WatchRunner(IReadOnlyList<WatchDefinition> definitions,int sessionId,int pollMilliseconds,int maximumParallel,AuditWriter audit,string? payloadDirectory,Func<IReadOnlyList<ProcessIdentity>>? snapshot=null,Func<WatchWork,string>? apply=null) { this.definitions=definitions; tracker=new CandidateTracker(definitions,sessionId); this.pollMilliseconds=pollMilliseconds; parallel=new SemaphoreSlim(maximumParallel); this.audit=audit; this.payloadDirectory=payloadDirectory; var names=definitions.Select(value=>value.Value.Process!.FileName!).ToArray(); this.snapshot=snapshot??(()=>ProcessDiscovery.Snapshot(names)); var coordinator=new ResidentCoordinator(payloadDirectory); this.apply=apply??coordinator.Apply; }
 	public async Task RunAsync(CancellationToken cancellation) {
 		while(!cancellation.IsCancellationRequested) {
 			Schedule(snapshot());
@@ -97,7 +97,7 @@ internal sealed class WatchRunner {
 	internal async Task DrainAsync() { while(!running.IsEmpty) await Task.WhenAll(running.Values); }
 	async Task ApplyAsync(WatchWork work) {
 		await parallel.WaitAsync(); var watch=Stopwatch.StartNew();
-		try { await Task.Run(()=>apply(work)); audit.Write(work,"ok",watch.ElapsedMilliseconds,null); Console.WriteLine("HookLab watcher applied "+work.Definition.Value.Id+" to PID "+work.Process.ProcessId+" in "+watch.ElapsedMilliseconds+" ms."); }
+		try { var disposition=await Task.Run(()=>apply(work)); audit.Write(work,disposition,watch.ElapsedMilliseconds,null); Console.WriteLine("HookLab watcher "+disposition+" "+work.Definition.Value.Id+" for PID "+work.Process.ProcessId+" in "+watch.ElapsedMilliseconds+" ms."); }
 		catch(Exception ex) { audit.Write(work,"error",watch.ElapsedMilliseconds,ex.Message); Console.Error.WriteLine("HookLab watcher failed "+work.Definition.Value.Id+" for PID "+work.Process.ProcessId+": "+ex.Message); }
 		finally { parallel.Release(); }
 	}

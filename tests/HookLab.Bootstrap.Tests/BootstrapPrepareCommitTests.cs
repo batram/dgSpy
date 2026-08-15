@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Text.RegularExpressions;
 using System.Text;
@@ -37,6 +38,31 @@ namespace HookLab.Bootstrap.Tests {
 				}
 			}
 			finally { try { File.Delete(completion); File.Delete(completion + ".tmp"); } catch { } }
+		}
+
+		[Fact]
+		public void Host_supplied_pipe_secret_is_accepted_but_never_reported_outward() {
+			var completion = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".hooklab-completion");
+			try {
+				using (var runner = BootstrapRunner.Create("bootstrap-injected-pipe-secret")) {
+					var secret = Enumerable.Range(1, 32).Select(value => (byte)value).ToArray();
+					var prepared = Report.Parse(runner.Prepare(Parameters(runner, completion).With("endpoint", "pipe").With("endpoint_secret_base64", Convert.ToBase64String(secret)).ToString()));
+					Assert.Equal("ok", prepared["status"]); Assert.False(string.IsNullOrWhiteSpace(prepared["pipe_name"])); Assert.False(string.IsNullOrWhiteSpace(prepared["pipe_nonce_base64"]));
+					Assert.DoesNotContain(prepared.Keys, key => key.IndexOf("secret", StringComparison.OrdinalIgnoreCase) >= 0);
+				}
+			}
+			finally { try { File.Delete(completion); File.Delete(completion + ".tmp"); } catch { } }
+		}
+
+		[Theory]
+		[InlineData("none", "AQID")]
+		[InlineData("pipe", "not-base64")]
+		[InlineData("pipe", "AQID")]
+		public void Endpoint_secret_requires_pipe_and_exact_base64_secret(string endpoint, string secret) {
+			using (var runner = BootstrapRunner.Create("bootstrap-invalid-pipe-secret-" + endpoint + "-" + secret.Length)) {
+				var report = Report.Parse(runner.Prepare(Parameters(runner, Path.GetTempFileName()).With("endpoint", endpoint).With("endpoint_secret_base64", secret).ToString()));
+				Assert.Equal("error", report["status"]);
+			}
 		}
 
 		[Fact]

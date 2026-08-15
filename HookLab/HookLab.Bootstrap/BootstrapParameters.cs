@@ -17,7 +17,7 @@ namespace HookLab.Bootstrap {
 
 		static readonly string[] KnownKeys = {
 			"host_id", "image_path", "process_id", "process_creation_utc_ticks", "architecture", "runtime_id",
-			"appdomain_id", "event_capacity", "byte_capacity", "endpoint", "completion_path",
+			"appdomain_id", "event_capacity", "byte_capacity", "endpoint", "endpoint_secret_base64", "completion_path",
 			"hook_id", "hook_kind", "hook_assembly", "hook_type", "hook_method", "hook_module_mvid",
 			"hook_metadata_token", "hook_declaring_type", "hook_method_signature", "hook_il_sha256",
 			"hook_source_base64", "hook_revision", "maximum_events_per_second", "maximum_string_length",
@@ -40,6 +40,13 @@ namespace HookLab.Bootstrap {
 		internal string RuntimeId => Values["runtime_id"];
 		internal string AppDomainId => Values["appdomain_id"];
 		internal string Endpoint => Values["endpoint"];
+		internal byte[]? EndpointSecret {
+			get {
+				if (!Values.TryGetValue("endpoint_secret_base64", out var value)) return null;
+				try { var bytes = Convert.FromBase64String(value); if (bytes.Length != 32) throw new ArgumentException("endpoint_secret_base64 must decode to exactly 32 bytes."); return bytes; }
+				catch (FormatException ex) { throw new ArgumentException("endpoint_secret_base64 is not valid base64.", ex); }
+			}
+		}
 		internal string? CompletionPath => Values.TryGetValue("completion_path", out var value) ? value : null;
 		internal int EventCapacity => Optional("event_capacity", 1024);
 		internal long ByteCapacity => Values.TryGetValue("byte_capacity", out var value) ? long.Parse(value, CultureInfo.InvariantCulture) : 4L * 1024 * 1024;
@@ -76,6 +83,8 @@ namespace HookLab.Bootstrap {
 				throw new ArgumentException("endpoint must be exactly 'none' or 'pipe'.", nameof(text));
 			if (values["endpoint"] == "none" && !values.ContainsKey("completion_path"))
 				throw new ArgumentException("Missing required initialization key for endpoint=none: completion_path", nameof(text));
+			if (values.ContainsKey("endpoint_secret_base64") && values["endpoint"] != "pipe")
+				throw new ArgumentException("endpoint_secret_base64 requires endpoint=pipe.", nameof(text));
 			// All or nothing: a half-specified hook would otherwise silently install with a guard field
 			// defaulted, which is the one thing a guard must never do.
 			var present = 0;

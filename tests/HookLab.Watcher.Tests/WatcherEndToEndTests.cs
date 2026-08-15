@@ -16,18 +16,22 @@ public sealed class WatcherEndToEndTests {
 		var definition=target.Definition(method,replacement); var definitionPath=Path.Combine(directory.Path,"hook.json");
 		File.WriteAllText(definitionPath,JsonSerializer.Serialize(definition,new JsonSerializerOptions { PropertyNamingPolicy=JsonNamingPolicy.CamelCase }),new UTF8Encoding(false));
 		var definitions=DefinitionCatalog.Load(directory.Path); var auditPath=Path.Combine(directory.Path,"audit.jsonl");
+		var stateRoot=Path.Combine(directory.Path,"state"); var identity=ProcessDiscovery.Snapshot(new[]{"HookLab.ApplyOnceTarget.exe"}).Single(value=>value.ProcessId==target.ProcessId);
 		using(var audit=new AuditWriter(auditPath)) {
-			var runner=new WatchRunner(definitions,Process.GetCurrentProcess().SessionId,25,2,audit,null);
-			runner.Schedule(ProcessDiscovery.Snapshot(new[]{"HookLab.ApplyOnceTarget.exe"}));
-			await runner.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
+			var firstCoordinator=new ResidentCoordinator(null,stateRoot); var first=new WatchRunner(definitions,Process.GetCurrentProcess().SessionId,25,2,audit,null,apply:firstCoordinator.Apply);
+			first.Schedule(new[]{identity}); await first.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
+			var restartedCoordinator=new ResidentCoordinator(null,stateRoot); var restarted=new WatchRunner(definitions,Process.GetCurrentProcess().SessionId,25,2,audit,null,apply:restartedCoordinator.Apply);
+			restarted.Schedule(new[]{identity}); await restarted.DrainAsync().WaitAsync(TimeSpan.FromSeconds(5));
 		}
 		var behavior=target.ReleaseAndRead();
 		Assert.Equal(expectedAlpha,behavior["alpha"]); Assert.Equal(expectedBeta,behavior["beta"]);
-		using var auditDocument=JsonDocument.Parse(File.ReadAllText(auditPath)); Assert.Equal("ok",auditDocument.RootElement.GetProperty("status").GetString());
+		var auditText=File.ReadAllText(auditPath); var lines=auditText.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries); Assert.Equal(2,lines.Length);
+		using var installed=JsonDocument.Parse(lines[0]); using var adopted=JsonDocument.Parse(lines[1]); Assert.Equal("installed",installed.RootElement.GetProperty("status").GetString()); Assert.Equal("adopted",adopted.RootElement.GetProperty("status").GetString());
 	}
 
 	sealed class TargetRun : IDisposable {
 		readonly string directory; readonly string signalPath; readonly string resultPath; readonly Dictionary<string,string> facts; readonly Process process;
+		public int ProcessId=>process.Id;
 		TargetRun(string directory,string signalPath,string resultPath,Dictionary<string,string> facts,Process process) { this.directory=directory; this.signalPath=signalPath; this.resultPath=resultPath; this.facts=facts; this.process=process; }
 		public static TargetRun Start() {
 			var executable=Path.Combine(RepoRoot(),"tests","TestTargets","HookLab.ApplyOnceTarget","bin","Release","net48","HookLab.ApplyOnceTarget.exe"); var directory=Path.Combine(Path.GetTempPath(),"hooklab-watcher-e2e-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);

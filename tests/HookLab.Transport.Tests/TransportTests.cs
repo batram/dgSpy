@@ -75,6 +75,24 @@ public sealed class TransportTests {
 	}
 
 	[Fact]
+	public void StrictDiscoverySurfacesQuarantineInsteadOfReturningAnIncompleteDecisionSet() {
+		using var temporary = new TemporaryDirectory(); var store = new ProbeDiscoveryStore(temporary.Path); var process = Process.GetCurrentProcess();
+		var identity = new TargetIdentity("host", process.MainModule!.FileName, process.Id, process.StartTime.ToUniversalTime(), "x64", ".NET", "1");
+		var path = store.Write(new ProbeDiscoveryRecord(identity, "probe", "pipe", ProbeAuthentication.CreateNonce(), ProbeAuthentication.CreateSecret(), 1, DateTime.UtcNow.AddMinutes(1)));
+		File.Copy(path, Path.Combine(store.DirectoryPath, "replay.probe"));
+		Assert.Contains("incomplete scan", Assert.Throws<InvalidDataException>(() => store.DiscoverStrict(new ExactIdentity(identity), DateTime.UtcNow)).Message, StringComparison.Ordinal);
+		Assert.Single(store.DiscoverStrict(new ExactIdentity(identity), DateTime.UtcNow));
+	}
+
+	[Fact]
+	public void StrictDiscoveryDeletesAValidRecordWhenItsExactProcessIdentityIsGone() {
+		using var temporary = new TemporaryDirectory(); var store = new ProbeDiscoveryStore(temporary.Path); var process = Process.GetCurrentProcess();
+		var identity = new TargetIdentity("host", process.MainModule!.FileName, process.Id, process.StartTime.ToUniversalTime(), "x64", ".NET", "1");
+		var path = store.Write(new ProbeDiscoveryRecord(identity, "probe", "pipe", ProbeAuthentication.CreateNonce(), ProbeAuthentication.CreateSecret(), 1, DateTime.UtcNow.AddMinutes(5)));
+		Assert.Empty(store.DiscoverStrict(new GoneIdentity(), DateTime.UtcNow)); Assert.False(File.Exists(path));
+	}
+
+	[Fact]
 	public void AStaleTargetIdentityIsQuarantinedWhateverTheRefreshDeadlineSays() {
 		using var temporary = new TemporaryDirectory(); var process = Process.GetCurrentProcess(); var identity = new TargetIdentity("host", process.MainModule!.FileName, process.Id, process.StartTime.ToUniversalTime(), "x64", ".NET", "1");
 		var store = new ProbeDiscoveryStore(temporary.Path); store.Write(new ProbeDiscoveryRecord(identity, "probe", "pipe", ProbeAuthentication.CreateNonce(), ProbeAuthentication.CreateSecret(), 1, DateTime.UtcNow.AddMinutes(1)));
@@ -301,6 +319,7 @@ public sealed class TransportTests {
 	static string RepositoryRoot() { var directory = new DirectoryInfo(AppContext.BaseDirectory); while (directory != null && !File.Exists(Path.Combine(directory.FullName, "dnSpy.sln"))) directory = directory.Parent; return directory?.FullName ?? throw new InvalidOperationException(); }
 	sealed class ExactIdentity : ILiveTargetIdentity { readonly TargetIdentity expected; public ExactIdentity(TargetIdentity expected) { this.expected = expected; } public bool IsCurrent(TargetIdentity value) => value.ProcessId == expected.ProcessId && value.ProcessCreationTimeUtc == expected.ProcessCreationTimeUtc && string.Equals(value.ImagePath, expected.ImagePath, StringComparison.OrdinalIgnoreCase); }
 	sealed class NeverCurrent : ILiveTargetIdentity { public bool IsCurrent(TargetIdentity identity) => false; }
+	sealed class GoneIdentity : ILiveTargetIdentity, ILiveTargetLiveness { public bool IsCurrent(TargetIdentity identity) => false; public bool IsAlive(TargetIdentity identity) => false; }
 	sealed class AlwaysCurrent : ILiveTargetIdentity { public bool IsCurrent(TargetIdentity identity) => true; }
 	sealed class TemporaryDirectory : IDisposable { public TemporaryDirectory() { Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "hooklab-transport-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(Path); } public string Path { get; } public void Dispose() { try { Directory.Delete(Path, true); } catch { } } }
 	static ProbeMessage Request(string operation, string payload, long? version) => new ProbeMessage(1, ProbeMessageKind.Request, Guid.NewGuid().ToString("N"), operation, payload, version);

@@ -25,4 +25,11 @@ namespace HookLab.Host.Transport.Discovery {
 	public interface ILiveTargetIdentity {
 		bool IsCurrent(TargetIdentity identity);
 	}
+
+	/// <summary>Optional stronger classification used by strict reconciliation. False means the exact PID
+	/// plus creation-time identity no longer exists, so its otherwise valid record is ordinary lifecycle
+	/// garbage. True with <see cref="ILiveTargetIdentity.IsCurrent"/> false is a live identity conflict.</summary>
+	public interface ILiveTargetLiveness {
+		bool IsAlive(TargetIdentity identity);
+	}
 }

@@ -313,23 +313,24 @@ namespace HookLab.Bootstrap {
 			ProbeRuntime? probe = null;
 			try {
 				if (parameters.Endpoint == "pipe") {
-					pipe = new ProbePipeServer(HandleCommand, authenticationEnabled: false);
+					var endpointSecret = parameters.EndpointSecret;
+					pipe = new ProbePipeServer(HandleCommand, injectedSecret: endpointSecret, authenticationEnabled: endpointSecret != null);
 					PipeConstructionCountForTest++;
 				}
 				// The public HookLab service uses explicit bounded drain commands. Do not also register the pipe
 				// as a push consumer here: that would remove events from the authoritative buffer before the
 				// caller's cursor read. The older one-shot Start path retains its push behavior above.
 				probe = ProbeInitializer.Initialize(new ProbeInitialization(expected, provider, null, parameters.EventCapacity, parameters.ByteCapacity));
-				var endpoint = pipe?.TakeInitialEndpoint();
+				var endpoint = pipe == null || pipe.SecretWasInjected ? null : pipe.TakeInitialEndpoint();
 				lock (Gate) {
 					runtime = probe; server = pipe;
-					preparedPipeName = endpoint?.PipeName ?? "";
-					preparedEndpointNonceBase64 = endpoint == null ? "" : Convert.ToBase64String(endpoint.EndpointNonce);
+					preparedPipeName = pipe?.PipeName ?? "";
+					preparedEndpointNonceBase64 = pipe == null ? "" : Convert.ToBase64String(pipe.EndpointNonce);
 				}
 				var outcome = Outcome(probe, provider.GetCurrentIdentity());
-				outcome.PipeName = endpoint?.PipeName ?? "";
+				outcome.PipeName = pipe?.PipeName ?? "";
 				outcome.SecretBase64 = endpoint == null ? "" : Convert.ToBase64String(endpoint.Secret);
-				outcome.EndpointNonceBase64 = endpoint == null ? "" : Convert.ToBase64String(endpoint.EndpointNonce);
+				outcome.EndpointNonceBase64 = pipe == null ? "" : Convert.ToBase64String(pipe.EndpointNonce);
 				return outcome;
 			}
 			catch {

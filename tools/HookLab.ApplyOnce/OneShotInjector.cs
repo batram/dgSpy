@@ -8,7 +8,13 @@ using System.Text;
 namespace HookLab.ApplyOnce;
 
 internal static class OneShotInjector {
-	public static string Apply(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory) {
+	public static string Apply(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory)=>ApplyCore(processId,definition,definitionPath,payloadDirectory,"none",null).Result;
+	internal static ResidentInjection ApplyResident(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,byte[] endpointSecret) {
+		if(endpointSecret is null||endpointSecret.Length!=32) throw new ArgumentException("The resident endpoint secret must be exactly 32 bytes.",nameof(endpointSecret));
+		var outcome=ApplyCore(processId,definition,definitionPath,payloadDirectory,"pipe",endpointSecret);
+		return new ResidentInjection(outcome.Result,outcome.ImagePath,outcome.CreationTicks,Required(outcome.Report,"probe_instance_id"),Required(outcome.Report,"pipe_name"),Convert.FromBase64String(Required(outcome.Report,"pipe_nonce_base64")),Required(outcome.Report,"patch_id"),Int64.Parse(Required(outcome.Report,"hooks_version"),CultureInfo.InvariantCulture));
+	}
+	static InjectionOutcome ApplyCore(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,string endpoint,byte[]? endpointSecret) {
 		using var process=Process.GetProcessById(processId);
 		string imagePath; long creationTicks;
 		try { imagePath=process.MainModule?.FileName ?? throw new InvalidOperationException("The target image path is unavailable."); creationTicks=process.StartTime.ToUniversalTime().Ticks; }
@@ -19,12 +25,12 @@ internal static class OneShotInjector {
 		var staging=Path.Combine(Path.GetTempPath(),"hooklab-apply-once-"+processId.ToString(CultureInfo.InvariantCulture)+"-"+Guid.NewGuid().ToString("N"));
 		Directory.CreateDirectory(staging);
 		var completion=Path.Combine(staging,"completion.txt");
-		var completed=false;
+		var completed=false; var targetExited=false;
 		try {
 			var nativePath=Path.Combine(staging,"HookLab.NativeBootstrap.x64.dll");
 			File.Copy(payload.Native,nativePath,false);
 			File.Copy(payload.Managed,Path.Combine(staging,"HookLab.Bootstrap.dll"),false);
-			File.WriteAllText(Path.Combine(staging,"initialize.params"),Parameters(imagePath,processId,creationTicks,completion,definition),new UTF8Encoding(false));
+			File.WriteAllText(Path.Combine(staging,"initialize.params"),Parameters(imagePath,processId,creationTicks,completion,definition,endpoint,endpointSecret),new UTF8Encoding(false));
 			NativeLoader.Load(processId,nativePath);
 			var wait=Stopwatch.StartNew();
 			var report=WaitForCompletion(process,completion,TimeSpan.FromSeconds(5));
@@ -34,25 +40,26 @@ internal static class OneShotInjector {
 			if(!values.TryGetValue("patch_id",out var patchId)||String.IsNullOrWhiteSpace(patchId)) throw new InvalidOperationException("The target reported success without a patch_id.");
 			var result="status=ok\nprocess_id="+processId.ToString(CultureInfo.InvariantCulture)+"\nprocess_creation_utc_ticks="+creationTicks.ToString(CultureInfo.InvariantCulture)+"\ndefinition_id="+definition.Id+"\ndefinition_path="+definitionPath+"\ndefinition_sha256="+Sha256(definitionPath)+"\npatch_id="+patchId+"\nhooks_version="+(values.TryGetValue("hooks_version",out var version)?version:"unknown")+"\nlauncher_wait_ms="+wait.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)+"\nworker_queue_ms="+(values.TryGetValue("worker_queue_ms",out var queue)?queue:"missing")+"\nbehavior_elapsed_ms="+(values.TryGetValue("behavior_elapsed_ms",out var elapsed)?elapsed:"missing")+"\n";
 			WriteResult(processId,result);
-			return result;
+			return new InjectionOutcome(result,imagePath,creationTicks,values);
 		}
+		catch(Exception ex) when(HasExited(process)) { targetExited=true; throw new TargetExitedException("Target exited during HookLab initialization.",ex); }
 		finally {
-			if(completed) TryDeleteDirectory(staging);
+			if(completed||targetExited) TryDeleteDirectory(staging);
 			else Console.Error.WriteLine("Preserved ambiguous HookLab staging directory: "+staging);
 		}
 	}
 
-	internal static string Parameters(string imagePath,int processId,long creationTicks,string completion,HookDefinition definition) {
+	internal static string Parameters(string imagePath,int processId,long creationTicks,string completion,HookDefinition definition,string endpoint="none",byte[]? endpointSecret=null) {
 		var target=definition.Target!; var hook=definition.Hook!;
 		var source=Convert.ToBase64String(Encoding.UTF8.GetBytes(hook.Source!));
 		var values=new[] {
 			Pair("host_id","apply-once"),Pair("image_path",imagePath),Pair("process_id",processId.ToString(CultureInfo.InvariantCulture)),Pair("process_creation_utc_ticks",creationTicks.ToString(CultureInfo.InvariantCulture)),
-			Pair("architecture","x64"),Pair("runtime_id","v4.0.30319"),Pair("appdomain_id","1"),Pair("endpoint","none"),Pair("completion_path",completion),Pair("hook_id",definition.Id!),
+			Pair("architecture","x64"),Pair("runtime_id","v4.0.30319"),Pair("appdomain_id","1"),Pair("endpoint",endpoint),Pair("completion_path",completion),Pair("hook_id",definition.Id!),
 			Pair("hook_kind",hook.Kind!),Pair("hook_assembly",target.Assembly!),Pair("hook_type",target.DeclaringType!),Pair("hook_method",target.Method!),Pair("hook_module_mvid",target.ModuleMvid!),
 			Pair("hook_metadata_token",target.MetadataToken.ToString(CultureInfo.InvariantCulture)),Pair("hook_declaring_type",target.DeclaringType!),Pair("hook_method_signature",target.Signature!),Pair("hook_il_sha256",target.IlSha256!),
 			Pair("hook_source_base64",source),Pair("hook_revision",hook.Revision.ToString(CultureInfo.InvariantCulture)),Pair("maximum_events_per_second",hook.MaximumEventsPerSecond.ToString(CultureInfo.InvariantCulture)),Pair("maximum_string_length",hook.MaximumStringLength.ToString(CultureInfo.InvariantCulture))
 		};
-		return String.Join("\n",values)+"\n";
+		return String.Join("\n",endpointSecret is null?values:values.Concat(new[]{Pair("endpoint_secret_base64",Convert.ToBase64String(endpointSecret))}))+"\n";
 	}
 
 	internal static void WriteResult(int processId,string result) { try { File.WriteAllText(ResultPath(processId),result,new UTF8Encoding(false)); } catch { } }
@@ -60,7 +67,9 @@ internal static class OneShotInjector {
 	static string Pair(string key,string value) { if(value.IndexOfAny(new[]{'\r','\n'})>=0) throw new InvalidOperationException("Bootstrap value contains a newline: "+key+"."); return key+"="+value; }
 	static string Sha256(string path) { using var sha=SHA256.Create(); return Convert.ToHexString(sha.ComputeHash(File.ReadAllBytes(path))).ToLowerInvariant(); }
 	static Dictionary<string,string> ParseReport(string text) { var result=new Dictionary<string,string>(StringComparer.Ordinal); foreach(var line in text.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries)) { var separator=line.IndexOf('='); if(separator>0) result[line[..separator]]=line[(separator+1)..]; } return result; }
+	static string Required(Dictionary<string,string> values,string key)=>values.TryGetValue(key,out var value)&&!String.IsNullOrWhiteSpace(value)?value:throw new InvalidOperationException("The target completion report omitted "+key+".");
 	static string WaitForCompletion(Process process,string path,TimeSpan timeout) { var watch=Stopwatch.StartNew(); while(watch.Elapsed<timeout) { if(process.HasExited) throw new InvalidOperationException("Target exited before HookLab initialization completed."); if(File.Exists(path)) return File.ReadAllText(path); Thread.Sleep(25); } throw new TimeoutException("HookLab did not publish its completion report within "+timeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)+" seconds. Staging was preserved; do not retry this PID blindly."); }
+	internal static bool HasExited(Process process) { try { return process.HasExited; } catch(InvalidOperationException) { return true; } }
 	static void TryDeleteDirectory(string path) { try { Directory.Delete(path,true); } catch { Console.Error.WriteLine("Warning: temporary bootstrap files remain at "+path); } }
 
 	static PayloadFiles FindPayload() {
@@ -78,7 +87,11 @@ internal static class OneShotInjector {
 	[DllImport("kernel32.dll",SetLastError=true,EntryPoint="OpenProcess")] static extern IntPtr OpenProcessForArchitecture(uint access,bool inheritHandle,int processId);
 	[DllImport("kernel32.dll",SetLastError=true,EntryPoint="CloseHandle")] static extern bool CloseArchitectureHandle(IntPtr handle);
 	readonly record struct PayloadFiles(string Native,string Managed) { public static PayloadFiles InDirectory(string directory)=>new(RequireFile(directory,"HookLab.NativeBootstrap.x64.dll"),RequireFile(directory,"HookLab.Bootstrap.dll")); public static PayloadFiles? TryInDirectory(string directory) { var native=Path.Combine(directory,"HookLab.NativeBootstrap.x64.dll"); var managed=Path.Combine(directory,"HookLab.Bootstrap.dll"); return File.Exists(native)&&File.Exists(managed)?new PayloadFiles(Path.GetFullPath(native),Path.GetFullPath(managed)):null; } }
+	readonly record struct InjectionOutcome(string Result,string ImagePath,long CreationTicks,Dictionary<string,string> Report);
 }
+
+internal sealed record ResidentInjection(string Result,string ImagePath,long CreationTicks,string ProbeInstanceId,string PipeName,byte[] EndpointNonce,string PatchId,long HooksVersion);
+internal sealed class TargetExitedException : Exception { public TargetExitedException(string message,Exception innerException):base(message,innerException) { } }
 
 internal static class NativeLoader {
 	const uint ProcessAccess=0x0002|0x0008|0x0020|0x0400, CommitReserve=0x1000|0x2000;

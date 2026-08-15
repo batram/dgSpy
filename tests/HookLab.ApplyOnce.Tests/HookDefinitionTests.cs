@@ -100,6 +100,12 @@ public sealed class HookDefinitionTests {
 		Assert.Equal(Path.GetFullPath("payload"),parsed.PayloadDirectory);
 	}
 
+	[Fact]
+	public void Exited_process_is_classified_as_gone_for_native_failure_reconciliation() {
+		using var process=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe","/c exit 0") { UseShellExecute=false,CreateNoWindow=true })!;
+		Assert.True(process.WaitForExit(5000)); Assert.True(OneShotInjector.HasExited(process));
+	}
+
 	static HookDefinition Valid()=>new() {
 		SchemaVersion=1,Id="test",Process=new ProcessDefinition { FileName="Target.exe" },
 		Target=new TargetDefinition { Assembly="Target",ModuleMvid=Guid.NewGuid().ToString("D"),DeclaringType="T",Method="M",MetadataToken=0x06000001,Signature="System.Void M()",IlSha256=new string('a',64) },
