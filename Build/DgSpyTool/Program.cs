@@ -120,8 +120,22 @@ internal static class DgSpyBuildTool {
 
 	static void BuildNative(string repo) {
 		var candidates=new[]{@"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe",@"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe",@"C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe"};
-		var msbuild=candidates.FirstOrDefault(File.Exists) ?? throw new InvalidOperationException("MSBuild with the Visual C++ x64 toolchain was not found.");
+		var msbuild=FindMSBuildWithVcx64() ?? candidates.FirstOrDefault(File.Exists) ?? throw new InvalidOperationException("MSBuild with the Visual C++ x64 toolchain was not found.");
 		Run(repo,msbuild,Path.Combine(repo,"HookLab","HookLab.NativeBootstrap","HookLab.NativeBootstrap.vcxproj"),"/nologo","/m:1","/p:Configuration=Release","/p:Platform=x64","/v:minimal","/clp:ErrorsOnly");
+	}
+
+	static string? FindMSBuildWithVcx64() {
+		// Editions and versions move around (CI runners ship Enterprise, VS 2026 lives under "18"),
+		// so ask vswhere for any install that actually has the VC++ x64 toolchain.
+		var vswhere=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),"Microsoft Visual Studio","Installer","vswhere.exe");
+		if(!File.Exists(vswhere)) return null;
+		var info=new ProcessStartInfo(vswhere){RedirectStandardOutput=true,UseShellExecute=false};
+		foreach(var argument in new[]{"-latest","-products","*","-requires","Microsoft.VisualStudio.Component.VC.Tools.x86.x64","-find",@"MSBuild\**\Bin\amd64\MSBuild.exe"}) info.ArgumentList.Add(argument);
+		using var process=Process.Start(info);
+		if(process is null) return null;
+		var first=process.StandardOutput.ReadLine();
+		process.WaitForExit();
+		return process.ExitCode==0 && File.Exists(first) ? first : null;
 	}
 
 	static void Run(string workingDirectory,string executable,params string[] arguments) {
