@@ -42,6 +42,21 @@ public sealed class McpActivityLogTests {
 	}
 
 	[Fact]
+	public void Keeps_full_exception_only_in_local_error_details() {
+		var log=new McpActivityLog();
+		var response=RpcResponse.Failure("req-1","internal_error","evaluate failed unexpectedly.");
+		response.Error!.DiagnosticId="rpc-req-1";
+		response.Error.LocalDiagnostic="System.Exception: private stack detail";
+
+		log.Record(Request("evaluate"),response,TimeSpan.Zero);
+
+		var entry=Assert.Single(log.Snapshot());
+		Assert.Contains("rpc-req-1",entry.ErrorDetails);
+		Assert.Contains("private stack detail",entry.ErrorDetails);
+		Assert.DoesNotContain("private stack detail",ProtocolJson.Serialize(response));
+	}
+
+	[Fact]
 	public void Drops_the_oldest_entries_once_capacity_is_reached() {
 		var log=new McpActivityLog(capacity:3);
 

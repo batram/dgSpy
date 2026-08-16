@@ -27,7 +27,7 @@ namespace dgSpy.Extension.ToolWindows {
 
 		public string ArgumentsText => entry.Arguments;
 		public string ResultText => entry.Failed
-			? entry.Status+": "+(entry.ErrorMessage ?? "")
+			? entry.ErrorDetails
 			: entry.Result;
 
 		/// <summary>Everything the filter box matches against.</summary>

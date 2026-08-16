@@ -16,6 +16,7 @@ namespace dgSpy.Extension.ToolWindows {
 		public string Status { get; set; }="ok";
 		public bool Failed { get; set; }
 		public string? ErrorMessage { get; set; }
+		public string ErrorDetails { get; set; }="";
 		public double DurationMs { get; set; }
 		public string Arguments { get; set; }="{}";
 		public string Result { get; set; }="";
@@ -85,6 +86,7 @@ namespace dgSpy.Extension.ToolWindows {
 				Failed=response.Error is not null,
 				Status=response.Error?.Code ?? "ok",
 				ErrorMessage=response.Error?.Message,
+				ErrorDetails=response.Error is null ? "" : Describe(response.Error)+(string.IsNullOrEmpty(response.Error.LocalDiagnostic) ? "" : Environment.NewLine+Environment.NewLine+response.Error.LocalDiagnostic),
 				Result=response.Error is not null ? "" : Describe(response.Result),
 			};
 			lock(sync) {

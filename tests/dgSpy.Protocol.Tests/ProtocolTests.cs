@@ -33,6 +33,29 @@ public class RpcContractTests {
 	}
 
 	[Fact]
+	public void Failure_optional_provenance_round_trips_without_local_diagnostic() {
+		var response=RpcResponse.Failure("r1","program_discovery_failed","failed");
+		response.Error!.Operation="list_programs"; response.Error.Stage="attach_provider"; response.Error.Provider="DotNet";
+		response.Error.ExceptionType="System.ComponentModel.Win32Exception"; response.Error.NativeErrorCode=998;
+		response.Error.HResult=unchecked((int)0x80004005); response.Error.Transient=true; response.Error.DiagnosticId="rpc-r1";
+		response.Error.LocalDiagnostic="private stack";
+		var json=ProtocolJson.Serialize(response);
+		var restored=ProtocolJson.Deserialize<RpcResponse>(json)!;
+		Assert.Equal("list_programs",restored.Error!.Operation);
+		Assert.Equal(998,restored.Error.NativeErrorCode);
+		Assert.Equal("rpc-r1",restored.Error.DiagnosticId);
+		Assert.Null(restored.Error.LocalDiagnostic);
+		Assert.DoesNotContain("private stack",json);
+	}
+
+	[Fact]
+	public void Legacy_failure_shape_still_deserializes() {
+		var restored=ProtocolJson.Deserialize<RpcResponse>("{\"version\":2,\"request_id\":\"r1\",\"error\":{\"code\":\"old\",\"message\":\"legacy\"}}")!;
+		Assert.Equal("old",restored.Error!.Code);
+		Assert.Null(restored.Error.Operation);
+	}
+
+	[Fact]
 	public void Success_omits_the_error_member_entirely() {
 		// An agent must be able to branch on the presence of "error" alone.
 		var wire = ProtocolJson.ParseObject(ProtocolJson.Serialize(RpcResponse.Success("r1", new Handshake())));

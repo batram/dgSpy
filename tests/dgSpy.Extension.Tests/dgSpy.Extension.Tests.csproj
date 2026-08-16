@@ -56,6 +56,7 @@
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\HookLab\HookLabTargetEligibility.cs" Link="Debugger\HookLab\HookLabTargetEligibility.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\ToolWindows\HookLabEditorState.cs" Link="ToolWindows\HookLabEditorState.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcException.cs" Link="Rpc\RpcException.cs" />
+	<Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcFailure.cs" Link="Rpc\RpcFailure.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Rpc\RpcSecurity.cs" Link="Rpc\RpcSecurity.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\SymbolSearchQuery.cs" Link="Decompiler\SymbolSearchQuery.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Decompiler\ModuleNameMatch.cs" Link="Decompiler\ModuleNameMatch.cs" />

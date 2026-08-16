@@ -48,8 +48,12 @@ Name matching has a second contract mismatch: the prefilter sees the executable 
    interprets as an unfiltered system scan.
 4. Each discovery starts a new cache generation immediately. An older concurrent call cannot publish
    over a newer result, and a failed refresh cannot leave old `program_id` entries valid.
-5. Structured provider error provenance is implemented in the following slice so a future operation
-   failure is not reduced to a misleading raw operating-system message.
+5. Provider failures use `program_discovery_failed` and preserve operation, stage, provider,
+   exception type, native error/HRESULT, transient classification, and a diagnostic ID. The full
+   exception remains only in the bounded local dgSpy MCP Activity entry; it is excluded from the wire.
+6. The Gateway passes typed provenance through MCP and recommends retrying `list_programs` by PID for
+   provider failures. Unknown failures use a sanitized message and diagnostic ID instead of exposing
+   the raw exception as the product diagnosis.
 
 ### Acceptance criteria
 

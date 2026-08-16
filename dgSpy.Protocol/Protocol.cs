@@ -40,7 +40,19 @@ namespace dgSpy.Protocol {
 		public static RpcResponse Success(string id, object value) => new RpcResponse { RequestId=id, Result=value };
 		public static RpcResponse Failure(string id, string code, string message) => new RpcResponse { RequestId=id, Error=new RpcError { Code=code, Message=message } };
 	}
-	public sealed class RpcError { [JsonPropertyName("code")] public string Code { get; set; }="internal_error"; [JsonPropertyName("message")] public string Message { get; set; }=""; }
+	public sealed class RpcError {
+		[JsonPropertyName("code")] public string Code { get; set; }="internal_error";
+		[JsonPropertyName("message")] public string Message { get; set; }="";
+		[JsonPropertyName("operation"),JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Operation { get; set; }
+		[JsonPropertyName("stage"),JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Stage { get; set; }
+		[JsonPropertyName("provider"),JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? Provider { get; set; }
+		[JsonPropertyName("exception_type"),JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? ExceptionType { get; set; }
+		[JsonPropertyName("native_error_code"),JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? NativeErrorCode { get; set; }
+		[JsonPropertyName("hresult"),JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public int? HResult { get; set; }
+		[JsonPropertyName("transient"),JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public bool? Transient { get; set; }
+		[JsonPropertyName("diagnostic_id"),JsonIgnore(Condition=JsonIgnoreCondition.WhenWritingNull)] public string? DiagnosticId { get; set; }
+		[JsonIgnore] public string? LocalDiagnostic { get; set; }
+	}
 	public sealed class Handshake {
 		[JsonPropertyName("protocol_version")] public int ProtocolVersion { get; set; }=Protocol.ProtocolVersion.Current;
 		[JsonPropertyName("extension_version")] public string ExtensionVersion { get; set; }="0.1.0";

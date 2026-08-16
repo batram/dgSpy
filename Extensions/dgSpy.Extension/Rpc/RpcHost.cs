@@ -394,7 +394,7 @@ namespace dgSpy.Extension {
 			case "analyze_symbol": return RpcResponse.Success(req.RequestId,await AnalyzeSymbolAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			default: return RpcResponse.Failure(req.RequestId,"unsupported","Unknown operation: "+req.Operation);
 			}
-		} catch (OperationCanceledException) { return RpcResponse.Failure(req.RequestId,"deadline_exceeded","The operation exceeded its deadline."); } catch (RpcException ex) { return RpcResponse.Failure(req.RequestId,ex.Code,ex.Message); } catch (Exception ex) { return RpcResponse.Failure(req.RequestId,"internal_error",ex.Message); } }
+		} catch (OperationCanceledException) { return RpcResponse.Failure(req.RequestId,"deadline_exceeded","The operation exceeded its deadline."); } catch (Exception ex) { return RpcFailure.FromException(req,ex); } }
 		// Unfiltered discovery probes every process on the machine. Passing process ids or names lets
 		// dnSpy skip the rest, which is the difference between seconds and milliseconds when the
 		// caller already knows what it is looking for.
@@ -416,7 +416,9 @@ namespace dgSpy.Extension {
 					return Array.Empty<ProgramInfo>();
 				}
 			}
-			var values=await programs.GetAttachableProcessesAsync(null,processIds,providerNames,cancellationToken).ConfigureAwait(false);
+			AttachableProcess[] values;
+			try { values=await programs.GetAttachableProcessesAsync(null,processIds,providerNames,cancellationToken).ConfigureAwait(false); }
+			catch (Exception ex) when (ex is not OperationCanceledException && ex is not RpcException) { throw new ProgramDiscoveryException(providerNames?.Length==1 ? providerNames[0] : null,ex); }
 			var entries=values.Select(p=>new KeyValuePair<string,AttachableProcess>(ProgramIdentity.Create(p.ProcessId,p.RuntimeGuid,p.RuntimeName),p)).ToArray();
 			if (!programCache.TryPublish(generation,entries)) throw new RpcException("discovery_superseded","A newer list_programs request replaced this discovery.");
 			return entries.Select(entry=>{
