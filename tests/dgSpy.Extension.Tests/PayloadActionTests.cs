@@ -134,7 +134,16 @@ public sealed class PayloadActionRequestTests {
 		Assert.Contains("maximum_string_length=128\n", bounded.Compose(42, "1"));
 		AssertInvalid(PrepareArgs("none", "x\ncode=evil"), "character");
 		AssertInvalid(PrepareArgs("none", @"C:\done", ("surprise", "value")), "unknown key");
-		AssertInvalid(PrepareArgs("none", @"C:\done", ("hook_id", new string('x', 1025))), "exceeds 1024");
+		Assert.Contains("hook_source_base64="+new string('x',2048)+"\n",PayloadActionRequest.Parse(PrepareArgs("none",@"C:\done",("hook_source_base64",new string('x',2048)))).Compose(42,"1"));
+		AssertInvalid(PrepareArgs("none", @"C:\done", ("hook_source_base64", new string('x', 2049))), "exceeds 2048");
+	}
+
+	[Fact]
+	public void Authenticated_endpoint_secret_is_forwarded_only_to_pipe_endpoints() {
+		const string secret="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+		var request=PayloadActionRequest.Parse(PrepareArgs("pipe",@"C:\done",("endpoint_secret_base64",secret)));
+		Assert.Contains("endpoint_secret_base64="+secret+"\n",request.Compose(42,"1"));
+		AssertInvalid(PrepareArgs("none",@"C:\done",("endpoint_secret_base64",secret)),"requires endpoint=pipe");
 	}
 
 	[Fact]
@@ -153,6 +162,7 @@ public sealed class PayloadActionRequestTests {
 		foreach (var key in PayloadActionRequest.KnownParameterKeys) Assert.Contains("\"" + key + "\"", source);
 		var knownBlock = source.Substring(source.IndexOf("KnownKeys", StringComparison.Ordinal), source.IndexOf("HookKeys", StringComparison.Ordinal) - source.IndexOf("KnownKeys", StringComparison.Ordinal));
 		Assert.Equal(PayloadActionRequest.KnownParameterKeys.Length, knownBlock.Count(c => c == '"') / 2);
+		Assert.Contains("MaximumValueLength = "+PayloadActionRequest.MaxParameterValueLength+";",source);
 	}
 
 	static JsonObject PrepareArgs(string endpoint, string? completion, params (string Key, string Value)[] extra) {
