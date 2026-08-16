@@ -22,7 +22,10 @@
              Targets="Restore" BuildInParallel="true"
 			 Properties="Configuration=$(Configuration);DgSpyHostContractsRoot=$(DgSpyHostContractsRoot)" />
   </Target>
-  <Target Name="Build" DependsOnTargets="Restore">
+  <!-- No DependsOnTargets="Restore": restore must run in its own evaluation pass (the /restore
+       switch), or projects evaluated before NuGet writes their assets keep the empty evaluation
+       and compile with no references at all (CS0518 on a fresh checkout). -->
+  <Target Name="Build">
     <MSBuild Projects="@(ComponentProject)" Targets="Build" BuildInParallel="true"
              Properties="Configuration=$(Configuration)" />
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\Extensions\dgSpy.Extension\dgSpy.Extension.csproj" Targets="Build"

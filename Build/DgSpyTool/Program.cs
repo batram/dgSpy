@@ -99,7 +99,7 @@ internal static class DgSpyBuildTool {
 	static void BuildComponents(Options options) {
 		var repo=Full(options.Required("repo")); var host=Full(options.Required("host")); var output=Full(options.Required("output"));
 		Require(host,"bin/dnSpy.Contracts.DnSpy.dll");
-		Run(repo,"dotnet","msbuild",Path.Combine(repo,"Build","DgSpy.Components.proj"),"/t:Build","/p:Configuration=Release","/p:DgSpyHostContractsRoot="+Path.Combine(host,"bin"),"/m","/nologo","/v:minimal","/clp:ErrorsOnly");
+		Run(repo,"dotnet","msbuild",Path.Combine(repo,"Build","DgSpy.Components.proj"),"/restore","/t:Build","/p:Configuration=Release","/p:DgSpyHostContractsRoot="+Path.Combine(host,"bin"),"/m","/nologo","/v:minimal","/clp:ErrorsOnly");
 		BuildNative(repo);
 		PublishDirectory(output,staging=>{
 			var content=Path.Combine(staging,"content"); var extension=Path.Combine(content,"extension"); var payload=Path.Combine(content,"payload"); var launcher=Path.Combine(content,"launcher");
