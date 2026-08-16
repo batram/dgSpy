@@ -405,7 +405,20 @@ Only after the standalone deployment path is stable:
 
 - export the selected live-verified hook and its exact guards as a package;
 - validate package compatibility before export;
-- optionally show installed watcher packages/profiles and their last sanitized result;
+- add an unelevated notification-area companion that starts at user logon independently of the elevated
+  watcher and reads the authenticated status/control boundary rather than hosting UI in the watcher;
+- make its icon and tooltip distinguish running, paused, degraded/error, stale, and stopped state from an
+  exact watcher process identity, without treating an old status file as live;
+- expose only real management operations: status summary, pause/resume, enabled-profile checkmarks and
+  enable/disable, start/restart of the installed task, and opening the bounded audit log;
+- make **Exit tray** close only the companion. Stopping the watcher is a separate explicit action and
+  still leaves target processes and resident hooks untouched;
+- honor each profile's notification policy for concise tray notifications; do not create success spam or
+  a second audit/status store;
+- show installed watcher packages/profiles and their last sanitized result in a fuller management window
+  reachable from the tray icon;
+- keep package editing, hook removal, and other unavailable mutations absent until authoritative backend
+  operations exist for them;
 - keep watcher enablement and automatic deployment an explicit user action.
 
 This phase is not required for the VMConnect prototype; the first package may be produced by a repository
