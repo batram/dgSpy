@@ -10,10 +10,10 @@ identity, develops and live-verifies hooks, and exports guarded packages. A smal
 the deployment environment. It discovers matching processes, initializes or adopts the resident HookLab
 runtime, reconciles the desired package, and reports the result.
 
-The first delivered use is the confirmed VMConnect fullscreen fix. It begins as a replacement Hyper-V
-Manager launcher so the standalone injection path can be proven with a narrow blast radius. The same
-executable and package format then become a per-user global watcher; the prototype must not embed
-VMConnect-specific behavior in its process or injection machinery.
+The first delivered use is the confirmed VMConnect fullscreen fix. Prove the standalone injection path
+against an explicitly selected live process first, then use the same executable and package format from
+the per-user global watcher. The watcher must not embed VMConnect-specific behavior in its process or
+injection machinery.
 
 ```text
 dgSpy / HookLab GUI                 HookLab.Watcher
@@ -71,8 +71,8 @@ implementation into a second product.
 - Do not treat filename-only matching as authority to inject.
 - Do not build a general arbitrary-code autoinjector. Only locally approved, integrity-checked HookLab
   packages with exact target guards are eligible.
-- Do not make global watching the first acceptance environment. Prove explicit-PID application and the
-  launcher-scoped VMConnect slice first.
+- Do not make global watching the first acceptance environment. Prove explicit-PID application against
+  VMConnect first.
 
 ## Target component graph
 
@@ -109,7 +109,6 @@ Add a small Windows executable under `HookLab/HookLab.Watcher`. It consumes `Hoo
 - profile loading and enablement;
 - process-start observation and startup reconciliation;
 - bounded concurrent work scheduling and PID/creation-time deduplication;
-- launcher lifetime;
 - per-profile and global pause controls;
 - user-facing status, failure notification, and a bounded local audit log.
 
@@ -156,9 +155,8 @@ HookLab payload-manifest verification are the model; do not invent a mutable sea
 A profile is local deployment policy and refers to a package by stable ID and digest. It controls:
 
 - enabled/disabled state;
-- `explicit`, `launcher`, or `user` scope;
+- `explicit` or `user` scope;
 - permitted normalized executable paths;
-- optional parent/launcher constraint for the prototype;
 - notification policy;
 - bounded CLR-readiness and initialization deadlines.
 
@@ -180,7 +178,6 @@ Use cheap host-side facts to identify candidates:
 - normalized full image path;
 - Windows session ID;
 - x64 architecture;
-- optional launcher/parent relationship in launcher mode.
 
 Filename is only a filter. Before obtaining injection rights, and again immediately before native load,
 verify PID plus creation time and full image path so PID reuse or a changed candidate cannot redirect the
@@ -232,7 +229,6 @@ Define a small, scriptable CLI before adding shell integration:
 HookLab.Watcher.exe validate-package <package>
 HookLab.Watcher.exe apply --package <package> --pid <pid>
 HookLab.Watcher.exe status [--pid <pid>]
-HookLab.Watcher.exe launch --profile <profile> -- <program> [arguments]
 HookLab.Watcher.exe run --profiles <directory>
 ```
 
@@ -245,22 +241,9 @@ transport loss, timeout-with-known-state, and success/no-op success.
 `apply --pid` performs one bounded adoption-or-initialization and reconciliation. It is the first
 standalone acceptance path and the diagnostic primitive used by later modes.
 
-### Launcher prototype
-
-`launch` starts the ordinary Hyper-V Manager command and observes candidate processes while that launcher
-scope remains active. The replacement shortcut points to the watcher with the VMConnect profile and:
-
-```text
-%windir%\System32\mmc.exe %windir%\System32\virtmgmt.msc
-```
-
-The launcher prototype may use parent/launch-time correlation to narrow candidates, but the package's
-normal path, runtime, module, and method guards remain required. Multiple simultaneous VMConnect
-processes are supported independently.
-
 ### Per-user global mode
 
-After launcher acceptance, `run` observes all enabled profiles in the current interactive user session.
+After explicit-PID acceptance, `run` observes all enabled profiles in the current interactive user session.
 Subscribe to process-start events, then reconcile already-running candidates so the subscription has no
 startup gap. Use PID plus creation time for deduplication. Bound parallel work so one process waiting for
 CLR initialization cannot block other profiles.
@@ -361,25 +344,21 @@ Acceptance against a disposable x64 CLR v4 fixture:
 - target exit during every major stage is clean;
 - dnSpy, dgSpy Gateway, and MCP are absent for the entire run.
 
-### Phase 3 - VMConnect package and launcher prototype
+### Phase 3 - VMConnect package and explicit live acceptance
 
 - export the confirmed fullscreen Prefix as the first immutable package;
-- add a launcher-scoped profile;
-- implement `launch` and the replacement Hyper-V Manager shortcut/install metadata;
-- observe and reconcile every matching VMConnect process opened from the launcher scope;
+- add the guarded VMConnect profile for later per-user observation;
+- apply and reconcile the package against explicitly selected live VMConnect processes;
 - show one concise notification and write an actionable log on failure.
 
 Acceptance on the normal desktop, with GUI launches following the repository's hidden-desktop policy
 except for an explicitly requested visible final demonstration:
 
-- normal Hyper-V Manager opens from the replacement shortcut;
-- the first and subsequent VMConnect processes receive the hook automatically;
+- an explicitly selected VMConnect process receives the hook without dnSpy, Gateway, or MCP;
 - two simultaneous VMConnect processes are handled independently;
 - fullscreen login resizes correctly without the manual fullscreen toggle;
 - already-running and very-short-lived candidates do not corrupt watcher state;
-- invalid guards after a simulated package/target mismatch fail closed and visibly;
-- closing Hyper-V Manager stops launcher-scoped observation without terminating VMConnect or removing its
-  installed hook.
+- invalid guards after a simulated package/target mismatch fail closed and visibly.
 
 ### Phase 4 - per-user global watcher
 
@@ -475,7 +454,6 @@ Keep implementation claims, fixture measurements, and live VMConnect acceptance 
 This plan is complete when all of the following are true:
 
 - a verified VMConnect package can be applied to an explicit PID without dnSpy, dgSpy Gateway, or MCP;
-- the same package works through the replacement Hyper-V Manager launcher;
 - the same unmodified `apply` pipeline works from the per-user global watcher;
 - watcher restart adopts an existing resident runtime without reinjection or target restart;
 - exact target guards and package integrity fail closed;
