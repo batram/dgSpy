@@ -63,6 +63,8 @@ Extensions/dnSpy.Debugger/dnSpy.Debugger/Breakpoints/Code/DbgCodeBreakpointsServ
 # Attach: dgSpy exposes attachable processes over MCP and needs stable identity.
 dnSpy/dnSpy.Contracts.Debugger/Attach/AttachableProcess.cs                stable process identity for list_programs
 Extensions/dnSpy.Debugger/dnSpy.Debugger/Attach/AttachableProcessImpl.cs  stable process identity for list_programs
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Attach/AttachableProcessesServiceImpl.cs isolate expected per-process inspection failures during name filtering
+Extensions/dnSpy.Debugger/dnSpy.Debugger/Attach/ProcessNameCandidate.cs  tested per-process exception boundary for attach name filtering
 
 # An upstream use-after-free, not a dgSpy regression: this file and both its
 # collaborators were byte-identical to dnSpyEx when the crash was diagnosed.

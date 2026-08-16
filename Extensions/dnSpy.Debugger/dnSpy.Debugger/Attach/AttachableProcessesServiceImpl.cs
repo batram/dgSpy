@@ -142,16 +142,8 @@ namespace dnSpy.Debugger.Attach {
 				if (!IsValidProcessId(process.Id))
 					return false;
 				if (processNameRegexes.Length != 0) {
-					try {
-						if (!IsValidProcessName(Path.GetFileName(process.MainModule?.FileName) ?? string.Empty))
-							return false;
-					}
-					catch (InvalidOperationException) {
+					if (!ProcessNameCandidate.TryReadExecutableName(() => Path.GetFileName(process.MainModule?.FileName),out var name) || !IsValidProcessName(name))
 						return false;
-					}
-					catch (ArgumentException) {
-						return false;
-					}
 				}
 				return true;
 			}
