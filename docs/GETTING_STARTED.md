@@ -81,7 +81,7 @@ when troubleshooting manually—run:
 - If the agent does not show dgSpy tools, restart it or reconnect MCP.
 - If installation reports an incomplete package, download the complete `dgspy-win-x64.zip` again.
 - To update, extract a newer release and rerun the same installer command.
-- If a repository install fails after its package was built, use the printed `-PackagePath` retry command;
+- If a repository install fails after its package was built, use the printed `install --package <path> --install <path>` retry command;
   it reuses the completed directory without rebuilding.
 
 ## Watching what the agent does

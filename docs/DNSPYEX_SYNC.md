@@ -3,8 +3,7 @@
 `batram/dgSpy` is a genuine GitHub fork of `dnSpyEx/dnSpy`, used both to track upstream and to
 contribute back. (It was created as `batram/dnSpy` and later renamed; the old URL still redirects.)
 
-- `master` mirrors dnSpyEx and must not contain dgSpy changes. It currently sits exactly on the
-  upstream tip.
+- `master` mirrors dnSpyEx and must not contain dgSpy changes.
 - `dgspy` carries the dgSpy work. Its upstream baseline is dnSpyEx `3f4caa4f`, recorded in
   `tools/upstream-baseline.txt`.
 - Fixes intended for dnSpyEx start from `upstream/master`, never from `dgspy`.

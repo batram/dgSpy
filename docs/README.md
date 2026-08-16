@@ -15,9 +15,18 @@
 
 ## Active feature plan
 
-- [HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md) - one direct GUI and MCP path for
-  guarded Harmony observation hooks. It replaces the earlier provider, atomic-action, and micro-task
-  plans.
+- [HookLab watcher implementation plan](HOOKLAB_WATCHER_IMPLEMENTATION_PLAN.md) — the active plan:
+  standalone watcher deployment of guarded hooks outside a debugger session. Current status is
+  tracked in the local docs overlay, not in this design document.
+- [HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md) — delivered scope: one direct GUI
+  and MCP path for guarded Harmony observation and custom hooks, plus a small deferred backlog
+  (generic-method templates, editor UX).
+
+## Completed proposals kept in place
+
+- [Search proposal](SEARCH_PROPOSAL.md) — implemented; retained as the standing rationale for the
+  ported dnSpy matching rules cited by the reference.
+- [CoreCLR follow-ups](DNSPY_CORECLR_TODOS.md) — parked; CoreCLR is outside the current dgSpy gate.
 
 ## Worked examples
 

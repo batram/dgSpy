@@ -12,7 +12,9 @@
 
 - .NET SDK 10.
 - .NET Framework 4.8 developer pack for CLR v4 fixtures and HookLab payload compilation.
-- Visual C++ x64 build tools for `HookLab.NativeBootstrap`.
+- Visual C++ x64 build tools for `HookLab.NativeBootstrap`. DgSpyTool locates them through
+  `vswhere` (any Visual Studio edition with the VC x86/x64 toolchain component), with a hardcoded
+  path fallback.
 - Recursive Git submodules.
 
 ```powershell
@@ -30,6 +32,11 @@ attempt. The Codex sandbox blocks NuGet HTTPS requests and may not be able to ov
 intermediates produced by the normal identity. A socket-denied `NU1301` or cross-identity access
 failure is an execution-environment failure; rerun the unchanged command under the normal identity.
 Do not weaken NuGet verification or add an offline dependency path for this repository.
+
+The component build restores in a separate MSBuild evaluation pass (`dotnet msbuild /restore`).
+Do not reintroduce a Restore dependency inside the Build invocation: on a fresh checkout, projects
+evaluated before NuGet writes their assets keep the empty evaluation and fail with a `CS0518`
+cascade.
 
 The completed outputs are:
 
@@ -64,7 +71,7 @@ or registration fails after the swap, the previous installation is restored.
 
 A full install replaces an old installation wholesale. Legacy manifests and mutable publish trees are
 not adopted. If a process is running from the install directory, installation refuses and names it.
-Run from a plain terminal with `--force true` only when you intentionally want to terminate those
+Run from a plain terminal with `--force` only when you intentionally want to terminate those
 processes; restart the agent afterward.
 
 After one full new-format install, a compatible host-only update is available:
@@ -89,7 +96,8 @@ To consume a package exactly as CI does:
   -LayoutRoot artifacts\packages\dgspy-win-x64\local\cli
 ```
 
-GUI tests must run through `Invoke-OnHiddenDesktop.ps1`; see `AGENTS.md`.
+GUI tests must run on a hidden desktop so no window can steal focus; use the hidden-desktop helper
+from your agent environment (the script is not part of this repository).
 
 CI builds the net10 package once and passes the identical verified artifact to CorDebug and all three
 Mono/Unity jobs. The local Unity fixture is `C:\Users\mjb\develop\UCH-dev\uch-debug-target`.

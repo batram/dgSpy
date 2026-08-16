@@ -13,5 +13,9 @@ regression or reconstructing a decision, but they do not define the current road
   sections 2.1–2.6, including the bounded dnSpyEx 6.6 adoption.
 - [Upstream source review](UPSTREAM_SOURCE_REVIEW.md) — pre-adoption dependency investigation, superseded
   by the completed modernization decision.
+- [Build pipeline record](BUILD_PIPELINE_TODO.md) — the implemented DgSpyTool immutable build/compose/verify
+  pipeline and its dependency-cleanup milestones.
+- [Discovery isolation record](DGSPY_DISCOVERY_TODOS.md) — resolved: unreadable processes no longer fail
+  name-filtered program discovery, with typed error provenance.
 
 For current information, return to the [documentation index](../README.md).

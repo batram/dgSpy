@@ -41,7 +41,7 @@ rotated records from a repository checkout with
 client, host, session, correlation and text filters. A full transcript can contain source, expressions,
 values and paths even after token/password redaction, so enable and retain it deliberately.
 
-For packaged-host status and the planned extension-initiated Gateway registration flow, see
+For packaged-host status and the extension-initiated Gateway registration flow, see
 [remote hosts](REMOTE_HOSTS.md).
 
 ## Authentication
@@ -62,6 +62,11 @@ without a preflight, so loopback binding alone would leave the debugger open to 
 
 ## Tools
 
+- Onboarding and diagnostics (Gateway-local): `get_started`, `doctor`, `get_workflow_help`.
+- Local deployment (Gateway-local): `get_local_deployment`, `launch_local_host`,
+  `rollback_local_deployment`, `uninstall_local_deployment`.
+- Remote hosts (Gateway-local): `create_remote_host_package`, `get_remote_host_readiness`,
+  `revoke_remote_host`.
 - Host, discovery, and lifecycle: `list_hosts`, `get_host_info`, `get_capabilities`, `list_programs`, `attach`,
   `attach_endpoint`, `launch`, `list_sessions`, `get_session_state`, `get_session_controller`,
   `claim_session`, `release_session`, `pause`, `continue`, `detach`, `terminate`, `restart`.
@@ -84,6 +89,12 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
   `get_raw_module`, `analyze_symbol`.
 - Explicit side effects and low-level access: `invoke_method`, `create_object`, `read_memory`,
   `write_memory`, `get_disassembly`, `get_registers`, `set_instruction_pointer`.
+- Composed workflows: `step_and_inspect`, `trace_calls`, `run_to_method`, `run_to_location`.
+- Atomic actions: `run_atomic_action`, `start_atomic_action`, `get_atomic_action_status`,
+  `cancel_atomic_action`.
+- HookLab: `initialize_hooklab`, `get_hooklab_status`, `get_hook_template`, `create_hook`,
+  `install_hook`, `update_hook`, `list_hooks`, `enable_hook`, `disable_hook`, `get_hook_events`,
+  `remove_hook`, `remove_all_hooks`.
 
 ## State and lifetime rules
 

@@ -167,13 +167,13 @@ authenticated, loopback-only, and shared by equally trusted local callers.
 
 ## 2. Optional high-risk capabilities
 
-Runtime hooking now has one active [HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md): a
-direct vertical slice for guarded observation hooks through MCP and the dnSpy GUI. Mutation hooks,
-generic providers, expert compilation, persistent reconnect, Unity/Mono, CoreCLR, x86, automatic
-watching, profiler/ReJIT, transpilers, reverse patches, and native debugging are outside the first
-version. The existing CLR prototype already proves Harmony patch/unpatch and event capture; the active
-plan starts from that repository state instead of repeating feasibility work. It deliberately does not
-carry the old provider, atomic-action, credential, or Mono requirements forward.
+Runtime hooking delivered its first version through the
+[HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md): guarded observation and custom
+Prefix/Postfix/Finalizer/Transpiler hooks through MCP and the dnSpy GUI, with a small deferred
+backlog (generic-method templates, editor UX). The active plan is now the
+[HookLab watcher implementation plan](HOOKLAB_WATCHER_IMPLEMENTATION_PLAN.md), which deploys
+guarded hooks through a standalone watcher outside a debugger session. Generic providers,
+profiler/ReJIT, reverse patches, CoreCLR, x86, and native debugging remain outside both.
 
 General target-code execution outside HookLab, assembly editing, general live method-body replacement,
 and dnSpy-host scripting remain unscheduled. Their trust boundaries and prerequisites are in

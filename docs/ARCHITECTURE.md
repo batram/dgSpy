@@ -4,7 +4,7 @@
 
 dgSpy exposes dnSpy's debugger, decompiler, metadata, and search capabilities to AI agents through MCP,
 without automating the WPF UI. The extension owns debugger state; the Gateway translates MCP requests,
-enforces the local HTTP boundary, and will accept and route provisioned outbound remote-host connections.
+enforces the local HTTP boundary, and accepts and routes provisioned outbound remote-host connections.
 
 ```text
 AI agent / MCP client
@@ -69,7 +69,7 @@ project can exercise it.
 ## State and identity model
 
 A host identity represents one trusted extension instance. The delivered local registry maps each
-identity to an authenticated endpoint. The planned remote registry maps a provisioned identity to its
+identity to an authenticated endpoint. The delivered remote registry maps a provisioned identity to its
 authenticated live outbound connection. Both reject ambiguous, unknown, duplicate, or mismatched
 selection. A session represents one logical attachment or launch and reports `attaching`,
 `running`, `paused`, `mixed`, `detaching`, `exited`, or `faulted`. `event_id` orders the event stream;
