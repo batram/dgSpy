@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
 
@@ -16,29 +17,57 @@ internal sealed record InstalledWatcherOptions(string Source,string InstallRoot,
 
 internal interface IWatcherTaskScheduler {
 	void Register(string executable,string arguments);
+	void Stop();
 	void Remove();
 	bool Matches(string executable,string arguments);
+	bool MatchesAction(string executable,string arguments);
 }
 
 internal sealed class WindowsWatcherTaskScheduler:IWatcherTaskScheduler {
 	internal const string TaskName="HookLab Watcher";
 	public void Register(string executable,string arguments) {
-		Run("/Create","/F","/TN",TaskName,"/SC","ONLOGON","/RL","HIGHEST","/IT","/TR",TaskCommandLine(executable,arguments));
+		var temporary=Path.Combine(Path.GetTempPath(),"hooklab-watcher-task-"+Guid.NewGuid().ToString("N")+".xml");
+		try { File.WriteAllText(temporary,BuildTaskXml(executable,arguments),Encoding.Unicode); Run("/Create","/F","/TN",TaskName,"/XML",temporary); }
+		finally { if(File.Exists(temporary)) File.Delete(temporary); }
 		if(!Matches(executable,arguments)) throw new InvalidOperationException("Scheduled task readback differs from the requested HookLab watcher command.");
 	}
+	public void Stop() { if(Exists()) Run("/End","/TN",TaskName); }
 	public void Remove() { if(Exists()) Run("/Delete","/F","/TN",TaskName); }
 	public bool Matches(string executable,string arguments) {
 		try { return MatchesXml(Capture("/Query","/TN",TaskName,"/XML"),executable,arguments); }
 		catch { return false; }
 	}
-	internal static bool MatchesXml(string xml,string executable,string arguments) {
-		var document=XDocument.Parse(xml); string? Value(string name)=>document.Descendants().FirstOrDefault(element=>element.Name.LocalName==name)?.Value;
-		return String.Equals(Value("RunLevel"),"HighestAvailable",StringComparison.OrdinalIgnoreCase)&&
-			String.Equals(Value("LogonType"),"InteractiveToken",StringComparison.OrdinalIgnoreCase)&&
-			String.Equals(NormalizeCommand(Value("Command")),NormalizeCommand(executable),StringComparison.OrdinalIgnoreCase)&&
-			String.Equals(NormalizeArguments(Value("Arguments")),NormalizeArguments(arguments),StringComparison.OrdinalIgnoreCase);
+	public bool MatchesAction(string executable,string arguments) {
+		try { return MatchesActionXml(Capture("/Query","/TN",TaskName,"/XML"),executable,arguments); }
+		catch { return false; }
 	}
-	internal static string TaskCommandLine(string executable,string arguments)=>Quote(executable)+" "+arguments;
+	internal static bool MatchesXml(string xml,string executable,string arguments) {
+		var document=XDocument.Parse(xml); string? Value(string name)=>ValueOf(document,name);
+		return MatchesAction(document,executable,arguments)&&
+			String.Equals(Value("DisallowStartIfOnBatteries"),"false",StringComparison.OrdinalIgnoreCase)&&
+			String.Equals(Value("StopIfGoingOnBatteries"),"false",StringComparison.OrdinalIgnoreCase)&&
+			String.Equals(Value("MultipleInstancesPolicy"),"IgnoreNew",StringComparison.OrdinalIgnoreCase)&&
+			String.Equals(Value("ExecutionTimeLimit"),"PT0S",StringComparison.OrdinalIgnoreCase)&&
+			String.Equals(Value("Interval"),"PT1M",StringComparison.OrdinalIgnoreCase)&&
+			String.Equals(Value("Count"),"3",StringComparison.OrdinalIgnoreCase);
+	}
+	internal static bool MatchesActionXml(string xml,string executable,string arguments)=>MatchesAction(XDocument.Parse(xml),executable,arguments);
+	internal static string BuildTaskXml(string executable,string arguments) {
+		XNamespace ns="http://schemas.microsoft.com/windows/2004/02/mit/task"; var user=WindowsIdentity.GetCurrent().User?.Value??throw new UnauthorizedAccessException("Current Windows identity has no SID.");
+		var document=new XDocument(new XDeclaration("1.0","UTF-16",null),new XElement(ns+"Task",new XAttribute("version","1.4"),
+			new XElement(ns+"RegistrationInfo",new XElement(ns+"Author",WindowsIdentity.GetCurrent().Name)),
+			new XElement(ns+"Triggers",new XElement(ns+"LogonTrigger",new XElement(ns+"Enabled",true),new XElement(ns+"UserId",user))),
+			new XElement(ns+"Principals",new XElement(ns+"Principal",new XAttribute("id","Author"),new XElement(ns+"UserId",user),new XElement(ns+"LogonType","InteractiveToken"),new XElement(ns+"RunLevel","HighestAvailable"))),
+			new XElement(ns+"Settings",new XElement(ns+"MultipleInstancesPolicy","IgnoreNew"),new XElement(ns+"DisallowStartIfOnBatteries",false),new XElement(ns+"StopIfGoingOnBatteries",false),new XElement(ns+"AllowHardTerminate",true),new XElement(ns+"StartWhenAvailable",true),new XElement(ns+"AllowStartOnDemand",true),new XElement(ns+"Enabled",true),new XElement(ns+"Hidden",false),new XElement(ns+"RunOnlyIfIdle",false),new XElement(ns+"WakeToRun",false),new XElement(ns+"ExecutionTimeLimit","PT0S"),new XElement(ns+"Priority",7),new XElement(ns+"RestartOnFailure",new XElement(ns+"Interval","PT1M"),new XElement(ns+"Count",3))),
+			new XElement(ns+"Actions",new XAttribute("Context","Author"),new XElement(ns+"Exec",new XElement(ns+"Command",executable),new XElement(ns+"Arguments",arguments)))));
+		return document.Declaration+Environment.NewLine+document.ToString(SaveOptions.DisableFormatting);
+	}
+	static bool MatchesAction(XDocument document,string executable,string arguments) {
+		string? Value(string name)=>ValueOf(document,name);
+		return String.Equals(Value("RunLevel"),"HighestAvailable",StringComparison.OrdinalIgnoreCase)&&String.Equals(Value("LogonType"),"InteractiveToken",StringComparison.OrdinalIgnoreCase)&&
+			String.Equals(NormalizeCommand(Value("Command")),NormalizeCommand(executable),StringComparison.OrdinalIgnoreCase)&&String.Equals(NormalizeArguments(Value("Arguments")),NormalizeArguments(arguments),StringComparison.OrdinalIgnoreCase);
+	}
+	static string? ValueOf(XDocument document,string name)=>document.Descendants().FirstOrDefault(element=>element.Name.LocalName==name)?.Value;
 	static string NormalizeCommand(string? value)=>(value??String.Empty).Trim().Trim('"');
 	static string NormalizeArguments(string? value)=>(value??String.Empty).Replace("\"",String.Empty,StringComparison.Ordinal).Trim();
 	bool Exists() { try { Capture("/Query","/TN",TaskName); return true; } catch { return false; } }
@@ -64,9 +93,10 @@ internal sealed class WatcherInstaller {
 		var source=VerifySource(options.Source); var parent=Directory.GetParent(options.InstallRoot)?.FullName??throw new InvalidDataException("Install root has no parent.");
 		Directory.CreateDirectory(parent); Directory.CreateDirectory(options.StateRoot);
 		var staging=options.InstallRoot+".staging-"+Guid.NewGuid().ToString("N"); var backup=options.InstallRoot+".previous-"+Guid.NewGuid().ToString("N"); var taskExecutable=TaskExecutable(); var command=TaskArguments(options.InstallRoot,options.StateRoot);
-		var legacyExecutable=Path.Combine(options.InstallRoot,"HookLab.Watcher.exe"); var priorHiddenTask=scheduler.Matches(taskExecutable,command); var priorLegacyTask=!priorHiddenTask&&scheduler.Matches(legacyExecutable,"run-installed");
+		var legacyExecutable=Path.Combine(options.InstallRoot,"HookLab.Watcher.exe"); var priorHiddenTask=scheduler.MatchesAction(taskExecutable,command); var priorLegacyTask=!priorHiddenTask&&scheduler.MatchesAction(legacyExecutable,"run-installed");
 		try {
 			CopyClosedTree(options.Source,staging,source); ProtectTree(staging); VerifyInstalled(staging);
+			if(priorHiddenTask||priorLegacyTask) scheduler.Stop();
 			StopInstalledWatchers(options.InstallRoot);
 			if(Directory.Exists(options.InstallRoot)) Directory.Move(options.InstallRoot,backup);
 			try {

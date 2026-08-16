@@ -34,12 +34,14 @@ Use `install --no-task` for a verified manual installation. `--source`, `--insta
 ## Task boundary
 
 The task is named `HookLab Watcher`. It is an interactive-token, highest-available, per-user `ONLOGON`
-task, not a service. Its short hidden, noninteractive PowerShell action synchronously invokes the
-ACL-protected installed `run-installed.ps1`, which launches the watcher without a visible console while
-keeping Task Scheduler supervision. The watcher derives package and bootstrap paths from the immutable
-installed executable directory, and the complete action stays below Task Scheduler's 261-character
-`/TR` limit. Writable
-state is used for control, status, and bounded audit output. Task XML is read back after registration.
+task, not a service. Its hidden, noninteractive PowerShell action synchronously invokes the ACL-protected
+installed `run-installed.ps1`, which starts a separate hidden watcher process, waits for it, and propagates
+its exit code while keeping Task Scheduler supervision. The explicit task definition permits start on any
+power source, does not stop on power changes, has no execution-time limit, ignores duplicate starts, and
+retries an unexpected failure up to three times at one-minute intervals. The watcher derives package and
+bootstrap paths from the immutable installed executable directory. Upgrades end the supervising task before
+stopping the watcher and swapping the closed install tree, so failure recovery cannot race the replacement.
+Writable state is used for control, status, and bounded audit output. Task XML is read back after registration.
 Watcher stdout is never a control channel: operational commands communicate through atomic control and
 status files, which also avoids relying on an elevated task's unavailable console output.
 
