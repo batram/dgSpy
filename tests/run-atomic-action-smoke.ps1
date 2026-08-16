@@ -42,6 +42,7 @@ $fail = 0
 
 . (Join-Path $PSScriptRoot 'TestSupport\Invoke-DgSpyRpc.ps1')
 . (Join-Path $PSScriptRoot 'TestSupport\McpClient.ps1')
+. (Join-Path $PSScriptRoot 'TestSupport\Find-DgSpyProgram.ps1')
 
 function Say([string]$Text) {
     $line = (Get-Date -Format 'HH:mm:ss') + '  ' + $Text
@@ -227,7 +228,7 @@ try {
     while ([DateTime]::UtcNow -lt $gatewayDeadline) {
         try { $null = Invoke-RestMethod ($gatewayUrl + '/health') -TimeoutSec 1; break } catch { Start-Sleep -Milliseconds 250 }
     }
-    $program = @(Rpc 'list_programs' @{ process_ids=@($targetId) })[0]
+    $program = Find-DgSpyProgram -ProcessId $targetId -InvokeRpc ${function:Rpc}
     $session = Rpc 'attach' @{ program_id=$program.program_id } 60
     $sessionId = $session.session_id
     Ensure-Paused $sessionId

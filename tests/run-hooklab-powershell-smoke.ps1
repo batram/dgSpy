@@ -20,6 +20,7 @@ $sessionId = $null
 $rpcPort = 0
 . (Join-Path $PSScriptRoot 'TestSupport\Invoke-DgSpyRpc.ps1')
 . (Join-Path $PSScriptRoot 'TestSupport\Resolve-DgSpyModuleId.ps1')
+. (Join-Path $PSScriptRoot 'TestSupport\Find-DgSpyProgram.ps1')
 
 function Status([string]$Text) {
 	$line = (Get-Date -Format 'HH:mm:ss.fff') + ' ' + $Text
@@ -59,7 +60,7 @@ try {
 	$hostProcessId=& (Join-Path $PSScriptRoot 'TestSupport\Start-DgSpyHost.ps1') -TargetFramework net10.0-windows
 	$rpcPort=[int]$env:DGSPY_RPC_PORT
 	Status "HOST_STARTED pid=$hostProcessId rpc_port=$rpcPort"
-	$program=@(Rpc 'list_programs' @{process_ids=@($child.Id)})[0]
+	$program=Find-DgSpyProgram -ProcessId $child.Id -InvokeRpc ${function:Rpc}
 	$sessionId=(Rpc 'attach' @{program_id=$program.program_id} 60).session_id
 	$facts=Facts $fixtureDll 'HookLabPowerShellFixture.Target' 'System.Int32 Calculate(System.Int32)'
 	$moduleId=Resolve-DgSpyModuleId -SessionId $sessionId -ExpectedMvid $facts.Mvid -NamePattern 'HookLabPowerShellFixture' -ProcessId $child.Id -InvokeRpc ${function:Rpc}

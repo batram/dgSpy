@@ -44,6 +44,7 @@ $startedProcesses = New-Object System.Collections.ArrayList
 
 . (Join-Path $PSScriptRoot 'TestSupport\Invoke-DgSpyRpc.ps1')
 . (Join-Path $PSScriptRoot 'TestSupport\Resolve-DgSpyModuleId.ps1')
+. (Join-Path $PSScriptRoot 'TestSupport\Find-DgSpyProgram.ps1')
 
 function Say([string]$Text) {
     $line = (Get-Date -Format 'HH:mm:ss.fff') + '  ' + $Text
@@ -262,8 +263,7 @@ function Start-Fixture([string]$Label, [int]$ExitAfterMs) {
     [pscustomobject]@{ Process=$process; TargetProcess=$targetProcess; Id=$targetId; Token=[uint32]($tokenLine -replace '^TOKEN=',''); Out=$stdout; Err=$stderr; ExitPath=$exitPath }
 }
 function Attach-Fixture($Fixture) {
-    $program = @(Rpc 'list_programs' @{ process_ids=@($Fixture.Id) })[0]
-    if (-not $program) { throw "target pid $($Fixture.Id) was not discoverable" }
+    $program = Find-DgSpyProgram -ProcessId $Fixture.Id -InvokeRpc ${function:Rpc}
     $sessionId = (Rpc 'attach' @{ program_id=$program.program_id } 60).session_id
     $script:carrierModuleId = Resolve-DgSpyModuleId -SessionId $sessionId -ExpectedMvid $script:carrierMvid -NamePattern 'Milestone1Target' -ProcessId $Fixture.Id -InvokeRpc ${function:Rpc}
     $sessionId

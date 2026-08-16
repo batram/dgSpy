@@ -25,6 +25,7 @@ $activeKind = $null
 $hookInstalled = $false
 . (Join-Path $PSScriptRoot 'TestSupport\Invoke-DgSpyRpc.ps1')
 . (Join-Path $PSScriptRoot 'TestSupport\Resolve-DgSpyModuleId.ps1')
+. (Join-Path $PSScriptRoot 'TestSupport\Find-DgSpyProgram.ps1')
 
 function Rpc([string]$Operation,[hashtable]$Arguments=@{},[int]$Deadline=30) {
 	Invoke-DgSpyRpc -OperationName $Operation -OperationArguments $Arguments -RpcPort $rpcPort -DeadlineSeconds $Deadline
@@ -97,7 +98,7 @@ try {
 	$env:DGSPY_LAYOUT_ROOT=Join-Path $repoRoot 'artifacts\layouts\local'
 	$hostProcessId=& (Join-Path $PSScriptRoot 'TestSupport\Start-DgSpyHost.ps1') -TargetFramework net10.0-windows
 	$rpcPort=[int]$env:DGSPY_RPC_PORT
-	$program=@(Rpc 'list_programs' @{process_ids=@($child.Id)})[0]
+	$program=Find-DgSpyProgram -ProcessId $child.Id -InvokeRpc ${function:Rpc}
 	$sessionId=(Rpc 'attach' @{program_id=$program.program_id} 60).session_id
 	$facts=Facts $fixtureDll
 	$moduleId=Resolve-DgSpyModuleId -SessionId $sessionId -ExpectedMvid $facts.Mvid -NamePattern 'HookLabPowerShellFixture' -ProcessId $child.Id -InvokeRpc ${function:Rpc}
