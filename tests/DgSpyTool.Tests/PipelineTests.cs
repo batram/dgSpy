@@ -27,6 +27,7 @@ public sealed class PipelineTests : IDisposable {
 			Assert.Contains("<Reference Include=\""+dependency+"\">",extension,StringComparison.Ordinal);
 		Assert.Contains("<ProjectReference Include=\"..\\..\\dgSpy.Protocol\\dgSpy.Protocol.csproj\" />",extension,StringComparison.Ordinal);
 		Assert.Contains("<ProjectReference Include=\"..\\..\\HookLab\\HookLab.Contracts\\HookLab.Contracts.csproj\" />",extension,StringComparison.Ordinal);
+		Assert.Contains("<ProjectReference Include=\"..\\..\\HookLab\\HookLab.Packaging\\HookLab.Packaging.csproj\" />",extension,StringComparison.Ordinal);
 	}
 	[Fact]
 	public void Ci_builds_the_net10_package_once_and_reuses_it() {
@@ -164,7 +165,7 @@ public sealed class PipelineTests : IDisposable {
 		Write(host,"dnSpy.exe","host"); Write(host,"bin/dnSpy.dll","host-bin"); Write(host,"bin/shared-runtime.dll","shared");
 		Write(cli,"dgspy.exe","cli"); Write(cli,"DgSpyTool.exe","installer"); Write(cli,"dgSpy.Protocol.dll","protocol"); Write(cli,"shared-runtime.dll","shared");
 		Write(gateway,"dgSpy.Gateway.exe","gateway"); Write(gateway,"dgSpy.Protocol.dll","protocol");
-		foreach(var name in new[]{"dgSpy.Extension.x.dll","dgSpy.Extension.x.pdb","dgSpy.Protocol.dll","dgSpy.Protocol.pdb","HookLab.Contracts.dll","HookLab.Contracts.pdb","HookLab.Host.Transport.dll","HookLab.Host.Transport.pdb"}) Write(components,name,name=="dgSpy.Protocol.dll"?"protocol":name);
+		foreach(var name in new[]{"dgSpy.Extension.x.dll","dgSpy.Extension.x.pdb","dgSpy.Protocol.dll","dgSpy.Protocol.pdb","HookLab.Contracts.dll","HookLab.Contracts.pdb","HookLab.Packaging.dll","HookLab.Packaging.pdb","HookLab.Host.Transport.dll","HookLab.Host.Transport.pdb"}) Write(components,name,name=="dgSpy.Protocol.dll"?"protocol":name);
 		var bootstrap=Write(root,"bootstrap.payload","bootstrap"); var native=Write(root,"native.dll","native"); var launcher=Dir("launcher");
 		Write(launcher,"Start-dgSpyRemoteHost.ps1","launcher"); Write(launcher,"Start-dgSpyRemoteHost.cmd","launcher");
 		var watcher=Dir("watcher"); Write(watcher,"HookLab.Watcher.exe","watcher"); Write(watcher,"payload/HookLab.Bootstrap.dll","bootstrap"); Write(watcher,"payload/HookLab.NativeBootstrap.x64.dll","native"); Write(watcher,"deployments/vmconnect-fullscreen/vmconnect-fullscreen.json","profile");

@@ -10,6 +10,7 @@
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\dgSpy.Protocol\dgSpy.Protocol.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\dgSpy.ExtensionContracts\dgSpy.ExtensionContracts.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\HookLab\HookLab.Contracts\HookLab.Contracts.csproj" />
+    <ComponentProject Include="$(MSBuildThisFileDirectory)..\HookLab\HookLab.Packaging\HookLab.Packaging.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\HookLab\HookLab.Probe.CorDebug\HookLab.Probe.CorDebug.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\HookLab\HookLab.Host.Transport\HookLab.Host.Transport.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\HookLab\HookLab.Bootstrap\HookLab.Bootstrap.csproj" />

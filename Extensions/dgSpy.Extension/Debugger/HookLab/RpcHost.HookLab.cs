@@ -13,6 +13,7 @@ using dgSpy.Extension.ToolWindows;
 using dgSpy.Protocol;
 using HookLab.Contracts;
 using HookLab.Host.Transport;
+using HookLab.Packaging;
 using dnlib.DotNet;
 
 namespace dgSpy.Extension {
@@ -37,6 +38,7 @@ namespace dgSpy.Extension {
 		Task<object> InstallHookAsync(RpcRequest req,CancellationToken token) => hookLab.InstallAsync(this,req,token);
 		Task<object> CreateHookAsync(RpcRequest req,CancellationToken token) => hookLab.CreateAsync(this,req,token);
 		Task<object> UpdateHookAsync(RpcRequest req,CancellationToken token) => hookLab.UpdateAsync(this,req,token);
+		object ExportHookPackage(RpcRequest req) { CheckSession(req); return hookLab.Export(this,req); }
 		object ListHooks(RpcRequest req) { CheckSession(req); var session=(string?)req.Arguments["session_id"] ?? throw new RpcException("invalid_arguments","session_id is required."); return hookLab.List(session,(int?)req.Arguments["process_id"]); }
 		Task<object> GetHookEventsAsync(RpcRequest req,CancellationToken token) { CheckSession(req); return hookLab.ReadEventsAsync(this,req,token); }
 		Task<object> EnableHookAsync(RpcRequest req,CancellationToken token) => hookLab.SetEnabledAsync(this,req,true,token);
@@ -242,6 +244,23 @@ namespace dgSpy.Extension {
 
 			public object List(string sessionId,int? processId) {
 				lock(gate) return new { hooks=hooks.Values.Where(value=>value.Definition.SessionId==sessionId && (processId is null || value.Definition.ProcessId==processId.Value)).Select(View).ToArray() };
+			}
+
+			public object Export(RpcHost host,RpcRequest source) {
+				var session=Required(source.Arguments,"session_id"); var processId=RequiredInt(source.Arguments,"process_id"); var hookId=Required(source.Arguments,"hook_id");
+				HookRecord record; lock(gate) if(!hooks.TryGetValue(Key(session,processId,hookId),out record!)) throw new RpcException("hook_not_found","Hook ID '"+hookId+"' is not installed in this process.");
+				var definition=record.Definition; if(definition.Source is null) throw new RpcException("hook_not_exportable","Only compiled HookLab hooks with retained source can be exported.");
+				try { using var process=Process.GetProcessById(processId); if(process.StartTime.ToUniversalTime().Ticks!=definition.ProcessCreationTicks) throw new RpcException("target_identity_mismatch","The HookLab target PID was reused."); var image=process.MainModule?.FileName??process.ProcessName; if(!String.Equals(Path.GetFullPath(image),Path.GetFullPath(definition.ImagePath),StringComparison.OrdinalIgnoreCase)) throw new RpcException("target_identity_mismatch","The HookLab target image changed."); }
+				catch(RpcException) { throw; } catch(Exception ex) { throw new RpcException("target_unavailable","Could not verify the live HookLab target: "+ex.Message); }
+				var configured=Environment.GetEnvironmentVariable("DGSPY_EXPORT_ROOT"); if(String.IsNullOrWhiteSpace(configured)) throw new RpcException("capability_unavailable","Set DGSPY_EXPORT_ROOT to enable HookLab package export.");
+				var root=Path.GetFullPath(configured!); var requested=Required(source.Arguments,"output_path"); var target=Path.GetFullPath(Path.IsPathRooted(requested)?requested:Path.Combine(root,requested)); var prefix=root.TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;
+				if(!target.StartsWith(prefix,StringComparison.OrdinalIgnoreCase)) throw new RpcException("path_not_allowed","The HookLab export path is outside DGSPY_EXPORT_ROOT."); RejectReparsePath(root,Path.GetDirectoryName(target)!); if(Directory.Exists(target)&&(File.GetAttributes(target)&System.IO.FileAttributes.ReparsePoint)!=0) throw new RpcException("path_not_allowed","The HookLab export path is a reparse point.");
+				var overwrite=(bool?)source.Arguments["overwrite"]??false; if((Directory.Exists(target)||File.Exists(target))&&!overwrite) throw new RpcException("file_exists","HookLab export already exists: "+target);
+				HookPackageExportResult result;
+				try { result=HookPackageExporter.Export(target,new HookPackageExportRequest { PackageId=Required(source.Arguments,"package_id"),ProfileId=Required(source.Arguments,"profile_id"),DisplayName=(string?)source.Arguments["display_name"]??hookId,PackageRevision=definition.Revision,ProcessFileName=Path.GetFileName(definition.ImagePath),PermittedExecutablePath=Path.GetFullPath(definition.ImagePath),Assembly=definition.Assembly,ModuleMvid=definition.Mvid,DeclaringType=definition.DeclaringType,Method=definition.Method,MetadataToken=definition.MethodToken,Signature=definition.Signature,IlSha256=definition.IlSha256,HookId=definition.HookId,HookKind=definition.Kind,HookRevision=definition.Revision,HookEnabled=record.Enabled,Source=definition.Source,MaximumEventsPerSecond=definition.MaximumEventsPerSecond,MaximumStringLength=definition.MaximumStringLength,NotificationPolicy=(string?)source.Arguments["notification_policy"]??"errors",ClrReadinessTimeoutMs=(int?)source.Arguments["clr_readiness_timeout_ms"]??5000,InitializationTimeoutMs=(int?)source.Arguments["initialization_timeout_ms"]??10000 },overwrite); }
+				catch(InvalidDataException ex) { throw new RpcException("invalid_arguments",ex.Message); }
+				var audit=host.AuditMutation(source.Operation,"hook_id="+hookId+" package_id="+Required(source.Arguments,"package_id")+" path="+result.DeploymentPath+" digest="+result.PackageDigest);
+				return new { hook_id=hookId,package_id=Required(source.Arguments,"package_id"),profile_id=Required(source.Arguments,"profile_id"),deployment_path=result.DeploymentPath,package_path=result.PackagePath,profile_path=result.ProfilePath,package_digest=result.PackageDigest,profile_enabled=false,audit_id=audit };
 			}
 
 			public async Task<object> ReadEventsAsync(RpcHost host,RpcRequest source,CancellationToken token) {

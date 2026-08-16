@@ -233,6 +233,7 @@ namespace dgSpy.Protocol {
 			Op("install_hook",65000,mutates:true,version:1),
 			Op("create_hook",65000,mutates:true,version:1),
 			Op("update_hook",65000,mutates:true,version:1),
+			Op("export_hook_package",10000,mutates:true,version:1),
 			Op("list_hooks",5000,version:1),
 			Op("get_hook_events",65000,version:1),
 			Op("enable_hook",65000,mutates:true,version:1),

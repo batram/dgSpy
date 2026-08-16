@@ -123,6 +123,13 @@
       "result_schema_version": 1
     },
     {
+      "operation": "export_hook_package",
+      "max_duration_ms": 10000,
+      "mutates_session": true,
+      "operation_version": 1,
+      "result_schema_version": 1
+    },
+    {
       "operation": "list_hooks",
       "max_duration_ms": 5000,
       "mutates_session": false,

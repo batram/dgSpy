@@ -66,6 +66,11 @@ Package and profile reloads activate only as complete valid catalog generations.
 work without removing existing hooks. Disabling a profile does the same for that profile. A task or
 watcher restart adopts authenticated live residents and reconciles desired state without reinjection.
 
+dgSpy's side-effecting `export_hook_package` operation writes a watcher-compatible deployment below its
+configured `DGSPY_EXPORT_ROOT`. It freezes the retained compiled source and exact live process/module/
+method guards, writes a closed package with the canonical digest, and creates a disabled sibling profile.
+Export alone never enrolls the package into the installed watcher or enables automatic deployment.
+
 The default notification policy is defined per profile (`all`, `errors`, or `none`). The durable
 operational record is `%LOCALAPPDATA%\HookLab\watcher-audit.jsonl`, which rotates at its configured bound.
 `status` reports lifecycle, discovery mode, catalog errors, and the latest bounded result set.

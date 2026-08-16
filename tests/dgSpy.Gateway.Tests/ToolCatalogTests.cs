@@ -378,6 +378,14 @@ public sealed class ToolCatalogTests {
 	}
 
 	[Fact]
+	public void HookLab_export_is_explicit_disabled_profile_packaging() {
+		var tool=ToolCatalog.All.Single(value=>Name(value)=="export_hook_package"); var wire=ProtocolJson.ToNode(tool)!.AsObject(); var properties=InputProperties(tool);
+		Assert.Contains("SIDE EFFECTING",Description(tool)); Assert.Contains("disabled profile",Description(tool)); Assert.True((bool)wire["annotations"]!["idempotentHint"]! == false);
+		foreach(var name in new[]{"session_id","process_id","hook_id","package_id","profile_id","output_path"}) Assert.Contains(name,ProtocolJson.FromNode<string[]>(wire["inputSchema"]!["required"])!);
+		Assert.Contains("overwrite",properties.Keys); Assert.Contains("notification_policy",properties.Keys);
+	}
+
+	[Fact]
 	public void Every_exact_module_tool_exposes_the_opaque_identity() {
 		foreach(var name in new[]{"run_to_method","run_to_location","set_il_breakpoint","set_instruction_pointer","list_types","list_members","get_il","get_csharp","set_breakpoint","find_references","find_implementations","get_metadata","analyze_symbol","get_raw_module","get_hook_template"}) {
 			var tool=ToolCatalog.All.Single(value=>Name(value)==name);

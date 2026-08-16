@@ -93,8 +93,13 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
 - Atomic actions: `run_atomic_action`, `start_atomic_action`, `get_atomic_action_status`,
   `cancel_atomic_action`.
 - HookLab: `initialize_hooklab`, `get_hooklab_status`, `get_hook_template`, `create_hook`,
-  `install_hook`, `update_hook`, `list_hooks`, `enable_hook`, `disable_hook`, `get_hook_events`,
+  `install_hook`, `update_hook`, `export_hook_package`, `list_hooks`, `enable_hook`, `disable_hook`, `get_hook_events`,
   `remove_hook`, `remove_all_hooks`.
+
+`export_hook_package` revalidates the exact live process identity and exports one installed compiled
+hook below `DGSPY_EXPORT_ROOT` as a canonical watcher deployment. The deployment contains its closed
+package plus a profile whose `enabled` field is always `false`; export never changes the target or
+enables automatic watcher operation. Existing output is refused unless `overwrite=true` is explicit.
 
 ## State and lifetime rules
 

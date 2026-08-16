@@ -83,6 +83,16 @@ public sealed class HookLabUiBoundaryTests {
 	}
 
 	[Fact]
+	public void Package_export_uses_only_retained_compiled_hooks_and_never_enables_the_profile() {
+		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
+		Assert.Contains("if(definition.Sourceisnull)thrownewRpcException(\"hook_not_exportable\"",source,StringComparison.Ordinal);
+		Assert.Contains("process.StartTime.ToUniversalTime().Ticks!=definition.ProcessCreationTicks",source,StringComparison.Ordinal);
+		Assert.Contains("String.Equals(Path.GetFullPath(image),Path.GetFullPath(definition.ImagePath),StringComparison.OrdinalIgnoreCase)",source,StringComparison.Ordinal);
+		Assert.Contains("profile_enabled=false",source,StringComparison.Ordinal);
+		Assert.Contains("HookPackageExporter.Export(target,newHookPackageExportRequest",source,StringComparison.Ordinal);
+	}
+
+	[Fact]
 	public void Synthetic_gui_session_is_released_when_debugging_ends() {
 		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Rpc","RpcHost.cs")));
 		Assert.Contains("if(sessionKind==\"ui\"){sessionId=null;attachedProgramId=null;sessionKind=null",source,StringComparison.Ordinal);

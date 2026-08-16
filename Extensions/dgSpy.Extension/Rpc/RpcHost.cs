@@ -214,7 +214,7 @@ namespace dgSpy.Extension {
 			// policy, so it moves execution_version and stop_id like any other execution operation. Leaving
 			// it unstamped forced a get_session_state between it and the next guarded call, and made
 			// cancel_atomic_action's mandatory expected_execution_version racy against the action it cancels.
-			"run_atomic_action","install_hook","create_hook","update_hook","enable_hook","disable_hook","get_hook_events","remove_hook","remove_all_hooks",
+			"run_atomic_action","install_hook","create_hook","update_hook","export_hook_package","enable_hook","disable_hook","get_hook_events","remove_hook","remove_all_hooks",
 		};
 		// Mutations which can invalidate an atomic action's captured process state. This deliberately
 		// includes evaluation-side effects and debugger policy changes in addition to engine transitions.
@@ -317,6 +317,7 @@ namespace dgSpy.Extension {
 			case "install_hook": return RpcResponse.Success(req.RequestId,await InstallHookAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "create_hook": return RpcResponse.Success(req.RequestId,await CreateHookAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "update_hook": return RpcResponse.Success(req.RequestId,await UpdateHookAsync(req,requestCancellation.Token).ConfigureAwait(false));
+			case "export_hook_package": return RpcResponse.Success(req.RequestId,ExportHookPackage(req));
 			case "list_hooks": return RpcResponse.Success(req.RequestId,ListHooks(req));
 			case "get_hook_events": return RpcResponse.Success(req.RequestId,await GetHookEventsAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			case "enable_hook": return RpcResponse.Success(req.RequestId,await EnableHookAsync(req,requestCancellation.Token).ConfigureAwait(false));

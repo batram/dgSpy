@@ -5,6 +5,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\dgSpy.Protocol\dgSpy.Protocol.csproj" />
     <ProjectReference Include="..\..\HookLab\HookLab.Contracts\HookLab.Contracts.csproj" />
+	<ProjectReference Include="..\..\HookLab\HookLab.Packaging\HookLab.Packaging.csproj" />
 	<ProjectReference Include="..\..\HookLab\HookLab.Host.Transport\HookLab.Host.Transport.csproj" />
 	</ItemGroup>
 	<!-- Packaged component builds consume the immutable host artifact structurally: none of these

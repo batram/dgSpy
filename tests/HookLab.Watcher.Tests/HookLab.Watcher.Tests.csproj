@@ -13,6 +13,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\tools\HookLab.Watcher\HookLab.Watcher.csproj" />
+    <ProjectReference Include="..\..\HookLab\HookLab.Packaging\HookLab.Packaging.csproj" />
   </ItemGroup>
   <Target Name="BuildApplyOnceTarget" BeforeTargets="Build">
     <MSBuild Projects="..\TestTargets\HookLab.ApplyOnceTarget\HookLab.ApplyOnceTarget.csproj" Targets="Build" Properties="Configuration=$(Configuration)" />

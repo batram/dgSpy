@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using HookLab.Injector;
+using HookLab.Packaging;
 using Xunit;
 
 namespace HookLab.Watcher.Tests;
@@ -23,6 +24,17 @@ public sealed class PackageTests {
 		using var directory=new TemporaryDirectory(); var package=WritePackage(directory.Path);
 		var first=PackageLoader.Load(package); var second=PackageLoader.Load(package);
 		Assert.Equal("sample-package",first.PackageId); Assert.Equal(first.Digest,second.Digest); Assert.Equal("sample-hook",first.Definition.Id); Assert.Contains("class H",first.Definition.Hook!.Source); Assert.False(first.Definition.Hook.Source!.EndsWith('\n'));
+	}
+
+	[Fact]
+	public void DgSpy_export_is_a_canonical_package_with_an_explicitly_disabled_profile() {
+		using var directory=new TemporaryDirectory(); var deployment=Path.Combine(directory.Path,"exported"); var mvid=Guid.NewGuid().ToString("D");
+		var request=new HookPackageExportRequest { PackageId="spy-snack",ProfileId="spy-snack-user",DisplayName="Spy snack",PackageRevision=2,ProcessFileName="Target.exe",PermittedExecutablePath=Path.Combine(directory.Path,"Target.exe"),Assembly="Target",ModuleMvid=mvid,DeclaringType="Example.Target",Method="Run",MetadataToken=0x06000001,Signature="System.Void Run()",IlSha256=new string('a',64),HookId="spy-hook",HookKind="Prefix",HookRevision=2,HookEnabled=true,Source="public static class H{public static void Prefix(){}}",MaximumEventsPerSecond=10,MaximumStringLength=128 };
+		var exported=HookPackageExporter.Export(deployment,request);
+		var package=PackageLoader.Load(exported.PackagePath); Assert.Equal("spy-snack",package.PackageId); Assert.Equal(exported.PackageDigest,package.Digest); Assert.Equal(mvid,package.Definition.Target!.ModuleMvid); Assert.Equal("spy-hook",package.Definition.Id);
+		using var profile=JsonDocument.Parse(File.ReadAllBytes(exported.ProfilePath)); Assert.False(profile.RootElement.GetProperty("enabled").GetBoolean()); Assert.Equal(exported.PackageDigest,profile.RootElement.GetProperty("packageDigest").GetString()); Assert.Empty(ProfileCatalog.Load(deployment));
+		Assert.Throws<IOException>(()=>HookPackageExporter.Export(deployment,request,overwrite:false));
+		request.DisplayName="Updated spy snack"; var replaced=HookPackageExporter.Export(deployment,request,overwrite:true); Assert.NotEqual(exported.PackageDigest,replaced.PackageDigest); Assert.Equal(replaced.PackageDigest,PackageLoader.Load(replaced.PackagePath).Digest); Assert.DoesNotContain(Directory.EnumerateDirectories(directory.Path),path=>path.Contains(".previous-",StringComparison.Ordinal)||path.Contains(".staging-",StringComparison.Ordinal));
 	}
 
 	[Theory]

@@ -12,6 +12,7 @@
   <ItemGroup>
     <None Include="run-installed.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <ProjectReference Include="..\..\HookLab\HookLab.Injector\HookLab.Injector.csproj" />
+    <ProjectReference Include="..\..\HookLab\HookLab.Packaging\HookLab.Packaging.csproj" />
     <ProjectReference Include="..\..\HookLab\HookLab.Contracts\HookLab.Contracts.csproj" />
     <ProjectReference Include="..\..\HookLab\HookLab.Host.Transport\HookLab.Host.Transport.csproj" />
   </ItemGroup>

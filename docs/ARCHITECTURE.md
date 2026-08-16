@@ -100,6 +100,11 @@ machine-readable JSON with stable exit categories. The dgSpy extension still use
 integrated adapter; adapting it to the shared standalone boundary is deliberately deferred until
 standalone parity and operational controls are complete.
 
+`HookLab.Packaging` is the runtime-neutral writer for watcher deployment exports. The dgSpy extension
+uses it to atomically freeze one retained compiled hook below `DGSPY_EXPORT_ROOT`; the watcher consumes
+the result through its existing strict package loader. Every export includes a disabled profile, so
+creating a package never opts a process into unattended injection.
+
 The supported pipeline publishes the watcher as a closed, separately owned layout subtree. Its elevated
 installer verifies the parent layout inventory, digests, owner/ACL, path containment, and reparse-point
 absence before an atomic per-user install. A highest-available interactive logon task reads only the

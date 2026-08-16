@@ -7,7 +7,7 @@ using System.Text.Json;
 return await DgSpyBuildTool.RunAsync(args);
 
 internal static class DgSpyBuildTool {
-	static readonly string[] ExtensionFiles={"dgSpy.Extension.x.dll","dgSpy.Extension.x.pdb","dgSpy.Protocol.dll","dgSpy.Protocol.pdb","HookLab.Contracts.dll","HookLab.Contracts.pdb","HookLab.Host.Transport.dll","HookLab.Host.Transport.pdb"};
+	static readonly string[] ExtensionFiles={"dgSpy.Extension.x.dll","dgSpy.Extension.x.pdb","dgSpy.Protocol.dll","dgSpy.Protocol.pdb","HookLab.Contracts.dll","HookLab.Contracts.pdb","HookLab.Packaging.dll","HookLab.Packaging.pdb","HookLab.Host.Transport.dll","HookLab.Host.Transport.pdb"};
 	static readonly HashSet<string> FrameworkOverrides=new(StringComparer.OrdinalIgnoreCase){"Microsoft.VisualBasic.dll","System.Diagnostics.EventLog.dll","System.Drawing.dll","System.Security.Cryptography.Pkcs.dll","System.Security.Cryptography.Xml.dll","WindowsBase.dll"};
 	const string ManifestName="dgspy-layout.json";
 

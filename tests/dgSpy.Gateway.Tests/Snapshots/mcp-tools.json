@@ -944,6 +944,80 @@
       }
     },
     {
+      "name": "export_hook_package",
+      "description": "SIDE EFFECTING and audited. Atomically export one installed compiled HookLab hook below DGSPY_EXPORT_ROOT as a watcher deployment containing a canonical immutable package and a disabled profile. Revalidates the exact live process identity and never enables automatic deployment.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "hook_id": {
+            "type": "string"
+          },
+          "package_id": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "output_path": {
+            "type": "string",
+            "description": "Deployment directory below DGSPY_EXPORT_ROOT."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "notification_policy": {
+            "type": "string",
+            "enum": [
+              "errors",
+              "all",
+              "none"
+            ]
+          },
+          "clr_readiness_timeout_ms": {
+            "type": "integer",
+            "minimum": 250,
+            "maximum": 30000
+          },
+          "initialization_timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 30000
+          },
+          "overwrite": {
+            "type": "boolean"
+          },
+          "expected_execution_version": {
+            "type": "integer",
+            "description": "Required exact execution_version; unrelated debugger events do not invalidate it."
+          }
+        },
+        "required": [
+          "session_id",
+          "process_id",
+          "hook_id",
+          "package_id",
+          "profile_id",
+          "output_path",
+          "expected_execution_version"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
       "name": "list_hooks",
       "description": "List HookLab observation hooks owned by this dgSpy session.",
       "inputSchema": {
