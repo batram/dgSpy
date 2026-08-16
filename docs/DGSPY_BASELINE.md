@@ -49,6 +49,16 @@ The pipeline never deploys into a compiler output directory. Composition starts 
 records every file's size, SHA-256, and owner, verifies the complete inventory, and publishes by
 directory rename. Failed composition or installation leaves the previous completed tree available.
 
+The verified layout also contains the standalone HookLab watcher under `hooklab-watcher`, including its
+closed deployments and native/managed bootstrap payloads. Install its per-user scheduled operation only
+from that layout:
+
+```powershell
+.\artifacts\layouts\local\hooklab-watcher\HookLab.Watcher.exe install
+```
+
+See [HOOKLAB_WATCHER.md](HOOKLAB_WATCHER.md) for verification, control, upgrade, and uninstall behavior.
+
 Lower-level `build`, `build-host`, `build-components`, `compose`, `verify`, `package`, `verify-package`,
 and `snapshot` verbs exist for diagnostics and CI. `pipeline` is the normal shipping command.
 
@@ -108,6 +118,8 @@ Mono/Unity jobs. The local Unity fixture is `C:\Users\mjb\develop\UCH-dev\uch-de
 - Runtime assemblies and tools are under `bin`.
 - The extension is under `bin\Extensions\dgSpy` and is named `dgSpy.Extension.x.dll`.
 - HookLab payload files are under `hooklab`, outside every assembly scan path.
+- The independently runnable watcher and its closed packages/payloads are under `hooklab-watcher` and
+  are owned as `hooklab-watcher` in the complete layout manifest.
 - `bin\dgSpy.Protocol.dll` and the extension copy are byte-identical.
 - `dgspy-layout.json` is the authoritative complete file inventory.
 - Package `manifest.json` hashes the layout manifest and records the complete package shape.

@@ -8,12 +8,14 @@ namespace HookLab.Watcher;
 internal static class Program {
 	static readonly JsonSerializerOptions JsonOptions=new() { PropertyNamingPolicy=JsonNamingPolicy.CamelCase };
 	public static async Task<int> Main(string[] arguments) {
+		if(arguments.Length==1&&arguments[0]=="run-installed") arguments=InstalledRunArguments();
+		if(InstallCommand.TryParse(arguments,out var install)) return RunInstall(install);
 		if(arguments.Length==2&&arguments[0]=="validate-package") return ValidatePackage(arguments[1]);
 		if(CommandOptions.TryParseApply(arguments,out var apply)) return ApplyPackage(apply);
 		if(CommandOptions.TryParseStatus(arguments,out var status)) return ShowStatus(status);
 		if(ControlOptions.TryParse(arguments,out var control)) return UpdateControl(control);
-		if(arguments.Length>0&&arguments[0] is "apply" or "status" or "validate-package" or "pause" or "resume" or "disable-profile" or "enable-profile") { WriteJson(new { status="error",code="invalid_arguments",message="Command arguments are invalid." }); return CommandExitCodes.InvalidArguments; }
-		if(!WatchOptions.TryParse(arguments,out var options)) { Console.Error.WriteLine("Usage: HookLab.Watcher.exe validate-package <directory> | apply --package <directory> --pid <pid> [--payload-dir <directory>] | status [--pid <pid>] | pause | resume | disable-profile <id> | enable-profile <id> | run (--profiles <directory> | --definitions <directory>) [--poll-ms <25-5000>] [--max-parallel <1-32>] [--payload-dir <directory>] [--audit <jsonl>]"); return 2; }
+		if(arguments.Length>0&&arguments[0] is "apply" or "status" or "validate-package" or "pause" or "resume" or "disable-profile" or "enable-profile" or "install" or "verify-install" or "uninstall" or "run-installed") { WriteJson(new { status="error",code="invalid_arguments",message="Command arguments are invalid." }); return CommandExitCodes.InvalidArguments; }
+		if(!WatchOptions.TryParse(arguments,out var options)) { Console.Error.WriteLine("Usage: HookLab.Watcher.exe install [--no-task] | verify-install | uninstall [--keep-state] | validate-package <directory> | apply --package <directory> --pid <pid> [--payload-dir <directory>] | status [--pid <pid>] | pause | resume | disable-profile <id> | enable-profile <id> | run-installed | run (--profiles <directory> | --definitions <directory>) [--poll-ms <25-5000>] [--max-parallel <1-32>] [--payload-dir <directory>] [--audit <jsonl>]"); return 2; }
 		try {
 			IWatchCatalog catalog=options.ProfilesDirectory is null?new StaticWatchCatalog(DefinitionCatalog.Load(options.DefinitionsDirectory!)):new ReloadingProfileCatalog(options.ProfilesDirectory);
 			var definitions=catalog.Current().Definitions; var controlStore=new WatchControlStore(); var statusStore=new WatcherStatusStore();
@@ -35,9 +37,20 @@ internal static class Program {
 	}
 	static int ShowStatus(CommandOptions options) { try { var result=new ResidentCoordinator(null).Status(options.ProcessId); WriteJson(new { status="ok",watcher=WatcherStatusStore.Read(),residents=result }); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
 	static int UpdateControl(ControlOptions options) { try { var store=new WatchControlStore(); var value=store.Update(options.Paused,options.EnableProfile,options.DisableProfile); WriteJson(new { status="ok",paused=value.Paused,disabledProfiles=value.DisabledProfiles.OrderBy(id=>id,StringComparer.Ordinal) }); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
+	static int RunInstall(InstallCommand command) { try { var installer=new WatcherInstaller(); var result=command.Action switch { "install"=>installer.Install(command.Options), "verify-install"=>installer.Verify(command.Options), "uninstall"=>installer.Uninstall(command.Options), _=>throw new InvalidOperationException() }; WriteJson(result); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
+	static string[] InstalledRunArguments() { var root=AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar); var state=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"HookLab"); return new[]{"run","--profiles",Path.Combine(root,"deployments"),"--payload-dir",Path.Combine(root,"payload"),"--audit",Path.Combine(state,"watcher-audit.jsonl")}; }
 	static int WriteFailure(Exception ex) { var failure=CommandFailure.Classify(ex); WriteJson(new { status="error",code=failure.Code,message=Sanitize(ex.Message) }); return failure.ExitCode; }
 	static void WriteJson(object value)=>Console.WriteLine(JsonSerializer.Serialize(value,JsonOptions));
 	static string Sanitize(string value)=>value.Replace('\r',' ').Replace('\n',' ');
+}
+
+internal sealed record InstallCommand(string Action,InstalledWatcherOptions Options) {
+	public static bool TryParse(string[] values,out InstallCommand result) {
+		result=new("",InstalledWatcherOptions.Defaults()); if(values.Length==0||values[0] is not ("install" or "verify-install" or "uninstall")) return false;
+		string? source=null,root=null,state=null; var task=true; var keep=false;
+		for(var index=1;index<values.Length;index++) { if(values[index] is "--source" or "--install-root" or "--state-root") { if(++index>=values.Length) return false; if(values[index-1]=="--source") source=values[index]; else if(values[index-1]=="--install-root") root=values[index]; else state=values[index]; } else if(values[index]=="--no-task"&&values[0]=="install") task=false; else if(values[index]=="--keep-state"&&values[0]=="uninstall") keep=true; else return false; }
+		result=new(values[0],InstalledWatcherOptions.Defaults(source,root,state,task,keep)); return true;
+	}
 }
 
 internal sealed record ControlOptions(bool? Paused,string? EnableProfile,string? DisableProfile) {

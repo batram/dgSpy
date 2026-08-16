@@ -8,6 +8,11 @@ namespace HookLab.Watcher.Tests;
 
 public sealed class PackageTests {
 	[Fact]
+	public void Aggregate_deployments_root_loads_immediate_closed_deployment_directories() {
+		var root=Path.Combine(RepoRoot(),"tools","HookLab.Watcher","deployments"); var definition=Assert.Single(ProfileCatalog.Load(root)); Assert.Equal("vmconnect-fullscreen-user",definition.ProfileId);
+	}
+
+	[Fact]
 	public void Checked_in_vmconnect_deployment_is_closed_and_profile_bound() {
 		var root=Path.Combine(RepoRoot(),"tools","HookLab.Watcher","deployments","vmconnect-fullscreen"); var definition=Assert.Single(ProfileCatalog.Load(root));
 		Assert.Equal("vmconnect-fullscreen-user",definition.ProfileId); Assert.Equal("vmconnect-fullscreen-sync",definition.PackageId); Assert.Equal("vmconnect-fullscreen-sync-v1",definition.Value.Id);

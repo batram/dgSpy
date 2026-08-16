@@ -93,8 +93,8 @@ public sealed class ResidentCoordinator {
 				return identity.ProcessCreationTimeUtc.ToUniversalTime().Ticks==actual.ProcessCreationTimeUtc.ToUniversalTime().Ticks&&String.Equals(Path.GetFullPath(identity.ImagePath),Path.GetFullPath(actual.ImagePath),StringComparison.OrdinalIgnoreCase)&&identity.Architecture==actual.Architecture&&identity.RuntimeId==actual.RuntimeId&&identity.AppDomainId==actual.AppDomainId;
 			}
 			catch(ArgumentException) { return false; }
-			catch(InvalidOperationException) { return false; }
-			catch(Win32Exception) { return false; }
+			catch(InvalidOperationException ex) { throw new LiveTargetInspectionUnavailableException("Live target identity could not be inspected; preserving its discovery record.",ex); }
+			catch(Win32Exception ex) { throw new LiveTargetInspectionUnavailableException("Live target identity could not be inspected; preserving its discovery record.",ex); }
 		}
 	}
 

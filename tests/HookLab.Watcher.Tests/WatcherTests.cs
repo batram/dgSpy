@@ -120,6 +120,8 @@ public sealed class WatcherTests {
 		var changed=store.Update(paused:true,disableProfile:"alpha"); Assert.True(changed.Paused); Assert.Contains("alpha",store.Read().DisabledProfiles);
 		var definition=Definition("alpha","Target.exe"); var status=new WatcherStatusStore(statusPath); status.Publish(changed,new StaticWatchCatalog(new[]{definition}).Current(),new WatchWork(definition,new ProcessIdentity(1,2,"Target.exe",7)),"installed",12,null);
 		var value=WatcherStatusStore.Read(statusPath)!.Value; Assert.True(value.GetProperty("paused").GetBoolean()); Assert.Equal("installed",Assert.Single(value.GetProperty("lastResults").EnumerateArray()).GetProperty("status").GetString());
+		Assert.True(value.GetProperty("processAlive").GetBoolean()); Assert.Equal("starting",value.GetProperty("recordedLifecycle").GetString());
+		var stale=WatcherStatusStore.Read(statusPath,(_,_)=>false)!.Value; Assert.Equal("stale",stale.GetProperty("lifecycle").GetString()); Assert.Equal("starting",stale.GetProperty("recordedLifecycle").GetString()); Assert.False(stale.GetProperty("processAlive").GetBoolean());
 	}
 
 	[Fact]

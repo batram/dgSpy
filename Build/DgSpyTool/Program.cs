@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 
 return await DgSpyBuildTool.RunAsync(args);
@@ -60,7 +62,7 @@ internal static class DgSpyBuildTool {
 		Build(new Options(new(StringComparer.OrdinalIgnoreCase){{"repo",repo},{"artifacts",artifacts},{"build-id",buildId}}));
 		var host=Path.Combine(artifacts,"host-raw",buildId,"content"); var components=Path.Combine(artifacts,"dgspy-components",buildId,"content");
 		var layout=Full(options.Value("layout") ?? Path.Combine(artifacts,"layouts",buildId));
-		Compose(new Options(new(StringComparer.OrdinalIgnoreCase){{"host",host},{"components",Path.Combine(components,"extension")},{"cli",Path.Combine(components,"cli")},{"gateway",Path.Combine(components,"gateway")},{"installer",Path.Combine(components,"installer")},{"launcher",Path.Combine(components,"launcher")},{"bootstrap",Path.Combine(components,"payload","HookLab.Bootstrap.dll")},{"native-bootstrap",Path.Combine(components,"payload","HookLab.NativeBootstrap.x64.dll")},{"output",layout}}));
+		Compose(new Options(new(StringComparer.OrdinalIgnoreCase){{"host",host},{"components",Path.Combine(components,"extension")},{"cli",Path.Combine(components,"cli")},{"gateway",Path.Combine(components,"gateway")},{"installer",Path.Combine(components,"installer")},{"launcher",Path.Combine(components,"launcher")},{"watcher",Path.Combine(components,"watcher")},{"bootstrap",Path.Combine(components,"payload","HookLab.Bootstrap.dll")},{"native-bootstrap",Path.Combine(components,"payload","HookLab.NativeBootstrap.x64.dll")},{"output",layout}}));
 		var package=Full(options.Value("package") ?? Path.Combine(artifacts,"packages","dgspy-win-x64",buildId));
 		Package(new Options(new(StringComparer.OrdinalIgnoreCase){{"layout",layout},{"output",package}}));
 		Console.WriteLine("pipeline complete: "+package);
@@ -107,6 +109,11 @@ internal static class DgSpyBuildTool {
 				(repo,"dotnet",new[]{"publish",Path.Combine(repo,"dgSpy.Cli","dgSpy.Cli.csproj"),"-c","Release","-r","win-x64","--self-contained","true","--no-restore","-o",Path.Combine(content,"cli"),"--nologo","-v:minimal","-clp:ErrorsOnly"}),
 				(repo,"dotnet",new[]{"publish",Path.Combine(repo,"dgSpy.Gateway","dgSpy.Gateway.csproj"),"-c","Release","-r","win-x64","--self-contained","true","--no-restore","-o",Path.Combine(content,"gateway"),"--nologo","-v:minimal","-clp:ErrorsOnly"}),
 				(repo,"dotnet",new[]{"publish",Path.Combine(repo,"Build","DgSpyTool","DgSpyTool.csproj"),"-c","Release","-r","win-x64","--self-contained","true","--no-restore","-p:PublishSingleFile=true","-p:IncludeNativeLibrariesForSelfExtract=true","-o",Path.Combine(content,"installer"),"--nologo","-v:minimal","-clp:ErrorsOnly"})});
+			Run(repo,"dotnet","publish",Path.Combine(repo,"tools","HookLab.Watcher","HookLab.Watcher.csproj"),"-c","Release","-r","win-x64","--self-contained","true","--no-restore","-o",Path.Combine(content,"watcher"),"--nologo","-v:minimal","-clp:ErrorsOnly");
+			CopyDirectory(Path.Combine(repo,"tools","HookLab.Watcher","deployments"),Path.Combine(content,"watcher","deployments"));
+			Directory.CreateDirectory(Path.Combine(content,"watcher","payload"));
+			File.Copy(Path.Combine(repo,"HookLab","HookLab.Bootstrap","bin","Release","net48","HookLab.Bootstrap.dll"),Path.Combine(content,"watcher","payload","HookLab.Bootstrap.dll"));
+			File.Copy(Path.Combine(repo,"HookLab","HookLab.NativeBootstrap","bin","Release","HookLab.NativeBootstrap.x64.dll"),Path.Combine(content,"watcher","payload","HookLab.NativeBootstrap.x64.dll"));
 			Directory.CreateDirectory(extension); Directory.CreateDirectory(payload); Directory.CreateDirectory(launcher);
 			var extensionOutput=Path.Combine(repo,"Extensions","dgSpy.Extension","bin","Release","net10.0-windows");
 			foreach(var file in ExtensionFiles) File.Copy(Path.Combine(extensionOutput,file),Path.Combine(extension,file));
@@ -172,6 +179,8 @@ internal static class DgSpyBuildTool {
 			MergeTree(options.Required("gateway"),bin,"gateway",ownership);
 			var installer=options.Value("installer"); if(!string.IsNullOrWhiteSpace(installer)) MergeTree(installer!,bin,"installer",ownership);
 			MergeTree(options.Required("launcher"),Path.Combine(staging,"launcher"),"launcher",ownership);
+			MergeTree(options.Required("watcher"),Path.Combine(staging,"hooklab-watcher"),"hooklab-watcher",ownership);
+			ProtectPrivilegedTree(Path.Combine(staging,"hooklab-watcher"));
 			var extension=Path.Combine(bin,"Extensions","dgSpy"); Directory.CreateDirectory(extension);
 			foreach(var name in ExtensionFiles) CopyOwned(Path.Combine(options.Required("components"),name),Path.Combine(extension,name),"extension",staging,ownership,false);
 			var hooklab=Path.Combine(staging,"hooklab"); Directory.CreateDirectory(hooklab);
@@ -205,7 +214,7 @@ internal static class DgSpyBuildTool {
 	static void Verify(string layoutPath) {
 		var root=Full(layoutPath); var manifestPath=Path.Combine(root,ManifestName);
 		var manifest=VerifyInventoryOnly(root);
-		Require(root,"dnSpy.exe"); Require(root,"bin/dnSpy.dll"); Require(root,"bin/dgspy.exe"); Require(root,"bin/dgSpy.Gateway.exe"); Require(root,"bin/Extensions/dgSpy/dgSpy.Extension.x.dll"); Require(root,"hooklab/HookLab.NativeBootstrap.x64.dll"); Require(root,"launcher/Start-dgSpyRemoteHost.ps1"); Require(root,"launcher/Start-dgSpyRemoteHost.cmd");
+		Require(root,"dnSpy.exe"); Require(root,"bin/dnSpy.dll"); Require(root,"bin/dgspy.exe"); Require(root,"bin/dgSpy.Gateway.exe"); Require(root,"bin/Extensions/dgSpy/dgSpy.Extension.x.dll"); Require(root,"hooklab/HookLab.NativeBootstrap.x64.dll"); Require(root,"hooklab-watcher/HookLab.Watcher.exe"); Require(root,"hooklab-watcher/payload/HookLab.Bootstrap.dll"); Require(root,"hooklab-watcher/payload/HookLab.NativeBootstrap.x64.dll"); Require(root,"hooklab-watcher/deployments/vmconnect-fullscreen/vmconnect-fullscreen.json"); Require(root,"launcher/Start-dgSpyRemoteHost.ps1"); Require(root,"launcher/Start-dgSpyRemoteHost.cmd");
 		var rootProtocol=Hash(Path.Combine(root,"bin","dgSpy.Protocol.dll")); var extensionProtocol=Hash(Path.Combine(root,"bin","Extensions","dgSpy","dgSpy.Protocol.dll"));
 		if(rootProtocol!=extensionProtocol) throw new InvalidOperationException("App-base and extension protocol assemblies differ.");
 		Console.WriteLine($"verified {manifest.Files.Length} files: {root}");
@@ -223,6 +232,7 @@ internal static class DgSpyBuildTool {
 		var layout=Full(options.Required("layout")); Verify(layout);
 		var output=Full(options.Required("output")); PublishDirectory(output,staging=>{
 			CopyDirectory(layout,Path.Combine(staging,"cli"));
+			ProtectPrivilegedTree(Path.Combine(staging,"cli","hooklab-watcher"));
 			File.Copy(Path.Combine(layout,"bin","DgSpyTool.exe"),Path.Combine(staging,"install-dgspy.exe"));
 			var layoutManifest=Path.Combine(staging,"cli",ManifestName);
 			var files=Directory.EnumerateFiles(Path.Combine(staging,"cli"),"*",SearchOption.AllDirectories).ToArray();
@@ -345,6 +355,14 @@ internal static class DgSpyBuildTool {
 	}
 	static LayoutManifest ReadLayout(string root)=>JsonSerializer.Deserialize<LayoutManifest>(File.ReadAllText(Path.Combine(root,ManifestName)),JsonOptions) ?? throw new InvalidOperationException("Layout manifest is invalid.");
 	static void CopyDirectory(string source,string destination) { Directory.CreateDirectory(destination); foreach(var directory in Directory.EnumerateDirectories(source,"*",SearchOption.AllDirectories)) Directory.CreateDirectory(Path.Combine(destination,Path.GetRelativePath(source,directory))); Parallel.ForEach(Directory.EnumerateFiles(source,"*",SearchOption.AllDirectories),file=>{ var target=Path.Combine(destination,Path.GetRelativePath(source,file)); Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file,target); }); }
+	static void ProtectPrivilegedTree(string root) {
+		if(!OperatingSystem.IsWindows()) return;
+		var inheritance=InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit; var propagation=PropagationFlags.None; var full=FileSystemRights.FullControl;
+		var identities=new IdentityReference[]{WindowsIdentity.GetCurrent().User??throw new UnauthorizedAccessException("Current Windows identity has no SID."),new SecurityIdentifier(WellKnownSidType.LocalSystemSid,null),new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid,null)};
+		var security=new DirectorySecurity(); security.SetAccessRuleProtection(true,false); foreach(var identity in identities) security.AddAccessRule(new FileSystemAccessRule(identity,full,inheritance,propagation,AccessControlType.Allow)); FileSystemAclExtensions.SetAccessControl(new DirectoryInfo(root),security);
+		foreach(var directory in Directory.EnumerateDirectories(root,"*",SearchOption.AllDirectories)) { var value=new DirectorySecurity(); value.SetAccessRuleProtection(false,false); FileSystemAclExtensions.SetAccessControl(new DirectoryInfo(directory),value); }
+		foreach(var file in Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories)) { var value=new FileSecurity(); value.SetAccessRuleProtection(false,false); FileSystemAclExtensions.SetAccessControl(new FileInfo(file),value); }
+	}
 	static void TryDeleteDirectory(string path) { if(!Directory.Exists(path)) return; try { Directory.Delete(path,true); } catch(Exception ex) { Console.Error.WriteLine("warning: completed artifact retained, but cleanup failed for "+path+": "+ex.Message); } }
 	static string Quote(string value)=>'"'+value.Replace("\"","\\\"")+'"';
 

@@ -1,5 +1,9 @@
 namespace HookLab.Injector;
 
+public sealed class LiveTargetInspectionUnavailableException:Exception {
+	public LiveTargetInspectionUnavailableException(string message,Exception innerException):base(message,innerException) { }
+}
+
 public sealed record InjectorRequest(
 	int ProcessId,
 	long ProcessCreationUtcTicks,

@@ -158,7 +158,7 @@ public sealed class PipelineTests : IDisposable {
 		Assert.Equal(1,await DgSpyBuildTool.RunAsync(new[]{"install","--package",package,"--install",install,"--host-only","true"})); Assert.Equal("updated-host",File.ReadAllText(Path.Combine(install,"cli","dnSpy.exe")));
 	}
 
-	async Task<int> Run(string command,string[] input,params string[] extra)=>await DgSpyBuildTool.RunAsync(new[]{command,"--host",input[0],"--components",input[1],"--cli",input[2],"--gateway",input[3],"--bootstrap",input[4],"--native-bootstrap",input[5],"--launcher",input[6]}.Concat(extra).ToArray());
+	async Task<int> Run(string command,string[] input,params string[] extra)=>await DgSpyBuildTool.RunAsync(new[]{command,"--host",input[0],"--components",input[1],"--cli",input[2],"--gateway",input[3],"--bootstrap",input[4],"--native-bootstrap",input[5],"--launcher",input[6],"--watcher",input[7]}.Concat(extra).ToArray());
 	string[] Fixture() {
 		var host=Dir("host"); var components=Dir("components"); var cli=Dir("cli"); var gateway=Dir("gateway");
 		Write(host,"dnSpy.exe","host"); Write(host,"bin/dnSpy.dll","host-bin"); Write(host,"bin/shared-runtime.dll","shared");
@@ -167,7 +167,8 @@ public sealed class PipelineTests : IDisposable {
 		foreach(var name in new[]{"dgSpy.Extension.x.dll","dgSpy.Extension.x.pdb","dgSpy.Protocol.dll","dgSpy.Protocol.pdb","HookLab.Contracts.dll","HookLab.Contracts.pdb","HookLab.Host.Transport.dll","HookLab.Host.Transport.pdb"}) Write(components,name,name=="dgSpy.Protocol.dll"?"protocol":name);
 		var bootstrap=Write(root,"bootstrap.payload","bootstrap"); var native=Write(root,"native.dll","native"); var launcher=Dir("launcher");
 		Write(launcher,"Start-dgSpyRemoteHost.ps1","launcher"); Write(launcher,"Start-dgSpyRemoteHost.cmd","launcher");
-		return new[]{host,components,cli,gateway,bootstrap,native,launcher};
+		var watcher=Dir("watcher"); Write(watcher,"HookLab.Watcher.exe","watcher"); Write(watcher,"payload/HookLab.Bootstrap.dll","bootstrap"); Write(watcher,"payload/HookLab.NativeBootstrap.x64.dll","native"); Write(watcher,"deployments/vmconnect-fullscreen/vmconnect-fullscreen.json","profile");
+		return new[]{host,components,cli,gateway,bootstrap,native,launcher,watcher};
 	}
 	string Dir(string name) { var path=Path.Combine(root,name); Directory.CreateDirectory(path); return path; }
 	static string Write(string directory,string relative,string text) { var path=Path.Combine(directory,relative); Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllText(path,text); return path; }

@@ -100,6 +100,18 @@ machine-readable JSON with stable exit categories. The dgSpy extension still use
 integrated adapter; adapting it to the shared standalone boundary is deliberately deferred until
 standalone parity and operational controls are complete.
 
+The supported pipeline publishes the watcher as a closed, separately owned layout subtree. Its elevated
+installer verifies the parent layout inventory, digests, owner/ACL, path containment, and reparse-point
+absence before an atomic per-user install. A highest-available interactive logon task reads only the
+installed packages and bootstrap payloads. Mutable control/status/audit state is separate, and stdout is
+not an operational control channel. Upgrade and uninstall stop only the exact installed watcher image;
+they never terminate targets, remove resident patches, or delete live resident payload leases.
+
+Live discovery identity has a three-way operational boundary: an exact mismatch is quarantined, a
+definitely exited identity is retired, and an identity that cannot be inspected is preserved while the
+operation fails closed. Persisted watcher status similarly validates the exact PID plus creation time and
+marks dead recorded active states as stale rather than presenting historical `running` as current.
+
 The injector re-reads PID, creation time, and full image path immediately before acting. A profile-backed
 watcher request also carries the image selected by the permitted-path filter, and the injector refuses a
 different live image. Discovery credentials and resident status remain owned by
