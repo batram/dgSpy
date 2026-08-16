@@ -23,6 +23,7 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\DetachCompletionGuard.cs" Link="Debugger\DetachCompletionGuard.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\LaunchSessionOwnership.cs" Link="Debugger\LaunchSessionOwnership.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\BreakpointSnapPolicy.cs" Link="Debugger\BreakpointSnapPolicy.cs" />
+	<Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\ProgramDiscoverySelection.cs" Link="Debugger\ProgramDiscoverySelection.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\OwnedBreakpoints\OwnedBreakpointStopLabel.cs" Link="Debugger\OwnedBreakpoints\OwnedBreakpointStopLabel.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\ActionLeaseCoordinator.cs" Link="Debugger\ActionLeaseCoordinator.cs" />
     <!-- Deliberately dnSpy-free: it carries the capture-then-recheck decision that closes the lease

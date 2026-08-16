@@ -39,7 +39,7 @@ namespace dgSpy.Extension {
 		readonly AttachableProcessesService programs; readonly DbgManager manager; readonly DebuggerSettings debuggerSettings; readonly DbgCodeBreakpointsService breakpoints; readonly DbgModuleBreakpointsService moduleBreakpoints; readonly DbgObjectIdService objectIds; readonly DbgDotNetCodeLocationFactory locations; readonly DbgCallStackService callStack; readonly DbgLanguageService languages; readonly DbgExceptionSettingsService exceptions; readonly DbgMetadataService metadataService; readonly IDsDocumentService documentService; readonly Lazy<DbgModuleIdProvider>[] moduleIdProviders; readonly IDecompilerService decompilers;
 		readonly EvaluationQueue evaluations=new EvaluationQueue(); readonly SemaphoreSlim targetControl=new SemaphoreSlim(1,1);
 		readonly CancellationTokenSource shutdown=new CancellationTokenSource(); readonly object sync=new object(); readonly DebugEventBuffer events=new DebugEventBuffer(); readonly OutputBuffer output=new OutputBuffer();
-		readonly ProgramOutputAssembler programOutput; readonly Dictionary<string,AttachableProcess> programCache=new Dictionary<string,AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>(); readonly Dictionary<int,long> engineHitCounts=new Dictionary<int,long>();
+		readonly ProgramOutputAssembler programOutput; readonly ProgramDiscoveryCache<AttachableProcess> programCache=new ProgramDiscoveryCache<AttachableProcess>(); readonly Dictionary<int,uint> requestedOffsets=new Dictionary<int,uint>(); readonly Dictionary<int,string> processLifecycleActions=new Dictionary<int,string>(); readonly Dictionary<int,long> engineHitCounts=new Dictionary<int,long>();
 		readonly OwnedBreakpointService ownedBreakpoints;
 		readonly ActionLeaseCoordinator actionLeases;
 		long lifecycleVersion,executionVersion,breakpointsVersion; string? stopId; string? connectionState; DateTime lastGatewayHeartbeatUtc;
@@ -402,18 +402,30 @@ namespace dgSpy.Extension {
 		// for, which is how a caller avoids paying for a scan it does not need — Unity's multicast
 		// discovery in particular only ever runs when it is named explicitly.
 		async Task<ProgramInfo[]> ListProgramsAsync(RpcRequest req,CancellationToken cancellationToken) {
-			var processIds=ProtocolJson.FromNode<int[]>(req.Arguments["process_ids"]);
-			var processNames=ProtocolJson.FromNode<string[]>(req.Arguments["process_names"]);
+			var processIds=ProtocolJson.FromNode<int[]>(req.Arguments["process_ids"]) ?? Array.Empty<int>();
+			var processNames=ProtocolJson.FromNode<string[]>(req.Arguments["process_names"]) ?? Array.Empty<string>();
 			var providerNames=ProtocolJson.FromNode<string[]>(req.Arguments["provider_names"]);
-			var values=await programs.GetAttachableProcessesAsync(processNames,processIds,providerNames,cancellationToken).ConfigureAwait(false);
-			lock(sync) { programCache.Clear(); return values.Select(p=>{
+			var generation=programCache.Begin();
+			if (processNames.Length!=0) {
+				ProcessDiscoverySelection selection;
+				try { selection=ProgramDiscoverySelector.Resolve(processNames,processIds); }
+				catch (ArgumentException ex) { throw new RpcException("invalid_argument",ex.Message); }
+				processIds=selection.ProcessIds;
+				if (processIds.Length==0) {
+					if (!programCache.TryPublish(generation,Array.Empty<KeyValuePair<string,AttachableProcess>>())) throw new RpcException("discovery_superseded","A newer list_programs request replaced this discovery.");
+					return Array.Empty<ProgramInfo>();
+				}
+			}
+			var values=await programs.GetAttachableProcessesAsync(null,processIds,providerNames,cancellationToken).ConfigureAwait(false);
+			var entries=values.Select(p=>new KeyValuePair<string,AttachableProcess>(ProgramIdentity.Create(p.ProcessId,p.RuntimeGuid,p.RuntimeName),p)).ToArray();
+			if (!programCache.TryPublish(generation,entries)) throw new RpcException("discovery_superseded","A newer list_programs request replaced this discovery.");
+			return entries.Select(entry=>{
+				var p=entry.Value;
 				// RuntimeId has no string form, so identity is composed from typed fields: pid, the
 				// runtime GUID (the only thing separating .NET Framework from Unity/Mono), and the
 				// engine's own discriminator, which is the CLR version for CorDebug.
-				var id=ProgramIdentity.Create(p.ProcessId,p.RuntimeGuid,p.RuntimeName);
-				programCache[id]=p;
+				var id=entry.Key;
 				return new ProgramInfo { ProgramId=id,ProcessId=p.ProcessId,Executable=p.Filename,Title=p.Title,CommandLine=p.CommandLine,Architecture=p.Architecture.ToString(),RuntimeName=p.RuntimeName,RuntimeGuid=p.RuntimeGuid.ToString("D"),RuntimeKindGuid=p.RuntimeKindGuid.ToString("D"),AttachProviders=AttachProviders(p.RuntimeGuid) }; }).ToArray(); }
-		}
 		// AttachableProcess does not say which provider produced it, so report the providers that can:
 		// the runtime GUID identifies the engine, and Unity's runtime is reachable through either of
 		// dnSpy's two Unity providers. These are the exact strings provider_names accepts.
@@ -423,7 +435,7 @@ namespace dgSpy.Extension {
 			runtimeGuid==PredefinedDbgRuntimeGuids.DotNetUnity_Guid ? new[]{PredefinedAttachProgramOptionsProviderNames.UnityEditor,PredefinedAttachProgramOptionsProviderNames.UnityPlayer} :
 			Array.Empty<string>();
 		async Task<SessionState> AttachAsync(string id,CancellationToken cancellationToken) {
-			AttachableProcess p; lock(sync) if (!programCache.TryGetValue(id,out p!)) throw new RpcException("program_not_found","The program_id is not in the current listing cache. Every list_programs call replaces that cache; refresh list_programs and use an exact returned program_id.");
+			if (!programCache.TryGetValue(id,out var p)) throw new RpcException("program_not_found","The program_id is not in the current listing cache. Every list_programs call replaces that cache; refresh list_programs and use an exact returned program_id.");
 			// AttachableProcess.Attach() is exactly DbgManager.Start(GetOptions()) with the returned error
 			// string discarded. Calling Start directly is the same attach, except a refused engine says why.
 			return await StartSessionAsync(id,"attach",()=>manager.Start(p.GetOptions()),default,cancellationToken).ConfigureAwait(false);
