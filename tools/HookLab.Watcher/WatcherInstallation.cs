@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
+using System.Xml.Linq;
 
 namespace HookLab.Watcher;
 
@@ -22,17 +23,24 @@ internal interface IWatcherTaskScheduler {
 internal sealed class WindowsWatcherTaskScheduler:IWatcherTaskScheduler {
 	internal const string TaskName="HookLab Watcher";
 	public void Register(string executable,string arguments) {
-		Run("/Create","/F","/TN",TaskName,"/SC","ONLOGON","/RL","HIGHEST","/IT","/TR",Quote(executable)+" "+arguments);
+		Run("/Create","/F","/TN",TaskName,"/SC","ONLOGON","/RL","HIGHEST","/IT","/TR",TaskCommandLine(executable,arguments));
 		if(!Matches(executable,arguments)) throw new InvalidOperationException("Scheduled task readback differs from the requested HookLab watcher command.");
 	}
 	public void Remove() { if(Exists()) Run("/Delete","/F","/TN",TaskName); }
 	public bool Matches(string executable,string arguments) {
-		try { var output=Capture("/Query","/TN",TaskName,"/XML");
-		return output.Contains("<RunLevel>HighestAvailable</RunLevel>",StringComparison.OrdinalIgnoreCase)&&
-			output.Contains("<LogonType>InteractiveToken</LogonType>",StringComparison.OrdinalIgnoreCase)&&
-			output.Contains(System.Security.SecurityElement.Escape(executable),StringComparison.OrdinalIgnoreCase)&&
-			output.Contains(System.Security.SecurityElement.Escape(arguments),StringComparison.Ordinal); } catch { return false; }
+		try { return MatchesXml(Capture("/Query","/TN",TaskName,"/XML"),executable,arguments); }
+		catch { return false; }
 	}
+	internal static bool MatchesXml(string xml,string executable,string arguments) {
+		var document=XDocument.Parse(xml); string? Value(string name)=>document.Descendants().FirstOrDefault(element=>element.Name.LocalName==name)?.Value;
+		return String.Equals(Value("RunLevel"),"HighestAvailable",StringComparison.OrdinalIgnoreCase)&&
+			String.Equals(Value("LogonType"),"InteractiveToken",StringComparison.OrdinalIgnoreCase)&&
+			String.Equals(NormalizeCommand(Value("Command")),NormalizeCommand(executable),StringComparison.OrdinalIgnoreCase)&&
+			String.Equals(NormalizeArguments(Value("Arguments")),NormalizeArguments(arguments),StringComparison.OrdinalIgnoreCase);
+	}
+	internal static string TaskCommandLine(string executable,string arguments)=>Quote(executable)+" "+arguments;
+	static string NormalizeCommand(string? value)=>(value??String.Empty).Trim().Trim('"');
+	static string NormalizeArguments(string? value)=>(value??String.Empty).Replace("\"",String.Empty,StringComparison.Ordinal).Trim();
 	bool Exists() { try { Capture("/Query","/TN",TaskName); return true; } catch { return false; } }
 	static void Run(params string[] arguments)=>Capture(arguments);
 	static string Capture(params string[] arguments) {
@@ -55,18 +63,19 @@ internal sealed class WatcherInstaller {
 	public object Install(InstalledWatcherOptions options) {
 		var source=VerifySource(options.Source); var parent=Directory.GetParent(options.InstallRoot)?.FullName??throw new InvalidDataException("Install root has no parent.");
 		Directory.CreateDirectory(parent); Directory.CreateDirectory(options.StateRoot);
-		var staging=options.InstallRoot+".staging-"+Guid.NewGuid().ToString("N"); var backup=options.InstallRoot+".previous-"+Guid.NewGuid().ToString("N"); var command=TaskArguments(options.InstallRoot,options.StateRoot); var priorTask=scheduler.Matches(Path.Combine(options.InstallRoot,"HookLab.Watcher.exe"),command);
+		var staging=options.InstallRoot+".staging-"+Guid.NewGuid().ToString("N"); var backup=options.InstallRoot+".previous-"+Guid.NewGuid().ToString("N"); var taskExecutable=TaskExecutable(); var command=TaskArguments(options.InstallRoot,options.StateRoot);
+		var legacyExecutable=Path.Combine(options.InstallRoot,"HookLab.Watcher.exe"); var priorHiddenTask=scheduler.Matches(taskExecutable,command); var priorLegacyTask=!priorHiddenTask&&scheduler.Matches(legacyExecutable,"run-installed");
 		try {
 			CopyClosedTree(options.Source,staging,source); ProtectTree(staging); VerifyInstalled(staging);
 			StopInstalledWatchers(options.InstallRoot);
 			if(Directory.Exists(options.InstallRoot)) Directory.Move(options.InstallRoot,backup);
 			try {
 				Directory.Move(staging,options.InstallRoot);
-				if(options.RegisterTask) scheduler.Register(Path.Combine(options.InstallRoot,"HookLab.Watcher.exe"),command);
+				if(options.RegisterTask) scheduler.Register(taskExecutable,command);
 				VerifyInstalled(options.InstallRoot);
-				if(options.RegisterTask&&!scheduler.Matches(Path.Combine(options.InstallRoot,"HookLab.Watcher.exe"),command)) throw new InvalidOperationException("Scheduled task verification failed.");
+				if(options.RegisterTask&&!scheduler.Matches(taskExecutable,command)) throw new InvalidOperationException("Scheduled task verification failed.");
 			}
-			catch { if(options.RegisterTask) TryRemoveTask(); TryDelete(options.InstallRoot); if(Directory.Exists(backup)) Directory.Move(backup,options.InstallRoot); if(priorTask) scheduler.Register(Path.Combine(options.InstallRoot,"HookLab.Watcher.exe"),command); throw; }
+			catch { if(options.RegisterTask) TryRemoveTask(); TryDelete(options.InstallRoot); if(Directory.Exists(backup)) Directory.Move(backup,options.InstallRoot); if(priorHiddenTask) scheduler.Register(taskExecutable,command); else if(priorLegacyTask) scheduler.Register(legacyExecutable,"run-installed"); throw; }
 			TryDelete(backup);
 			return new { status="installed",installRoot=options.InstallRoot,stateRoot=options.StateRoot,taskRegistered=options.RegisterTask,fileCount=source.Files.Length };
 		}
@@ -75,7 +84,7 @@ internal sealed class WatcherInstaller {
 
 	public object Verify(InstalledWatcherOptions options) {
 		var manifest=VerifyInstalled(options.InstallRoot); var command=TaskArguments(options.InstallRoot,options.StateRoot);
-		return new { status="valid",installRoot=options.InstallRoot,fileCount=manifest.Files.Length,taskRegistered=scheduler.Matches(Path.Combine(options.InstallRoot,"HookLab.Watcher.exe"),command) };
+		return new { status="valid",installRoot=options.InstallRoot,fileCount=manifest.Files.Length,taskRegistered=scheduler.Matches(TaskExecutable(),command) };
 	}
 
 	public object Uninstall(InstalledWatcherOptions options) {
@@ -83,7 +92,8 @@ internal sealed class WatcherInstaller {
 		return new { status="uninstalled",installRoot=options.InstallRoot,stateRemoved=!options.KeepState };
 	}
 
-	internal static string TaskArguments(string installRoot,string stateRoot)=>"run-installed";
+	internal static string TaskExecutable()=>Path.Combine(Environment.SystemDirectory,"WindowsPowerShell","v1.0","powershell.exe");
+	internal static string TaskArguments(string installRoot,string stateRoot)=>"-NoProfile -NonInteractive -WindowStyle Hidden -File "+Quote(Path.Combine(installRoot,"run-installed.ps1"));
 	static InstallManifest VerifySource(string source) {
 		var root=Path.GetFullPath(source); var layout=Directory.GetParent(root)?.FullName??throw new InvalidDataException("Watcher source is not inside a dgSpy layout.");
 		var layoutPath=Path.Combine(layout,"dgspy-layout.json"); if(!File.Exists(layoutPath)) throw new InvalidDataException("Watcher source is missing its authoritative dgSpy layout manifest.");
