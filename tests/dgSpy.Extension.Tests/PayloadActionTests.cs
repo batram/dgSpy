@@ -159,9 +159,17 @@ public sealed class PayloadActionRequestTests {
 	[Fact]
 	public void Host_parameter_key_copy_matches_bootstrap_authority() {
 		var source = File.ReadAllText(RepoFile("HookLab", "HookLab.Bootstrap", "BootstrapParameters.cs"));
-		foreach (var key in PayloadActionRequest.KnownParameterKeys) Assert.Contains("\"" + key + "\"", source);
 		var knownBlock = source.Substring(source.IndexOf("KnownKeys", StringComparison.Ordinal), source.IndexOf("HookKeys", StringComparison.Ordinal) - source.IndexOf("KnownKeys", StringComparison.Ordinal));
-		Assert.Equal(PayloadActionRequest.KnownParameterKeys.Length, knownBlock.Count(c => c == '"') / 2);
+		var bootstrapKeys=knownBlock.Split('"').Where((_,index)=>index%2==1).ToArray();
+		var hostKeys=PayloadActionRequest.KnownParameterKeys;
+		var missingFromHost=bootstrapKeys.Except(hostKeys,StringComparer.Ordinal).ToArray();
+		var extraInHost=hostKeys.Except(bootstrapKeys,StringComparer.Ordinal).ToArray();
+		var sameOrder=hostKeys.SequenceEqual(bootstrapKeys,StringComparer.Ordinal);
+		Assert.True(sameOrder,
+			"Payload parameter keys differ from BootstrapParameters.KnownKeys. "+
+			"Missing from host: ["+String.Join(", ",missingFromHost)+"]. "+
+			"Extra in host: ["+String.Join(", ",extraInHost)+"]. "+
+			(missingFromHost.Length==0 && extraInHost.Length==0 ? "The sets match but their order differs." : String.Empty));
 		Assert.Contains("MaximumValueLength = "+PayloadActionRequest.MaxParameterValueLength+";",source);
 	}
 
