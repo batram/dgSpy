@@ -35,18 +35,29 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Improve HookLab authoring only when concrete hooks require it.
+1. Establish a reliable CoreCLR debugger boundary from the retained Barnyard failures.
 2. Revisit high-risk execution, editing, and scripting one workflow at a time.
 3. Keep compatibility expansions parked until product scope changes.
+4. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - improve HookLab authoring when demanded
+## Road 1 - establish the CoreCLR debugger boundary
 
-Pull these only from a concrete failing hook: generic methods and declaring types, additional resident
-compiler references, a larger source boundary, Roslyn editor assistance, natural collision-safe
-parameter names, or richer package management.
+Promote the retained Barnyard evidence into three ordered, independently verified slices:
 
-Each slice needs a target fixture that fails before it, compilation and runtime rollback coverage, and
-the existing exact MVID, token, signature, and IL identity guarantees.
+1. Resolve `mscordbi.dll` and `mscordaccore.dll` by the filename, architecture, PE timestamp, and
+   `SizeOfImage` identity supplied by `ICLRDebuggingLibraryProvider3`. Search adjacent files, a private
+   verified cache, and all installed x64 `Microsoft.NETCore.App` runtimes without selecting one from a
+   single-file apphost's version. Keep downloads optional, explicit, atomic, and outside the dispatcher.
+2. Reproduce and capture the managed callback that leaves Barnyard suspended while the session reports
+   running. Enforce one observable terminal disposition per accepted callback without an unconditional
+   broad-`finally` continue that could corrupt counters, queued callbacks, intentional stops, or detach.
+3. Only after ordinary CoreCLR attach, pause, continue, breakpoint, evaluation, detach, and failure
+   behavior have their own live gate, design CoreCLR HookLab as a separate runtime backend. Do not weaken
+   the proven CLR v4 resident, identity, guard, authentication, revision, or ownership boundaries.
+
+The current product boundary remains x64 CLR v4 and Mono/Unity until those gates pass. The active
+evidence, investigation order, and acceptance criteria live in
+`docs/local/work/coreclr-debugger.md`.
 
 ## Road 2 - consider high-risk capabilities separately
 
@@ -67,13 +78,24 @@ side-effect reporting, and end-to-end refusal tests.
 
 ## Road 3 - parked horizons
 
-CoreCLR, x86, native debugging, broad Mono HookLab support, reverse patches, generic hook providers,
-profiler/ReJIT, and Visual Basic parity remain outside the current x64 CLR v4 and Unity scope. Useful
-CoreCLR evidence is retained under `docs/local/work/backlog/coreclr-debugger.md`.
+x86, native debugging, broad Mono HookLab support, reverse patches, generic hook providers,
+profiler/ReJIT, and Visual Basic parity remain outside the current x64 CLR v4 and Unity scope.
 
 Deterministic Unity fixtures, headless Mono connection-failure handling, and broader multi-session
 isolation are independent quality projects. Promote one only with a concrete workflow, fixture, and
 acceptance boundary.
+
+## Road 4 - improve HookLab authoring when demanded
+
+There is currently no failing base hook that justifies an authoring slice. Generic methods and declaring
+types, additional resident compiler references, a larger source boundary, Roslyn editor assistance,
+natural collision-safe parameter names, and richer package management are known possibilities, not
+open defects. The historical compact VmConnect source proves past pressure but still compiled and ran;
+it must be reproduced against the current package before it can motivate a source-boundary change.
+
+Pull one item forward only from a concrete hook that fails on the current verified package. That slice
+needs a target fixture that fails before it, compilation and runtime rollback coverage, and the existing
+exact MVID, token, signature, and IL identity guarantees.
 
 ## Invariants for every road
 
