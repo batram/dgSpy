@@ -5,14 +5,15 @@
 - Windows x64 host.
 - Self-contained `net10.0-windows` dnSpy/dgSpy package.
 - CLR v4 and CoreCLR CorDebug targets, plus Mono/Unity debug targets.
-- HookLab payload targets CLR v4 and therefore remains `net48` internally.
-- x86 targets, CoreCLR HookLab residents, and the old net48 dnSpy host are out of scope.
+- HookLab supports CLR v4 and CoreCLR residents through separate explicit backends; its shared payload
+  remains `net48` internally and carries runtime-specific compiler and patch-engine assets.
+- x86 targets and the old net48 dnSpy host are out of scope.
 
 ## Prerequisites
 
 - .NET SDK 10.
 - .NET Framework 4.8 developer pack for CLR v4 fixtures and HookLab payload compilation.
-- An installed matching x64 runtime for the ordinary CoreCLR debugger fixture.
+- An installed matching x64 runtime for the ordinary CoreCLR debugger and HookLab fixtures.
 - Visual C++ x64 build tools for `HookLab.NativeBootstrap`. DgSpyTool locates them through
   `vswhere` (any Visual Studio edition with the VC x86/x64 toolchain component), with a hardcoded
   path fallback.

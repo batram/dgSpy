@@ -32,13 +32,17 @@
        the assembly builds clean and ships with no payload at all. -->
   <Target Name="EmbedBootstrapPayloads" DependsOnTargets="ResolveReferences" BeforeTargets="AssignTargetPaths">
     <ItemGroup>
-      <BootstrapPayload Include="@(ReferencePath)" Condition="'%(Filename)' == 'HookLab.Contracts' Or '%(Filename)' == 'HookLab.Probe.CorDebug'" />
+	  <BootstrapPayload Include="@(ReferencePath)" Condition="'%(Filename)' == 'HookLab.Contracts' Or '%(Filename)' == 'HookLab.Probe.CorDebug'" />
+	  <BootstrapPayload Include="$(NuGetPackageRoot)microsoft.codeanalysis.common\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.dll" />
+	  <BootstrapPayload Include="$(NuGetPackageRoot)microsoft.codeanalysis.csharp\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.CSharp.dll" />
+	  <BootstrapPayload Include="$(NuGetPackageRoot)system.collections.immutable\10.0.1\lib\net462\System.Collections.Immutable.dll" />
     </ItemGroup>
     <PropertyGroup>
       <BootstrapPayloadNames>@(BootstrapPayload->'%(Filename)')</BootstrapPayloadNames>
     </PropertyGroup>
     <Error Condition="!$(BootstrapPayloadNames.Contains('HookLab.Contracts'))" Text="HookLab.Contracts was not resolved, so the bootstrap would ship without it. Resolved: $(BootstrapPayloadNames)" />
     <Error Condition="!$(BootstrapPayloadNames.Contains('HookLab.Probe.CorDebug'))" Text="HookLab.Probe.CorDebug was not resolved, so the bootstrap would ship without it. Resolved: $(BootstrapPayloadNames)" />
+    <Error Condition="!$(BootstrapPayloadNames.Contains('Microsoft.CodeAnalysis')) Or !$(BootstrapPayloadNames.Contains('Microsoft.CodeAnalysis.CSharp'))" Text="Roslyn was not resolved, so compiled hooks would fail in CoreCLR targets. Resolved: $(BootstrapPayloadNames)" />
     <GetFileHash Files="@(BootstrapPayload)" Algorithm="SHA256" HashEncoding="hex">
       <Output TaskParameter="Items" ItemName="BootstrapPayloadHash" />
     </GetFileHash>

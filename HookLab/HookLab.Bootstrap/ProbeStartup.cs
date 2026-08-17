@@ -316,6 +316,7 @@ namespace HookLab.Bootstrap {
 					var endpointSecret = parameters.EndpointSecret;
 					pipe = new ProbePipeServer(HandleCommand, injectedSecret: endpointSecret, authenticationEnabled: endpointSecret != null);
 					PipeConstructionCountForTest++;
+					if (!pipe.WaitUntilListening(2000)) throw new InvalidOperationException("HookLab probe listener did not become ready: " + (pipe.ListenerFailure ?? "timeout"));
 				}
 				// The public HookLab service uses explicit bounded drain commands. Do not also register the pipe
 				// as a push consumer here: that would remove events from the authoritative buffer before the

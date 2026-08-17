@@ -4,6 +4,9 @@ using System.IO;
 using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using HookLab.Contracts;
 using HookLab.Probe.CorDebug.Patching;
@@ -50,6 +53,7 @@ namespace HookLab.Probe.CorDebug.Transport {
 		readonly bool authenticationEnabled;
 		readonly bool secretWasInjected;
 		readonly ManualResetEvent stopped = new ManualResetEvent(false);
+		readonly ManualResetEvent listening = new ManualResetEvent(false);
 		/// <summary>Serializes the in-flight command count, the dispatch gate and <see cref="commandsIdle"/>
 		/// against each other. Admission and quiescence observation must be one atomic decision: see
 		/// <see cref="TryEnterCommand"/>.</summary>
@@ -109,6 +113,11 @@ namespace HookLab.Probe.CorDebug.Transport {
 		/// normal case; a non-null value means the endpoint stopped accepting connections without being disposed.</summary>
 		public string? ListenerFailure { get; private set; }
 
+		public bool WaitUntilListening(int timeoutMilliseconds) {
+			if (timeoutMilliseconds <= 0) throw new ArgumentOutOfRangeException(nameof(timeoutMilliseconds));
+			return listening.WaitOne(timeoutMilliseconds) && ListenerFailure == null;
+		}
+
 		public ProbeEndpoint TakeInitialEndpoint() {
 			if (secretWasInjected) throw new InvalidOperationException("The probe secret was injected by the host, which already holds it; it is deliberately not returned outward.");
 			if (Interlocked.Exchange(ref endpointTaken, 1) != 0) throw new InvalidOperationException("The initial probe credential has already been returned.");
@@ -136,6 +145,7 @@ namespace HookLab.Probe.CorDebug.Transport {
 						if (disposed) return;
 						pipe = CreatePipe();
 						activePipes.Add(pipe);
+						listening.Set();
 					}
 					try {
 						// If Dispose ran between the gate release and here it has already disposed this pipe,
@@ -167,7 +177,7 @@ namespace HookLab.Probe.CorDebug.Transport {
 			// .NET Framework, and this process is the debuggee - measured, by exactly that route. It is recorded
 			// rather than discarded, for the same reason ProbeRuntime counts consumer dispatch failures: a
 			// listener that died looks identical to one that shut down cleanly otherwise.
-			catch (Exception ex) { ListenerFailure = ex.GetType().FullName + ": " + ex.Message; }
+			catch (Exception ex) { ListenerFailure = ex.GetType().FullName + ": " + ex.Message; listening.Set(); }
 			// Never disposed by Dispose(): a Dispose that stopped owning this handle while the listener may
 			// still reach this line would make Set() throw ObjectDisposedException out of a thread delegate,
 			// which terminates the process on .NET Framework - and that process is the debuggee. Measured.
@@ -194,9 +204,31 @@ namespace HookLab.Probe.CorDebug.Transport {
 			var security = new PipeSecurity();
 			security.SetAccessRuleProtection(true, false);
 			security.AddAccessRule(new PipeAccessRule(sid, PipeAccessRights.FullControl, AccessControlType.Allow));
-			return new NamedPipeServerStream(pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte,
-				PipeOptions.Asynchronous, 4096, 4096, security, HandleInheritability.None);
+			Type? aclType = null;
+			try {
+				var aclAssemblyPath = Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "System.IO.Pipes.AccessControl.dll");
+				if (File.Exists(aclAssemblyPath)) aclType = Assembly.LoadFile(aclAssemblyPath).GetType("System.IO.Pipes.NamedPipeServerStreamAcl", false);
+				else aclType = Assembly.Load(new AssemblyName("System.IO.Pipes.AccessControl")).GetType("System.IO.Pipes.NamedPipeServerStreamAcl", false);
+			}
+			catch (FileNotFoundException) { }
+			if (aclType != null) {
+				var create = aclType.GetMethods(BindingFlags.Public | BindingFlags.Static);
+				foreach (var method in create) {
+					var parameters = method.GetParameters();
+					if (method.Name != "Create" || parameters.Length != 10) continue;
+					return (NamedPipeServerStream)method.Invoke(null, new object[] { pipeName, PipeDirection.InOut, 254,
+						PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 4096, 4096, security,
+						HandleInheritability.None, (PipeAccessRights)0 })!;
+				}
+				throw new MissingMethodException(aclType.FullName, "Create");
+			}
+			return CreateFrameworkPipe(pipeName, security);
 		}
+
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		static NamedPipeServerStream CreateFrameworkPipe(string name, PipeSecurity security) =>
+			new NamedPipeServerStream(name, PipeDirection.InOut, 254, PipeTransmissionMode.Byte,
+				PipeOptions.Asynchronous, 4096, 4096, security, HandleInheritability.None);
 
 		void Serve(Stream pipe) {
 			if (authenticationEnabled) Authenticate(pipe); else NegotiateVersion(pipe);
@@ -242,10 +274,16 @@ namespace HookLab.Probe.CorDebug.Transport {
 				}
 				catch (Exception ex) {
 					response = new ProbeMessage(ProbeWireProtocol.ProtocolVersion, ProbeMessageKind.Response, request.CorrelationId,
-						"error", "{\"error\":\"" + Escape(ex.GetType().Name) + "\",\"message\":\"" + Escape(ex.Message) + "\"}", null);
+						"error", "{\"error\":\"" + Escape(ex.GetType().Name) + "\",\"message\":\"" + Escape(ExceptionMessage(ex)) + "\"}", null);
 				}
 				lock (sendGate) ProbeWireProtocol.WriteFrame(pipe, ProbeWireProtocol.Encode(response));
 			}
+		}
+
+		static string ExceptionMessage(Exception exception) {
+			var parts=new List<string>();
+			for(var current=exception;current!=null && parts.Count<4;current=current.InnerException) parts.Add(current.GetType().Name+": "+current.Message);
+			return string.Join(" -> ",parts);
 		}
 
 		void Authenticate(Stream pipe) {

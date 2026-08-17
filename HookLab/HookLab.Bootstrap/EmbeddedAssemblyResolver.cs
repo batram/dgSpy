@@ -97,7 +97,10 @@ namespace HookLab.Bootstrap {
 					Refuse(simpleName, "not in the manifest");
 					return null;
 				}
-				if (resolved.TryGetValue(simpleName, out var cached)) return cached;
+				if (resolved.TryGetValue(simpleName, out var cached)) {
+					ValidateVersion(requested, cached.GetName(), entry.Name);
+					return cached;
+				}
 				var bytes = reader(entry.ResourceName) ?? throw new BootstrapIntegrityException("Embedded payload resource is missing: " + entry.ResourceName);
 				var actual = Sha256Hex(bytes);
 				if (!string.Equals(actual, Normalize(entry.Sha256), StringComparison.Ordinal))
@@ -106,12 +109,16 @@ namespace HookLab.Bootstrap {
 				var loadedName = assembly.GetName();
 				if (!string.Equals(loadedName.Name, entry.Name, StringComparison.Ordinal))
 					throw new BootstrapIntegrityException("Embedded payload identity mismatch: manifest says " + entry.Name + ", assembly says " + loadedName.Name + ".");
-				if (requested.Version != null && loadedName.Version != requested.Version)
-					throw new BootstrapIntegrityException("Embedded payload version mismatch for " + entry.Name + ": requested " + requested.Version + ", embedded " + loadedName.Version + ".");
+				ValidateVersion(requested, loadedName, entry.Name);
 				resolved.Add(simpleName, assembly);
 				loadCount++;
 				return assembly;
 			}
+		}
+
+		static void ValidateVersion(AssemblyName requested, AssemblyName loaded, string entryName) {
+			if (requested.Version != null && loaded.Version != requested.Version)
+				throw new BootstrapIntegrityException("Embedded payload version mismatch for " + entryName + ": requested " + requested.Version + ", embedded " + loaded.Version + ".");
 		}
 
 		/// <summary>The CLR probes the application directory before it ever raises AssemblyResolve, so this

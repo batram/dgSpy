@@ -91,6 +91,12 @@ namespace HookLab.Bootstrap {
 		/// later Shutdown could reach. The retained cleanup is retried first, so the refusal only stands when
 		/// the retry got nowhere.</summary>
 		[MethodImpl(MethodImplOptions.NoInlining)]
+		public static string PrepareAndCommit(string parameters) {
+			var prepared=Prepare(parameters);
+			return prepared.StartsWith("status=ok\n",StringComparison.Ordinal) ? Commit() : prepared;
+		}
+
+		[MethodImpl(MethodImplOptions.NoInlining)]
 		public static string Start(string parameters) {
 			lock (Gate) {
 				if (startedResult != null) return Error("already_started", "This bootstrap has already run in this AppDomain.", false);

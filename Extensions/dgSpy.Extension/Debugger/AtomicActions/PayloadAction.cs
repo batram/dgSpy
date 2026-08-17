@@ -15,6 +15,9 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 	/// runs with a real resume between them, which is exactly what <c>resume_policy=resume</c> already gives.
 	/// A single action doing both would hold the target frozen across the whole of it.</summary>
 	public enum PayloadOperation {
+		/// <summary>CoreCLR-only combined prepare and commit, used because a second func-eval cannot be
+		/// reached after the first run-all-threads payload evaluation.</summary>
+		initialize,
 		/// <summary>Byte-loads the payload and runs <c>HookLabBootstrap.Prepare</c>: resolver, probe,
 		/// contracts and Harmony become permanently resident, the target is validated, and the commit entry
 		/// is pre-JITted. This is the residency commit and it cannot be undone.</summary>
@@ -85,6 +88,12 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			if(String.IsNullOrEmpty(parameters)) throw new ArgumentException("Bootstrap parameters are required.",nameof(parameters));
 			return "(string)System.Reflection.Assembly.Load(System.IO.File.ReadAllBytes("+Literal(payloadPath)+"))"
 				+".GetType("+Literal(BootstrapTypeName)+").GetMethod(\"Prepare\").Invoke(null,new object[]{"+Literal(parameters)+"})";
+		}
+		public static string PrepareAndCommit(string payloadPath,string parameters) {
+			if(String.IsNullOrEmpty(payloadPath)) throw new ArgumentException("A payload path is required.",nameof(payloadPath));
+			if(String.IsNullOrEmpty(parameters)) throw new ArgumentException("Bootstrap parameters are required.",nameof(parameters));
+			return "(string)System.Reflection.Assembly.Load(System.IO.File.ReadAllBytes("+Literal(payloadPath)+"))"
+				+".GetType("+Literal(BootstrapTypeName)+").GetMethod(\"PrepareAndCommit\").Invoke(null,new object[]{"+Literal(parameters)+"})";
 		}
 
 		public static string Commit(int generationIndex) => GuardedInvoke(generationIndex,"Commit","null");
@@ -278,13 +287,14 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			if(String.IsNullOrWhiteSpace(name)) throw new RpcException("invalid_arguments","payload_operation is required.");
 			PayloadOperation operation;
 			switch(name) {
+				case "initialize": operation=PayloadOperation.initialize; break;
 				case "prepare": operation=PayloadOperation.prepare; break;
 				case "commit": operation=PayloadOperation.commit; break;
 				case "drain": operation=PayloadOperation.drain; break;
 				case "install": operation=PayloadOperation.install; break;
 				case "uninstall": operation=PayloadOperation.uninstall; break;
 				case "shutdown": operation=PayloadOperation.shutdown; break;
-				default: throw new RpcException("invalid_arguments","payload_operation must be prepare, commit, drain, install, uninstall, or shutdown.");
+				default: throw new RpcException("invalid_arguments","payload_operation must be initialize, prepare, commit, drain, install, uninstall, or shutdown.");
 			}
 			var drainMax=(int?)arguments["drain_max"] ?? DefaultDrainMax;
 			if(operation==PayloadOperation.drain && (drainMax<1 || drainMax>MaxDrainMax))
@@ -305,11 +315,11 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		static List<KeyValuePair<string,string>> ParseParameters(JsonNode? node,PayloadOperation operation) {
 			var parsed=new List<KeyValuePair<string,string>>();
 			if(node is null) {
-				if(operation==PayloadOperation.prepare || operation==PayloadOperation.install) throw new RpcException("invalid_arguments","payload_parameters is required for payload_operation="+operation.ToString()+".");
+				if(operation==PayloadOperation.initialize || operation==PayloadOperation.prepare || operation==PayloadOperation.install) throw new RpcException("invalid_arguments","payload_parameters is required for payload_operation="+operation.ToString()+".");
 				return parsed;
 			}
-			if(operation!=PayloadOperation.prepare && operation!=PayloadOperation.install)
-				throw new RpcException("invalid_arguments","payload_parameters applies to payload_operation=prepare or install only.");
+			if(operation!=PayloadOperation.initialize && operation!=PayloadOperation.prepare && operation!=PayloadOperation.install)
+				throw new RpcException("invalid_arguments","payload_parameters applies to payload_operation=initialize, prepare, or install only.");
 			if(node is not JsonObject supplied) throw new RpcException("invalid_arguments","payload_parameters must be an object of string values.");
 			var total=0;
 			var seen=new HashSet<string>(StringComparer.Ordinal);
@@ -455,7 +465,8 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			payloadsResidentObserved=scan.GenerationCount>0;
 
 			switch(request.Operation) {
-				case PayloadOperation.prepare: return await PrepareAsync(context,evidence,scan,cancellationToken).ConfigureAwait(false);
+				case PayloadOperation.prepare:
+				case PayloadOperation.initialize: return await PrepareAsync(context,evidence,scan,cancellationToken).ConfigureAwait(false);
 				default: return await ResidentAsync(context,evidence,scan,cancellationToken).ConfigureAwait(false);
 			}
 		}
@@ -469,7 +480,7 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			evidence["payload_path"]=payload.Path;
 			evidence["payload_bytes"]=payload.Length;
 			evidence["payload_sha256_before"]=payload.Sha256;
-			var expression=PayloadExpressions.Prepare(payload.Path,parameters);
+			var expression=request.Operation==PayloadOperation.initialize?PayloadExpressions.PrepareAndCommit(payload.Path,parameters):PayloadExpressions.Prepare(payload.Path,parameters);
 			evidence["expression"]=expression;
 			// From here on the load may have happened, whatever comes back.
 			residencyMayBeCommitted=true;
@@ -551,6 +562,7 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 					if(report.Value("residency_commit")!="completed") return "Preparation reported residency_commit="+report.Value("residency_commit")+"; a successful preparation makes the payload resident and must say so.";
 					if(report.Value("payloads_resident")!="true") return "Preparation reported payloads_resident="+(report.Value("payloads_resident") ?? "absent")+"; preparation byte-loads the payload and cannot claim otherwise.";
 					return null;
+				case PayloadOperation.initialize:
 				case PayloadOperation.commit:
 					if(report.Value("residency_commit")!="completed") return "Commit reported residency_commit="+report.Value("residency_commit")+", which means it did not reach a prepared generation.";
 					if(!report.Has("worker_started")) return "Commit did not report worker_started, so a first commit cannot be told from a repeat of one.";

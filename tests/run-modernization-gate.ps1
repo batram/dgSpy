@@ -107,6 +107,7 @@ try {
 		Invoke-Checked 'CorDebug fixture (Release)' { dotnet build tests\TestTargets\Milestone1Target\Milestone1Target.csproj -c Release -f net48 --nologo -v:minimal }
 		Invoke-Checked 'CoreCLR debugger fixture (Release)' { dotnet build tests\TestTargets\CoreClrDebuggerTarget\CoreClrDebuggerTarget.csproj -c Release -f net10.0 --nologo -v:minimal }
 		Invoke-Checked 'CoreCLR debugger live smoke' { .\tests\run-coreclr-debugger-smoke.ps1 }
+		Invoke-Checked 'CoreCLR HookLab live smoke' { .\tests\run-coreclr-hooklab-smoke.ps1 }
 		Invoke-Checked 'HookLab interactive fixture (Release)' { dotnet build tests\TestTargets\HookLabInteractiveTarget\HookLabInteractiveTarget.csproj -c Release -f net48 --nologo -v:minimal }
 		# T08 shipped with no live leg: every one of the nine defects T08b fixes lived in the
 		# dnSpy-facing half, which no test entered. This runs a real atomic action against the CorDebug

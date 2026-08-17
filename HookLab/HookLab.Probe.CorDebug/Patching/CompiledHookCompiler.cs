@@ -4,7 +4,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using Microsoft.CSharp;
+using System.Runtime.CompilerServices;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace HookLab.Probe.CorDebug.Patching {
 	public sealed class HookCompilationException : InvalidOperationException {
@@ -25,13 +27,33 @@ namespace HookLab.Probe.CorDebug.Patching {
 	internal static class CompiledHookCompiler {
 		const int MaximumDiagnostics = 20;
 		const int MaximumDiagnosticLength = 1000;
-		const string HarmonyResourceName = "HookLab.Probe.CorDebug.Backends.0Harmony.dll";
 
 		internal static CompiledHook Compile(string source, MethodBase target, HookLab.Contracts.HookKind kind) {
 			if (string.IsNullOrWhiteSpace(source)) throw new ArgumentException("Hook source is required.", nameof(source));
 			if (target == null) throw new ArgumentNullException(nameof(target));
 			if (kind != HookLab.Contracts.HookKind.Prefix && kind != HookLab.Contracts.HookKind.Postfix && kind != HookLab.Contracts.HookKind.Finalizer && kind != HookLab.Contracts.HookKind.Transpiler) throw new NotSupportedException("Compiled hooks currently support Prefix, Postfix, Finalizer, and Transpiler only.");
-			using (var provider = new CSharpCodeProvider()) {
+			var compiledAssembly=CompileAssembly(source,target,kind);
+			var methods = compiledAssembly.GetTypes().SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static)).ToArray();
+			var prefixes = methods.Where(method => string.Equals(method.Name, "Prefix", StringComparison.Ordinal)).ToArray();
+			var postfixes = methods.Where(method => string.Equals(method.Name, "Postfix", StringComparison.Ordinal)).ToArray();
+			var finalizers = methods.Where(method => string.Equals(method.Name, "Finalizer", StringComparison.Ordinal)).ToArray();
+			var transpilers = methods.Where(method => string.Equals(method.Name, "Transpiler", StringComparison.Ordinal)).ToArray();
+			if (prefixes.Length > 1 || postfixes.Length > 1 || finalizers.Length > 1 || transpilers.Length > 1) throw new HookCompilationException(new[] { "Source may declare at most one public static method for each HookLab patch phase." });
+			if (kind == HookLab.Contracts.HookKind.Prefix && prefixes.Length != 1) throw new HookCompilationException(new[] { "Source must declare one public static Prefix method." });
+			if (kind == HookLab.Contracts.HookKind.Postfix && postfixes.Length != 1) throw new HookCompilationException(new[] { "Source must declare one public static Postfix method." });
+			if (kind == HookLab.Contracts.HookKind.Finalizer && finalizers.Length != 1) throw new HookCompilationException(new[] { "Source must declare one public static Finalizer method." });
+			if (kind == HookLab.Contracts.HookKind.Transpiler && transpilers.Length != 1) throw new HookCompilationException(new[] { "Source must declare one public static Transpiler method." });
+			return new CompiledHook(compiledAssembly, prefixes.SingleOrDefault(), postfixes.SingleOrDefault(), finalizers.SingleOrDefault(), transpilers.SingleOrDefault());
+		}
+
+		static Assembly CompileAssembly(string source,MethodBase target,HookLab.Contracts.HookKind kind) {
+			if(string.Equals(typeof(object).Assembly.GetName().Name,"mscorlib",StringComparison.Ordinal)) return CompileDesktop(source,target,kind);
+			return CompileCoreClr(source,target,kind);
+		}
+
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		static Assembly CompileDesktop(string source,MethodBase target,HookLab.Contracts.HookKind kind) {
+			using (var provider = new Microsoft.CSharp.CSharpCodeProvider()) {
 				var parameters = new CompilerParameters { GenerateExecutable = false, GenerateInMemory = true, TreatWarningsAsErrors = false };
 				foreach (var reference in References(target)) parameters.ReferencedAssemblies.Add(reference);
 				// Transpiler source names HarmonyLib.CodeInstruction. Always compile it against the
@@ -45,23 +67,34 @@ namespace HookLab.Probe.CorDebug.Patching {
 				finally { if (temporaryHarmonyReference != null) try { File.Delete(temporaryHarmonyReference); } catch { } }
 				var errors = result.Errors.Cast<CompilerError>().Where(error => !error.IsWarning).Select(Format).Take(MaximumDiagnostics).ToArray();
 				if (errors.Length != 0) throw new HookCompilationException(errors);
-				var methods = result.CompiledAssembly.GetTypes().SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static)).ToArray();
-				var prefixes = methods.Where(method => string.Equals(method.Name, "Prefix", StringComparison.Ordinal)).ToArray();
-				var postfixes = methods.Where(method => string.Equals(method.Name, "Postfix", StringComparison.Ordinal)).ToArray();
-				var finalizers = methods.Where(method => string.Equals(method.Name, "Finalizer", StringComparison.Ordinal)).ToArray();
-				var transpilers = methods.Where(method => string.Equals(method.Name, "Transpiler", StringComparison.Ordinal)).ToArray();
-				if (prefixes.Length > 1 || postfixes.Length > 1 || finalizers.Length > 1 || transpilers.Length > 1) throw new HookCompilationException(new[] { "Source may declare at most one public static method for each HookLab patch phase." });
-				if (kind == HookLab.Contracts.HookKind.Prefix && prefixes.Length != 1) throw new HookCompilationException(new[] { "Source must declare one public static Prefix method." });
-				if (kind == HookLab.Contracts.HookKind.Postfix && postfixes.Length != 1) throw new HookCompilationException(new[] { "Source must declare one public static Postfix method." });
-				if (kind == HookLab.Contracts.HookKind.Finalizer && finalizers.Length != 1) throw new HookCompilationException(new[] { "Source must declare one public static Finalizer method." });
-				if (kind == HookLab.Contracts.HookKind.Transpiler && transpilers.Length != 1) throw new HookCompilationException(new[] { "Source must declare one public static Transpiler method." });
-				return new CompiledHook(result.CompiledAssembly, prefixes.SingleOrDefault(), postfixes.SingleOrDefault(), finalizers.SingleOrDefault(), transpilers.SingleOrDefault());
+				return result.CompiledAssembly;
 			}
+		}
+
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		static Assembly CompileCoreClr(string source,MethodBase target,HookLab.Contracts.HookKind kind) {
+			var temporaryHarmonyReference=kind==HookLab.Contracts.HookKind.Transpiler?MaterializeHarmonyReference():null;
+			try {
+				var paths=References(target).Concat(temporaryHarmonyReference==null?Array.Empty<string>():new[]{temporaryHarmonyReference});
+				var references=paths.Select(path=>MetadataReference.CreateFromFile(path));
+				var compilation=CSharpCompilation.Create("HookLab.Dynamic."+Guid.NewGuid().ToString("N"),new[]{CSharpSyntaxTree.ParseText(source)},references,options:null);
+				compilation=compilation.WithOptions(compilation.Options.WithOutputKind(OutputKind.DynamicallyLinkedLibrary));
+				using(var stream=new MemoryStream()) {
+					var emitted=compilation.Emit(stream);
+					if(!emitted.Success) {
+						var values=(System.Collections.IEnumerable)emitted.GetType().GetProperty("Diagnostics").GetValue(emitted,null);
+						var diagnostics=values.Cast<object>().Select(value=>value.ToString()).Take(MaximumDiagnostics).ToArray();
+						throw new HookCompilationException(diagnostics);
+					}
+					return Assembly.Load(stream.ToArray());
+				}
+			}
+			finally { if(temporaryHarmonyReference!=null) try { File.Delete(temporaryHarmonyReference); } catch { } }
 		}
 
 		static string MaterializeHarmonyReference() {
 			var path=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-harmony-"+Guid.NewGuid().ToString("N")+".dll");
-			using(var input=typeof(CompiledHookCompiler).Assembly.GetManifestResourceStream(HarmonyResourceName) ?? throw new InvalidOperationException("The pinned Harmony compiler reference is unavailable."))
+			using(var input=typeof(CompiledHookCompiler).Assembly.GetManifestResourceStream(PinnedBackendLoader.ResourceName) ?? throw new InvalidOperationException("The pinned Harmony compiler reference is unavailable."))
 			using(var output=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.Read)) input.CopyTo(output);
 			return path;
 		}

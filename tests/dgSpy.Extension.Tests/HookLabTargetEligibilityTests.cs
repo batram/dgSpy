@@ -13,9 +13,10 @@ public sealed class HookLabTargetEligibilityTests {
 	}
 
 	[Fact]
-	public void CoreClr_is_rejected_with_the_observed_runtime() {
+	public void CoreClr_selects_the_separate_backend() {
 		var reason=HookLabTargetEligibility.UnsupportedReason(64,"X64",new[] { new HookLabRuntimeIdentity(CoreClr,"CoreCLR") });
-		Assert.Equal("HookLab currently supports x64 desktop CLR v4 targets; the attached process exposes CoreCLR.",reason);
+		Assert.Null(reason);
+		Assert.Equal(HookLabTargetEligibility.Backend.CoreClr,HookLabTargetEligibility.SelectBackend(64,"X64",new[] { new HookLabRuntimeIdentity(CoreClr,"CoreCLR") }));
 	}
 
 	[Theory]
@@ -33,11 +34,12 @@ public sealed class HookLabTargetEligibilityTests {
 			new HookLabRuntimeIdentity(DesktopClr,"CLR v4.0.30319")
 		});
 		Assert.Null(reason);
+		Assert.Equal(HookLabTargetEligibility.Backend.DesktopClrV4,HookLabTargetEligibility.SelectBackend(64,"X64",new[] { new HookLabRuntimeIdentity(CoreClr,"CoreCLR"),new HookLabRuntimeIdentity(DesktopClr,"CLR v4.0.30319") }));
 	}
 
 	[Fact]
 	public void Missing_runtime_is_rejected_explicitly() {
 		var reason=HookLabTargetEligibility.UnsupportedReason(64,"X64",Array.Empty<HookLabRuntimeIdentity>());
-		Assert.Equal("HookLab currently supports x64 desktop CLR v4 targets; the attached process exposes no managed runtime.",reason);
+		Assert.Equal("HookLab currently supports x64 desktop CLR v4 and CoreCLR targets; the attached process exposes no managed runtime.",reason);
 	}
 }

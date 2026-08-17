@@ -78,7 +78,8 @@ namespace dgSpy.Extension {
 				FrameSnapshotGuard.EnsureOpen(captured.Frame.IsClosed,"The target resumed while this frame was being evaluated. Pause again and request a fresh snapshot.");
 				// dnSpy forwards this deadline to the engine's func-eval implementation. CorDebug aborts a
 				// timed-out eval and temporarily disables further func-eval if recovery itself fails.
-				var context=captured.Language.CreateContext(captured.Frame,funcEvalTimeout:TimeSpan.FromMilliseconds(timeoutMs),cancellationToken:evaluation.Token);
+				var contextOptions=(bool?)req.Arguments["run_all_threads"]==true ? DbgEvaluationContextOptions.RunAllThreads : DbgEvaluationContextOptions.None;
+				var context=captured.Language.CreateContext(captured.Frame,contextOptions,funcEvalTimeout:TimeSpan.FromMilliseconds(timeoutMs),cancellationToken:evaluation.Token);
 				try { return callback(captured,new DbgEvaluationInfo(context,captured.Frame,evaluation.Token)); }
 				finally { context.Close(); }
 			},cancellationToken).ConfigureAwait(false);

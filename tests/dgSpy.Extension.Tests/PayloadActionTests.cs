@@ -113,12 +113,20 @@ public sealed class PayloadActionRequestTests {
 	}
 
 	[Fact]
+	public void Initialize_accepts_the_same_parameters_as_prepare() {
+		var arguments=PrepareArgs("pipe",@"C:\done");
+		arguments["payload_operation"]="initialize";
+		Assert.Equal(PayloadOperation.initialize,PayloadActionRequest.Parse(arguments).Operation);
+		AssertInvalid(new JsonObject { ["payload_operation"] = "initialize" }, "payload_parameters is required");
+	}
+
+	[Fact]
 	public void Commit_and_drain_accept_no_prepare_parameters() {
 		Assert.Equal(PayloadOperation.commit, PayloadActionRequest.Parse(new JsonObject { ["payload_operation"] = "commit" }).Operation);
 		Assert.Equal(PayloadOperation.shutdown, PayloadActionRequest.Parse(new JsonObject { ["payload_operation"] = "shutdown" }).Operation);
 		var drain = PayloadActionRequest.Parse(new JsonObject { ["payload_operation"] = "drain", ["drain_max"] = 17 });
 		Assert.Equal(17, drain.DrainMax);
-		AssertInvalid(new JsonObject { ["payload_operation"] = "commit", ["payload_parameters"] = new JsonObject() }, "prepare or install only");
+		AssertInvalid(new JsonObject { ["payload_operation"] = "commit", ["payload_parameters"] = new JsonObject() }, "initialize, prepare, or install only");
 	}
 
 	[Theory]

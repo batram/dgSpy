@@ -5,7 +5,9 @@ using System.Reflection;
 
 namespace HookLab.Probe.CorDebug.Patching {
 	internal static class PinnedBackendLoader {
-		const string ResourceName = "HookLab.Probe.CorDebug.Backends.0Harmony.dll";
+		internal static string ResourceName => string.Equals(typeof(object).Assembly.GetName().Name,"mscorlib",StringComparison.Ordinal)
+			? "HookLab.Probe.CorDebug.Backends.Desktop.0Harmony.dll"
+			: "HookLab.Probe.CorDebug.Backends.CoreClr.0Harmony.dll";
 		static readonly object Gate = new object();
 		static Assembly? loadedBackend;
 		internal static void EnsureLoaded(BackendInventoryResult inventory) {

@@ -136,18 +136,24 @@ namespace dgSpy.Extension {
 				try {
 					lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) { HookLabUiBridge.SetInitialized(); return Initialized(existing,false); }
 
-				var wasRunning=await host.OnDebuggerAsync(()=>{
+				var target=await host.OnDebuggerAsync(()=>{
 					host.CheckVersion(source);
 					var process=host.SelectProcess(source);
-					var unsupported=HookLabTargetEligibility.UnsupportedReason(process.Bitness,process.Architecture.ToString(),process.Runtimes.Select(runtime=>new HookLabRuntimeIdentity(runtime.Guid,runtime.Name)));
+					var identities=process.Runtimes.Select(runtime=>new HookLabRuntimeIdentity(runtime.Guid,runtime.Name)).ToArray();
+					var unsupported=HookLabTargetEligibility.UnsupportedReason(process.Bitness,process.Architecture.ToString(),identities);
 					if(unsupported is not null) throw new RpcException("unsupported_hooklab_target",unsupported);
-					return process.IsRunning;
+					var backend=HookLabTargetEligibility.SelectBackend(process.Bitness,process.Architecture.ToString(),identities)!.Value;
+					var runtimeId=backend==HookLabTargetEligibility.Backend.CoreClr?CoreClrRuntimeId(process.Id):"v4.0.30319";
+					if(String.IsNullOrWhiteSpace(runtimeId)) throw new RpcException("hooklab_runtime_identity_unavailable","The debugger did not publish the exact CoreCLR runtime version.");
+					return (WasRunning:process.IsRunning,Backend:backend,RuntimeId:runtimeId);
 				},token).ConfigureAwait(false);
+				var wasRunning=target.WasRunning;
 				var completion=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-init-"+Guid.NewGuid().ToString("N")+".completion");
 				ProbeConnection? connection=null; byte[]? endpointSecret=null;
 				try {
-					var identity=TargetIdentity(source.Arguments,processId,completion);
-					var live=LiveTarget(processId); var store=new ProbeDiscoveryStore(DgSpyStateRoot.SharedResidentRoot()); var discovered=store.DiscoverStrict(new ExtensionLiveTargets(),DateTime.UtcNow).Where(value=>SameTarget(value.Target,live)).ToArray();
+					var runtimeId=target.RuntimeId;
+					var identity=TargetIdentity(source.Arguments,processId,completion,runtimeId);
+					var live=LiveTarget(processId,DgSpyStateRoot.ResidentHostId,runtimeId); var store=new ProbeDiscoveryStore(DgSpyStateRoot.SharedResidentRoot()); var discovered=store.DiscoverStrict(new ExtensionLiveTargets(runtimeId),DateTime.UtcNow).Where(value=>SameTarget(value.Target,live)).ToArray();
 					if(discovered.Length>1) throw new RpcException("hooklab_resident_ambiguous","Multiple authenticated HookLab residents name this exact target.");
 					Dictionary<string,string> completionReport;
 					if(discovered.Length==1) {
@@ -157,10 +163,17 @@ namespace dgSpy.Extension {
 						lock(gate) runtimes.Add(RuntimeKey(session,processId),adoptedRuntime); StartEventPump(adoptedRuntime); HookLabUiBridge.SetInitialized(); return Initialized(adoptedRuntime,true,adopted:true);
 					}
 					endpointSecret=ProbeAuthentication.CreateSecret(); identity["endpoint_secret_base64"]=Convert.ToBase64String(endpointSecret);
-					try { await ResumeAsync(host,source,token).ConfigureAwait(false); completionReport=await InitializeAutonomouslyAsync(processId,identity,token).ConfigureAwait(false); }
+					try {
+						if(target.Backend==HookLabTargetEligibility.Backend.CoreClr) {
+							completionReport=await ExecuteInitializationOperationAsync(host,source,PayloadOperation.initialize,identity,token,true).ConfigureAwait(false);
+							completionReport=await ReadCompletionAsync(completion,token).ConfigureAwait(false);
+						}
+						else { await ResumeAsync(host,source,token).ConfigureAwait(false); completionReport=await InitializeAutonomouslyAsync(processId,identity,token).ConfigureAwait(false); }
+					}
 					finally { }
 					if(!String.Equals(completionReport.TryGetValue("status",out var completedStatus)?completedStatus:null,"ok",StringComparison.Ordinal))
 						throw new RpcException("hooklab_initialization_failed","HookLab worker reported: "+String.Join("; ",completionReport.Select(pair=>pair.Key+"="+pair.Value)));
+					if(target.Backend==HookLabTargetEligibility.Backend.CoreClr) await SynchronizeCoreClrAsync(host,source,token).ConfigureAwait(false);
 					var pipe=Required(completionReport,"pipe_name","HookLab initialization did not report its control pipe."); var nonce=Convert.FromBase64String(Required(completionReport,"pipe_nonce_base64","HookLab initialization did not report its endpoint nonce.")); var probe=Required(completionReport,"probe_instance_id","HookLab initialization did not report its probe identity.");
 					connection=new ProbeConnection(pipe,endpointSecret,nonce);
 					var runtime=new RuntimeRecord(session,processId,connection,Long(completionReport,"hooks_version"),probe,false);
@@ -430,13 +443,14 @@ namespace dgSpy.Extension {
 				return report;
 			}
 
-			async Task<Dictionary<string,string>> ExecuteInitializationOperationAsync(RpcHost host,RpcRequest source,PayloadOperation operation,JsonObject? parameters,CancellationToken token) {
-				if(await TryReachEvaluablePauseAsync(host,source,token).ConfigureAwait(false)) return await EvaluatePayloadAsync(host,source,operation,parameters,token).ConfigureAwait(false);
+			async Task<Dictionary<string,string>> ExecuteInitializationOperationAsync(RpcHost host,RpcRequest source,PayloadOperation operation,JsonObject? parameters,CancellationToken token,bool requireCarrier=false) {
+				if(!requireCarrier && await TryReachEvaluablePauseAsync(host,source,token).ConfigureAwait(false)) return await EvaluatePayloadAsync(host,source,operation,parameters,token).ConfigureAwait(false);
+				await EnsurePausedAsync(host,source,token).ConfigureAwait(false);
 				var carriers=await SelectInternalCarriersAsync(host,source,token).ConfigureAwait(false);
 				AtomicActionResult? lastResult=null;
 				foreach(var carrier in carriers) {
 					if(parameters is not null) parameters["appdomain_id"]=carrier.AppDomainId;
-					var result=await RunInitializationPayloadAsync(host,source,carrier,operation,parameters,token).ConfigureAwait(false);
+					var result=await RunInitializationPayloadAsync(host,source,carrier,operation,parameters,token,requireCarrier).ConfigureAwait(false);
 					if(result.Status.ActionOutcome==HookLab.Contracts.ActionOutcome.completed) return Report(result);
 					lastResult=result;
 					if(!HookCarrierSelectionPolicy.ShouldTryAnotherCarrier(result.Status.ActionOutcome,result.Status.ActionMayHaveExecuted)) break;
@@ -474,9 +488,9 @@ namespace dgSpy.Extension {
 				throw new RpcException("hooklab_no_carrier","HookLab found neither an evaluable managed thread nor a managed stack frame it could use as an internal arrival carrier.");
 			},token);
 
-			async Task<AtomicActionResult> RunInitializationPayloadAsync(RpcHost host,RpcRequest source,HookCarrier carrier,PayloadOperation operation,JsonObject? parameters,CancellationToken token) {
-				var arguments=new JsonObject { ["session_id"]=Required(source.Arguments,"session_id"),["process_id"]=RequiredInt(source.Arguments,"process_id"),["module_id"]=carrier.ModuleId,["operation_version"]=1,["action_kind"]="payload",["payload_operation"]=operation.ToString(),["timeout_ms"]=60000 };
-				if(parameters is not null) arguments["payload_parameters"]=parameters;
+			async Task<AtomicActionResult> RunInitializationPayloadAsync(RpcHost host,RpcRequest source,HookCarrier carrier,PayloadOperation operation,JsonObject? parameters,CancellationToken token,bool runAllThreads) {
+				var arguments=new JsonObject { ["session_id"]=Required(source.Arguments,"session_id"),["process_id"]=RequiredInt(source.Arguments,"process_id"),["module_id"]=carrier.ModuleId,["operation_version"]=1,["action_kind"]="payload",["payload_operation"]=operation.ToString(),["timeout_ms"]=60000,["run_all_threads"]=runAllThreads };
+				if(parameters is not null) arguments["payload_parameters"]=parameters.DeepClone();
 				arguments["request"]=new JsonObject { ["schema_version"]=1,["action_id"]=Guid.NewGuid().ToString("N"),["action_name"]="HookLab initialize "+operation,["process_id"]=RequiredInt(source.Arguments,"process_id"),["runtime_id"]="",["app_domain_id"]=carrier.AppDomainId,["module"]=carrier.ModuleId,["method_token"]=carrier.MethodToken,["il_offset"]=carrier.IlOffset,["nearby_offsets"]=new JsonArray(carrier.NearbyOffsets.Select(value=>(JsonNode)value).ToArray()),["resume_policy"]="resume" };
 				return await host.RunAtomicActionAsync(new RpcRequest { Operation="initialize_hooklab",RequestId=source.RequestId,Arguments=arguments,DeadlineUtc=source.DeadlineUtc },token).ConfigureAwait(false);
 			}
@@ -495,25 +509,42 @@ namespace dgSpy.Extension {
 
 			static async Task<string> InvokeTextAsync(RpcHost host,RpcRequest request,string expression,CancellationToken token) {
 				request.Arguments["expression"]=expression;
+				request.Arguments["run_all_threads"]=true;
 				var result=await host.InvokeExpressionAsync(request,"hooklab_initialization",token).ConfigureAwait(false);
 				if(!result.Completed || result.Value?.Value is not string text) throw new RpcException("hooklab_evaluation_failed",result.Error ?? "HookLab initialization returned no report.");
 				return text;
 			}
 
-			static JsonObject TargetIdentity(JsonObject source,int processId,string completion) {
-				try { using var process=Process.GetProcessById(processId); return new JsonObject { ["host_id"]=DgSpyStateRoot.ResidentHostId,["image_path"]=process.MainModule?.FileName ?? process.ProcessName,["process_id"]=processId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]="v4.0.30319",["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion }; }
+			static JsonObject TargetIdentity(JsonObject source,int processId,string completion,string runtimeId) {
+				try { using var process=Process.GetProcessById(processId); return new JsonObject { ["host_id"]=DgSpyStateRoot.ResidentHostId,["image_path"]=process.MainModule?.FileName ?? process.ProcessName,["process_id"]=processId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]=runtimeId,["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion }; }
 				catch(Exception ex) { throw new RpcException("target_unavailable","Could not read target process identity: "+ex.Message); }
 			}
-			static TargetIdentity LiveTarget(int processId,string hostId=DgSpyStateRoot.ResidentHostId) { using var process=Process.GetProcessById(processId); return new TargetIdentity(hostId,process.MainModule?.FileName??throw new InvalidOperationException("Target image is unavailable."),processId,process.StartTime.ToUniversalTime(),"x64","v4.0.30319","1"); }
+			static string CoreClrRuntimeId(int processId) {
+				try {
+					using var process=Process.GetProcessById(processId);
+					var modules=process.Modules.Cast<ProcessModule>().Where(module=>String.Equals(module.ModuleName,"coreclr.dll",StringComparison.OrdinalIgnoreCase)).ToArray();
+					if(modules.Length!=1) throw new InvalidOperationException("Expected exactly one loaded coreclr.dll; found "+modules.Length.ToString(CultureInfo.InvariantCulture)+".");
+					var runtimeVersionText=Path.GetFileName(Path.GetDirectoryName(modules[0].FileName));
+					if(!System.Version.TryParse(runtimeVersionText,out _)) throw new InvalidOperationException("The loaded CoreCLR runtime directory does not carry a version: "+modules[0].FileName);
+					return "v"+runtimeVersionText;
+				}
+				catch(Exception ex) when(ex is not RpcException) { throw new RpcException("hooklab_runtime_identity_unavailable","Could not derive the exact loaded CoreCLR runtime identity: "+ex.Message); }
+			}
+			static TargetIdentity LiveTarget(int processId,string hostId=DgSpyStateRoot.ResidentHostId,string runtimeId="v4.0.30319") { using var process=Process.GetProcessById(processId); return new TargetIdentity(hostId,process.MainModule?.FileName??throw new InvalidOperationException("Target image is unavailable."),processId,process.StartTime.ToUniversalTime(),"x64",runtimeId,"1"); }
 			static bool SameTarget(TargetIdentity left,TargetIdentity right)=>(left.HostId==DgSpyStateRoot.ResidentHostId||left.HostId=="apply-once")&&left.ProcessId==right.ProcessId&&left.ProcessCreationTimeUtc.ToUniversalTime().Ticks==right.ProcessCreationTimeUtc.ToUniversalTime().Ticks&&String.Equals(Path.GetFullPath(left.ImagePath),Path.GetFullPath(right.ImagePath),StringComparison.OrdinalIgnoreCase)&&left.Architecture==right.Architecture&&left.RuntimeId==right.RuntimeId&&left.AppDomainId==right.AppDomainId;
 			sealed class ExtensionLiveTargets : ILiveTargetIdentity,ILiveTargetLiveness {
-				public bool IsCurrent(TargetIdentity identity) { try { return SameTarget(identity,LiveTarget(identity.ProcessId,identity.HostId)); } catch(ArgumentException) { return false; } }
+				readonly string runtimeId; public ExtensionLiveTargets(string runtimeId="v4.0.30319")=>this.runtimeId=runtimeId;
+				public bool IsCurrent(TargetIdentity identity) { try { return SameTarget(identity,LiveTarget(identity.ProcessId,identity.HostId,runtimeId)); } catch(ArgumentException) { return false; } }
 				public bool IsAlive(TargetIdentity identity) { try { using var process=Process.GetProcessById(identity.ProcessId); return process.StartTime.ToUniversalTime().Ticks==identity.ProcessCreationTimeUtc.ToUniversalTime().Ticks; } catch(ArgumentException) { return false; } }
 			}
 
 			static async Task EnsurePausedAsync(RpcHost host,RpcRequest source,CancellationToken token) {
 				if(!await host.OnDebuggerAsync(()=>host.SelectProcess(source).IsRunning,token).ConfigureAwait(false)) return;
 				await host.PauseProcessAsync(ControlRequest(source),token).ConfigureAwait(false);
+			}
+			static async Task SynchronizeCoreClrAsync(RpcHost host,RpcRequest source,CancellationToken token) {
+				if(await host.OnDebuggerAsync(()=>host.SelectProcess(source).IsRunning,token).ConfigureAwait(false)) await host.PauseProcessAsync(ControlRequest(source),token).ConfigureAwait(false);
+				await host.ContinueProcessAsync(ControlRequest(source),token).ConfigureAwait(false);
 			}
 			static async Task<bool> TryReachEvaluablePauseAsync(RpcHost host,RpcRequest source,CancellationToken token) {
 				var session=Required(source.Arguments,"session_id"); var process=RequiredInt(source.Arguments,"process_id");

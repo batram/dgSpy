@@ -34,6 +34,11 @@ be installed, or its matching debugger components to be available beside the tar
 verified private cache; dgSpy never substitutes a nearest runtime version. Initialize the submodules,
 then run the same installer:
 
+HookLab supports both CLR v4 and CoreCLR targets. The host selects the backend from the discovered
+session runtime; callers still use the exact session-scoped `module_id`, method identity, and MVID.
+CoreCLR initialization is debugger-mediated and requires the target to be stopped at a safe managed
+location, after which hook management uses the same authenticated resident protocol as CLR v4.
+
 ```powershell
 git submodule update --init --recursive
 dotnet run --project Build\DgSpyTool -- pipeline

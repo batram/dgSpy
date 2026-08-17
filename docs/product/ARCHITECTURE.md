@@ -32,7 +32,10 @@ dgSpy dnSpy Extension
 - One local gateway, one dnSpy instance, and one logical dgSpy session. dnSpy may own multiple selected
   processes/runtimes within that session.
 - C# is the agent-facing source language. x86 and Visual Basic parity are not current gates. HookLab
-  remains CLR-v4-only until its separate CoreCLR resident backend passes its own gate.
+  selects an explicit resident backend from the target's exact runtime identity: CLR v4 keeps the
+  autonomous native initializer, while CoreCLR uses one run-all-threads debugger evaluation to load
+  and commit the authenticated resident. CoreCLR hook source compiles through the hash-pinned Roslyn
+  payload and patches through the matching CoreCLR Harmony backend.
 
 ## Components and ownership
 

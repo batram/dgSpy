@@ -36,9 +36,9 @@ namespace HookLab.Bootstrap.Tests {
 		static string RealDigest => EmbeddedAssemblyResolver.Sha256Hex(Payload(ContractsResource));
 
 		[Fact]
-		public void Manifest_carries_exactly_the_probe_and_its_contracts() {
+		public void Manifest_carries_exactly_the_probe_contracts_and_compiler_runtime() {
 			var resolver = EmbeddedAssemblyResolver.FromEmbeddedManifest();
-			Assert.Equal(new[] { "HookLab.Contracts", "HookLab.Probe.CorDebug" }, resolver.ManifestIdentities.ToArray());
+			Assert.Equal(new[] { "HookLab.Contracts", "HookLab.Probe.CorDebug", "Microsoft.CodeAnalysis", "Microsoft.CodeAnalysis.CSharp", "System.Collections.Immutable" }, resolver.ManifestIdentities.ToArray());
 			// 0Harmony is deliberately absent: the probe carries and resolves its own pinned backend, and a
 			// second embedded copy served by this resolver would win the bind and leave two 0Harmony
 			// assemblies resident - the duplicate patching backend the plan forbids.
@@ -65,7 +65,7 @@ namespace HookLab.Bootstrap.Tests {
 		public void An_identity_absent_from_the_manifest_does_not_resolve() {
 			var resolver = Resolver("HookLab.Contracts", RealDigest);
 			Assert.Null(resolver.Resolve("System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"));
-			Assert.Null(resolver.Resolve("0Harmony, Version=2.3.6.0, Culture=neutral, PublicKeyToken=null"));
+			Assert.Null(resolver.Resolve("0Harmony, Version=2.4.2.0, Culture=neutral, PublicKeyToken=null"));
 			Assert.Equal(0, resolver.LoadCount);
 			Assert.Equal(2, resolver.RefusedCount);
 		}
@@ -124,7 +124,7 @@ namespace HookLab.Bootstrap.Tests {
 				Assert.NotNull(assembly);
 				Assert.Equal("", assembly!.Location);
 			}
-			Assert.Equal(2, resolver.LoadCount);
+			Assert.Equal(5, resolver.LoadCount);
 		}
 	}
 }

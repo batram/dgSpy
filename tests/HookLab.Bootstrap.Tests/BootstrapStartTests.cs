@@ -17,7 +17,7 @@ namespace HookLab.Bootstrap.Tests {
 				Assert.True(report["status"] == "ok", "Bootstrap refused: " + report.Get("error_type") + " " + report.Get("error_message"));
 				Assert.False(string.IsNullOrWhiteSpace(report["probe_instance_id"]));
 				Assert.Equal("1", report["protocol_version"]);
-				Assert.Equal("HookLab.Contracts,HookLab.Probe.CorDebug", report["payload_identities"]);
+				Assert.Equal("HookLab.Contracts,HookLab.Probe.CorDebug,Microsoft.CodeAnalysis,Microsoft.CodeAnalysis.CSharp,System.Collections.Immutable", report["payload_identities"]);
 				Assert.Equal("2", report["payload_load_count"]);
 				Assert.False(string.IsNullOrWhiteSpace(report["pipe_name"]));
 				Assert.DoesNotContain("secret_base64", report.Keys);

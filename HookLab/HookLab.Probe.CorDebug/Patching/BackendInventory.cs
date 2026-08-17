@@ -19,7 +19,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 
 	public static class BackendInventory {
 		public const string PinnedName = "0Harmony";
-		public static readonly Version PinnedVersion = new Version(2, 3, 6, 0);
+		public static readonly Version PinnedVersion = new Version(2, 4, 2, 0);
 
 		public static BackendInventoryResult InspectLoadedAssemblies() =>
 			Inspect(AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetName()));
