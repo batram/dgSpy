@@ -134,3 +134,28 @@ callbacks, intentional pauses, detach, and reentrant callbacks must remain corre
 - dgSpy state and event responses distinguish running, intentionally stopped, and faulted attach.
 - Regression coverage injects failures at each callback-processing stage and proves the target reaches
   one terminal disposition without timing-based assertions.
+
+## TODO 3: support HookLab residents in CoreCLR targets
+
+### Motivation
+
+A second local dgSpy host successfully attached to the first dgSpy host as a CoreCLR target and reached
+an evaluable WPF input frame, but HookLab could not initialize because its native bootstrap, resident,
+and packaging/runtime contract currently support desktop CLR v4 only. This blocks the useful
+dgSpy-debugging-dgSpy workflow even though ordinary CoreCLR debugging and func-eval work.
+
+### Intended boundary
+
+Design CoreCLR HookLab as an explicit runtime backend, not as a relaxation of the proven CLR v4 path.
+Preserve exact process/runtime/module identity, MVID/token/signature/IL guards, authenticated resident
+discovery, one resident generation, atomic revision replacement, and watcher ownership rules. Reuse the
+public HookLab lifecycle and package model only where runtime evidence proves the semantics equivalent.
+
+### Acceptance criteria
+
+- A second dgSpy instance can initialize HookLab in a disposable CoreCLR dgSpy fixture and install,
+  update, disable, enable, remove, and read back one exactly guarded compiled hook.
+- CoreCLR and CLR v4 residents cannot be confused or adopted across runtime identities.
+- Initialization failure leaves the CoreCLR target responsive and never reports ready without an
+  authenticated resident readback.
+- The existing CLR v4 and VMConnect watcher gates remain unchanged and green.

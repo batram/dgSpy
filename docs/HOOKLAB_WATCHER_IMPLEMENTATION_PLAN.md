@@ -449,6 +449,36 @@ Before declaring each phase complete, update:
 
 Keep implementation claims, fixture measurements, and live VMConnect acceptance evidence separate.
 
+## Open interoperability follow-ups
+
+- Make dgSpy adopt and authenticate an existing HookLab resident initialized by the standalone watcher,
+  then read its generation and hook inventory before adding dgSpy-owned hooks. It must preserve unknown
+  and watcher-owned hooks and must never inject a competing resident generation.
+- When dgSpy initialization encounters a valid resident that it cannot adopt, return the stable
+  `resident_not_adoptable` failure with actionable ownership/authentication detail instead of allowing
+  the operation to end as a generic `hook_operation_timed_out`.
+- Make watcher `status` preserve its valid watcher lifecycle and control output when an individual
+  resident cannot be inspected. Return the failed resident as a structured per-resident error rather
+  than replacing the entire status response with one top-level `operation_failed` message.
+- Make HookLab target discovery round-trip the exact case-sensitive CLR assembly simple name used by
+  `create_hook`. At minimum, `get_hook_template` must return `AssemblyName.Name` with the other guarded
+  target fields, and the MCP schema/reference must distinguish it from the module filename, path, and
+  display name so callers never infer values such as `VmConnect` from `VmConnect.exe` when the runtime
+  identity is `vmconnect`.
+- Preserve watcher run state across a successful upgrade. If the exact verified installed watcher/task
+  was running before replacement, restart the newly registered task, read back its new PID plus process
+  creation identity and installed image path, and require its live catalog/status to become healthy
+  before reporting the upgrade complete. Preserve an intentionally stopped watcher as stopped, and make
+  first-install start policy explicit rather than depending on the next logon.
+- Add an integrity-checked atomic package-enrollment operation so a canonical dgSpy export can be
+  installed and explicitly enabled without rebuilding or replacing the watcher executable. Keep the
+  executable installation tree closed and immutable; publish packages/profiles through a separately
+  protected, generation-based catalog with staging, package/digest/ACL/reparse verification, same-ID
+  conflict refusal, last-good rollback, and live catalog-generation readback. Export remains disabled
+  and unenrolled by default; automatic deployment still requires an explicit enable decision.
+- Add live acceptance coverage for both ownership directions: watcher adopts a dgSpy-created resident,
+  and dgSpy adopts a watcher-created resident while the existing hook remains active.
+
 ## Completion criteria
 
 This plan is complete when all of the following are true:

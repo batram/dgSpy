@@ -188,6 +188,15 @@ Take these as independent, fixture-led projects rather than one compatibility ph
 
 - **CoreCLR:** define engine capabilities, add deterministic targets, and prove lifecycle, inspection,
   evaluation, breakpoint, and detach behavior.
+- **Concurrent MCP stimulus during waits:** characterize where same-client nested calls are serialized
+  across the Codex MCP client, Gateway, and debugger-host connection. A composed `run_to_*` wait could
+  not overlap an independently issued request intended to drive the target into the armed breakpoint;
+  the stimulus was not dispatched until the wait had already timed out. Preserve intentional
+  target/evaluation serialization, but allow a bounded long-running wait and an independent safe
+  request to remain in flight when their host/session operations do not conflict. Acceptance must
+  prove the stimulus reaches the host before the wait deadline, the breakpoint stop is observed, and
+  cancellation/disconnect leaves neither request stranded. Do not infer the faulty layer until an
+  instrumented client-Gateway-host trace identifies it.
 - **x86:** add an x86 build/deploy path and engine-specific regression fixtures.
 - **Visual Basic parity:** first define the intended agent-facing surface; do not retain VB solely because
   legacy decompiler internals reference it.

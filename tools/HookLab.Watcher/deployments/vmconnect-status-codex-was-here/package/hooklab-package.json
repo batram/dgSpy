@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "packageId": "vmconnect-status-codex-was-here",
+  "revision": 1,
+  "displayName": "VMConnect Codex was here status prefix",
+  "minimumProtocolVersion": 1,
+  "architecture": "x64",
+  "runtimeFamily": "clr-v4",
+  "process": {
+    "fileName": "VmConnect.exe"
+  },
+  "target": {
+    "assembly": "vmconnect",
+    "moduleMvid": "dc470534-4dc7-403f-a529-c2b0259fa97d",
+    "declaringType": "Microsoft.Virtualization.Client.InteractiveSession.VmisStatusStrip",
+    "method": "InformVMState",
+    "metadataToken": 100663769,
+    "signature": "System.Void InformVMState(Microsoft.Virtualization.Client.Management.VMComputerSystemState,System.Boolean)",
+    "ilSha256": "bc1ca53bd5f458a563f1219f90b3284ed90bdbe90e01c7ccdf8ac871e1719225"
+  },
+  "hook": {
+    "id": "vmconnect-status-codex-was-here-v1",
+    "kind": "Postfix",
+    "revision": 1,
+    "enabled": true,
+    "sourcePath": "hook.cs",
+    "maximumEventsPerSecond": 10,
+    "maximumStringLength": 512
+  },
+  "entries": [
+    {
+      "path": "hook.cs",
+      "sha256": "5caec16b7740badb55abd13f1424944bf9dfd2caa0813e6681613d33006e972c"
+    }
+  ]
+}
