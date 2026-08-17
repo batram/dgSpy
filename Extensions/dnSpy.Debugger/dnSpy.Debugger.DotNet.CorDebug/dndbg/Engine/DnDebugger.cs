@@ -33,6 +33,20 @@ using dndbg.COM.MetaHost;
 namespace dndbg.Engine {
 	delegate void DebugCallbackEventHandler(DnDebugger dbg, DebugCallbackEventArgs e);
 
+	sealed class ManagedCallbackFailureEventArgs : EventArgs {
+		public DebugCallbackKind Kind { get; }
+		public string Stage { get; }
+		public Exception Exception { get; }
+		public ManagedCallbackFailureDisposition Disposition { get; }
+
+		public ManagedCallbackFailureEventArgs(DebugCallbackKind kind, string stage, Exception exception, ManagedCallbackFailureDisposition disposition) {
+			Kind = kind;
+			Stage = stage;
+			Exception = exception;
+			Disposition = disposition;
+		}
+	}
+
 	sealed class DnDebugger : IDisposable {
 		readonly IDebugMessageDispatcher debugMessageDispatcher;
 		readonly ICorDebug corDebug;
@@ -255,6 +269,7 @@ namespace dndbg.Engine {
 		static readonly string[] clrFiles_v4 = new string[] { "clr.dll" };
 
 		public event DebugCallbackEventHandler? DebugCallbackEvent;
+		public event EventHandler<ManagedCallbackFailureEventArgs>? ManagedCallbackFailure;
 
 		// Could be called from any thread
 		internal void OnManagedCallbackFromAnyThread(Func<DebugCallbackEventArgs> func) => debugMessageDispatcher.ExecuteAsync(() => {
@@ -311,16 +326,43 @@ namespace dndbg.Engine {
 			if (disposeValues.Count != 0)
 				DisposeOfHandles();
 
+			string stage = "handle";
 			try {
 				TraceCallbackStage(e, "handle", () => HandleManagedCallback(e));
+				stage = "breakpoints";
 				TraceCallbackStage(e, "breakpoints", () => CheckBreakpoints(e));
+				stage = "subscriber";
 				InvokeDebugCallbackEvent(e);
 			}
 			catch (Exception ex) {
 				Debug.WriteLine($"dndbg: EX:\n\n{ex}");
-				CoreClrManagedCallbackTrace.Record(e.Kind, "abandoned", managedCallbackCounter, ex);
-				ResetDebuggerStates();
-				throw;
+				bool hasQueuedCallbacks = HasQueuedCallbacks(e);
+				bool hasIntentionalPause = e.PauseStates.Length != 0 || ShouldStopQueued();
+				var disposition = ManagedCallbackFailurePolicy.Decide(e.Kind == DebugCallbackKind.ExitProcess, hasQueuedCallbacks, hasIntentionalPause);
+				CoreClrManagedCallbackTrace.Record(e.Kind, "recovery-" + disposition.ToString().ToLowerInvariant(), managedCallbackCounter, ex, stage);
+				try {
+					ManagedCallbackFailure?.Invoke(this, new ManagedCallbackFailureEventArgs(e.Kind, stage, ex, disposition));
+				}
+				catch (Exception notificationException) {
+					CoreClrManagedCallbackTrace.Record(e.Kind, "failure-notification-failed", managedCallbackCounter, notificationException);
+				}
+				switch (disposition) {
+				case ManagedCallbackFailureDisposition.KeepPaused:
+					if (debuggerStates.Count != 0)
+						Current.PauseStates = e.PauseStates;
+					CallOnProcessStateChanged();
+					return;
+				case ManagedCallbackFailureDisposition.CompleteExit:
+					ResetDebuggerStates();
+					managedCallbackCounter--;
+					return;
+				case ManagedCallbackFailureDisposition.Continue:
+					ResetDebuggerStates();
+					ContinueAndDecrementCounter(e);
+					return;
+				default:
+					throw new InvalidOperationException();
+				}
 			}
 
 			Current.PauseStates = e.PauseStates;

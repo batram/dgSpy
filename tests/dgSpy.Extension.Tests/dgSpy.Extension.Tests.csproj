@@ -70,6 +70,7 @@
 	<Compile Include="..\..\Extensions\dnSpy.Debugger\dnSpy.Debugger\Shared\Dispatcher.cs" Link="Debugger\Dispatcher.cs" />
 	<Compile Include="..\..\Extensions\dnSpy.Debugger\dnSpy.Debugger\Attach\ProcessNameCandidate.cs" Link="Debugger\ProcessNameCandidate.cs" />
 	<Compile Include="..\..\Extensions\dnSpy.Debugger\dnSpy.Debugger.DotNet.CorDebug\dndbg\Engine\CoreClrDebuggingLibraryResolver.cs" Link="Debugger\CoreClrDebuggingLibraryResolver.cs" />
+	<Compile Include="..\..\Extensions\dnSpy.Debugger\dnSpy.Debugger.DotNet.CorDebug\dndbg\Engine\ManagedCallbackFailureDisposition.cs" Link="Debugger\ManagedCallbackFailureDisposition.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\DebugEventBuffer.cs" Link="Events\DebugEventBuffer.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\EventCursorGuard.cs" Link="Events\EventCursorGuard.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Events\StateRevisionKinds.cs" Link="Events\StateRevisionKinds.cs" />

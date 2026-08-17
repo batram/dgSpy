@@ -190,6 +190,7 @@ Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/dndbg/Engine/CoreCLRHel
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/dndbg/Engine/CoreClrDebuggingLibraryResolver.cs  identity-driven CoreCLR debugger component search
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/dndbg/Engine/DnDebugger.cs             diagnose and enforce managed callback terminal disposition
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/dndbg/Engine/CoreClrManagedCallbackTrace.cs  opt-in asynchronous managed callback evidence
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/dndbg/Engine/ManagedCallbackFailureDisposition.cs  exactly one terminal action after callback failure
 dnSpy/dnSpy.Contracts.Debugger.DotNet.CorDebug/CorThreadUserStates.cs                        UserStateUnavailable, present instead of the real flags
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/ThreadProperties.cs            carry probe-failed through the thread property snapshot
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DnThreadUtils.cs               map an unavailable user state rather than dropping it

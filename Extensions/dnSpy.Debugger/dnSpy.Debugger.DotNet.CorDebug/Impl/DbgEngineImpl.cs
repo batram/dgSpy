@@ -394,6 +394,7 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 
 		void HookDnDebuggerEvents() {
 			dnDebugger.DebugCallbackEvent += DnDebugger_DebugCallbackEvent;
+			dnDebugger.ManagedCallbackFailure += DnDebugger_ManagedCallbackFailure;
 			dnDebugger.OnProcessStateChanged += DnDebugger_OnProcessStateChanged;
 			dnDebugger.OnNameChanged += DnDebugger_OnNameChanged;
 			dnDebugger.OnThreadAdded += DnDebugger_OnThreadAdded;
@@ -406,6 +407,7 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 		void UnhookDnDebuggerEventsAndCloseProcessHandle() {
 			if (dnDebugger is not null) {
 				dnDebugger.DebugCallbackEvent -= DnDebugger_DebugCallbackEvent;
+				dnDebugger.ManagedCallbackFailure -= DnDebugger_ManagedCallbackFailure;
 				dnDebugger.OnProcessStateChanged -= DnDebugger_OnProcessStateChanged;
 				dnDebugger.OnNameChanged -= DnDebugger_OnNameChanged;
 				dnDebugger.OnThreadAdded -= DnDebugger_OnThreadAdded;
@@ -416,6 +418,11 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 				dnDebugger.OnRedirectedOutput -= DnDebugger_OnRedirectedOutput;
 			}
 			hProcess_debuggee?.Close();
+		}
+
+		void DnDebugger_ManagedCallbackFailure(object? sender, ManagedCallbackFailureEventArgs e) {
+			var message = $"CoreCLR managed callback '{e.Kind}' failed during {e.Stage}; disposition: {e.Disposition}. {e.Exception.GetType().FullName}: {e.Exception.Message}";
+			SendMessage(new DbgMessageAsyncProgramMessage(AsyncProgramMessageSource.Other, message));
 		}
 
 		void DnDebugger_OnAttachComplete(object? sender, EventArgs e) => DetectMainThread();
