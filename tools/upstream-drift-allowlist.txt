@@ -186,6 +186,8 @@ dnSpy/dnSpy.Contracts.Debugger.DotNet.CorDebug/DgSpyOwnedBreakpointService.cs   
 # conclusion from an absent flag, and surfaces the failure as its own state rather
 # than as an empty set. See commit 825da4b96 (T08c).
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/dndbg/Engine/CorThread.cs           TryGetUserState reports whether the HRESULT answered
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/dndbg/Engine/CoreCLRHelper.cs       resolve CoreCLR debugger libraries by requested PE identity
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/dndbg/Engine/CoreClrDebuggingLibraryResolver.cs  identity-driven CoreCLR debugger component search
 dnSpy/dnSpy.Contracts.Debugger.DotNet.CorDebug/CorThreadUserStates.cs                        UserStateUnavailable, present instead of the real flags
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/ThreadProperties.cs            carry probe-failed through the thread property snapshot
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DnThreadUtils.cs               map an unavailable user state rather than dropping it

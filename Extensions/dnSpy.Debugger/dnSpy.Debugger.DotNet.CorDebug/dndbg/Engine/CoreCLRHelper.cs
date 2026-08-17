@@ -25,7 +25,6 @@ using System.Runtime.InteropServices;
 using System.Text;
 using dndbg.COM.CorDebug;
 using dndbg.COM.MetaHost;
-using dnlib.PE;
 using dnSpy.Contracts.Utilities;
 using dnSpy.Debugger.Shared;
 
@@ -42,11 +41,11 @@ namespace dndbg.Engine {
 
 	sealed class CLRDebuggingLibraryProvider : ICLRDebuggingLibraryProvider2, ICLRDebuggingLibraryProvider3 {
 		readonly string coreclrFileName;
-		readonly DotNetPathProvider dotNetPathProvider;
+		readonly CoreClrDebuggingLibraryResolver resolver;
 
 		public CLRDebuggingLibraryProvider(string coreclrFileName) {
 			this.coreclrFileName = coreclrFileName;
-			dotNetPathProvider = new DotNetPathProvider();
+			resolver = new CoreClrDebuggingLibraryResolver(coreclrFileName);
 		}
 
 		public int ProvideLibrary2(string pwszFileName, int dwTimestamp, int dwSizeOfImage, out IntPtr ppResolvedModulePath) {
@@ -63,6 +62,10 @@ namespace dndbg.Engine {
 		public int ProvideWindowsLibrary(string pwszFileName, string pwszRuntimeModule, LIBRARY_PROVIDER_INDEX_TYPE indexType, int dwTimestamp, int dwSizeOfImage, out IntPtr ppResolvedModulePath) {
 			Debug2.Assert(indexType == LIBRARY_PROVIDER_INDEX_TYPE.Identity);
 			Debug2.Assert(pwszRuntimeModule == coreclrFileName);
+			if (indexType != LIBRARY_PROVIDER_INDEX_TYPE.Identity) {
+				ppResolvedModulePath = IntPtr.Zero;
+				return -1;
+			}
 
 			var resultFile = LocateDebuggingLibrary(pwszRuntimeModule, pwszFileName, dwTimestamp, dwSizeOfImage);
 			if (resultFile is not null) {
@@ -75,44 +78,10 @@ namespace dndbg.Engine {
 		}
 
 		string? LocateDebuggingLibrary(string clrFileName, string libraryName, int timeStamp, int sizeOfImage) {
-			// Check to see if the file is available next to the runtime dll.
-			var runtimeDirectory = Path.GetDirectoryName(clrFileName);
-			string? defaultFileName = null;
-			if (runtimeDirectory is not null) {
-				defaultFileName = Path.Combine(runtimeDirectory, libraryName);
-				if (File.Exists(defaultFileName) && VerifyPEMatches(defaultFileName, timeStamp, sizeOfImage))
-					return defaultFileName;
-			}
-
-			// Check if the user has a matching .NET runtime installed, if so, try to load the file from there.
-			var clrFileVersion = FileVersionInfo.GetVersionInfo(clrFileName);
-			var dotNetVersion = new Version(clrFileVersion.FileMajorPart, clrFileVersion.FileMinorPart, clrFileVersion.FileBuildPart / 100, 0);
-			var dotNetPaths = dotNetPathProvider.TryFindExactRuntimePaths(dotNetVersion, IntPtr.Size * 8);
-			foreach (string dotNetPath in dotNetPaths) {
-				var fileName = Path.Combine(dotNetPath, libraryName);
-				if (File.Exists(fileName) && VerifyPEMatches(fileName, timeStamp, sizeOfImage))
-					return fileName;
-			}
-
-			// Fall back to file path net to the runtime dll
-			return defaultFileName;
-		}
-
-		static bool VerifyPEMatches(string fileName, int timeStamp, int sizeOfImage) {
-			using (var peImage = new PEImage(fileName)) {
-				if (peImage.ImageNTHeaders.FileHeader.TimeDateStamp != timeStamp)
-					return false;
-				if (peImage.ImageNTHeaders.OptionalHeader.SizeOfImage != sizeOfImage)
-					return false;
-
-				switch (peImage.ImageNTHeaders.OptionalHeader.Magic) {
-				case 0x010B when IntPtr.Size == 4:
-				case 0x020B when IntPtr.Size == 8:
-					return true;
-				default:
-					return false;
-				}
-			}
+			var result = resolver.Resolve(new CoreClrDebuggingLibraryIdentity(libraryName, timeStamp, sizeOfImage, IntPtr.Size * 8));
+			foreach (var message in result.Trace)
+				Trace.WriteLine("CoreCLR debugger library: " + message);
+			return result.ResolvedPath;
 		}
 
 		public int ProvideUnixLibrary(string pwszFileName, string pwszRuntimeModule, LIBRARY_PROVIDER_INDEX_TYPE indexType, byte[] pbBuildId, int iBuildIdSize, out IntPtr ppResolvedModulePath) {
