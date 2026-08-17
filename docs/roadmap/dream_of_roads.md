@@ -1,237 +1,188 @@
 # Dream of roads
 
-This is dgSpy's aspirational roadmap as of 2026-08-17: one ordered path through work that is still
-open, grounded in the current source tree rather than accumulated phase prose. It is deliberately not
-a release promise. The nearer a road is to the top, the more concrete its evidence and acceptance
-boundary; the farther away it is, the more it requires a fresh product decision before implementation.
+This is dgSpy's ordered roadmap for open product work as of 2026-08-17. It is not a release promise.
+The current product already includes the verified x64 CLR v4 and Mono/Unity debugger bridge, remote-host
+routing, immutable packaging, compiled HookLab hooks, its GUI editor, and the installed standalone
+watcher. Preserve those foundations; do not restart completed plans.
 
-The present foundation is already substantial. dgSpy has a verified x64 CLR v4 and Mono/Unity debugger
-bridge, authenticated local and outbound remote-host routing, ownership and optimistic mutation guards,
-immutable packaging, HookLab's resident compiled Prefix/Postfix/Finalizer/Transpiler path, a real GUI
-editor, and an installed per-user standalone HookLab watcher. Do not rebuild those foundations from old
-plans. Preserve their tests and use them as the starting line.
+## How to travel the roadmap
 
-## The route at a glance
+The numbered roads are open product outcomes, ordered from most concrete to most speculative. Start a
+later road only when evidence or an explicit product decision justifies changing that order.
 
-1. Close the dgSpy-to-watcher package journey with live evidence and explicit enrollment.
-2. Make watcher installation and upgrades preserve intentional operating state.
-3. Make dgSpy and the watcher safely share one resident HookLab generation.
-4. Turn the watcher into an operable product without inventing controls the backend cannot perform.
-5. Resolve controller continuity and the remaining concurrency boundary.
-6. Burn down narrowly reproduced MCP correctness and usability defects.
-7. Improve HookLab authoring only when real hooks demand it.
-8. Revisit high-risk execution, editing, and scripting capabilities one workflow at a time.
-9. Keep compatibility expansions parked until the product scope changes.
+Before starting a road:
 
-## Road 0 - keep the map honest
+- reconcile its motivating documents and old reports with the current code and package;
+- reproduce old defects before treating them as open work;
+- create or update one bounded task under the separate `docs/local/work` repository.
 
-Before and during every slice, reconcile the document that motivated it with the code. Product truth
-stays in the main `docs`; bounded tasks, TODOs, investigations, handoffs, and evidence belong in the
-separate `docs/local` work repository. Completed or superseded product plans move to `docs/history/`.
+While working:
 
-Dated investigations, review logs, evidence folders, and failed plans are evidence, not a backlog.
-Reproduce an old issue against the current package before promoting it here.
+- keep tasks, investigations, handoffs, measurements, and live evidence in `docs/local`;
+- keep supported behavior, architecture, operation, and public contracts in the main `docs`;
+- update architecture, reference, or baseline documents only when their owned truth changes;
+- prefer one verified end-to-end slice over several partially real layers.
 
-For each road below, update the architecture/reference/baseline only when the public contract or supported
-operation changes. Keep live measurements in a dated evidence or local status document rather than
-turning them into timeless guarantees.
+A road is complete only when its exit evidence is satisfied, not when implementation merely exists.
+On completion:
 
-## Road 1 - finish the hook export journey
+1. Promote durable behavior to the owning product, guide, reference, or baseline document.
+2. Close or archive the bounded task and retain detailed evidence in `docs/local`.
+3. Remove the completed road and its route-at-a-glance entry; do not add a completion diary.
+4. Renumber the remaining roads and repair ordering references.
 
-The first export slice exists: `export_hook_package` freezes one installed compiled hook into a canonical,
-closed watcher deployment and creates its profile disabled. What remains is to prove and complete the
-operator journey.
+If only part of an outcome is complete, rewrite the road around what remains.
 
-1. Run a live RPC acceptance against an installed dgSpy package and a retained VMConnect compiled hook.
-   Read back the exported package, manifest, target guards, source revision, and disabled profile from
-   the exact produced directory.
-2. Add an integrity-checked, atomic enrollment operation for canonical exported packages. Enrollment
-   must stage and verify the digest, ACL/owner, absence of reparse points, closed inventory, and same-ID
-   conflicts before publishing a new catalog generation.
-3. Keep enablement a separate explicit decision. Export and enrollment must never silently cause an
-   elevated watcher to patch future processes.
-4. Prove last-good rollback and watcher catalog-generation readback. A failed import must leave the
-   prior executable tree, catalog, profiles, targets, and resident hooks untouched.
+## Route at a glance
 
-Exit evidence: one real hook moves from dgSpy GUI/MCP authoring through export, enrollment, explicit
-enable, new-process application, disable, and readback without rebuilding or replacing the watcher.
+1. Complete the dgSpy-to-watcher package journey with verified enrollment and explicit enablement.
+2. Preserve intentional watcher operating state across installation and upgrade.
+3. Let dgSpy and the watcher safely share one resident HookLab generation.
+4. Add an honest unelevated operator surface for watcher operations that really exist.
+5. Resolve controller continuity and independent safe stimulus during bounded waits.
+6. Fix narrowly reproduced MCP correctness and usability defects.
+7. Improve HookLab authoring only when concrete hooks require it.
+8. Revisit high-risk execution, editing, and scripting one workflow at a time.
+9. Keep compatibility expansions parked until product scope changes.
 
-## Road 2 - make installation preserve operator intent
+## Road 1 - complete the hook export journey
 
-The immutable H2 installer, scheduled task, verification, rollback, and uninstall exist. Close the
-remaining lifecycle ambiguity:
+`export_hook_package` already freezes one installed compiled hook into a canonical watcher deployment
+with a disabled profile. Complete the operator journey:
 
-1. Record whether the exact verified watcher/task was running before upgrade.
-2. After a successful replacement, restart it only when it was previously running; preserve an
-   intentionally stopped watcher as stopped.
-3. Make first-install start policy explicit instead of relying on the next logon.
-4. Read back the new PID, creation identity, installed image path, catalog generation, and healthy
-   status before reporting upgrade success. Roll back if that boundary cannot be established.
-5. Retain the existing invariant that upgrade, uninstall, watcher exit, and task failure do not stop
-   targets, remove resident hooks, or modify target binaries.
+1. Live-verify export through RPC against an installed dgSpy package and the retained VMConnect hook.
+   Read back the exact package, manifest, target guards, source revision, digest, and disabled profile.
+2. Add atomic enrollment for canonical exports. Before publication, verify the digest, closed inventory,
+   owner and ACL, absence of reparse points, and same-ID conflicts.
+3. Keep enablement separate and explicit; export and enrollment must never patch future processes.
+4. Prove catalog-generation readback and last-good rollback. Failed enrollment must leave the previous
+   tree, catalog, profiles, targets, and resident hooks untouched.
 
-Exit evidence: live upgrades in both running and intentionally stopped states, plus failure injection
-that demonstrates rollback and target preservation.
+Exit evidence: one real hook travels from dgSpy authoring through export, enrollment, explicit enable,
+new-process application, disable, and readback without rebuilding or replacing the watcher.
 
-## Road 3 - one resident, two trustworthy controllers
+## Road 2 - preserve watcher operating intent
 
-Today the standalone watcher can adopt its own resident, and dgSpy can operate its own resident, but the
-two directions are not yet one supported interoperability story. This is the most important structural
-work after enrollment.
+Close the remaining installer lifecycle ambiguity:
 
-1. Make dgSpy discover, authenticate, and adopt a valid watcher-created resident before attempting any
-   injection. Read its generation and hook inventory first; preserve unknown and watcher-owned hooks.
-2. Make the watcher adopt a dgSpy-created resident using the same authoritative injector/adoption
-   boundary. Neither side may inject a competing generation merely because ownership differs.
-3. Define hook ownership and mutation rules. Listing is shared; edit, enable/disable, and removal must
-   require a real owning capability or an explicit transfer operation. `remove_all_hooks` must never
-   become permission to erase another controller's work.
-4. Return stable, actionable failures. A valid but unauthenticatable resident should produce
-   `resident_not_adoptable`, not a generic worker timeout. Watcher `status` should preserve the watcher
-   lifecycle and return a structured per-resident inspection error rather than collapsing globally.
-5. Round-trip the exact case-sensitive CLR assembly simple name used by hook creation. Do not infer it
-   from a filename, display name, or path.
+1. Preserve whether the exact verified watcher/task was running or intentionally stopped before upgrade.
+2. Define first-install start policy explicitly.
+3. Before reporting success, read back the new PID, creation identity, installed image, catalog
+   generation, and health; otherwise roll back.
+4. Preserve the invariant that upgrade, uninstall, watcher exit, and task failure do not stop targets,
+   remove resident hooks, or modify target binaries.
 
-Exit evidence: live tests in both ownership directions, with the original hook visibly active throughout
-adoption, restart, inventory, addition of a second hook, and removal of only the new owner's hook.
+Exit evidence: live upgrades from both running and intentionally stopped states, plus injected failure
+that proves rollback and target preservation.
 
-## Road 4 - an operator surface for the watcher
+## Road 3 - share one resident between two controllers
 
-Once enrollment and interoperability are stable, add the unelevated management companion already
-outlined in the watcher plan. Keep the elevated watcher headless and narrowly privileged.
+Make dgSpy and the watcher adopt either side's valid resident instead of injecting competing generations:
 
-The first useful surface is a notification-area companion that can show exact running, paused, error,
-stale, and stopped states; pause/resume; enable/disable profiles; start or restart the installed task;
-and open the bounded audit log. A fuller window may list installed packages/profiles and their latest
-sanitized results.
+1. Discover, authenticate, and inventory a resident before adoption or injection.
+2. Preserve unknown and foreign-owned hooks.
+3. Define ownership for edit, enable, disable, and removal; require an owning capability or explicit
+   transfer. `remove_all_hooks` must not erase another controller's work.
+4. Return stable adoption and per-resident inspection failures without collapsing watcher status.
+5. Round-trip the exact case-sensitive CLR assembly simple name used at hook creation.
 
-Only expose operations that really exist. Exiting the tray closes the companion, not the watcher.
-Stopping the watcher is explicit and still does not remove resident hooks. Package editing, arbitrary
-hook removal, and suggestive disabled controls stay absent until their backend contracts and ownership
-rules are implemented.
+Exit evidence: live adoption in both directions while the original hook remains active, followed by
+restart, inventory, addition of a second hook, and removal of only the new owner's hook.
 
-Exit evidence: main-desktop human acceptance plus hidden-desktop automation of status and every exposed
-operation, including stale-state and privilege-boundary failures.
+## Road 4 - add an honest watcher operator surface
 
-## Road 5 - controller continuity and concurrent waits
+Add an unelevated notification-area companion while keeping the elevated watcher headless. Show exact
+running, paused, error, stale, and stopped states; expose pause/resume, profile enable/disable, installed
+task start/restart, and the bounded audit log.
 
-Two control-plane questions should be resolved together only at their shared protocol boundary, not as
-one large rewrite.
+Expose only implemented operations. Exiting the companion must not stop the watcher. Stopping the
+watcher remains explicit and must not remove resident hooks. Omit package editing and arbitrary hook
+removal until their ownership contracts exist.
 
-### 5A. Decide session ownership continuity
+Exit evidence: main-desktop human acceptance and hidden-desktop automation of every exposed operation,
+including stale-state and privilege-boundary failures.
 
-Current behavior is explicit and usable: an active controller blocks normal claims; an operator can
-inspect it and intentionally take over with `force=true`; expiry permits ordinary reclaim. The older
-claim-token proposal would instead prove continuity across MCP or Gateway restart. Decide which product
-property is wanted before coding:
+## Road 5 - resolve control-plane continuity and concurrency
 
-- If deliberate operator takeover is sufficient for equally trusted loopback clients, retire the token
-  proposal and document forced takeover as the supported recovery contract.
-- If automatic rightful-owner continuity matters, design a persisted, non-listable, revocable claim
-  capability. It must survive the intended restart, never widen access policy, distinguish token reclaim
-  from expiry/force in audit, and be invalidated on deliberate release or transfer.
+### 5A. Choose the session recovery contract
 
-Either choice needs restart, contention, expiry, release, forced transfer, and audit-redaction tests.
+Current recovery uses expiry or inspected `claim_session(force=true)` takeover. Decide whether that is
+sufficient or whether rightful-owner continuity requires a persisted, non-listable, revocable claim
+capability. Either choice needs restart, contention, expiry, release, transfer, and audit-redaction tests.
 
-### 5B. Permit independent safe stimulus during a bounded wait
+### 5B. Permit safe stimulus during a bounded wait
 
-Instrument the MCP-client to Gateway to host path to locate the serialization that prevents a
-long-running `run_to_*`/wait from overlapping an independent request. Preserve intentional mutation and
-func-eval serialization, but allow a bounded wait and a non-conflicting stimulus to be in flight. Do not
-assign blame to the client, Gateway, or host before the trace proves where dispatch stops.
+Trace MCP client, Gateway, and host dispatch to locate the serialization boundary. Preserve mutation and
+func-eval serialization while allowing a bounded `run_to_*`/wait and an independent non-conflicting
+stimulus to overlap.
 
-Exit evidence: the stimulus reaches the host before the wait deadline, the resulting breakpoint/event
-completes the wait, and timeout, cancellation, or disconnect strands neither request.
+Exit evidence: the stimulus reaches the host before the deadline and completes the wait; timeout,
+cancellation, and disconnect strand neither request.
 
-## Road 6 - focused MCP quality work
+## Road 6 - fix reproduced MCP quality defects
 
-Treat each item as its own reproduction-led fix. Recheck old local reports first; several neighboring
-friction points have already been fixed or deliberately declined.
+Treat each item as an independent reproduction-led fix:
 
-Priority candidates:
+1. Contain the intermittent wildcard `list_programs` access violation and make `doctor` report the fault.
+2. Add operation/correlation context and a recovery boundary to raw `internal_error` responses without
+   leaking arbitrary exception details.
+3. Recheck GUI-versus-MCP mutation races and enforce guards at the dispatcher only if reproduced.
+4. Explain unsafe func-eval stops and offer bounded candidate guidance without probing every thread.
+5. Document conditional-breakpoint risk in locks, hot callbacks, and retry loops.
+6. Clarify raw-module offsets, IL code-size semantics, and instrumented native disassembly; change code
+   only where a fixture proves the contract wrong.
+7. Add a public exact-MVID resolver only if real callers show the existing filtered discovery workflow
+   is too costly. Zero and ambiguous resolution must remain explicit failures.
 
-1. Reproduce and contain the intermittent `list_programs(process_names=[wildcard])` access violation.
-   If an operation contains an AV, `doctor` must record a contained fault rather than immediately report
-   an entirely healthy host.
-2. Make raw `internal_error` responses carry an operation/correlation context and a useful recovery
-   boundary without leaking arbitrary exception details.
-3. Revisit GUI-versus-MCP control arbitration and duplicate resume races against the current action
-   guards. If still reproducible, enforce at the dispatcher-side mutation point and keep stock dnSpy
-   behavior when no dgSpy guard is active.
-4. Improve func-eval discoverability: explain why a selected stop/thread is unsafe and offer bounded
-   candidate guidance without probing every thread by default.
-5. Document conditional-breakpoint risk inside locks, hot callbacks, and retry loops.
-6. Clarify raw-module file offsets, IL code-size semantics, and breakpoint-instrumented native
-   disassembly. Fix implementation defects only where a fixture proves the contract is wrong.
-7. Consider a public exact-MVID module resolver only if real non-test callers or measurements show the
-   existing filtered `list_modules` plus `get_metadata` workflow is too costly. Ambiguity must remain an
-   explicit failure; never select the first name match.
+Do not reopen delivered neighbors: filtered member listings, session-scoped module identity, the
+development transcript, and explicit controller takeover already exist.
 
-Already-delivered neighbors should not return as roadmap work: symbol/member listings have filtering,
-session-scoped module identity has a shared exact-MVID test resolver, the development transcript exists,
-and explicit controller takeover exists.
+## Road 7 - improve HookLab authoring when demanded
 
-## Road 7 - HookLab authoring when pressure arrives
+Pull these only from a concrete failing hook: generic methods and declaring types, additional resident
+compiler references, a larger source boundary, Roslyn editor assistance, natural collision-safe
+parameter names, or richer package management.
 
-These are good improvements, but they should be pulled by a concrete hook rather than by a desire to
-make the surface larger:
+Each slice needs a target fixture that fails before it, compilation and runtime rollback coverage, and
+the existing exact MVID, token, signature, and IL identity guarantees.
 
-- generic methods and methods on generic declaring types;
-- broader resident compiler references when the current target-AppDomain set fails on a real target;
-- a larger source boundary if the bootstrap parameter limit is actually reached;
-- Roslyn semantic highlighting, completion, signature help, and advisory diagnostics while retaining
-  target-side compilation as authority;
-- natural generated parameter names with collision-safe Harmony reserved-name handling;
-- richer package management after the scriptable lifecycle is settled.
+## Road 8 - consider high-risk capabilities separately
 
-Each slice needs a target fixture that fails before it, compilation/runtime rollback coverage, and the
-same exact MVID/token/signature/IL identity guarantees as the current path.
+General target C# execution, assembly editing or project export, live method-body replacement, and
+dnSpy-host scripting are separate trust domains. HookLab's bounded compiler authorizes none of them.
 
-## Road 8 - distant high-risk capabilities
+If a named workflow justifies one, proceed roughly in this order:
 
-General target C# execution, assembly editing/project export, live method-body replacement, and dnSpy-host
-C# scripting remain separate trust domains. HookLab's bounded source compiler does not authorize any of
-them. Start one only for a named workflow after policy can grant it independently and audit it without
-recording source, expressions, values, memory, or secrets.
-
-The rough order, if demand arrives, is:
-
-1. Tighten and document the existing expression/invocation tier per engine.
-2. Add deterministic copy-on-write artifact/project export before any overwrite path.
+1. Tighten the existing expression and invocation tier per engine.
+2. Add deterministic copy-on-write artifact or project export before overwrite support.
 3. Consider a digest-verified target payload against a disposable x64 CLR v4 fixture.
-4. Consider live method-body replacement only with exact paused-target and original-body guards.
-5. Leave dnSpy-host scripting last; in-process Roslyn code runs with the host user's authority and may
-   not admit honest hard cancellation.
+4. Consider live replacement only with exact paused-target and original-body guards.
+5. Leave dnSpy-host scripting last because it runs with the host user's authority and may not admit
+   honest hard cancellation.
 
-Every capability needs its own permission, bounded queues/deadlines/sizes, remote-default-off policy,
-possible-side-effect reporting, and end-to-end refusal tests.
+Each capability requires its own permission, bounds, audit policy, remote-default-off behavior,
+side-effect reporting, and end-to-end refusal tests.
 
 ## Road 9 - parked horizons
 
 CoreCLR, x86, native debugging, broad Mono HookLab support, reverse patches, generic hook providers,
-profiler/ReJIT, and Visual Basic parity are not part of the current x64 CLR v4/Unity product scope.
-The companion work repository retains useful CoreCLR failure evidence under
-`work/backlog/coreclr-debugger.md`, but it is parked work, not the next milestone. If scope changes,
-begin with deterministic engine fixtures and capability truth; do not generalize the CorDebug
-implementation by assumption.
+profiler/ReJIT, and Visual Basic parity remain outside the current x64 CLR v4 and Unity scope. Useful
+CoreCLR evidence is retained under `docs/local/work/backlog/coreclr-debugger.md`.
 
-Likewise, deterministic Unity fixtures, headless Mono connection-failure handling, and broader
-multi-session isolation are independent quality projects. Promote one only with a concrete workflow,
-fixture, and acceptance boundary.
+Deterministic Unity fixtures, headless Mono connection-failure handling, and broader multi-session
+isolation are independent quality projects. Promote one only with a concrete workflow, fixture, and
+acceptance boundary.
 
-## Rules of the road
+## Invariants for every road
 
-- Prefer one end-to-end vertical slice over several partially real layers.
-- Preserve exact session-scoped `module_id` and MVID identity; fail on zero or ambiguous resolution.
-- Never weaken disconnect invariants: no implicit resume, detach, terminate, restart, or hook removal.
+- Preserve exact session-scoped `module_id` and MVID identity; fail on zero or ambiguity.
+- Never turn disconnect into implicit resume, detach, terminate, restart, or hook removal.
 - Preserve unknown and foreign-owned resident hooks.
-- Keep elevated inputs immutable, closed, verified, and separate from editable policy/state.
-- Treat harness failures as possible harness defects until the product path is independently observed.
-- Run Protocol, Gateway, Extension, composition, pipeline, and applicable live gates in the supported
-  order; do not claim a live boundary from source-only tests.
-- Keep dnSpyEx synchronization routine and reviewable. A new upstream baseline is not a product phase.
-- Update this road map by deleting roads that are complete, not by piling completion diaries onto them.
+- Keep elevated inputs immutable, closed, verified, and separate from editable policy and state.
+- Treat harness failures as possible harness defects until independently observed.
+- Distinguish source coverage, package verification, and engine-specific live evidence.
+- Run Protocol, Gateway, Extension, composition, pipeline, and applicable live gates in supported order.
+- Keep dnSpyEx synchronization routine, bounded, and reviewable; it is not a product road.
 
-The dream is not a debugger with every imaginable button. It is a debugger whose next mile is always
-real: exact identity, explicit authority, reversible operations where reality permits them, and enough
-light on the road that an agent can tell evidence from hope.
+The goal is not every imaginable debugger button. It is a product whose next mile has exact identity,
+explicit authority, honest evidence, and reversible behavior wherever reality permits it.
