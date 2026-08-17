@@ -2,6 +2,10 @@
 
 - [Quick start and local deployment](GETTING_STARTED.md)
 
+This directory documents the product as it exists. Put implementation tasks, TODO lists,
+investigations, handoffs, and run evidence in the separate `docs/local` work repository. See
+[Documentation and work](DOCUMENTATION_AND_WORK.md) for the boundary.
+
 ## Start here
 
 - [Dream of roads](dream_of_roads.md) — current aspirational roadmap and rough ordering of open work.
