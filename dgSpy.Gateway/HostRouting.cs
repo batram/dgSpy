@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Collections.Concurrent;
 using System.Net.Security;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
@@ -279,20 +280,48 @@ sealed class RegisteredRpcClient : IHostRpcClient {
 }
 
 sealed class ReverseConnection : IDisposable {
-	readonly TcpClient client; readonly StreamReader reader; readonly StreamWriter writer; readonly SemaphoreSlim calls=new(1,1); volatile bool active;
+	readonly TcpClient client; readonly StreamReader reader; readonly StreamWriter writer;
+	readonly SemaphoreSlim writes=new(1,1);
+	readonly ConcurrentDictionary<string,TaskCompletionSource<RpcResponse>> pending=new(StringComparer.Ordinal);
+	readonly CancellationTokenSource closed=new();
+	Task? responses; volatile bool active; int disposed;
 	public bool SocketAlive { get { try { return client.Connected && !(client.Client.Poll(0,SelectMode.SelectRead) && client.Available==0); } catch { return false; } } }
 	public bool IsAlive => active && SocketAlive;
 	public ReverseConnection(TcpClient client,StreamReader reader,StreamWriter writer) { this.client=client; this.reader=reader; this.writer=writer; }
-	public void Activate() => active=true;
+	public void Activate() { active=true; responses=Task.Run(ReadResponsesAsync); }
 	public async Task<RpcResponse> CallAsync(RpcRequest request,CancellationToken cancellationToken) {
-		await calls.WaitAsync(cancellationToken);
+		if(!IsAlive) throw new IOException("The remote host is not connected.");
+		var completion=new TaskCompletionSource<RpcResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+		if(!pending.TryAdd(request.RequestId,completion)) throw new IOException($"Duplicate outbound request id '{request.RequestId}'.");
 		try {
-			await writer.WriteLineAsync(ProtocolJson.Serialize(request));
-			var line=await reader.ReadLineAsync(cancellationToken) ?? throw new IOException("The remote host disconnected.");
-			return ProtocolJson.Deserialize<RpcResponse>(line) ?? throw new IOException("Invalid remote host response.");
-		} catch { Dispose(); throw; } finally { calls.Release(); }
+			await writes.WaitAsync(cancellationToken);
+			try { await writer.WriteLineAsync(ProtocolJson.Serialize(request)); }
+			finally { writes.Release(); }
+			return await completion.Task.WaitAsync(cancellationToken);
+		}
+		finally { pending.TryRemove(request.RequestId,out _); }
 	}
-	public void Dispose() { client.Dispose(); }
+	async Task ReadResponsesAsync() {
+		Exception failure;
+		try {
+			string? line;
+			while((line=await reader.ReadLineAsync(closed.Token)) is not null) {
+				var response=ProtocolJson.Deserialize<RpcResponse>(line) ?? throw new IOException("Invalid remote host response.");
+				if(pending.TryRemove(response.RequestId,out var completion)) completion.TrySetResult(response);
+			}
+			failure=new IOException("The remote host disconnected.");
+		}
+		catch(OperationCanceledException) when(closed.IsCancellationRequested) { failure=new IOException("The remote host connection closed."); }
+		catch(Exception ex) { failure=ex; }
+		active=false;
+		foreach(var item in pending.ToArray()) if(pending.TryRemove(item.Key,out var completion)) completion.TrySetException(failure);
+	}
+	public void Dispose() {
+		if(Interlocked.Exchange(ref disposed,1)!=0) return;
+		active=false; closed.Cancel(); client.Dispose();
+		var failure=new IOException("The remote host connection closed.");
+		foreach(var item in pending.ToArray()) if(pending.TryRemove(item.Key,out var completion)) completion.TrySetException(failure);
+	}
 }
 
 public sealed class RemoteHostListener : BackgroundService {

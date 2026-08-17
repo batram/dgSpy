@@ -83,8 +83,11 @@ Frame/value snapshots are invalid after resume unless an engine-backed object ID
 persistence. An initialized MCP session controls a debugger session created by its `attach` or `launch`.
 Inspection is shared; every session mutation requires that controller plus its exact relevant scoped
 revision. Frame-bound mutations also require the current `stop_id`. Thread and module notifications can
-advance `event_id` without invalidating lifecycle or execution commands. A Gateway restart intentionally recovers debugger sessions as unowned, and
-`claim_session` is the only recovery action. Ownership changes never change target state.
+advance `event_id` without invalidating lifecycle or execution commands. A Gateway restart intentionally
+recovers debugger sessions as unowned, and `claim_session` is the only recovery action. The recovery
+contract deliberately remains an expiring controller lease plus inspected, warned `force=true` transfer:
+there is no persisted or listable claim capability to steal, retain, revoke, or redact. Ownership changes
+never change target state.
 
 ## Standalone HookLab injection boundary
 
@@ -153,6 +156,10 @@ different live image. Discovery credentials and resident status remain owned by
   lazy and not safe for concurrent first access.
 - Events and debugger output are separate bounded, non-destructive cursor streams. Concurrent waiters see
   the same event; stale cursors report truncation and the oldest available cursor.
+- Local routing uses one authenticated connection per call. Outbound hosts multiplex request-ID-correlated
+  calls over their one authenticated reverse connection and serialize only writes; a bounded wait cannot
+  prevent an independent request from reaching the host. Responses may complete out of order. Cancellation
+  abandons only its request, and connection loss fails every pending request explicitly.
 - A deadline can abandon the caller's wait, but dnSpy cannot cancel an arbitrary queued dispatcher action.
   Func-eval uses the engine's harder timeout where available. This limitation is advertised.
 - Breakpoints are dnSpy-global and survive detach. Closing dnSpy while attached may terminate the target;

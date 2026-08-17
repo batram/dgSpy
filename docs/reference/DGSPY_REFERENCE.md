@@ -266,6 +266,9 @@ and leaves the profile disabled until `enable-profile <id>` is explicit.
   session is owned, plus `controller_is_caller`. A client that lost its transport — an MCP client
   restarting its stdio server gives the session a new identity and strands the old lease on a dead one —
   cannot renew or claim until the lease lapses, so the deadline turns a blind poll into a known wait.
+  This expiry-or-inspected-transfer contract is intentional. dgSpy does not issue a persisted recovery
+  capability: `claim_session(force=true)` is the explicit transfer after inspecting ownership and warning
+  the current operator, and Gateway restart recovers sessions as unowned without changing target state.
 - Frame identity is `thread_id` + `frame_index` for paused selection, and `module` + `method_token` +
   `il_offset` for code identity and `set_il_breakpoint`. `name` is display-only and must not be parsed.
 - **On Mono/Unity, `il_offset` must be a sequence point** or the engine refuses the breakpoint. CorDebug
@@ -297,6 +300,10 @@ and leaves the profile disabled until `enable-profile <id>` is explicit.
 - `get_events`, `wait_for_event`, and `wait_for_stop` read one bounded per-session sequence without
   consuming it, so concurrent callers see the same event. Optional `kinds` filter general waits and
   reads. A stale cursor sets `truncated` and returns `oldest_available_cursor`; waits cap at 10 s.
+  Streamable HTTP and both host routes permit another request while a wait is outstanding. Local calls use
+  independent authenticated connections; an outbound host multiplexes correlated calls over its reverse
+  connection. A synchronous client still needs two outstanding requests or a second actor to supply an
+  external stimulus. Request cancellation does not cancel or consume another caller's response.
   `get_stop_reason` returns either an exact retained stop or the latest one. Normalized stops preserve
   reason, process, thread, breakpoint or exception identity, and stable IL location when dnSpy supplies it.
 - **An unrecognized `kinds` value is rejected with `invalid_argument`, not filtered on.** A near miss

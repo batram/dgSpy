@@ -146,12 +146,33 @@ namespace dgSpy.Extension {
 					if (!string.Equals(accepted.HostId,rpcSecurity.HostId,StringComparison.Ordinal)) throw new IOException($"Gateway registered '{accepted.HostId}', expected '{rpcSecurity.HostId}'.");
 					lock(sync) outboundGatewayConnected=true; NotifyConnectionStateChanged();
 					manager.WriteMessage($"dgSpy host {rpcSecurity.HostId} registered with {remote.Address}:{remote.Port}"); delay=TimeSpan.FromSeconds(1);
-					string? line; while((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null && !shutdown.IsCancellationRequested) { var request=ProtocolJson.Deserialize<RpcRequest>(line); var response=request is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(request).ConfigureAwait(false); await writer.WriteLineAsync(ProtocolJson.Serialize(response)).ConfigureAwait(false); }
+					// Keep reading while earlier calls dispatch. A bounded wait must not monopolize the one
+					// authenticated reverse connection and prevent an independent request from reaching the
+					// host. Response writes remain serialized and request_id carries the correlation, so
+					// completion order is deliberately independent of arrival order.
+					using(var writes=new SemaphoreSlim(1,1)) {
+						var inFlight=new ConcurrentDictionary<string,Task>(StringComparer.Ordinal);
+						string? line;
+						while((line=await reader.ReadLineAsync().ConfigureAwait(false)) is not null && !shutdown.IsCancellationRequested) {
+							var request=ProtocolJson.Deserialize<RpcRequest>(line);
+							var key=request?.RequestId ?? Guid.NewGuid().ToString("N");
+							var work=DispatchOutboundAsync(request,writer,writes);
+							inFlight[key]=work;
+							_=work.ContinueWith(completedTask=>inFlight.TryRemove(key,out var ignored),CancellationToken.None,TaskContinuationOptions.ExecuteSynchronously,TaskScheduler.Default);
+						}
+						await Task.WhenAll(inFlight.Values.ToArray()).ConfigureAwait(false);
+					}
 				} catch(Exception ex) when(!shutdown.IsCancellationRequested) { manager.WriteMessage(PredefinedDbgManagerMessageKinds.Output,"dgSpy outbound gateway: "+ex.Message); }
 				finally { lock(sync) outboundGatewayConnected=false; NotifyConnectionStateChanged(); }
 				try { await Task.Delay(delay,shutdown.Token).ConfigureAwait(false); } catch(OperationCanceledException) { return; }
 				delay=TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds*2,30));
 			}
+		}
+		async Task DispatchOutboundAsync(RpcRequest? request,StreamWriter writer,SemaphoreSlim writes) {
+			var response=request is null ? RpcResponse.Failure("","invalid_request","Invalid JSON request.") : await DispatchAsync(request).ConfigureAwait(false);
+			await writes.WaitAsync(shutdown.Token).ConfigureAwait(false);
+			try { await writer.WriteLineAsync(ProtocolJson.Serialize(response)).ConfigureAwait(false); }
+			finally { writes.Release(); }
 		}
 		static async Task<Stream> OpenGatewayStreamAsync(TcpClient client,RemoteGatewaySettings remote) {
 			if (!remote.UseTls) return client.GetStream();

@@ -35,30 +35,12 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Resolve controller continuity and independent safe stimulus during bounded waits.
-2. Fix narrowly reproduced MCP correctness and usability defects.
-3. Improve HookLab authoring only when concrete hooks require it.
-4. Revisit high-risk execution, editing, and scripting one workflow at a time.
-5. Keep compatibility expansions parked until product scope changes.
+1. Fix narrowly reproduced MCP correctness and usability defects.
+2. Improve HookLab authoring only when concrete hooks require it.
+3. Revisit high-risk execution, editing, and scripting one workflow at a time.
+4. Keep compatibility expansions parked until product scope changes.
 
-## Road 1 - resolve control-plane continuity and concurrency
-
-### 1A. Choose the session recovery contract
-
-Current recovery uses expiry or inspected `claim_session(force=true)` takeover. Decide whether that is
-sufficient or whether rightful-owner continuity requires a persisted, non-listable, revocable claim
-capability. Either choice needs restart, contention, expiry, release, transfer, and audit-redaction tests.
-
-### 1B. Permit safe stimulus during a bounded wait
-
-Trace MCP client, Gateway, and host dispatch to locate the serialization boundary. Preserve mutation and
-func-eval serialization while allowing a bounded `run_to_*`/wait and an independent non-conflicting
-stimulus to overlap.
-
-Exit evidence: the stimulus reaches the host before the deadline and completes the wait; timeout,
-cancellation, and disconnect strand neither request.
-
-## Road 2 - fix reproduced MCP quality defects
+## Road 1 - fix reproduced MCP quality defects
 
 Treat each item as an independent reproduction-led fix:
 
@@ -76,7 +58,7 @@ Treat each item as an independent reproduction-led fix:
 Do not reopen delivered neighbors: filtered member listings, session-scoped module identity, the
 development transcript, and explicit controller takeover already exist.
 
-## Road 3 - improve HookLab authoring when demanded
+## Road 2 - improve HookLab authoring when demanded
 
 Pull these only from a concrete failing hook: generic methods and declaring types, additional resident
 compiler references, a larger source boundary, Roslyn editor assistance, natural collision-safe
@@ -85,7 +67,7 @@ parameter names, or richer package management.
 Each slice needs a target fixture that fails before it, compilation and runtime rollback coverage, and
 the existing exact MVID, token, signature, and IL identity guarantees.
 
-## Road 4 - consider high-risk capabilities separately
+## Road 3 - consider high-risk capabilities separately
 
 General target C# execution, assembly editing or project export, live method-body replacement, and
 dnSpy-host scripting are separate trust domains. HookLab's bounded compiler authorizes none of them.
@@ -102,7 +84,7 @@ If a named workflow justifies one, proceed roughly in this order:
 Each capability requires its own permission, bounds, audit policy, remote-default-off behavior,
 side-effect reporting, and end-to-end refusal tests.
 
-## Road 5 - parked horizons
+## Road 4 - parked horizons
 
 CoreCLR, x86, native debugging, broad Mono HookLab support, reverse patches, generic hook providers,
 profiler/ReJIT, and Visual Basic parity remain outside the current x64 CLR v4 and Unity scope. Useful

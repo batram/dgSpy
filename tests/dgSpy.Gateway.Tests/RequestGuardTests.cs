@@ -136,6 +136,15 @@ public class SessionControlTests {
 	}
 
 	[Fact]
+	public void Gateway_restart_recovers_sessions_as_unowned_without_persisting_a_claim_secret() {
+		var clients=new McpClientSessions(TimeSpan.FromMinutes(5)); clients.Touch("client-a");
+		var beforeRestart=new SessionControllers(clients); beforeRestart.Claim("session-a","host-a","client-a");
+		var afterRestart=new SessionControllers(new McpClientSessions(TimeSpan.FromMinutes(5)));
+		Assert.Null(afterRestart.Get("session-a"));
+		Assert.Equal("session_unowned",Assert.Throws<GatewayControlException>(()=>afterRestart.Authorize("session-a","client-a")).Code);
+	}
+
+	[Fact]
 	public void Inspect_only_mode_denies_mutation() {
 		var policy=new GatewayAccessPolicy("inspect-only");
 		Assert.Equal("access_denied",Assert.Throws<GatewayControlException>(()=>policy.AuthorizeMutation("pause")).Code);
@@ -303,6 +312,63 @@ public class HostRegistryTests {
 	}
 
 	[Fact]
+	public async Task Outbound_wait_does_not_block_independent_request_and_responses_correlate_out_of_order() {
+		var directory=CreateRegistryDirectory();
+		try {
+			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} });
+			var router=new HostRouter(HostRegistry.FromJson(json,directory));
+			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start();
+			using var remote=new TcpClient(); var accept=listener.AcceptTcpClientAsync(); await remote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var gateway=await accept;
+			var gatewayReader=new StreamReader(gateway.GetStream(),Encoding.UTF8,false,4096,true); var gatewayWriter=new StreamWriter(gateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true}; Assert.True(router.TryRegister("host-a",gateway,gatewayReader,gatewayWriter,out _));
+			var remoteReader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true); var remoteWriter=new StreamWriter(remote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true};
+			var first=router.CallAsync(new RpcRequest { Operation="wait_for_stop",Arguments=new JsonObject{{"host_id","host-a"}},DeadlineUtc=DateTime.UtcNow.AddSeconds(5) },default);
+			var waitRequest=ProtocolJson.Deserialize<RpcRequest>((await remoteReader.ReadLineAsync())!)!;
+			var second=router.CallAsync(new RpcRequest { Operation="get_session_state",Arguments=new JsonObject{{"host_id","host-a"}},DeadlineUtc=DateTime.UtcNow.AddSeconds(5) },default);
+			var stimulusRequest=await remoteReader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(1));
+			Assert.NotNull(stimulusRequest); var stimulus=ProtocolJson.Deserialize<RpcRequest>(stimulusRequest!)!;
+			await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(stimulus.RequestId,new { marker="stimulus" })));
+			await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(waitRequest.RequestId,new { marker="wait" })));
+			var responses=await Task.WhenAll(first,second);
+			Assert.Equal("wait",(string?)ProtocolJson.ToNode(responses[0].Result)?["marker"]);
+			Assert.Equal("stimulus",(string?)ProtocolJson.ToNode(responses[1].Result)?["marker"]);
+			listener.Stop();
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	[Fact]
+	public async Task Cancelled_outbound_call_does_not_consume_another_calls_response() {
+		var directory=CreateRegistryDirectory();
+		try {
+			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} }); var router=new HostRouter(HostRegistry.FromJson(json,directory));
+			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start(); using var remote=new TcpClient(); var accept=listener.AcceptTcpClientAsync(); await remote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var gateway=await accept;
+			var gatewayReader=new StreamReader(gateway.GetStream(),Encoding.UTF8,false,4096,true); var gatewayWriter=new StreamWriter(gateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true}; Assert.True(router.TryRegister("host-a",gateway,gatewayReader,gatewayWriter,out _));
+			var remoteReader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true); var remoteWriter=new StreamWriter(remote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true};
+			using var cancellation=new CancellationTokenSource(); var abandoned=router.CallAsync(new RpcRequest { Operation="wait_for_stop",Arguments=new JsonObject{{"host_id","host-a"}},DeadlineUtc=DateTime.UtcNow.AddSeconds(5) },cancellation.Token); var abandonedRequest=ProtocolJson.Deserialize<RpcRequest>((await remoteReader.ReadLineAsync())!)!; cancellation.Cancel(); Assert.Equal("deadline_exceeded",(await abandoned).Error?.Code);
+			var next=router.CallAsync(new RpcRequest { Operation="get_session_state",Arguments=new JsonObject{{"host_id","host-a"}},DeadlineUtc=DateTime.UtcNow.AddSeconds(5) },default); var nextRequest=ProtocolJson.Deserialize<RpcRequest>((await remoteReader.ReadLineAsync())!)!;
+			await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(abandonedRequest.RequestId,new { marker="late" })));
+			await remoteWriter.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(nextRequest.RequestId,new { marker="next" })));
+			Assert.Equal("next",(string?)ProtocolJson.ToNode((await next).Result)?["marker"]); listener.Stop();
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	[Fact]
+	public async Task Outbound_disconnect_fails_every_pending_request() {
+		var directory=CreateRegistryDirectory();
+		try {
+			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} }); var router=new HostRouter(HostRegistry.FromJson(json,directory));
+			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start(); var remote=new TcpClient(); var accept=listener.AcceptTcpClientAsync(); await remote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var gateway=await accept;
+			var gatewayReader=new StreamReader(gateway.GetStream(),Encoding.UTF8,false,4096,true); var gatewayWriter=new StreamWriter(gateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true}; Assert.True(router.TryRegister("host-a",gateway,gatewayReader,gatewayWriter,out _)); var remoteReader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true);
+			var first=router.CallAsync(new RpcRequest { Operation="wait_for_stop",Arguments=new JsonObject{{"host_id","host-a"}},DeadlineUtc=DateTime.UtcNow.AddSeconds(5) },default);
+			var second=router.CallAsync(new RpcRequest { Operation="get_session_state",Arguments=new JsonObject{{"host_id","host-a"}},DeadlineUtc=DateTime.UtcNow.AddSeconds(5) },default);
+			Assert.NotNull(await remoteReader.ReadLineAsync()); Assert.NotNull(await remoteReader.ReadLineAsync()); remote.Dispose();
+			var responses=await Task.WhenAll(first,second); Assert.All(responses,response=>Assert.Equal("host_unavailable",response.Error?.Code)); listener.Stop();
+		}
+		finally { Directory.Delete(directory,true); }
+	}
+
+	[Fact]
 	public void Active_controller_can_only_be_displaced_by_explicit_force_claim() {
 		var clients=new McpClientSessions(TimeSpan.FromMinutes(5)); var controllers=new SessionControllers(clients);
 		clients.Touch("client-a"); clients.Touch("client-b"); controllers.Claim("session-a","host-a","client-a");
@@ -328,19 +394,18 @@ public class HostRegistryTests {
 	}
 
 	[Fact]
-	public async Task Outbound_deadline_disposes_the_blocked_channel_and_a_reconnection_recovers() {
+	public async Task Outbound_deadline_abandons_only_that_request_and_the_connection_recovers() {
 		var directory=CreateRegistryDirectory();
 		try {
 			var json=ProtocolJson.Serialize(new { hosts=new[]{new { host_id="host-a",transport="outbound",token_file="a.token" }} }); var router=new HostRouter(HostRegistry.FromJson(json,directory));
 			var listener=new TcpListener(IPAddress.Loopback,0); listener.Start();
-			using var silentRemote=new TcpClient(); var firstAccept=listener.AcceptTcpClientAsync(); await silentRemote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var firstGateway=await firstAccept;
-			Assert.True(router.TryRegister("host-a",firstGateway,new StreamReader(firstGateway.GetStream(),Encoding.UTF8,false,4096,true),new StreamWriter(firstGateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true},out _));
+			using var remote=new TcpClient(); var accept=listener.AcceptTcpClientAsync(); await remote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var gateway=await accept;
+			Assert.True(router.TryRegister("host-a",gateway,new StreamReader(gateway.GetStream(),Encoding.UTF8,false,4096,true),new StreamWriter(gateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true},out _));
+			var reader=new StreamReader(remote.GetStream(),Encoding.UTF8,false,4096,true); var writer=new StreamWriter(remote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true};
 			using var callerBound=new CancellationTokenSource(TimeSpan.FromSeconds(1)); var started=System.Diagnostics.Stopwatch.StartNew(); var timedOut=await router.CallAsync(new RpcRequest { Operation="get_host_info",Arguments=new JsonObject{{"host_id","host-a"}},DeadlineUtc=DateTime.UtcNow.AddMilliseconds(150) },callerBound.Token); started.Stop();
 			Assert.Equal("deadline_exceeded",timedOut.Error?.Code); Assert.InRange(started.ElapsedMilliseconds,50,600);
-
-			using var recoveredRemote=new TcpClient(); var secondAccept=listener.AcceptTcpClientAsync(); await recoveredRemote.ConnectAsync(IPAddress.Loopback,((IPEndPoint)listener.LocalEndpoint).Port); using var secondGateway=await secondAccept;
-			Assert.True(router.TryRegister("host-a",secondGateway,new StreamReader(secondGateway.GetStream(),Encoding.UTF8,false,4096,true),new StreamWriter(secondGateway.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true},out _));
-			var responder=Task.Run(async ()=>{ var reader=new StreamReader(recoveredRemote.GetStream(),Encoding.UTF8,false,4096,true); var writer=new StreamWriter(recoveredRemote.GetStream(),new UTF8Encoding(false),4096,true){AutoFlush=true}; var request=ProtocolJson.Deserialize<RpcRequest>((await reader.ReadLineAsync())!)!; await writer.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,new { recovered=true }))); });
+			var abandoned=ProtocolJson.Deserialize<RpcRequest>((await reader.ReadLineAsync())!)!;
+			var responder=Task.Run(async ()=>{ var request=ProtocolJson.Deserialize<RpcRequest>((await reader.ReadLineAsync())!)!; await writer.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(abandoned.RequestId,new { late=true }))); await writer.WriteLineAsync(ProtocolJson.Serialize(RpcResponse.Success(request.RequestId,new { recovered=true }))); });
 			var recovered=await router.CallAsync(new RpcRequest { Operation="get_host_info",Arguments=new JsonObject{{"host_id","host-a"}},DeadlineUtc=DateTime.UtcNow.AddSeconds(2) },default); await responder; listener.Stop();
 			Assert.Null(recovered.Error); Assert.True((bool?)ProtocolJson.ToObject(recovered.Result!)["recovered"]);
 		}
