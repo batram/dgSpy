@@ -1,5 +1,10 @@
 # HookLab implementation plan
 
+Status: delivered for its documented x64 desktop-CLR-v4 scope. The remaining generic-template,
+compiler-reference, and editor items are demand-led backlog, not the active product path. Follow
+[Dream of roads](dream_of_roads.md) for current ordering and the
+[watcher plan](HOOKLAB_WATCHER_IMPLEMENTATION_PLAN.md) for standalone interoperability boundaries.
+
 ## Product goal
 
 HookLab brings UnityExplorer-style Harmony hook creation to any attached x64 CLR v4 process. dgSpy

@@ -4,7 +4,9 @@
 
 ## Start here
 
-- [Implementation plan](IMPLEMENTATION_PLAN.md) — open work and ordering.
+- [Dream of roads](dream_of_roads.md) — current aspirational roadmap and rough ordering of open work.
+- [Implementation plan](IMPLEMENTATION_PLAN.md) — compact delivered baseline and compatibility pointer;
+  retained for existing links.
 - [Architecture](ARCHITECTURE.md) — current boundaries, state model, ownership, and safety rules.
 - [Build baseline](DGSPY_BASELINE.md) — supported toolchain, build/deploy workflow, and retained patches.
 - [Tool and behavior reference](DGSPY_REFERENCE.md) — MCP tools, authentication, identities, events,
@@ -13,11 +15,10 @@
   focused fixes upstream.
 - [Remote hosts](REMOTE_HOSTS.md) — deploy packages and the target outbound registration/TLS design.
 
-## Active feature plan
+## Feature design and delivered boundaries
 
-- [HookLab watcher implementation plan](HOOKLAB_WATCHER_IMPLEMENTATION_PLAN.md) — the active plan:
-  standalone watcher deployment of guarded hooks outside a debugger session. Current status is
-  tracked in the local docs overlay, not in this design document.
+- [HookLab watcher implementation plan](HOOKLAB_WATCHER_IMPLEMENTATION_PLAN.md) — delivered standalone
+  watcher design plus the still-open enrollment, upgrade-state, and interoperability boundaries.
 - [HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md) — delivered scope: one direct GUI
   and MCP path for guarded Harmony observation and custom hooks, plus a small deferred backlog
   (generic-method templates, editor UX).
@@ -26,7 +27,8 @@
 
 - [Search proposal](SEARCH_PROPOSAL.md) — implemented; retained as the standing rationale for the
   ported dnSpy matching rules cited by the reference.
-- [CoreCLR follow-ups](DNSPY_CORECLR_TODOS.md) — parked; CoreCLR is outside the current dgSpy gate.
+- [CoreCLR follow-ups](DNSPY_CORECLR_TODOS.md) — parked investigation notes; CoreCLR is outside the
+  current dgSpy product scope and gate.
 
 ## Worked examples
 

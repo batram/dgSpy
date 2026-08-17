@@ -97,8 +97,10 @@ reconciliation. It has no dnSpy, debugger, Gateway, MCP, MEF, WPF, or decompiler
 profile validation, process discovery, scheduling, audit, and command presentation; it does not own a
 second initializer. Its explicit `apply --package ... --pid ...` and `status [--pid ...]` commands return
 machine-readable JSON with stable exit categories. The dgSpy extension still uses its proven debugger-
-integrated adapter; adapting it to the shared standalone boundary is deliberately deferred until
-standalone parity and operational controls are complete.
+integrated adapter. Standalone parity and installed operational controls are complete; the remaining
+convergence work is authenticated cross-adoption of either adapter's resident generation, with foreign
+hook ownership preserved. Until then, neither adapter may inject a competing resident merely because it
+cannot adopt the one it discovered.
 
 `HookLab.Packaging` is the runtime-neutral writer for watcher deployment exports. The dgSpy extension
 uses it to atomically freeze one retained compiled hook below `DGSPY_EXPORT_ROOT`; the watcher consumes

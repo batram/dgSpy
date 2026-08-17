@@ -28,6 +28,11 @@ the installed `HookLab.Watcher.exe`, swaps the complete tree, registers and read
 restores the previous tree and task if validation fails. Loaded resident hooks and their leased payloads
 remain in target processes; no target is terminated and no remove-hook request is sent.
 
+Current upgrade does not preserve and restore the watcher's prior running/stopped intent after the swap.
+If continuous operation matters, start the verified installed task explicitly after upgrade and confirm
+its live status. Automatic preservation with healthy-process readback is open roadmap work; do not infer
+it from successful task registration.
+
 Use `install --no-task` for a verified manual installation. `--source`, `--install-root`, and
 `--state-root` exist for controlled testing or an intentionally non-default deployment.
 
