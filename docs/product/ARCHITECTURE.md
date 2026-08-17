@@ -128,6 +128,12 @@ restores the prior tree, task, and operating state. Upgrade and uninstall stop o
 watcher image; they never terminate targets, remove resident patches, or delete live resident payload
 leases.
 
+`HookLab.Watcher.Companion` is an `asInvoker` notification-area process in that closed layout. It reads
+the watcher's identity-validated status and bounded audit output, writes only the existing atomic control
+contract, and asks Task Scheduler to start or restart the installed task. It does not host watcher logic,
+self-elevate, stop the watcher on exit, or expose hook/package operations whose ownership contracts do not
+exist.
+
 Live discovery identity has a three-way operational boundary: an exact mismatch is quarantined, a
 definitely exited identity is retired, and an identity that cannot be inspected is preserved while the
 operation fails closed. Persisted watcher status similarly validates the exact PID plus creation time and

@@ -60,7 +60,10 @@ single or multiple installed hooks without guessing which row a click should mut
 `HookLab.Injector` is the package-neutral standalone injection and reconciliation boundary.
 `HookLab.Watcher` validates immutable packages and editable profiles, discovers matching processes,
 applies desired hooks, adopts authenticated residents, records bounded status/audit output, and supports
-pause and profile enable/disable. It runs without dnSpy, the Gateway, or MCP.
+pause and profile enable/disable. The separately packaged, unelevated `HookLab.Watcher.Companion`
+presents exact lifecycle state, pause/resume, profile enable/disable, installed-task start/restart, and
+the bounded audit tail in the notification area. Exiting the companion does not stop the elevated,
+headless watcher. Both run without dnSpy, the Gateway, or MCP.
 
 The supported package contains a closed watcher layout and installer. See
 [HookLab watcher installation and operation](../guides/HOOKLAB_WATCHER.md) for installation, task supervision,

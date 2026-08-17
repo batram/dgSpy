@@ -50,7 +50,8 @@ records every file's size, SHA-256, and owner, verifies the complete inventory, 
 directory rename. Failed composition or installation leaves the previous completed tree available.
 
 The verified layout also contains the standalone HookLab watcher under `hooklab-watcher`, including its
-closed deployments and native/managed bootstrap payloads. Install its per-user scheduled operation only
+unelevated `HookLab.Watcher.Companion.exe` notification-area operator surface, closed deployments, and
+native/managed bootstrap payloads. Install its per-user scheduled operation only
 from that layout:
 
 ```powershell

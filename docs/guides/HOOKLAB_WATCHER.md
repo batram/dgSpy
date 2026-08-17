@@ -54,6 +54,23 @@ status files, which also avoids relying on an elevated task's unavailable consol
 
 ## Operation
 
+Launch the installed unelevated notification-area companion for routine operation:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\HookLab.Watcher\HookLab.Watcher.Companion.exe"
+```
+
+The companion reports `running`, `paused`, `error`, `stale`, or `stopped` from the same exact process-
+identity status used by the command surface. Its menu exposes pause/resume, profile enable/disable,
+installed-task start/restart, and the newest 200 rows of the bounded audit log. Task Scheduler permission
+failures remain visible; the companion stays unelevated and never retries by elevating itself. **Exit
+companion** stops only the notification-area process. It does not stop the watcher, remove resident hooks,
+or touch a target. Stop, package editing, and arbitrary hook removal are deliberately not companion
+operations.
+
+The elevated executable remains available for installation, verification, enrollment, and explicit
+command-line operation:
+
 ```powershell
 $watcher = "$env:LOCALAPPDATA\Programs\HookLab.Watcher\HookLab.Watcher.exe"
 & $watcher status

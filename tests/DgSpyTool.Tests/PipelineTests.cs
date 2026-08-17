@@ -168,7 +168,7 @@ public sealed class PipelineTests : IDisposable {
 		foreach(var name in new[]{"dgSpy.Extension.x.dll","dgSpy.Extension.x.pdb","dgSpy.Protocol.dll","dgSpy.Protocol.pdb","HookLab.Contracts.dll","HookLab.Contracts.pdb","HookLab.Packaging.dll","HookLab.Packaging.pdb","HookLab.Host.Transport.dll","HookLab.Host.Transport.pdb"}) Write(components,name,name=="dgSpy.Protocol.dll"?"protocol":name);
 		var bootstrap=Write(root,"bootstrap.payload","bootstrap"); var native=Write(root,"native.dll","native"); var launcher=Dir("launcher");
 		Write(launcher,"Start-dgSpyRemoteHost.ps1","launcher"); Write(launcher,"Start-dgSpyRemoteHost.cmd","launcher");
-		var watcher=Dir("watcher"); Write(watcher,"HookLab.Watcher.exe","watcher"); Write(watcher,"payload/HookLab.Bootstrap.dll","bootstrap"); Write(watcher,"payload/HookLab.NativeBootstrap.x64.dll","native"); Write(watcher,"deployments/vmconnect-fullscreen/vmconnect-fullscreen.json","profile");
+		var watcher=Dir("watcher"); Write(watcher,"HookLab.Watcher.exe","watcher"); Write(watcher,"HookLab.Watcher.Companion.exe","companion"); Write(watcher,"payload/HookLab.Bootstrap.dll","bootstrap"); Write(watcher,"payload/HookLab.NativeBootstrap.x64.dll","native"); Write(watcher,"deployments/vmconnect-fullscreen/vmconnect-fullscreen.json","profile");
 		return new[]{host,components,cli,gateway,bootstrap,native,launcher,watcher};
 	}
 	string Dir(string name) { var path=Path.Combine(root,name); Directory.CreateDirectory(path); return path; }

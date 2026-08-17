@@ -73,6 +73,8 @@ try {
 		Invoke-Checked 'HookLab probe tests' { dotnet test tests\HookLab.Probe.Tests\HookLab.Probe.Tests.csproj -c Release --nologo -v:minimal }
 		Invoke-Checked 'HookLab transport tests' { dotnet test tests\HookLab.Transport.Tests\HookLab.Transport.Tests.csproj -c Release --nologo -v:minimal }
 		Invoke-Checked 'HookLab bootstrap tests' { dotnet test tests\HookLab.Bootstrap.Tests\HookLab.Bootstrap.Tests.csproj -c Release --nologo -v:minimal }
+		Invoke-Checked 'HookLab watcher tests' { dotnet test tests\HookLab.Watcher.Tests\HookLab.Watcher.Tests.csproj -c Release --nologo -v:minimal }
+		Invoke-Checked 'HookLab watcher companion tests' { dotnet test tests\HookLab.Watcher.Companion.Tests\HookLab.Watcher.Companion.Tests.csproj -c Release --nologo -v:minimal }
 		Invoke-Checked 'Gateway tests and contract snapshots' { dotnet test tests\dgSpy.Gateway.Tests\dgSpy.Gateway.Tests.csproj -c Release --nologo -v:minimal }
 		Invoke-Checked 'Extension tests' { dotnet test tests\dgSpy.Extension.Tests\dgSpy.Extension.Tests.csproj -c Release --nologo -v:minimal }
 		# Must run after the publish above: it loads the published assemblies and
