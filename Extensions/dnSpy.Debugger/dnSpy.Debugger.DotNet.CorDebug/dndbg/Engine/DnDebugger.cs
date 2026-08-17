@@ -306,17 +306,19 @@ namespace dndbg.Engine {
 			if (hasTerminated)
 				return;
 			managedCallbackCounter++;
+			CoreClrManagedCallbackTrace.Record(e.Kind, "accepted", managedCallbackCounter);
 
 			if (disposeValues.Count != 0)
 				DisposeOfHandles();
 
 			try {
-				HandleManagedCallback(e);
-				CheckBreakpoints(e);
-				DebugCallbackEvent?.Invoke(this, e);
+				TraceCallbackStage(e, "handle", () => HandleManagedCallback(e));
+				TraceCallbackStage(e, "breakpoints", () => CheckBreakpoints(e));
+				InvokeDebugCallbackEvent(e);
 			}
 			catch (Exception ex) {
 				Debug.WriteLine($"dndbg: EX:\n\n{ex}");
+				CoreClrManagedCallbackTrace.Record(e.Kind, "abandoned", managedCallbackCounter, ex);
 				ResetDebuggerStates();
 				throw;
 			}
@@ -336,6 +338,39 @@ namespace dndbg.Engine {
 		}
 		int managedCallbackCounter;
 
+		void TraceCallbackStage(DebugCallbackEventArgs e, string stage, Action action) {
+			try {
+				action();
+				CoreClrManagedCallbackTrace.Record(e.Kind, stage + "-completed", managedCallbackCounter);
+			}
+			catch (Exception ex) {
+				CoreClrManagedCallbackTrace.Record(e.Kind, stage + "-failed", managedCallbackCounter, ex);
+				throw;
+			}
+		}
+
+		void InvokeDebugCallbackEvent(DebugCallbackEventArgs e) {
+			var handlers = DebugCallbackEvent;
+			if (handlers is null)
+				return;
+			if (!CoreClrManagedCallbackTrace.IsEnabled) {
+				handlers.Invoke(this, e);
+				return;
+			}
+			foreach (DebugCallbackEventHandler handler in handlers.GetInvocationList()) {
+				var method = handler.Method;
+				var detail = (method.DeclaringType?.FullName ?? "<unknown>") + "." + method.Name;
+				try {
+					handler(this, e);
+					CoreClrManagedCallbackTrace.Record(e.Kind, "subscriber-completed", managedCallbackCounter, detail: detail);
+				}
+				catch (Exception ex) {
+					CoreClrManagedCallbackTrace.Record(e.Kind, "subscriber-failed", managedCallbackCounter, ex, detail);
+					throw;
+				}
+			}
+		}
+
 		bool ShouldStopQueued() {
 			foreach (var state in debuggerStates) {
 				if (state.PauseStates.Length != 0)
@@ -348,10 +383,15 @@ namespace dndbg.Engine {
 		// and no methods can be called because the CLR debugger could call us before this method
 		// returns.
 		void ContinueAndDecrementCounter(DebugCallbackEventArgs e) {
-			if (e.Kind != DebugCallbackKind.ExitProcess)
-				Continue(e.CorDebugController, false);	// Also decrements managedCallbackCounter
-			else
+			if (e.Kind != DebugCallbackKind.ExitProcess) {
+				CoreClrManagedCallbackTrace.Record(e.Kind, "continue-attempt", managedCallbackCounter);
+				bool continued = Continue(e.CorDebugController, false);	// Also decrements managedCallbackCounter
+				CoreClrManagedCallbackTrace.Record(e.Kind, continued ? "continued" : "continue-failed", -1);
+			}
+			else {
 				managedCallbackCounter--;
+				CoreClrManagedCallbackTrace.Record(e.Kind, "exit-completed", managedCallbackCounter);
+			}
 		}
 
 		bool HasQueuedCallbacks(DebugCallbackEventArgs e) {
