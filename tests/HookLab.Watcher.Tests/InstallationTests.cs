@@ -11,22 +11,20 @@ public sealed class InstallationTests {
 		installer.Install(options);
 		Assert.True(File.Exists(Path.Combine(install,"HookLab.Watcher.exe"))); Assert.True(File.Exists(Path.Combine(install,"hooklab-watcher-install.json"))); Assert.True(task.Registered);
 		var result=JsonSerializer.SerializeToElement(installer.Verify(options)); Assert.Equal("valid",result.GetProperty("status").GetString()); Assert.True(result.GetProperty("taskRegistered").GetBoolean());
-		Assert.EndsWith("powershell.exe",WatcherInstaller.TaskExecutable(),StringComparison.OrdinalIgnoreCase);
-		var arguments=WatcherInstaller.TaskArguments(install,state);
-		Assert.Contains("-NoProfile -NonInteractive -WindowStyle Hidden -File",arguments,StringComparison.Ordinal);
-		Assert.Contains(Path.Combine(install,"run-installed.ps1"),arguments,StringComparison.OrdinalIgnoreCase);
+		Assert.Equal(Path.Combine(install,"HookLab.Watcher.exe"),WatcherInstaller.TaskExecutable(install));
+		Assert.Equal("supervise",WatcherInstaller.TaskArguments(install,state));
 	}
 
 	[Fact]
 	public void Task_readback_accepts_schtasks_quote_normalization() {
-		const string xml="<Task xmlns='urn:test'><Principals><Principal><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals><Settings><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings><Actions><Exec><Command>\"C:\\Windows\\powershell.exe\"</Command><Arguments>-NoProfile -File C:\\Users\\mjb\\run-installed.ps1</Arguments></Exec></Actions></Task>";
+		const string xml="<Task version='1.2' xmlns='urn:test'><Triggers><TimeTrigger><Repetition><Interval>PT1H</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><StartBoundary>2020-01-01T00:00:00</StartBoundary><Enabled>true</Enabled></TimeTrigger></Triggers><Principals><Principal><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals><Settings><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings><Actions><Exec><Command>\"C:\\Windows\\powershell.exe\"</Command><Arguments>-NoProfile -File C:\\Users\\mjb\\run-installed.ps1</Arguments></Exec></Actions></Task>";
 		Assert.True(WindowsWatcherTaskScheduler.MatchesXml(xml,"C:\\Windows\\powershell.exe","-NoProfile -File \"C:\\Users\\mjb\\run-installed.ps1\""));
 	}
 
 	[Fact]
 	public void Task_xml_has_unbounded_runtime_and_bounded_failure_recovery() {
 		var xml=WindowsWatcherTaskScheduler.BuildTaskXml("C:\\Windows\\powershell.exe","-File C:\\watcher.ps1");
-		Assert.True(WindowsWatcherTaskScheduler.MatchesXml(xml,"C:\\Windows\\powershell.exe","-File C:\\watcher.ps1")); Assert.Contains("<StartWhenAvailable>true</StartWhenAvailable>",xml,StringComparison.Ordinal); Assert.Contains("<RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>",xml,StringComparison.Ordinal);
+		Assert.True(WindowsWatcherTaskScheduler.MatchesXml(xml,"C:\\Windows\\powershell.exe","-File C:\\watcher.ps1")); Assert.Contains("<Task version=\"1.2\"",xml,StringComparison.Ordinal); Assert.Contains("<StartWhenAvailable>true</StartWhenAvailable>",xml,StringComparison.Ordinal); Assert.DoesNotContain("UseUnifiedSchedulingEngine",xml,StringComparison.Ordinal); Assert.Contains("<RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>",xml,StringComparison.Ordinal); Assert.Contains("<TimeTrigger><Repetition><Interval>PT1H</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>",xml,StringComparison.Ordinal);
 	}
 
 	[Fact]

@@ -43,20 +43,26 @@ internal sealed class WindowsWatcherTaskScheduler:IWatcherTaskScheduler {
 	}
 	internal static bool MatchesXml(string xml,string executable,string arguments) {
 		var document=XDocument.Parse(xml); string? Value(string name)=>ValueOf(document,name);
-		return MatchesAction(document,executable,arguments)&&
+		return String.Equals(document.Root?.Attribute("version")?.Value,"1.2",StringComparison.Ordinal)&&
+			MatchesAction(document,executable,arguments)&&
 			String.Equals(Value("DisallowStartIfOnBatteries"),"false",StringComparison.OrdinalIgnoreCase)&&
 			String.Equals(Value("StopIfGoingOnBatteries"),"false",StringComparison.OrdinalIgnoreCase)&&
+			Value("UseUnifiedSchedulingEngine") is null&&
 			String.Equals(Value("MultipleInstancesPolicy"),"IgnoreNew",StringComparison.OrdinalIgnoreCase)&&
 			String.Equals(Value("ExecutionTimeLimit"),"PT0S",StringComparison.OrdinalIgnoreCase)&&
-			String.Equals(Value("Interval"),"PT1M",StringComparison.OrdinalIgnoreCase)&&
-			String.Equals(Value("Count"),"3",StringComparison.OrdinalIgnoreCase);
+			String.Equals(ValueUnder(document,"RestartOnFailure","Interval"),"PT1M",StringComparison.OrdinalIgnoreCase)&&
+			String.Equals(ValueUnder(document,"RestartOnFailure","Count"),"3",StringComparison.OrdinalIgnoreCase)&&
+			String.Equals(ValueUnder(document,"Repetition","Interval"),"PT1H",StringComparison.OrdinalIgnoreCase);
 	}
 	internal static bool MatchesActionXml(string xml,string executable,string arguments)=>MatchesAction(XDocument.Parse(xml),executable,arguments);
 	internal static string BuildTaskXml(string executable,string arguments) {
 		XNamespace ns="http://schemas.microsoft.com/windows/2004/02/mit/task"; var user=WindowsIdentity.GetCurrent().User?.Value??throw new UnauthorizedAccessException("Current Windows identity has no SID.");
-		var document=new XDocument(new XDeclaration("1.0","UTF-16",null),new XElement(ns+"Task",new XAttribute("version","1.4"),
+		var document=new XDocument(new XDeclaration("1.0","UTF-16",null),new XElement(ns+"Task",new XAttribute("version","1.2"),
 			new XElement(ns+"RegistrationInfo",new XElement(ns+"Author",WindowsIdentity.GetCurrent().Name)),
-			new XElement(ns+"Triggers",new XElement(ns+"LogonTrigger",new XElement(ns+"Enabled",true),new XElement(ns+"UserId",user))),
+			new XElement(ns+"Triggers",
+				new XElement(ns+"LogonTrigger",new XElement(ns+"Enabled",true),new XElement(ns+"UserId",user)),
+				// Hourly revival with IgnoreNew: a no-op while the supervisor lives, a restart if it died or gave up.
+				new XElement(ns+"TimeTrigger",new XElement(ns+"Repetition",new XElement(ns+"Interval","PT1H"),new XElement(ns+"StopAtDurationEnd",false)),new XElement(ns+"StartBoundary","2020-01-01T00:00:00"),new XElement(ns+"Enabled",true))),
 			new XElement(ns+"Principals",new XElement(ns+"Principal",new XAttribute("id","Author"),new XElement(ns+"UserId",user),new XElement(ns+"LogonType","InteractiveToken"),new XElement(ns+"RunLevel","HighestAvailable"))),
 			new XElement(ns+"Settings",new XElement(ns+"MultipleInstancesPolicy","IgnoreNew"),new XElement(ns+"DisallowStartIfOnBatteries",false),new XElement(ns+"StopIfGoingOnBatteries",false),new XElement(ns+"AllowHardTerminate",true),new XElement(ns+"StartWhenAvailable",true),new XElement(ns+"AllowStartOnDemand",true),new XElement(ns+"Enabled",true),new XElement(ns+"Hidden",false),new XElement(ns+"RunOnlyIfIdle",false),new XElement(ns+"WakeToRun",false),new XElement(ns+"ExecutionTimeLimit","PT0S"),new XElement(ns+"Priority",7),new XElement(ns+"RestartOnFailure",new XElement(ns+"Interval","PT1M"),new XElement(ns+"Count",3))),
 			new XElement(ns+"Actions",new XAttribute("Context","Author"),new XElement(ns+"Exec",new XElement(ns+"Command",executable),new XElement(ns+"Arguments",arguments)))));
@@ -68,6 +74,7 @@ internal sealed class WindowsWatcherTaskScheduler:IWatcherTaskScheduler {
 			String.Equals(NormalizeCommand(Value("Command")),NormalizeCommand(executable),StringComparison.OrdinalIgnoreCase)&&String.Equals(NormalizeArguments(Value("Arguments")),NormalizeArguments(arguments),StringComparison.OrdinalIgnoreCase);
 	}
 	static string? ValueOf(XDocument document,string name)=>document.Descendants().FirstOrDefault(element=>element.Name.LocalName==name)?.Value;
+	static string? ValueUnder(XDocument document,string parent,string name)=>document.Descendants().FirstOrDefault(element=>element.Name.LocalName==parent)?.Elements().FirstOrDefault(element=>element.Name.LocalName==name)?.Value;
 	static string NormalizeCommand(string? value)=>(value??String.Empty).Trim().Trim('"');
 	static string NormalizeArguments(string? value)=>(value??String.Empty).Replace("\"",String.Empty,StringComparison.Ordinal).Trim();
 	bool Exists() { try { Capture("/Query","/TN",TaskName); return true; } catch { return false; } }
@@ -92,7 +99,7 @@ internal sealed class WatcherInstaller {
 	public object Install(InstalledWatcherOptions options) {
 		var source=VerifySource(options.Source); var parent=Directory.GetParent(options.InstallRoot)?.FullName??throw new InvalidDataException("Install root has no parent.");
 		Directory.CreateDirectory(parent); Directory.CreateDirectory(options.StateRoot);
-		var staging=options.InstallRoot+".staging-"+Guid.NewGuid().ToString("N"); var backup=options.InstallRoot+".previous-"+Guid.NewGuid().ToString("N"); var taskExecutable=TaskExecutable(); var command=TaskArguments(options.InstallRoot,options.StateRoot);
+		var staging=options.InstallRoot+".staging-"+Guid.NewGuid().ToString("N"); var backup=options.InstallRoot+".previous-"+Guid.NewGuid().ToString("N"); var taskExecutable=TaskExecutable(options.InstallRoot); var command=TaskArguments(options.InstallRoot,options.StateRoot);
 		var legacyExecutable=Path.Combine(options.InstallRoot,"HookLab.Watcher.exe"); var priorHiddenTask=scheduler.MatchesAction(taskExecutable,command); var priorLegacyTask=!priorHiddenTask&&scheduler.MatchesAction(legacyExecutable,"run-installed");
 		try {
 			CopyClosedTree(options.Source,staging,source); ProtectTree(staging); VerifyInstalled(staging);
@@ -114,7 +121,7 @@ internal sealed class WatcherInstaller {
 
 	public object Verify(InstalledWatcherOptions options) {
 		var manifest=VerifyInstalled(options.InstallRoot); var command=TaskArguments(options.InstallRoot,options.StateRoot);
-		return new { status="valid",installRoot=options.InstallRoot,fileCount=manifest.Files.Length,taskRegistered=scheduler.Matches(TaskExecutable(),command) };
+		return new { status="valid",installRoot=options.InstallRoot,fileCount=manifest.Files.Length,taskRegistered=scheduler.Matches(TaskExecutable(options.InstallRoot),command) };
 	}
 
 	public object Uninstall(InstalledWatcherOptions options) {
@@ -122,8 +129,8 @@ internal sealed class WatcherInstaller {
 		return new { status="uninstalled",installRoot=options.InstallRoot,stateRemoved=!options.KeepState };
 	}
 
-	internal static string TaskExecutable()=>Path.Combine(Environment.SystemDirectory,"WindowsPowerShell","v1.0","powershell.exe");
-	internal static string TaskArguments(string installRoot,string stateRoot)=>"-NoProfile -NonInteractive -WindowStyle Hidden -File "+Quote(Path.Combine(installRoot,"run-installed.ps1"));
+	internal static string TaskExecutable(string installRoot)=>Path.Combine(installRoot,"HookLab.Watcher.exe");
+	internal static string TaskArguments(string installRoot,string stateRoot)=>"supervise";
 	static InstallManifest VerifySource(string source) {
 		var root=Path.GetFullPath(source); var layout=Directory.GetParent(root)?.FullName??throw new InvalidDataException("Watcher source is not inside a dgSpy layout.");
 		var layoutPath=Path.Combine(layout,"dgspy-layout.json"); if(!File.Exists(layoutPath)) throw new InvalidDataException("Watcher source is missing its authoritative dgSpy layout manifest.");
