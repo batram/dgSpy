@@ -23,15 +23,14 @@ size, SHA-256, and the complete installed inventory. The default immutable root 
 `%LOCALAPPDATA%\Programs\HookLab.Watcher`; mutable control, status, and audit state stays under
 `%LOCALAPPDATA%\HookLab`.
 
-The installer publishes by directory rename. An upgrade stops only a process whose full image path is
-the installed `HookLab.Watcher.exe`, swaps the complete tree, registers and reads back the task, and
-restores the previous tree and task if validation fails. Loaded resident hooks and their leased payloads
-remain in target processes; no target is terminated and no remove-hook request is sent.
-
-Current upgrade does not preserve and restore the watcher's prior running/stopped intent after the swap.
-If continuous operation matters, start the verified installed task explicitly after upgrade and confirm
-its live status. Automatic preservation with healthy-process readback is open roadmap work; do not infer
-it from successful task registration.
+The installer publishes by directory rename. A registered first install starts the watcher. An upgrade
+stops only a process whose full image path is the installed `HookLab.Watcher.exe`, swaps the complete
+tree, registers and reads back the task, and preserves whether the prior exact verified watcher was
+running or intentionally stopped. A started replacement is successful only after readback proves its
+live PID and creation identity, exact installed image, running lifecycle, and healthy catalog generation.
+Failure restores the previous tree, task action, and running/stopped intent. Loaded resident hooks and
+their leased payloads remain in target processes; no target is terminated and no remove-hook request is
+sent.
 
 Use `install --no-task` for a verified manual installation. `--source`, `--install-root`, and
 `--state-root` exist for controlled testing or an intentionally non-default deployment.
@@ -39,7 +38,7 @@ Use `install --no-task` for a verified manual installation. `--source`, `--insta
 ## Task boundary
 
 The task is named `HookLab Watcher`. It is an interactive-token, highest-available, per-user `ONLOGON`
-task, not a service. Its action is the installed `HookLab.Watcher.exe supervise`, which hides its console,
+task, not a service. Its action is the installed `HookLab.Watcher.exe supervise --state-root <path>`, which hides its console,
 starts the hidden `run-installed` watcher as a child, and supervises it: a clean zero exit ends supervision,
 a crash restarts the child with linear backoff (1/2/3 minutes) up to three consecutive failures, and five
 minutes of healthy uptime resets that budget. Task Scheduler's `RestartOnFailure` does not react to an

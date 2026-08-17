@@ -8,7 +8,7 @@ namespace HookLab.Watcher;
 internal static class Program {
 	static readonly JsonSerializerOptions JsonOptions=new() { PropertyNamingPolicy=JsonNamingPolicy.CamelCase };
 	public static async Task<int> Main(string[] arguments) {
-		if(arguments.Length==1&&arguments[0]=="supervise") return RunSupervisor();
+		if(TryParseSupervisor(arguments,out var supervisorState)) return RunSupervisor(supervisorState);
 		if(arguments.Length==1&&arguments[0]=="run-installed") arguments=InstalledRunArguments();
 		if(InstallCommand.TryParse(arguments,out var install)) return RunInstall(install);
 		if(EnrollmentCommand.TryParse(arguments,out var enrollment)) return RunEnrollment(enrollment.Options);
@@ -41,13 +41,13 @@ internal static class Program {
 	static int UpdateControl(ControlOptions options) { try { var store=new WatchControlStore(options.ControlPath); var value=store.Update(options.Paused,options.EnableProfile,options.DisableProfile); WriteJson(new { status="ok",paused=value.Paused,disabledProfiles=value.DisabledProfiles.OrderBy(id=>id,StringComparer.Ordinal) }); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
 	static int RunEnrollment(EnrollmentOptions options) { try { WriteJson(new WatcherEnrollmentService().Enroll(options)); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
 	static int RunInstall(InstallCommand command) { try { var installer=new WatcherInstaller(); var result=command.Action switch { "install"=>installer.Install(command.Options), "verify-install"=>installer.Verify(command.Options), "uninstall"=>installer.Uninstall(command.Options), _=>throw new InvalidOperationException() }; WriteJson(result); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
-	static int RunSupervisor() {
+	static int RunSupervisor(string stateRoot) {
 		HideOwnConsoleWindow();
-		return WatcherSupervisor.Run(RunInstalledChild,Thread.Sleep,message=>Console.Error.WriteLine(message));
+		return WatcherSupervisor.Run(()=>RunInstalledChild(stateRoot),Thread.Sleep,message=>Console.Error.WriteLine(message));
 	}
-	static (int ExitCode,TimeSpan Uptime) RunInstalledChild() {
+	static (int ExitCode,TimeSpan Uptime) RunInstalledChild(string stateRoot) {
 		var executable=Environment.ProcessPath??throw new InvalidOperationException("Watcher executable path is unavailable.");
-		var info=new ProcessStartInfo(executable){UseShellExecute=false,CreateNoWindow=true}; info.ArgumentList.Add("run-installed");
+		var info=new ProcessStartInfo(executable){UseShellExecute=false,CreateNoWindow=true}; foreach(var argument in InstalledRunArguments(stateRoot)) info.ArgumentList.Add(argument);
 		var stopwatch=Stopwatch.StartNew();
 		using var process=Process.Start(info)??throw new InvalidOperationException("Could not start the installed watcher.");
 		process.WaitForExit();
@@ -58,7 +58,8 @@ internal static class Program {
 	static void HideOwnConsoleWindow() { var window=GetConsoleWindow(); if(window!=IntPtr.Zero) ShowWindow(window,0); }
 	[System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
 	[System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window,int command);
-	static string[] InstalledRunArguments() { var root=AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar); var local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData); var state=Path.Combine(local,"HookLab"); var enrolled=Path.Combine(local,"Programs","HookLab.Watcher.Enrolled"); return new[]{"run","--profiles",Path.Combine(root,"deployments"),"--additional-profiles",enrolled,"--state-root",state,"--payload-dir",Path.Combine(root,"payload"),"--audit",Path.Combine(state,"watcher-audit.jsonl")}; }
+	static bool TryParseSupervisor(string[] arguments,out string stateRoot) { stateRoot=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"HookLab"); if(arguments.Length==1&&arguments[0]=="supervise") return true; if(arguments.Length==3&&arguments[0]=="supervise"&&arguments[1]=="--state-root"&&!String.IsNullOrWhiteSpace(arguments[2])) { stateRoot=Path.GetFullPath(arguments[2]); return true; } return false; }
+	static string[] InstalledRunArguments(string? stateRoot=null) { var root=AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar); var local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData); var state=Path.GetFullPath(stateRoot??Path.Combine(local,"HookLab")); var enrolled=Path.Combine(local,"Programs","HookLab.Watcher.Enrolled"); return new[]{"run","--profiles",Path.Combine(root,"deployments"),"--additional-profiles",enrolled,"--state-root",state,"--payload-dir",Path.Combine(root,"payload"),"--audit",Path.Combine(state,"watcher-audit.jsonl")}; }
 	static int WriteFailure(Exception ex) { var failure=CommandFailure.Classify(ex); WriteJson(new { status="error",code=failure.Code,message=Sanitize(ex.Message) }); return failure.ExitCode; }
 	static void WriteJson(object value)=>Console.WriteLine(JsonSerializer.Serialize(value,JsonOptions));
 	static string Sanitize(string value)=>value.Replace('\r',' ').Replace('\n',' ');

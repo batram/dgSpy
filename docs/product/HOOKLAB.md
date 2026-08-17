@@ -86,7 +86,6 @@ Authenticated cross-adoption and preservation of foreign-owned hooks remain road
 - The editor provides C# classification and normal editing, but not a HookLab-owned Roslyn project,
   semantic completion, or advisory Roslyn diagnostics.
 - Generated parameters use conservative verbatim identifiers rather than polished conditional escaping.
-- Watcher upgrade does not yet restore the previous intentional running or stopped state.
 - Cross-adoption between watcher-created and dgSpy-created residents is not yet a supported workflow.
 
 These limitations are recorded and ordered in [Dream of roads](../roadmap/dream_of_roads.md). Detailed tasks,

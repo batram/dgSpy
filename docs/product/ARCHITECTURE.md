@@ -116,9 +116,12 @@ The supported pipeline publishes the watcher as a closed, separately owned layou
 installer verifies the parent layout inventory, digests, owner/ACL, path containment, and reparse-point
 absence before an atomic per-user install. A highest-available interactive logon task reads only the
 installed packages, enrolled packages, and bootstrap payloads. Mutable control/status/audit state is
-separate, and stdout is
-not an operational control channel. Upgrade and uninstall stop only the exact installed watcher image;
-they never terminate targets, remove resident patches, or delete live resident payload leases.
+separate, and stdout is not an operational control channel. First install starts registered operation;
+upgrade preserves exact verified running/stopped intent and accepts a started replacement only after
+PID, creation identity, installed image, lifecycle, and catalog-health readback. Failed replacement
+restores the prior tree, task, and operating state. Upgrade and uninstall stop only the exact installed
+watcher image; they never terminate targets, remove resident patches, or delete live resident payload
+leases.
 
 Live discovery identity has a three-way operational boundary: an exact mismatch is quarantined, a
 definitely exited identity is retired, and an identity that cannot be inspected is preserved while the

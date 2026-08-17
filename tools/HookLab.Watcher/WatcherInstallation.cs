@@ -17,6 +17,7 @@ internal sealed record InstalledWatcherOptions(string Source,string InstallRoot,
 
 internal interface IWatcherTaskScheduler {
 	void Register(string executable,string arguments);
+	void Start();
 	void Stop();
 	void Remove();
 	bool Matches(string executable,string arguments);
@@ -32,6 +33,7 @@ internal sealed class WindowsWatcherTaskScheduler:IWatcherTaskScheduler {
 		if(!Matches(executable,arguments)) throw new InvalidOperationException("Scheduled task readback differs from the requested HookLab watcher command.");
 	}
 	public void Stop() { if(Exists()) Run("/End","/TN",TaskName); }
+	public void Start() { Run("/Run","/TN",TaskName); }
 	public void Remove() { if(Exists()) Run("/Delete","/F","/TN",TaskName); }
 	public bool Matches(string executable,string arguments) {
 		try { return MatchesXml(Capture("/Query","/TN",TaskName,"/XML"),executable,arguments); }
@@ -91,19 +93,46 @@ internal sealed class WindowsWatcherTaskScheduler:IWatcherTaskScheduler {
 	static string Sanitize(string value)=>value.Replace('\r',' ').Replace('\n',' ').Trim();
 }
 
+internal sealed record InstalledWatcherHealth(int ProcessId,long ProcessCreationUtcTicks,string ImagePath,string CatalogGeneration);
+internal interface IInstalledWatcherHealthProbe { InstalledWatcherHealth WaitForHealthy(string installRoot,string stateRoot,TimeSpan timeout); bool IsHealthy(string installRoot,string stateRoot); }
+internal sealed class InstalledWatcherHealthProbe:IInstalledWatcherHealthProbe {
+	public bool IsHealthy(string installRoot,string stateRoot) { try { WaitForHealthy(installRoot,stateRoot,TimeSpan.Zero); return true; } catch { return false; } }
+	public InstalledWatcherHealth WaitForHealthy(string installRoot,string stateRoot,TimeSpan timeout) {
+		var deadline=DateTime.UtcNow+timeout; Exception? last=null;
+		do {
+			try { return Read(installRoot,stateRoot); }
+			catch(Exception ex) when(ex is IOException or InvalidDataException or InvalidOperationException or ArgumentException) { last=ex; }
+			if(DateTime.UtcNow>=deadline) break; Thread.Sleep(100);
+		} while(true);
+		throw new InvalidOperationException("Installed watcher did not publish healthy replacement state before the deadline.",last);
+	}
+	static InstalledWatcherHealth Read(string installRoot,string stateRoot) {
+		var root=WatcherStatusStore.Read(Path.Combine(stateRoot,"watcher-status.json"))??throw new InvalidOperationException("Installed watcher status is missing.");
+		if(!root.GetProperty("processAlive").GetBoolean()||root.GetProperty("lifecycle").GetString()!="running") throw new InvalidOperationException("Installed watcher status is not live and running.");
+		var processId=root.GetProperty("watcherProcessId").GetInt32(); var creation=root.GetProperty("watcherProcessCreationUtcTicks").GetInt64();
+		var generation=root.GetProperty("catalogGeneration").GetString(); if(generation is null||generation.Length!=64||generation.Any(value=>!Uri.IsHexDigit(value))) throw new InvalidDataException("Installed watcher catalog generation is invalid.");
+		if(root.TryGetProperty("catalogError",out var error)&&error.ValueKind!=JsonValueKind.Null&&!String.IsNullOrWhiteSpace(error.GetString())) throw new InvalidOperationException("Installed watcher catalog is unhealthy: "+error.GetString());
+		using var process=Process.GetProcessById(processId); var image=Path.GetFullPath(process.MainModule?.FileName??throw new InvalidOperationException("Installed watcher image is unavailable.")); var expected=Path.GetFullPath(Path.Combine(installRoot,"HookLab.Watcher.exe"));
+		if(!String.Equals(image,expected,StringComparison.OrdinalIgnoreCase)||process.StartTime.ToUniversalTime().Ticks!=creation) throw new InvalidOperationException("Installed watcher process identity or image does not match the replacement.");
+		return new(processId,creation,image,generation);
+	}
+}
+
 internal sealed class WatcherInstaller {
 	const string ManifestName="hooklab-watcher-install.json";
 	readonly IWatcherTaskScheduler scheduler;
-	public WatcherInstaller(IWatcherTaskScheduler? scheduler=null)=>this.scheduler=scheduler??new WindowsWatcherTaskScheduler();
+	readonly IInstalledWatcherHealthProbe health;
+	public WatcherInstaller(IWatcherTaskScheduler? scheduler=null,IInstalledWatcherHealthProbe? health=null) { this.scheduler=scheduler??new WindowsWatcherTaskScheduler(); this.health=health??new InstalledWatcherHealthProbe(); }
 
 	public object Install(InstalledWatcherOptions options) {
 		var source=VerifySource(options.Source); var parent=Directory.GetParent(options.InstallRoot)?.FullName??throw new InvalidDataException("Install root has no parent.");
 		Directory.CreateDirectory(parent); Directory.CreateDirectory(options.StateRoot);
-		var staging=options.InstallRoot+".staging-"+Guid.NewGuid().ToString("N"); var backup=options.InstallRoot+".previous-"+Guid.NewGuid().ToString("N"); var taskExecutable=TaskExecutable(options.InstallRoot); var command=TaskArguments(options.InstallRoot,options.StateRoot);
-		var legacyExecutable=Path.Combine(options.InstallRoot,"HookLab.Watcher.exe"); var priorHiddenTask=scheduler.MatchesAction(taskExecutable,command); var priorLegacyTask=!priorHiddenTask&&scheduler.MatchesAction(legacyExecutable,"run-installed");
+		var staging=options.InstallRoot+".staging-"+Guid.NewGuid().ToString("N"); var backup=options.InstallRoot+".previous-"+Guid.NewGuid().ToString("N"); var taskExecutable=TaskExecutable(options.InstallRoot); var command=TaskArguments(options.InstallRoot,options.StateRoot); var hadInstall=Directory.Exists(options.InstallRoot);
+		var legacyExecutable=Path.Combine(options.InstallRoot,"HookLab.Watcher.exe"); var priorHiddenTask=scheduler.MatchesAction(taskExecutable,command); var priorSupervisorTask=!priorHiddenTask&&scheduler.MatchesAction(legacyExecutable,"supervise"); var priorLegacyTask=!priorHiddenTask&&!priorSupervisorTask&&scheduler.MatchesAction(legacyExecutable,"run-installed");
+		var priorRunning=(priorHiddenTask||priorSupervisorTask||priorLegacyTask)&&health.IsHealthy(options.InstallRoot,options.StateRoot); var startAfterInstall=options.RegisterTask&&(!hadInstall||priorRunning); InstalledWatcherHealth? replacement=null;
 		try {
 			CopyClosedTree(options.Source,staging,source); ProtectTree(staging); VerifyInstalled(staging);
-			if(priorHiddenTask||priorLegacyTask) scheduler.Stop();
+			if(priorHiddenTask||priorSupervisorTask||priorLegacyTask) scheduler.Stop();
 			StopInstalledWatchers(options.InstallRoot);
 			if(Directory.Exists(options.InstallRoot)) Directory.Move(options.InstallRoot,backup);
 			try {
@@ -111,10 +140,15 @@ internal sealed class WatcherInstaller {
 				if(options.RegisterTask) scheduler.Register(taskExecutable,command);
 				VerifyInstalled(options.InstallRoot);
 				if(options.RegisterTask&&!scheduler.Matches(taskExecutable,command)) throw new InvalidOperationException("Scheduled task verification failed.");
+				if(startAfterInstall) { scheduler.Start(); replacement=health.WaitForHealthy(options.InstallRoot,options.StateRoot,TimeSpan.FromSeconds(15)); }
 			}
-			catch { if(options.RegisterTask) TryRemoveTask(); TryDelete(options.InstallRoot); if(Directory.Exists(backup)) Directory.Move(backup,options.InstallRoot); if(priorHiddenTask) scheduler.Register(taskExecutable,command); else if(priorLegacyTask) scheduler.Register(legacyExecutable,"run-installed"); throw; }
+			catch(Exception failure) {
+				try { if(options.RegisterTask) TryRemoveTask(); TryDelete(options.InstallRoot); if(Directory.Exists(backup)) Directory.Move(backup,options.InstallRoot); if(priorHiddenTask) scheduler.Register(taskExecutable,command); else if(priorSupervisorTask) scheduler.Register(legacyExecutable,"supervise"); else if(priorLegacyTask) scheduler.Register(legacyExecutable,"run-installed"); if(priorRunning) { scheduler.Start(); health.WaitForHealthy(options.InstallRoot,options.StateRoot,TimeSpan.FromSeconds(15)); } }
+				catch(Exception rollback) { throw new AggregateException("Watcher installation failed and rollback could not restore the prior operating state.",failure,rollback); }
+				throw;
+			}
 			TryDelete(backup);
-			return new { status="installed",installRoot=options.InstallRoot,stateRoot=options.StateRoot,taskRegistered=options.RegisterTask,fileCount=source.Files.Length };
+			return new { status="installed",installRoot=options.InstallRoot,stateRoot=options.StateRoot,taskRegistered=options.RegisterTask,running=replacement is not null,watcherProcessId=replacement?.ProcessId,watcherProcessCreationUtcTicks=replacement?.ProcessCreationUtcTicks,installedImage=replacement?.ImagePath,catalogGeneration=replacement?.CatalogGeneration,fileCount=source.Files.Length };
 		}
 		finally { TryDelete(staging); }
 	}
@@ -130,7 +164,7 @@ internal sealed class WatcherInstaller {
 	}
 
 	internal static string TaskExecutable(string installRoot)=>Path.Combine(installRoot,"HookLab.Watcher.exe");
-	internal static string TaskArguments(string installRoot,string stateRoot)=>"supervise";
+	internal static string TaskArguments(string installRoot,string stateRoot)=>"supervise --state-root "+Quote(stateRoot);
 	static InstallManifest VerifySource(string source) {
 		var root=Path.GetFullPath(source); var layout=Directory.GetParent(root)?.FullName??throw new InvalidDataException("Watcher source is not inside a dgSpy layout.");
 		var layoutPath=Path.Combine(layout,"dgspy-layout.json"); if(!File.Exists(layoutPath)) throw new InvalidDataException("Watcher source is missing its authoritative dgSpy layout manifest.");
