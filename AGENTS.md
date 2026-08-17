@@ -17,8 +17,9 @@ mostly upstream code; `dgSpy.*` projects are ours.
 
 ## Scope
 
-x64, CLR v4, Unity/UCH. x86 and CoreCLR are out of scope; do not add support or tests for
-them. Prefer the smallest change that works and verify it by running it.
+x64, CLR v4, CoreCLR, and Unity/UCH. x86 is out of scope; do not add support or tests for it.
+CoreCLR HookLab residents remain a separate, explicit backend from ordinary CoreCLR debugging.
+Prefer the smallest change that works and verify it by running it.
 
 ## Build
 

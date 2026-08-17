@@ -26,10 +26,13 @@ dgSpy dnSpy Extension
 
 - x64 dnSpy and x64 targets only.
 - .NET Framework CorDebug (`CLR v4.0.30319`, covering .NET Framework 4.0–4.8).
+- CoreCLR CorDebug, with exact debugger-component identity resolution from adjacent files, a private
+  verified cache, or installed x64 `Microsoft.NETCore.App` runtimes.
 - Mono/Unity endpoint attach as exercised against Ultimate Chicken Horse.
 - One local gateway, one dnSpy instance, and one logical dgSpy session. dnSpy may own multiple selected
   processes/runtimes within that session.
-- C# is the agent-facing source language. CoreCLR, x86, and Visual Basic parity are not current gates.
+- C# is the agent-facing source language. x86 and Visual Basic parity are not current gates. HookLab
+  remains CLR-v4-only until its separate CoreCLR resident backend passes its own gate.
 
 ## Components and ownership
 

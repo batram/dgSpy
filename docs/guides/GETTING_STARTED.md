@@ -29,7 +29,10 @@ The agent starts dnSpy automatically. You are ready to debug.
 ## From a repository checkout
 
 Install the build prerequisites once: Windows x64, Git, .NET SDK 10, and the .NET Framework 4.8
-developer pack. Initialize the submodules, then run the same installer:
+developer pack. Ordinary CoreCLR debugging also requires the exact x64 runtime used by the target to
+be installed, or its matching debugger components to be available beside the target or in dgSpy's
+verified private cache; dgSpy never substitutes a nearest runtime version. Initialize the submodules,
+then run the same installer:
 
 ```powershell
 git submodule update --init --recursive

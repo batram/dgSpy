@@ -105,6 +105,8 @@ try {
 		# live legs below require bin\Release\net48. It happens to exist on the machine this was written
 		# on, which is exactly why the gap was invisible until a clean clone hit the first Test-Path.
 		Invoke-Checked 'CorDebug fixture (Release)' { dotnet build tests\TestTargets\Milestone1Target\Milestone1Target.csproj -c Release -f net48 --nologo -v:minimal }
+		Invoke-Checked 'CoreCLR debugger fixture (Release)' { dotnet build tests\TestTargets\CoreClrDebuggerTarget\CoreClrDebuggerTarget.csproj -c Release -f net10.0 --nologo -v:minimal }
+		Invoke-Checked 'CoreCLR debugger live smoke' { .\tests\run-coreclr-debugger-smoke.ps1 }
 		Invoke-Checked 'HookLab interactive fixture (Release)' { dotnet build tests\TestTargets\HookLabInteractiveTarget\HookLabInteractiveTarget.csproj -c Release -f net48 --nologo -v:minimal }
 		# T08 shipped with no live leg: every one of the nine defects T08b fixes lived in the
 		# dnSpy-facing half, which no test entered. This runs a real atomic action against the CorDebug
