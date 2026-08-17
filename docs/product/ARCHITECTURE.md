@@ -96,11 +96,16 @@ reconciliation. It has no dnSpy, debugger, Gateway, MCP, MEF, WPF, or decompiler
 `HookLab.ApplyOnce` is a compatibility executable over that boundary. `HookLab.Watcher` owns package and
 profile validation, process discovery, scheduling, audit, and command presentation; it does not own a
 second initializer. Its explicit `apply --package ... --pid ...` and `status [--pid ...]` commands return
-machine-readable JSON with stable exit categories. The dgSpy extension still uses its proven debugger-
-integrated adapter. Standalone parity and installed operational controls are complete; the remaining
-convergence work is authenticated cross-adoption of either adapter's resident generation, with foreign
-hook ownership preserved. Until then, neither adapter may inject a competing resident merely because it
-cannot adopt the one it discovered.
+machine-readable JSON with stable exit categories. The dgSpy extension keeps its debugger-integrated
+adapter, but both adapters use one protected discovery root and target identity. Each discovers,
+authenticates, inventories, and adopts an existing resident before injection. The resident accepts
+simultaneous authenticated controllers and keeps one shared hooks-version gate across them.
+
+Resident hook IDs are controller-qualified (`dgspy:<id>` or `watcher:<id>`). Inventory reports that
+owner and the exact case-sensitive CLR assembly simple name captured at installation. dgSpy exposes
+foreign hooks as inspect-only; edit, enable, disable, removal, and `remove_all_hooks` operate only on
+dgSpy-owned hooks. The watcher likewise reconciles only watcher-owned definitions. Unknown, legacy, and
+foreign hooks survive adoption and owner-scoped cleanup; ownership transfer is not a supported operation.
 
 `HookLab.Packaging` is the runtime-neutral writer for watcher deployment exports. The dgSpy extension
 uses it to atomically freeze one retained compiled hook below `DGSPY_EXPORT_ROOT`; the watcher consumes
@@ -131,7 +136,8 @@ marks dead recorded active states as stale rather than presenting historical `ru
 The injector re-reads PID, creation time, and full image path immediately before acting. A profile-backed
 watcher request also carries the image selected by the permitted-path filter, and the injector refuses a
 different live image. Discovery credentials and resident status remain owned by
-`HookLab.Host.Transport`; neither CLI invents a parallel credential format.
+`HookLab.Host.Transport`; the shared root defaults to `%LOCALAPPDATA%\HookLab` and can be isolated with
+`HOOKLAB_RESIDENT_STATE_ROOT`. Neither adapter invents a parallel credential format.
 
 ## Concurrency and lifetime invariants
 

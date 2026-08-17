@@ -24,7 +24,7 @@ internal static class Program {
 			using var current=Process.GetCurrentProcess(); using var audit=new AuditWriter(options.AuditPath!); using var cancellation=new CancellationTokenSource();
 			Console.CancelKeyPress+=(sender,eventArguments)=>{ eventArguments.Cancel=true; cancellation.Cancel(); };
 			Console.WriteLine("HookLab watcher loaded "+definitions.Count+" definition(s) for session "+current.SessionId+".");
-			await new WatchRunner(catalog,current.SessionId,options.PollMilliseconds,options.MaximumParallel,audit,options.PayloadDirectory,control:controlStore,statusStore:statusStore,processStarts:WmiProcessStartSignal.Create(),residentStateRoot:options.StateRoot).RunAsync(cancellation.Token);
+			await new WatchRunner(catalog,current.SessionId,options.PollMilliseconds,options.MaximumParallel,audit,options.PayloadDirectory,control:controlStore,statusStore:statusStore,processStarts:WmiProcessStartSignal.Create(),residentStateRoot:HookLab.Host.Transport.Discovery.DgSpyStateRoot.SharedResidentRoot()).RunAsync(cancellation.Token);
 			return 0;
 		}
 		catch(Exception ex) { Console.Error.WriteLine("HookLab watcher failed: "+ex.Message); return 1; }
@@ -37,7 +37,7 @@ internal static class Program {
 		}
 		catch(Exception ex) { return WriteFailure(ex); }
 	}
-	static int ShowStatus(CommandOptions options) { try { var result=new ResidentCoordinator(null).Status(options.ProcessId); WriteJson(new { status="ok",watcher=WatcherStatusStore.Read(),residents=result }); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
+	static int ShowStatus(CommandOptions options) { try { var result=new ResidentCoordinator(null,HookLab.Host.Transport.Discovery.DgSpyStateRoot.SharedResidentRoot()).Status(options.ProcessId); WriteJson(new { status="ok",watcher=WatcherStatusStore.Read(),residents=result }); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
 	static int UpdateControl(ControlOptions options) { try { var store=new WatchControlStore(options.ControlPath); var value=store.Update(options.Paused,options.EnableProfile,options.DisableProfile); WriteJson(new { status="ok",paused=value.Paused,disabledProfiles=value.DisabledProfiles.OrderBy(id=>id,StringComparer.Ordinal) }); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
 	static int RunEnrollment(EnrollmentOptions options) { try { WriteJson(new WatcherEnrollmentService().Enroll(options)); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }
 	static int RunInstall(InstallCommand command) { try { var installer=new WatcherInstaller(); var result=command.Action switch { "install"=>installer.Install(command.Options), "verify-install"=>installer.Verify(command.Options), "uninstall"=>installer.Uninstall(command.Options), _=>throw new InvalidOperationException() }; WriteJson(result); return CommandExitCodes.Success; } catch(Exception ex) { return WriteFailure(ex); } }

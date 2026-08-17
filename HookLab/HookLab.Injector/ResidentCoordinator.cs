@@ -12,7 +12,7 @@ using HookLab.Probe.CorDebug.Transport;
 namespace HookLab.Injector;
 
 public sealed class ResidentCoordinator {
-	const string HostId="apply-once";
+	const string HostId=DgSpyStateRoot.ResidentHostId;
 	readonly string? payloadDirectory; readonly ProbeDiscoveryStore store; readonly ResidentPayloadStore payloads;
 	readonly ConcurrentDictionary<(int ProcessId,long CreationTicks),object> gates=new();
 	readonly object storeGate=new();
@@ -50,21 +50,21 @@ public sealed class ResidentCoordinator {
 	}
 
 	InjectorResult Reconcile(ProbeDiscoveryRecord record,string payload,InjectorRequest request,string digest,string unchangedStatus) {
-		var status=ParseStatus(payload,record.ProbeInstanceId); var definition=request.Definition; var patchId=record.ProbeInstanceId+":"+definition.Id; var observed=status.Hooks.SingleOrDefault(value=>value.PatchId==patchId);
+		var status=ParseStatus(payload,record.ProbeInstanceId); var definition=request.Definition; var residentHookId=HookOwnership.Qualify(HookOwnership.WatcherController,definition.Id!); var patchId=record.ProbeInstanceId+":"+residentHookId; var legacyPatchId=record.ProbeInstanceId+":"+definition.Id; var observed=status.Hooks.SingleOrDefault(value=>value.PatchId==patchId)??status.Hooks.SingleOrDefault(value=>value.PatchId==legacyPatchId);
 		string disposition;
-		if(observed is null) { Mutate(record,"install_compiled_prefix",Parameters(request),status.HooksVersion); disposition="created"; }
+		if(observed is null) { Mutate(record,"install_compiled_prefix",Parameters(request,residentHookId),status.HooksVersion); disposition="created"; }
 		else {
-			EnsureSameTarget(observed,definition);
+			EnsureSameTarget(observed,definition,observed.PatchId==legacyPatchId);
 			var sourceDigest=SourceDigest(definition.Hook!.Source!);
 			if(observed.Revision==definition.Hook.Revision&&!String.Equals(observed.SourceSha256,sourceDigest,StringComparison.Ordinal)) throw new InvalidOperationException("Resident hook has the requested revision with different source; refusing conflict.");
 			if(observed.Revision>definition.Hook.Revision) throw new InvalidOperationException("Resident hook revision is newer than desired state; refusing downgrade.");
-			if(observed.Revision<definition.Hook.Revision) { Mutate(record,"install_compiled_prefix",Parameters(request),status.HooksVersion); disposition="updated"; }
-			else disposition=unchangedStatus;
+			if(observed.Revision<definition.Hook.Revision) { if(observed.PatchId==legacyPatchId) { Mutate(record,"uninstall",legacyPatchId,status.HooksVersion); status=ReadStatus(record); } Mutate(record,"install_compiled_prefix",Parameters(request,residentHookId),status.HooksVersion); disposition="updated"; }
+			else disposition=observed.PatchId==legacyPatchId?"adopted_legacy":unchangedStatus;
 		}
-		status=ReadStatus(record); observed=status.Hooks.Single(value=>value.PatchId==patchId);
-		if(observed.Enabled!=definition.Hook!.Enabled) { Mutate(record,definition.Hook.Enabled?"enable":"disable",patchId,status.HooksVersion); disposition=definition.Hook.Enabled?"enabled":"disabled"; status=ReadStatus(record); observed=status.Hooks.Single(value=>value.PatchId==patchId); }
-		EnsureSameTarget(observed,definition); if(observed.Revision!=definition.Hook.Revision||!String.Equals(observed.SourceSha256,SourceDigest(definition.Hook.Source!),StringComparison.Ordinal)||observed.Enabled!=definition.Hook.Enabled) throw new InvalidOperationException("Resident readback does not match desired hook state; refusing retry.");
-		return new(disposition,digest,record.ProbeInstanceId,patchId,status.HooksVersion,request.ProcessId,request.ProcessCreationUtcTicks,record.Target.ImagePath);
+		status=ReadStatus(record); observed=status.Hooks.SingleOrDefault(value=>value.PatchId==patchId)??status.Hooks.Single(value=>value.PatchId==legacyPatchId);
+		if(observed.Enabled!=definition.Hook!.Enabled) { var activePatchId=observed.PatchId; Mutate(record,definition.Hook.Enabled?"enable":"disable",activePatchId,status.HooksVersion); disposition=definition.Hook.Enabled?"enabled":"disabled"; status=ReadStatus(record); observed=status.Hooks.Single(value=>value.PatchId==activePatchId); }
+		EnsureSameTarget(observed,definition,observed.PatchId==legacyPatchId); if(observed.Revision!=definition.Hook.Revision||!String.Equals(observed.SourceSha256,SourceDigest(definition.Hook.Source!),StringComparison.Ordinal)||observed.Enabled!=definition.Hook.Enabled) throw new InvalidOperationException("Resident readback does not match desired hook state; refusing retry.");
+		return new(disposition,digest,record.ProbeInstanceId,observed.PatchId,status.HooksVersion,request.ProcessId,request.ProcessCreationUtcTicks,record.Target.ImagePath);
 	}
 	public IReadOnlyList<ResidentStatusResult> Status(int? processId=null) {
 		ProbeDiscoveryRecord[] records; lock(storeGate) records=store.DiscoverStrict(new SystemLiveTargets(),DateTime.UtcNow).Where(record=>processId is null||record.Target.ProcessId==processId.Value).ToArray();
@@ -75,12 +75,13 @@ public sealed class ResidentCoordinator {
 	}
 	static void Mutate(ProbeDiscoveryRecord record,string operation,string payload,long version) { try { ProbeTransportClient.Send(record,operation,payload,version,5000); } catch(TimeoutException) { _=ReadStatus(record); } }
 	static ResidentStatusResult ReadStatus(ProbeDiscoveryRecord record)=>ParseStatus(ProbeTransportClient.VerifyHealth(record,false,2000).Status.PayloadJson,record.ProbeInstanceId);
-	static string Parameters(InjectorRequest request) { var target=LiveIdentity.Read(request.ProcessId); return OneShotInjector.Parameters(target.ImagePath,target.ProcessId,target.ProcessCreationTimeUtc.Ticks,Path.Combine(Path.GetTempPath(),"hooklab-resident-unused"),request.Definition); }
+	static string Parameters(InjectorRequest request,string residentHookId) { var target=LiveIdentity.Read(request.ProcessId); return OneShotInjector.Parameters(target.ImagePath,target.ProcessId,target.ProcessCreationTimeUtc.Ticks,Path.Combine(Path.GetTempPath(),"hooklab-resident-unused"),request.Definition,residentHookId:residentHookId); }
 	static string SourceDigest(string source) { using var sha=SHA256.Create(); return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(source))).ToLowerInvariant(); }
-	static void EnsureSameTarget(ResidentHookStatus observed,HookDefinition desired) { var target=desired.Target!; if(observed.Kind!=desired.Hook!.Kind||observed.ModuleMvid!=target.ModuleMvid||observed.MetadataToken!=target.MetadataToken||observed.DeclaringType!=target.DeclaringType||observed.Signature!=target.Signature||observed.IlSha256!=target.IlSha256) throw new InvalidOperationException("Resident hook id names a different exact target; refusing conflict."); }
-	static ResidentStatusResult ParseStatus(string payload,string probeInstanceId) { using var document=JsonDocument.Parse(payload); var root=document.RootElement; if(root.GetProperty("probe_instance_id").GetString()!=probeInstanceId) throw new InvalidOperationException("Authenticated resident status reported a different probe instance."); var hooks=root.GetProperty("compiled_hooks").EnumerateArray().Select(value=>new ResidentHookStatus(value.GetProperty("patch_id").GetString()!,value.GetProperty("kind").GetString()!,value.GetProperty("module_mvid").GetString()!,value.GetProperty("metadata_token").GetInt32(),value.GetProperty("declaring_type").GetString()!,value.GetProperty("signature").GetString()!,value.GetProperty("il_sha256").GetString()!,value.GetProperty("source_sha256").GetString()!,value.GetProperty("revision").GetInt32(),value.GetProperty("enabled").GetBoolean())).ToArray(); return new(0,0,"",probeInstanceId,root.GetProperty("hooks_version").GetInt64(),hooks); }
+	static void EnsureSameTarget(ResidentHookStatus observed,HookDefinition desired,bool legacy=false) { var target=desired.Target!; if((!legacy&&(observed.Controller!=HookOwnership.WatcherController||observed.HookId!=desired.Id))||(!String.IsNullOrEmpty(observed.AssemblySimpleName)&&!String.Equals(observed.AssemblySimpleName,target.Assembly,StringComparison.Ordinal))||observed.Kind!=desired.Hook!.Kind||observed.ModuleMvid!=target.ModuleMvid||observed.MetadataToken!=target.MetadataToken||observed.DeclaringType!=target.DeclaringType||observed.Signature!=target.Signature||observed.IlSha256!=target.IlSha256) throw new InvalidOperationException("Resident hook id names a different exact target or owner; refusing conflict."); }
+	static ResidentStatusResult ParseStatus(string payload,string probeInstanceId) { using var document=JsonDocument.Parse(payload); var root=document.RootElement; if(root.GetProperty("probe_instance_id").GetString()!=probeInstanceId) throw new InvalidOperationException("Authenticated resident status reported a different probe instance."); var hooks=root.GetProperty("compiled_hooks").EnumerateArray().Select(value=>ParseHook(probeInstanceId,value)).ToArray(); return new(0,0,"",probeInstanceId,root.GetProperty("hooks_version").GetInt64(),hooks); }
+	static ResidentHookStatus ParseHook(string probeInstanceId,JsonElement value) { var patchId=value.GetProperty("patch_id").GetString()!; HookOwnership.TryParse(probeInstanceId,patchId,out var controller,out var hookId); return new(patchId,controller,hookId,value.TryGetProperty("assembly_simple_name",out var assembly)?assembly.GetString()!:String.Empty,value.GetProperty("kind").GetString()!,value.GetProperty("module_mvid").GetString()!,value.GetProperty("metadata_token").GetInt32(),value.GetProperty("declaring_type").GetString()!,value.GetProperty("signature").GetString()!,value.GetProperty("il_sha256").GetString()!,value.GetProperty("source_sha256").GetString()!,value.GetProperty("revision").GetInt32(),value.GetProperty("enabled").GetBoolean()); }
 
-	static bool SameTarget(TargetIdentity left,TargetIdentity right)=>left.HostId==HostId&&left.ProcessId==right.ProcessId&&left.ProcessCreationTimeUtc.ToUniversalTime().Ticks==right.ProcessCreationTimeUtc.ToUniversalTime().Ticks&&String.Equals(Path.GetFullPath(left.ImagePath),Path.GetFullPath(right.ImagePath),StringComparison.OrdinalIgnoreCase)&&left.Architecture==right.Architecture&&left.RuntimeId==right.RuntimeId&&left.AppDomainId==right.AppDomainId;
+	static bool SameTarget(TargetIdentity left,TargetIdentity right)=>(left.HostId==HostId||left.HostId=="apply-once")&&left.ProcessId==right.ProcessId&&left.ProcessCreationTimeUtc.ToUniversalTime().Ticks==right.ProcessCreationTimeUtc.ToUniversalTime().Ticks&&String.Equals(Path.GetFullPath(left.ImagePath),Path.GetFullPath(right.ImagePath),StringComparison.OrdinalIgnoreCase)&&left.Architecture==right.Architecture&&left.RuntimeId==right.RuntimeId&&left.AppDomainId==right.AppDomainId;
 
 	sealed class SystemLiveTargets : ILiveTargetIdentity,ILiveTargetLiveness {
 		public bool IsAlive(TargetIdentity identity) {
@@ -89,7 +90,7 @@ public sealed class ResidentCoordinator {
 		}
 		public bool IsCurrent(TargetIdentity identity) {
 			try {
-				var actual=LiveIdentity.Read(identity.ProcessId);
+				var actual=LiveIdentity.Read(identity.ProcessId,identity.HostId);
 				return identity.ProcessCreationTimeUtc.ToUniversalTime().Ticks==actual.ProcessCreationTimeUtc.ToUniversalTime().Ticks&&String.Equals(Path.GetFullPath(identity.ImagePath),Path.GetFullPath(actual.ImagePath),StringComparison.OrdinalIgnoreCase)&&identity.Architecture==actual.Architecture&&identity.RuntimeId==actual.RuntimeId&&identity.AppDomainId==actual.AppDomainId;
 			}
 			catch(ArgumentException) { return false; }
@@ -99,6 +100,6 @@ public sealed class ResidentCoordinator {
 	}
 
 	static class LiveIdentity {
-		public static TargetIdentity Read(int processId) { using var process=Process.GetProcessById(processId); return new TargetIdentity(HostId,process.MainModule?.FileName??throw new InvalidOperationException("Target image is unavailable."),process.Id,process.StartTime.ToUniversalTime(),"x64","v4.0.30319","1"); }
+		public static TargetIdentity Read(int processId,string hostId=HostId) { using var process=Process.GetProcessById(processId); return new TargetIdentity(hostId,process.MainModule?.FileName??throw new InvalidOperationException("Target image is unavailable."),process.Id,process.StartTime.ToUniversalTime(),"x64","v4.0.30319","1"); }
 	}
 }

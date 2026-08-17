@@ -110,9 +110,15 @@ namespace HookLab.Contracts {
 	}
 
 	public sealed class CompiledHookState {
-		public CompiledHookState(string patchId, HookKind kind, MethodGuard target, string sourceSha256, int revision, bool enabled) { PatchId=Required(patchId,nameof(patchId)); Kind=kind; Target=target??throw new ArgumentNullException(nameof(target)); SourceSha256=Required(sourceSha256,nameof(sourceSha256)); Revision=revision; Enabled=enabled; }
-		public string PatchId { get; } public HookKind Kind { get; } public MethodGuard Target { get; } public string SourceSha256 { get; } public int Revision { get; } public bool Enabled { get; }
+		public CompiledHookState(string patchId, string assemblySimpleName, HookKind kind, MethodGuard target, string sourceSha256, int revision, bool enabled) { PatchId=Required(patchId,nameof(patchId)); AssemblySimpleName=Required(assemblySimpleName,nameof(assemblySimpleName)); Kind=kind; Target=target??throw new ArgumentNullException(nameof(target)); SourceSha256=Required(sourceSha256,nameof(sourceSha256)); Revision=revision; Enabled=enabled; }
+		public string PatchId { get; } public string AssemblySimpleName { get; } public HookKind Kind { get; } public MethodGuard Target { get; } public string SourceSha256 { get; } public int Revision { get; } public bool Enabled { get; }
 		static string Required(string value,string name)=>string.IsNullOrWhiteSpace(value)?throw new ArgumentException("Value is required.",name):value;
+	}
+
+	public static class HookOwnership {
+		public const string DgSpyController="dgspy",WatcherController="watcher";
+		public static string Qualify(string controller,string hookId) { if(String.IsNullOrWhiteSpace(controller)||controller.IndexOf(':')>=0) throw new ArgumentException("Controller is invalid.",nameof(controller)); if(String.IsNullOrWhiteSpace(hookId)||hookId.IndexOf(':')>=0) throw new ArgumentException("Hook id is invalid.",nameof(hookId)); return controller+":"+hookId; }
+		public static bool TryParse(string probeInstanceId,string patchId,out string controller,out string hookId) { controller=hookId=String.Empty; var prefix=probeInstanceId+":"; if(!patchId.StartsWith(prefix,StringComparison.Ordinal)) return false; var value=patchId.Substring(prefix.Length); var separator=value.IndexOf(':'); if(separator<=0||separator==value.Length-1) return false; controller=value.Substring(0,separator); hookId=value.Substring(separator+1); return true; }
 	}
 
 	public sealed class HookEvent {

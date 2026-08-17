@@ -7,6 +7,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,7 +16,9 @@ using dgSpy.Extension.ToolWindows;
 using dgSpy.Protocol;
 using HookLab.Contracts;
 using HookLab.Host.Transport;
+using HookLab.Host.Transport.Discovery;
 using HookLab.Packaging;
+using HookLab.Probe.CorDebug.Transport;
 using dnlib.DotNet;
 
 namespace dgSpy.Extension {
@@ -116,6 +119,7 @@ namespace dgSpy.Extension {
 		sealed class HookLabService {
 			readonly object gate=new object();
 			readonly Dictionary<string,HookRecord> hooks=new Dictionary<string,HookRecord>(StringComparer.Ordinal);
+			readonly Dictionary<string,ResidentHookRecord> residentHooks=new Dictionary<string,ResidentHookRecord>(StringComparer.Ordinal);
 			readonly Dictionary<string,RuntimeRecord> runtimes=new Dictionary<string,RuntimeRecord>(StringComparer.Ordinal);
 			readonly List<HookEventRecord> events=new List<HookEventRecord>();
 			readonly SemaphoreSlim initialization=new SemaphoreSlim(1,1);
@@ -140,35 +144,48 @@ namespace dgSpy.Extension {
 					return process.IsRunning;
 				},token).ConfigureAwait(false);
 				var completion=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-init-"+Guid.NewGuid().ToString("N")+".completion");
-				ProbeConnection? connection=null;
+				ProbeConnection? connection=null; byte[]? endpointSecret=null;
 				try {
 					var identity=TargetIdentity(source.Arguments,processId,completion);
-					await ResumeAsync(host,source,token).ConfigureAwait(false);
-					var pipe=await InitializeAutonomouslyAsync(processId,identity,token).ConfigureAwait(false);
-
-					var completionReport=await ReadCompletionAsync(completion,token).ConfigureAwait(false);
+					var live=LiveTarget(processId); var store=new ProbeDiscoveryStore(DgSpyStateRoot.SharedResidentRoot()); var discovered=store.DiscoverStrict(new ExtensionLiveTargets(),DateTime.UtcNow).Where(value=>SameTarget(value.Target,live)).ToArray();
+					if(discovered.Length>1) throw new RpcException("hooklab_resident_ambiguous","Multiple authenticated HookLab residents name this exact target.");
+					Dictionary<string,string> completionReport;
+					if(discovered.Length==1) {
+						var health=store.VerifyHealthAndRefresh(discovered[0],2000); var adopted=discovered[0];
+						connection=new ProbeConnection(adopted.PipeName,adopted.Secret,adopted.EndpointNonce);
+						var adoptedRuntime=new RuntimeRecord(session,processId,connection,health.Status.ExpectedHooksVersion??0,adopted.ProbeInstanceId,true); connection=null; Inventory(adoptedRuntime,health.Status.PayloadJson);
+						lock(gate) runtimes.Add(RuntimeKey(session,processId),adoptedRuntime); StartEventPump(adoptedRuntime); HookLabUiBridge.SetInitialized(); return Initialized(adoptedRuntime,true,adopted:true);
+					}
+					endpointSecret=ProbeAuthentication.CreateSecret(); identity["endpoint_secret_base64"]=Convert.ToBase64String(endpointSecret);
+					try { await ResumeAsync(host,source,token).ConfigureAwait(false); completionReport=await InitializeAutonomouslyAsync(processId,identity,token).ConfigureAwait(false); }
+					finally { }
 					if(!String.Equals(completionReport.TryGetValue("status",out var completedStatus)?completedStatus:null,"ok",StringComparison.Ordinal))
 						throw new RpcException("hooklab_initialization_failed","HookLab worker reported: "+String.Join("; ",completionReport.Select(pair=>pair.Key+"="+pair.Value)));
-					connection=new ProbeConnection(pipe,Array.Empty<byte>(),Array.Empty<byte>(),authenticationEnabled:false);
-					var runtime=new RuntimeRecord(session,processId,connection,Long(completionReport,"hooks_version"));
-					var status=await SendAsync(runtime,"status","{}",token).ConfigureAwait(false);
+					var pipe=Required(completionReport,"pipe_name","HookLab initialization did not report its control pipe."); var nonce=Convert.FromBase64String(Required(completionReport,"pipe_nonce_base64","HookLab initialization did not report its endpoint nonce.")); var probe=Required(completionReport,"probe_instance_id","HookLab initialization did not report its probe identity.");
+					connection=new ProbeConnection(pipe,endpointSecret,nonce);
+					var runtime=new RuntimeRecord(session,processId,connection,Long(completionReport,"hooks_version"),probe,false);
+					store.Write(new ProbeDiscoveryRecord(live,probe,pipe,nonce,endpointSecret,1,DateTime.UtcNow.Add(ProbeDiscoveryStore.DiscoveryRecordLifetime)));
+					var status=await SendRawAsync(runtime,"status","{}",token).ConfigureAwait(false); Inventory(runtime,status);
 					lock(gate) runtimes.Add(RuntimeKey(session,processId),runtime);
 					connection=null;
 					StartEventPump(runtime);
 					HookLabUiBridge.SetInitialized();
-					return Initialized(runtime,true,status);
+					return Initialized(runtime,true,adopted:false);
 				}
 				finally {
+					if(endpointSecret is not null) Array.Clear(endpointSecret,0,endpointSecret.Length);
 					connection?.Dispose();
 					TryDelete(completion);
 					if(wasRunning) await ResumeAsync(host,source,CancellationToken.None).ConfigureAwait(false);
 					else await EnsurePausedAsync(host,source,CancellationToken.None).ConfigureAwait(false);
 				}
 				}
+				catch(RpcException) { throw; }
+				catch(Exception ex) { throw new RpcException("hooklab_initialization_failed",ex.GetType().Name+": "+ex.Message); }
 				finally { initialization.Release(); }
 			}
 
-			static async Task<string> InitializeAutonomouslyAsync(int processId,JsonObject parameters,CancellationToken token) {
+			static async Task<Dictionary<string,string>> InitializeAutonomouslyAsync(int processId,JsonObject parameters,CancellationToken token) {
 				var staging=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-native-"+processId.ToString(CultureInfo.InvariantCulture)+"-"+Guid.NewGuid().ToString("N"));
 				Directory.CreateDirectory(staging);
 				try {
@@ -184,7 +201,7 @@ namespace dgSpy.Extension {
 					var report=await ReadCompletionAsync(completion,token).ConfigureAwait(false);
 					if(!String.Equals(report.TryGetValue("status",out var status)?status:null,"ok",StringComparison.Ordinal))
 						throw new RpcException("hooklab_initialization_failed","HookLab worker reported: "+String.Join("; ",report.Select(pair=>pair.Key+"="+pair.Value)));
-					return Required(report,"pipe_name","HookLab initialization did not report its control pipe.");
+					return report;
 				}
 				finally { TryDeleteDirectory(staging); }
 			}
@@ -221,7 +238,7 @@ namespace dgSpy.Extension {
 					else if(lifecycle=="update") throw new RpcException("hook_not_found","Hook ID '"+definition.HookId+"' is not installed in this process. Use create_hook for its first revision.");
 				}
 
-				var parameters=definition.Parameters("unused");
+				var parameters=definition.Parameters("unused",HookOwnership.Qualify(HookOwnership.DgSpyController,definition.HookId));
 				var runtime=ForOperation(source.Arguments);
 				var report=await SendAsync(runtime,compiled?"install_compiled_prefix":"install",ParameterText(parameters),token).ConfigureAwait(false);
 				MethodDef? markerMethod=null;
@@ -235,7 +252,9 @@ namespace dgSpy.Extension {
 			public async Task<object> SetEnabledAsync(RpcHost host,RpcRequest source,bool enabled,CancellationToken token) {
 				host.CheckSession(source);
 				var session=Required(source.Arguments,"session_id"); var process=RequiredInt(source.Arguments,"process_id"); var hookId=Required(source.Arguments,"hook_id");
-				HookRecord record; lock(gate) if(!hooks.TryGetValue(Key(session,process,hookId),out record!)) throw new RpcException("hook_not_found","Hook ID '"+hookId+"' is not installed in this process.");
+				HookRecord? record; ResidentHookRecord? adopted; lock(gate) { hooks.TryGetValue(Key(session,process,hookId),out record); adopted=record is null?OwnedResident(session,process,hookId):null; }
+				if(record is null&&adopted is null) throw new RpcException("hook_not_owned","Hook ID '"+hookId+"' is absent or owned by another controller.");
+				if(record is null) { if(adopted!.Enabled==enabled) return new { hook=View(adopted),changed=false }; var adoptedRuntime=ForOperation(source.Arguments); await SendAsync(adoptedRuntime,enabled?"enable":"disable",adopted.PatchId,token).ConfigureAwait(false); Inventory(adoptedRuntime,await SendRawAsync(adoptedRuntime,"status","{}",token).ConfigureAwait(false)); return new { hook=View(OwnedResident(session,process,hookId)!),changed=true }; }
 				if(record.Enabled==enabled) return new { hook=View(record),changed=false };
 				var runtime=ForOperation(source.Arguments);
 				await SendAsync(runtime,enabled?"enable":"disable",record.PatchId,token).ConfigureAwait(false);
@@ -245,7 +264,7 @@ namespace dgSpy.Extension {
 			}
 
 			public object List(string sessionId,int? processId) {
-				lock(gate) return new { hooks=hooks.Values.Where(value=>value.Definition.SessionId==sessionId && (processId is null || value.Definition.ProcessId==processId.Value)).Select(View).ToArray() };
+				lock(gate) { var selected=hooks.Values.Where(value=>value.Definition.SessionId==sessionId && (processId is null || value.Definition.ProcessId==processId.Value)).ToArray(); var known=new HashSet<string>(selected.Select(value=>value.PatchId),StringComparer.Ordinal); var local=selected.Select(value=>(object)View(value)); var resident=residentHooks.Values.Where(value=>value.SessionId==sessionId&&(processId is null||value.ProcessId==processId.Value)&&!known.Contains(value.PatchId)).Select(value=>(object)View(value)); return new { hooks=local.Concat(resident).ToArray() }; }
 			}
 
 			public object Export(RpcHost host,RpcRequest source) {
@@ -307,31 +326,33 @@ namespace dgSpy.Extension {
 			public async Task<object> RemoveAsync(RpcHost host,RpcRequest source,CancellationToken token) {
 				host.CheckSession(source);
 				var session=Required(source.Arguments,"session_id"); var process=RequiredInt(source.Arguments,"process_id"); var hookId=Required(source.Arguments,"hook_id");
-				HookRecord record;
-				lock(gate) if(!hooks.TryGetValue(Key(session,process,hookId),out record!)) return new { hook_id=hookId,removed=false };
+				HookRecord? record; ResidentHookRecord? adopted; lock(gate) { hooks.TryGetValue(Key(session,process,hookId),out record); adopted=record is null?OwnedResident(session,process,hookId):null; }
+				if(record is null&&adopted is null) return new { hook_id=hookId,removed=false,reason="not_owned" };
 				var runtime=ForOperation(source.Arguments);
-				await SendAsync(runtime,"uninstall",record.PatchId,token).ConfigureAwait(false);
+				var patchId=record?.PatchId??adopted!.PatchId; await SendAsync(runtime,"uninstall",patchId,token).ConfigureAwait(false);
 				// Events queued before the unpatch are not evidence of calls after removal. Drain that bounded
 				// backlog before returning so the response is the cursor boundary after which every event would
 				// necessarily have been produced by a still-live patch.
 				await DrainRemovalBacklogAsync(runtime,token).ConfigureAwait(false);
-				lock(gate) hooks.Remove(record.Definition.Key); HookLabUiBridge.RemoveHook(session,process,hookId);
-				return new { hook_id=hookId,patch_id=record.PatchId,removed=true };
+				lock(gate) { if(record is not null) hooks.Remove(record.Definition.Key); if(adopted is not null) residentHooks.Remove(adopted.Key); } HookLabUiBridge.RemoveHook(session,process,hookId);
+				return new { hook_id=hookId,patch_id=patchId,removed=true };
 			}
 
 			public async Task<object> RemoveAllAsync(RpcHost host,RpcRequest source,CancellationToken token) {
 				host.CheckSession(source);
 				var session=Required(source.Arguments,"session_id"); var process=RequiredInt(source.Arguments,"process_id");
-				HookRecord[] selected; lock(gate) selected=hooks.Values.Where(value=>value.Definition.SessionId==session && value.Definition.ProcessId==process).ToArray();
+				HookRecord[] selected; ResidentHookRecord[] adopted; lock(gate) { selected=hooks.Values.Where(value=>value.Definition.SessionId==session && value.Definition.ProcessId==process).ToArray(); adopted=residentHooks.Values.Where(value=>value.SessionId==session&&value.ProcessId==process&&value.Controller==HookOwnership.DgSpyController&&!selected.Any(local=>local.PatchId==value.PatchId)).ToArray(); }
 				var removed=new List<string>();
-				var runtime=selected.Length==0 ? null : ForOperation(source.Arguments);
+				var runtime=selected.Length+adopted.Length==0 ? null : ForOperation(source.Arguments);
 				foreach(var record in selected) {
 					await SendAsync(runtime!,"uninstall",record.PatchId,token).ConfigureAwait(false); removed.Add(record.Definition.HookId);
 					lock(gate) hooks.Remove(record.Definition.Key); HookLabUiBridge.RemoveHook(session,process,record.Definition.HookId);
 				}
+				foreach(var record in adopted) { await SendAsync(runtime!,"uninstall",record.PatchId,token).ConfigureAwait(false); removed.Add(record.HookId); lock(gate) residentHooks.Remove(record.Key); }
 				if(runtime is not null) await DrainRemovalBacklogAsync(runtime,token).ConfigureAwait(false);
 				return new { removed=removed.ToArray(),removed_count=removed.Count };
 			}
+			ResidentHookRecord? OwnedResident(string session,int process,string hookId)=>residentHooks.Values.SingleOrDefault(value=>value.SessionId==session&&value.ProcessId==process&&value.Controller==HookOwnership.DgSpyController&&value.HookId==hookId);
 
 			public void BindUi(RpcHost host) => HookLabUiBridge.Bind(
 				()=>host.InitializeHookLabFromUiAsync(CancellationToken.None),
@@ -361,6 +382,14 @@ namespace dgSpy.Extension {
 				}
 				finally { runtime.OperationGate.Release(); }
 			}
+			async Task<string> SendRawAsync(RuntimeRecord runtime,string operation,string payload,CancellationToken token) {
+				await runtime.OperationGate.WaitAsync(token).ConfigureAwait(false);
+				try { var response=await Task.Run(()=>runtime.Connection.Send(new ProbeMessage(1,ProbeMessageKind.Request,Guid.NewGuid().ToString("N"),operation,payload,runtime.HooksVersion)),token).ConfigureAwait(false); if(response.Operation=="error") throw new RpcException("hook_operation_failed","HookLab "+operation+" failed: "+response.PayloadJson); if(response.ExpectedHooksVersion.HasValue) runtime.HooksVersion=response.ExpectedHooksVersion.Value; return response.PayloadJson; }
+				finally { runtime.OperationGate.Release(); }
+			}
+			void Inventory(RuntimeRecord runtime,string payload) {
+				using(var document=JsonDocument.Parse(payload)) { var root=document.RootElement; if(root.GetProperty("probe_instance_id").GetString()!=runtime.ProbeInstanceId) throw new RpcException("hooklab_resident_identity_mismatch","Authenticated resident reported a different probe identity."); runtime.HooksVersion=root.GetProperty("hooks_version").GetInt64(); var values=new List<ResidentHookRecord>(); foreach(var item in root.GetProperty("compiled_hooks").EnumerateArray()) { var patch=item.GetProperty("patch_id").GetString()!; HookOwnership.TryParse(runtime.ProbeInstanceId,patch,out var controller,out var hookId); values.Add(new ResidentHookRecord(runtime.SessionId,runtime.ProcessId,patch,controller,hookId,item.TryGetProperty("assembly_simple_name",out var assembly)?assembly.GetString()!:String.Empty,item.GetProperty("kind").GetString()!,item.GetProperty("module_mvid").GetString()!,item.GetProperty("metadata_token").GetInt32(),item.GetProperty("declaring_type").GetString()!,item.GetProperty("signature").GetString()!,item.GetProperty("il_sha256").GetString()!,item.GetProperty("source_sha256").GetString()!,item.GetProperty("revision").GetInt32(),item.GetProperty("enabled").GetBoolean())); } lock(gate) { foreach(var key in residentHooks.Where(value=>value.Value.SessionId==runtime.SessionId&&value.Value.ProcessId==runtime.ProcessId).Select(value=>value.Key).ToArray()) residentHooks.Remove(key); foreach(var value in values) residentHooks[value.Key]=value; } }
+			}
 
 			async Task DrainRemovalBacklogAsync(RuntimeRecord runtime,CancellationToken token) {
 				for(var page=1;page<=HookLabDrainPolicy.MaximumPages;page++) {
@@ -372,7 +401,7 @@ namespace dgSpy.Extension {
 
 			public void ClearAll() {
 				RuntimeRecord[] active;
-				lock(gate) { active=runtimes.Values.ToArray(); runtimes.Clear(); hooks.Clear(); events.Clear(); cursor=0; }
+				lock(gate) { active=runtimes.Values.ToArray(); runtimes.Clear(); hooks.Clear(); residentHooks.Clear(); events.Clear(); cursor=0; }
 				foreach(var runtime in active) runtime.Dispose();
 				HookLabUiBridge.Clear();
 			}
@@ -472,8 +501,14 @@ namespace dgSpy.Extension {
 			}
 
 			static JsonObject TargetIdentity(JsonObject source,int processId,string completion) {
-				try { using var process=Process.GetProcessById(processId); return new JsonObject { ["host_id"]="dgspy-hooklab",["image_path"]=process.MainModule?.FileName ?? process.ProcessName,["process_id"]=processId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]="v4.0.30319",["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion }; }
+				try { using var process=Process.GetProcessById(processId); return new JsonObject { ["host_id"]=DgSpyStateRoot.ResidentHostId,["image_path"]=process.MainModule?.FileName ?? process.ProcessName,["process_id"]=processId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]="v4.0.30319",["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion }; }
 				catch(Exception ex) { throw new RpcException("target_unavailable","Could not read target process identity: "+ex.Message); }
+			}
+			static TargetIdentity LiveTarget(int processId,string hostId=DgSpyStateRoot.ResidentHostId) { using var process=Process.GetProcessById(processId); return new TargetIdentity(hostId,process.MainModule?.FileName??throw new InvalidOperationException("Target image is unavailable."),processId,process.StartTime.ToUniversalTime(),"x64","v4.0.30319","1"); }
+			static bool SameTarget(TargetIdentity left,TargetIdentity right)=>(left.HostId==DgSpyStateRoot.ResidentHostId||left.HostId=="apply-once")&&left.ProcessId==right.ProcessId&&left.ProcessCreationTimeUtc.ToUniversalTime().Ticks==right.ProcessCreationTimeUtc.ToUniversalTime().Ticks&&String.Equals(Path.GetFullPath(left.ImagePath),Path.GetFullPath(right.ImagePath),StringComparison.OrdinalIgnoreCase)&&left.Architecture==right.Architecture&&left.RuntimeId==right.RuntimeId&&left.AppDomainId==right.AppDomainId;
+			sealed class ExtensionLiveTargets : ILiveTargetIdentity,ILiveTargetLiveness {
+				public bool IsCurrent(TargetIdentity identity) { try { return SameTarget(identity,LiveTarget(identity.ProcessId,identity.HostId)); } catch(ArgumentException) { return false; } }
+				public bool IsAlive(TargetIdentity identity) { try { using var process=Process.GetProcessById(identity.ProcessId); return process.StartTime.ToUniversalTime().Ticks==identity.ProcessCreationTimeUtc.ToUniversalTime().Ticks; } catch(ArgumentException) { return false; } }
 			}
 
 			static async Task EnsurePausedAsync(RpcHost host,RpcRequest source,CancellationToken token) {
@@ -497,9 +532,10 @@ namespace dgSpy.Extension {
 				await host.ContinueProcessAsync(ControlRequest(source),token).ConfigureAwait(false);
 			}
 			static RpcRequest ControlRequest(RpcRequest source)=>new RpcRequest { Operation=source.Operation,Arguments=new JsonObject { ["session_id"]=Required(source.Arguments,"session_id"),["process_id"]=RequiredInt(source.Arguments,"process_id") } };
-			static object Initialized(RuntimeRecord runtime,bool changed,Dictionary<string,string>? status=null)=>new { initialized=true,changed,process_id=runtime.ProcessId,state="ready",hooks_version=runtime.HooksVersion,probe_instance_id=status is null?null:(status.TryGetValue("probe_instance_id",out var value)?value:null) };
+			static object Initialized(RuntimeRecord runtime,bool changed,bool? adopted=null)=>new { initialized=true,changed,adopted,process_id=runtime.ProcessId,state="ready",hooks_version=runtime.HooksVersion,probe_instance_id=runtime.ProbeInstanceId };
 			static object Installed(HookRecord record,bool changed) => new { hook=View(record),installed=changed };
-			static object View(HookRecord record) => new { hook_id=record.Definition.HookId,patch_id=record.PatchId,kind=record.Definition.Kind,revision=record.Definition.Revision,compiled=record.Definition.Source is not null,source=record.Definition.Source,diagnostics=Array.Empty<string>(),enabled=record.Enabled,process_id=record.Definition.ProcessId,module_id=record.Definition.ModuleId,method_token=record.Definition.MethodToken,declaring_type=record.Definition.DeclaringType,method=record.Definition.Method,state=record.Enabled?"enabled":"disabled" };
+			static object View(HookRecord record) => new { hook_id=record.Definition.HookId,patch_id=record.PatchId,controller=HookOwnership.DgSpyController,owned=true,capabilities=new[]{"edit","enable","disable","remove"},assembly_simple_name=record.Definition.Assembly,kind=record.Definition.Kind,revision=record.Definition.Revision,compiled=record.Definition.Source is not null,source=record.Definition.Source,diagnostics=Array.Empty<string>(),enabled=record.Enabled,process_id=record.Definition.ProcessId,module_id=record.Definition.ModuleId,method_token=record.Definition.MethodToken,declaring_type=record.Definition.DeclaringType,method=record.Definition.Method,state=record.Enabled?"enabled":"disabled" };
+			static object View(ResidentHookRecord record) { var owned=record.Controller==HookOwnership.DgSpyController; return new { hook_id=record.HookId,patch_id=record.PatchId,controller=String.IsNullOrEmpty(record.Controller)?"unknown":record.Controller,owned,capabilities=owned?new[]{"enable","disable","remove"}:Array.Empty<string>(),assembly_simple_name=record.AssemblySimpleName,kind=record.Kind,revision=record.Revision,compiled=true,source=(string?)null,source_sha256=record.SourceSha256,diagnostics=Array.Empty<string>(),enabled=record.Enabled,process_id=record.ProcessId,module_id=(string?)null,method_token=record.MetadataToken,declaring_type=record.DeclaringType,method=(string?)null,state=record.Enabled?"enabled":"disabled" }; }
 			static void EnsureCompleted(AtomicActionResult result,string operation) { if(result.Status.ActionOutcome!=HookLab.Contracts.ActionOutcome.completed) throw new RpcException("hook_operation_failed",HookLabInstallPresentation.Failure(operation,result.Status.ActionOutcome,result.Status.InterruptionReason,result.Error)); }
 			static Dictionary<string,string> Report(AtomicActionResult result) { var node=JsonNode.Parse(result.VerificationEvidence ?? "{}") as JsonObject; return ParseReport((string?)node?["report"] ?? ""); }
 			static Dictionary<string,string> ParseReport(string text) { var values=new Dictionary<string,string>(StringComparer.Ordinal); foreach(var line in text.Split(new[]{'\n'},StringSplitOptions.RemoveEmptyEntries)) { var separator=line.IndexOf('='); if(separator>0) values[line.Substring(0,separator)]=line.Substring(separator+1); } return values; }
@@ -528,8 +564,9 @@ namespace dgSpy.Extension {
 			static string RuntimeKey(string session,int process)=>session+"\n"+process.ToString(CultureInfo.InvariantCulture);
 
 			sealed class HookRecord { public HookRecord(HookDefinition definition,string patchId) { Definition=definition; PatchId=patchId; } public HookDefinition Definition { get; } public string PatchId { get; } public bool Enabled=true; public MethodDef? MethodDefinition; }
+			sealed class ResidentHookRecord { public ResidentHookRecord(string sessionId,int processId,string patchId,string controller,string hookId,string assemblySimpleName,string kind,string mvid,int metadataToken,string declaringType,string signature,string ilSha256,string sourceSha256,int revision,bool enabled) { SessionId=sessionId; ProcessId=processId; PatchId=patchId; Controller=controller; HookId=hookId; AssemblySimpleName=assemblySimpleName; Kind=kind; Mvid=mvid; MetadataToken=metadataToken; DeclaringType=declaringType; Signature=signature; IlSha256=ilSha256; SourceSha256=sourceSha256; Revision=revision; Enabled=enabled; } public string SessionId,PatchId,Controller,HookId,AssemblySimpleName,Kind,Mvid,DeclaringType,Signature,IlSha256,SourceSha256; public int ProcessId,MetadataToken,Revision; public bool Enabled; public string Key=>SessionId+"\n"+ProcessId.ToString(CultureInfo.InvariantCulture)+"\n"+PatchId; }
 			sealed class HookCarrier { public HookCarrier(string moduleId,int methodToken,int ilOffset,int[] nearbyOffsets,string appDomainId) { ModuleId=moduleId; MethodToken=methodToken; IlOffset=ilOffset; NearbyOffsets=nearbyOffsets; AppDomainId=appDomainId; } public string ModuleId { get; } public int MethodToken { get; } public int IlOffset { get; } public int[] NearbyOffsets { get; } public string AppDomainId { get; } }
-			sealed class RuntimeRecord : IDisposable { public RuntimeRecord(string sessionId,int processId,ProbeConnection connection,long hooksVersion) { SessionId=sessionId; ProcessId=processId; Connection=connection; HooksVersion=hooksVersion; } public string SessionId { get; } public int ProcessId { get; } public ProbeConnection Connection { get; } public long HooksVersion; public SemaphoreSlim OperationGate { get; }=new SemaphoreSlim(1,1); public CancellationTokenSource Cancellation { get; }=new CancellationTokenSource(); public Task? Pump; public void Dispose() { Cancellation.Cancel(); Connection.Dispose(); OperationGate.Dispose(); Cancellation.Dispose(); } }
+			sealed class RuntimeRecord : IDisposable { public RuntimeRecord(string sessionId,int processId,ProbeConnection connection,long hooksVersion,string probeInstanceId,bool adopted) { SessionId=sessionId; ProcessId=processId; Connection=connection; HooksVersion=hooksVersion; ProbeInstanceId=probeInstanceId; Adopted=adopted; } public string SessionId { get; } public int ProcessId { get; } public string ProbeInstanceId { get; } public bool Adopted { get; } public ProbeConnection Connection { get; } public long HooksVersion; public SemaphoreSlim OperationGate { get; }=new SemaphoreSlim(1,1); public CancellationTokenSource Cancellation { get; }=new CancellationTokenSource(); public Task? Pump; public void Dispose() { Cancellation.Cancel(); Connection.Dispose(); OperationGate.Dispose(); Cancellation.Dispose(); } }
 			sealed class HookEventRecord { public HookEventRecord(long cursor,string sequence,string patchId,string payloadJson,long dropped) { Cursor=cursor; Sequence=sequence; PatchId=patchId; PayloadJson=payloadJson; Dropped=dropped; } public long Cursor { get; } public string Sequence { get; } public string PatchId { get; } public string PayloadJson { get; } public long Dropped { get; } }
 
 			sealed class HookDefinition {
@@ -554,7 +591,7 @@ namespace dgSpy.Extension {
 				// replace Prefix with Postfix on the same exactly guarded method.
 				public bool SameTarget(HookDefinition other)=>ModuleId==other.ModuleId && MethodToken==other.MethodToken && Mvid==other.Mvid && Signature==other.Signature && IlSha256==other.IlSha256;
 				static int Positive(JsonObject values,string name,int fallback) { var value=(int?)values[name] ?? fallback; return value>0 ? value : throw new RpcException("invalid_arguments",name+" must be positive."); }
-				public JsonObject Parameters(string completion) { var values=new JsonObject { ["host_id"]="dgspy-hooklab",["image_path"]=ImagePath,["process_id"]=ProcessId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=ProcessCreationTicks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]=RuntimeId,["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion,["hook_id"]=HookId,["hook_kind"]=Kind,["hook_assembly"]=Assembly,["hook_type"]=DeclaringType,["hook_method"]=Method,["hook_module_mvid"]=Mvid,["hook_metadata_token"]=MethodToken.ToString(CultureInfo.InvariantCulture),["hook_declaring_type"]=DeclaringType,["hook_method_signature"]=Signature,["hook_il_sha256"]=IlSha256,["maximum_events_per_second"]=MaximumEventsPerSecond.ToString(CultureInfo.InvariantCulture),["maximum_string_length"]=MaximumStringLength.ToString(CultureInfo.InvariantCulture) }; if(Source is not null) { values["hook_source_base64"]=Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Source)); values["hook_revision"]=Revision.ToString(CultureInfo.InvariantCulture); } return values; }
+				public JsonObject Parameters(string completion,string? residentHookId=null) { var values=new JsonObject { ["host_id"]=DgSpyStateRoot.ResidentHostId,["image_path"]=ImagePath,["process_id"]=ProcessId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=ProcessCreationTicks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]=RuntimeId,["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion,["hook_id"]=residentHookId??HookId,["hook_kind"]=Kind,["hook_assembly"]=Assembly,["hook_type"]=DeclaringType,["hook_method"]=Method,["hook_module_mvid"]=Mvid,["hook_metadata_token"]=MethodToken.ToString(CultureInfo.InvariantCulture),["hook_declaring_type"]=DeclaringType,["hook_method_signature"]=Signature,["hook_il_sha256"]=IlSha256,["maximum_events_per_second"]=MaximumEventsPerSecond.ToString(CultureInfo.InvariantCulture),["maximum_string_length"]=MaximumStringLength.ToString(CultureInfo.InvariantCulture) }; if(Source is not null) { values["hook_source_base64"]=Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Source)); values["hook_revision"]=Revision.ToString(CultureInfo.InvariantCulture); } return values; }
 			}
 		}
 	}

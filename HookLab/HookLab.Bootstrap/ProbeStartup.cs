@@ -590,7 +590,7 @@ namespace HookLab.Bootstrap {
 			"\",\"patch_ids\":[" + string.Join(",", state.PatchIds.Select(id => "\"" + Escape(id) + "\"").ToArray()) + "]" +
 			",\"compiled_hooks\":[" + string.Join(",", state.CompiledHooks.Select(CompiledHookJson).ToArray()) + "]}";
 
-		static string CompiledHookJson(CompiledHookState hook) => "{\"patch_id\":\"" + Escape(hook.PatchId) + "\",\"kind\":\"" + hook.Kind.ToString() + "\",\"module_mvid\":\"" + hook.Target.ModuleMvid.ToString("D") + "\",\"metadata_token\":" + hook.Target.MetadataToken.ToString(CultureInfo.InvariantCulture) + ",\"declaring_type\":\"" + Escape(hook.Target.DeclaringType) + "\",\"signature\":\"" + Escape(hook.Target.MethodSignature) + "\",\"il_sha256\":\"" + Escape(hook.Target.IlSha256) + "\",\"source_sha256\":\"" + Escape(hook.SourceSha256) + "\",\"revision\":" + hook.Revision.ToString(CultureInfo.InvariantCulture) + ",\"enabled\":" + (hook.Enabled ? "true" : "false") + "}";
+		static string CompiledHookJson(CompiledHookState hook) => "{\"patch_id\":\"" + Escape(hook.PatchId) + "\",\"assembly_simple_name\":\"" + Escape(hook.AssemblySimpleName) + "\",\"kind\":\"" + hook.Kind.ToString() + "\",\"module_mvid\":\"" + hook.Target.ModuleMvid.ToString("D") + "\",\"metadata_token\":" + hook.Target.MetadataToken.ToString(CultureInfo.InvariantCulture) + ",\"declaring_type\":\"" + Escape(hook.Target.DeclaringType) + "\",\"signature\":\"" + Escape(hook.Target.MethodSignature) + "\",\"il_sha256\":\"" + Escape(hook.Target.IlSha256) + "\",\"source_sha256\":\"" + Escape(hook.SourceSha256) + "\",\"revision\":" + hook.Revision.ToString(CultureInfo.InvariantCulture) + ",\"enabled\":" + (hook.Enabled ? "true" : "false") + "}";
 
 		static string Escape(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 

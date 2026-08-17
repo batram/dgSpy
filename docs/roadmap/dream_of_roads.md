@@ -35,29 +35,14 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Let dgSpy and the watcher safely share one resident HookLab generation.
-2. Add an honest unelevated operator surface for watcher operations that really exist.
-3. Resolve controller continuity and independent safe stimulus during bounded waits.
-4. Fix narrowly reproduced MCP correctness and usability defects.
-5. Improve HookLab authoring only when concrete hooks require it.
-6. Revisit high-risk execution, editing, and scripting one workflow at a time.
-7. Keep compatibility expansions parked until product scope changes.
+1. Add an honest unelevated operator surface for watcher operations that really exist.
+2. Resolve controller continuity and independent safe stimulus during bounded waits.
+3. Fix narrowly reproduced MCP correctness and usability defects.
+4. Improve HookLab authoring only when concrete hooks require it.
+5. Revisit high-risk execution, editing, and scripting one workflow at a time.
+6. Keep compatibility expansions parked until product scope changes.
 
-## Road 1 - share one resident between two controllers
-
-Make dgSpy and the watcher adopt either side's valid resident instead of injecting competing generations:
-
-1. Discover, authenticate, and inventory a resident before adoption or injection.
-2. Preserve unknown and foreign-owned hooks.
-3. Define ownership for edit, enable, disable, and removal; require an owning capability or explicit
-   transfer. `remove_all_hooks` must not erase another controller's work.
-4. Return stable adoption and per-resident inspection failures without collapsing watcher status.
-5. Round-trip the exact case-sensitive CLR assembly simple name used at hook creation.
-
-Exit evidence: live adoption in both directions while the original hook remains active, followed by
-restart, inventory, addition of a second hook, and removal of only the new owner's hook.
-
-## Road 2 - add an honest watcher operator surface
+## Road 1 - add an honest watcher operator surface
 
 Add an unelevated notification-area companion while keeping the elevated watcher headless. Show exact
 running, paused, error, stale, and stopped states; expose pause/resume, profile enable/disable, installed
@@ -70,7 +55,7 @@ removal until their ownership contracts exist.
 Exit evidence: main-desktop human acceptance and hidden-desktop automation of every exposed operation,
 including stale-state and privilege-boundary failures.
 
-## Road 3 - resolve control-plane continuity and concurrency
+## Road 2 - resolve control-plane continuity and concurrency
 
 ### 3A. Choose the session recovery contract
 
@@ -87,7 +72,7 @@ stimulus to overlap.
 Exit evidence: the stimulus reaches the host before the deadline and completes the wait; timeout,
 cancellation, and disconnect strand neither request.
 
-## Road 4 - fix reproduced MCP quality defects
+## Road 3 - fix reproduced MCP quality defects
 
 Treat each item as an independent reproduction-led fix:
 
@@ -105,7 +90,7 @@ Treat each item as an independent reproduction-led fix:
 Do not reopen delivered neighbors: filtered member listings, session-scoped module identity, the
 development transcript, and explicit controller takeover already exist.
 
-## Road 5 - improve HookLab authoring when demanded
+## Road 4 - improve HookLab authoring when demanded
 
 Pull these only from a concrete failing hook: generic methods and declaring types, additional resident
 compiler references, a larger source boundary, Roslyn editor assistance, natural collision-safe
@@ -114,7 +99,7 @@ parameter names, or richer package management.
 Each slice needs a target fixture that fails before it, compilation and runtime rollback coverage, and
 the existing exact MVID, token, signature, and IL identity guarantees.
 
-## Road 6 - consider high-risk capabilities separately
+## Road 5 - consider high-risk capabilities separately
 
 General target C# execution, assembly editing or project export, live method-body replacement, and
 dnSpy-host scripting are separate trust domains. HookLab's bounded compiler authorizes none of them.
@@ -131,7 +116,7 @@ If a named workflow justifies one, proceed roughly in this order:
 Each capability requires its own permission, bounds, audit policy, remote-default-off behavior,
 side-effect reporting, and end-to-end refusal tests.
 
-## Road 7 - parked horizons
+## Road 6 - parked horizons
 
 CoreCLR, x86, native debugging, broad Mono HookLab support, reverse patches, generic hook providers,
 profiler/ReJIT, and Visual Basic parity remain outside the current x64 CLR v4 and Unity scope. Useful

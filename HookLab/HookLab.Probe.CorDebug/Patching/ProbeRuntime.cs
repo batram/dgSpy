@@ -141,7 +141,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 		}
 
 		public ProbeState GetState() {
-			lock (gate) return new ProbeState(1, ProbeInstanceId, initialization.IdentityProvider.GetCurrentIdentity(), Inventory.SelectedIdentity, hooksVersion, hooks.Keys.Concat(compiledHooks.Keys).OrderBy(x => x).ToArray(),compiledHooks.Values.OrderBy(x=>x.PatchId).Select(x=>new CompiledHookState(x.PatchId,x.Document.Kind,x.Document.Target,Sha256(x.Source),x.Revision,x.Enabled)).ToArray());
+			lock (gate) return new ProbeState(1, ProbeInstanceId, initialization.IdentityProvider.GetCurrentIdentity(), Inventory.SelectedIdentity, hooksVersion, hooks.Keys.Concat(compiledHooks.Keys).OrderBy(x => x).ToArray(),compiledHooks.Values.OrderBy(x=>x.PatchId).Select(x=>new CompiledHookState(x.PatchId,x.Method.Module.Assembly.GetName().Name??x.Method.Module.Name,x.Document.Kind,x.Document.Target,Sha256(x.Source),x.Revision,x.Enabled)).ToArray());
 		}
 		static string Sha256(string value) { using(var sha=SHA256.Create()) return string.Concat(sha.ComputeHash(Encoding.UTF8.GetBytes(value)).Select(x=>x.ToString("x2")).ToArray()); }
 

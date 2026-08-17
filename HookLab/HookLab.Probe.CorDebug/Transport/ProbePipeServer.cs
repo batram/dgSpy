@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
 using System.Security.AccessControl;
@@ -38,7 +39,7 @@ namespace HookLab.Probe.CorDebug.Transport {
 	public sealed class ProbePipeServer : IDisposable, IHookEventConsumer {
 		readonly object secretGate = new object();
 		readonly object sendGate = new object();
-		/// <summary>Serializes publication of <see cref="activePipe"/> against <see cref="Dispose"/>. See
+		/// <summary>Serializes publication of listening and connected pipes against <see cref="Dispose"/>. See
 		/// the comment on <see cref="Listen"/> for why a plain assignment inside the loop body was not enough.</summary>
 		readonly object pipeGate = new object();
 		readonly ProbeCommandHandler commandHandler;
@@ -71,7 +72,7 @@ namespace HookLab.Probe.CorDebug.Transport {
 		volatile bool disposed;
 		int endpointTaken;
 		byte[] secret;
-		NamedPipeServerStream? activePipe;
+		readonly HashSet<NamedPipeServerStream> activePipes = new HashSet<NamedPipeServerStream>();
 		volatile Stream? authenticatedPipe;
 
 		/// <param name="injectedSecret">When supplied, the endpoint credential the host has already generated,
@@ -134,23 +135,31 @@ namespace HookLab.Probe.CorDebug.Transport {
 					lock (pipeGate) {
 						if (disposed) return;
 						pipe = CreatePipe();
-						activePipe = pipe;
+						activePipes.Add(pipe);
 					}
 					try {
 						// If Dispose ran between the gate release and here it has already disposed this pipe,
 						// so WaitForConnection throws instead of parking. Measured on net48: disposing the
 						// server stream releases a thread already parked in WaitForConnection in 0 ms, with
 						// IOException "The pipe has been ended" - no client connect is needed to wake it.
-						pipe.WaitForConnection(); if (!disposed) Serve(pipe);
+						pipe.WaitForConnection();
+						if (disposed) continue;
+						// A connected controller must not own the accept loop. The resident is shared by dgSpy
+						// and the watcher, so keep this pipe in the active set and serve it independently while
+						// this thread immediately publishes the next listener instance.
+						var connected = pipe;
+						new Thread(() => ServeConnected(connected)) { IsBackground = true, Name = "HookLab probe client" }.Start();
+						pipe = null!;
 					}
 					catch (Exception) when (disposed) { }
 					catch (IOException) { }
 					catch (UnauthorizedAccessException) { }
 					catch (InvalidDataException) { }
 					finally {
-						authenticatedPipe = null;
-						lock (pipeGate) activePipe = null;
-						try { pipe.Dispose(); } catch { }
+						if (pipe != null) {
+							lock (pipeGate) activePipes.Remove(pipe);
+							try { pipe.Dispose(); } catch { }
+						}
 					}
 				}
 			}
@@ -166,13 +175,26 @@ namespace HookLab.Probe.CorDebug.Transport {
 			finally { stopped.Set(); }
 		}
 
+		void ServeConnected(NamedPipeServerStream pipe) {
+			try { if (!disposed) Serve(pipe); }
+			catch (Exception) when (disposed) { }
+			catch (IOException) { }
+			catch (UnauthorizedAccessException) { }
+			catch (InvalidDataException) { }
+			finally {
+				Interlocked.CompareExchange(ref authenticatedPipe, null, pipe);
+				lock (pipeGate) activePipes.Remove(pipe);
+				try { pipe.Dispose(); } catch { }
+			}
+		}
+
 		NamedPipeServerStream CreatePipe() {
 			var identity = WindowsIdentity.GetCurrent();
 			var sid = identity.User ?? throw new InvalidOperationException("The probe process has no Windows user SID.");
 			var security = new PipeSecurity();
 			security.SetAccessRuleProtection(true, false);
 			security.AddAccessRule(new PipeAccessRule(sid, PipeAccessRights.FullControl, AccessControlType.Allow));
-			return new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+			return new NamedPipeServerStream(pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte,
 				PipeOptions.Asynchronous, 4096, 4096, security, HandleInheritability.None);
 		}
 
@@ -421,13 +443,13 @@ namespace HookLab.Probe.CorDebug.Transport {
 				disposed = true;
 				commandGateClosed = true;
 			}
-			NamedPipeServerStream? current;
-			lock (pipeGate) current = activePipe;
+			NamedPipeServerStream[] current;
+			lock (pipeGate) current = new List<NamedPipeServerStream>(activePipes).ToArray();
 			// Disposing the server stream both closes the endpoint and releases a listener already parked in
 			// WaitForConnection. Taking the gate first is what guarantees there is something here to dispose:
 			// either the listener published its pipe and this sees it, or it has not reached the gate yet and
 			// will observe disposed and exit without creating one.
-			try { current?.Dispose(); } catch { }
+			foreach (var pipe in current) try { pipe.Dispose(); } catch { }
 			// Test-only seam, between closing the endpoint and cancelling. It is the only point from which a
 			// test can release a listener *inside* Dispose and so observe what an admission racing the shutdown
 			// resolves to; from outside, the release necessarily lands before Dispose starts or after it

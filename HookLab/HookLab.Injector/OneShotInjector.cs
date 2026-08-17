@@ -4,18 +4,19 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using HookLab.Contracts;
 
 namespace HookLab.Injector;
 
 public static class OneShotInjector {
-	public static string Apply(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory)=>ApplyCore(processId,definition,definitionPath,payloadDirectory,"none",null,clrReadinessTimeoutMs:5000,initializationTimeoutMs:5000).Result;
+	public static string Apply(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory)=>ApplyCore(processId,definition,definitionPath,payloadDirectory,"none",null,HookOwnership.Qualify(HookOwnership.WatcherController,definition.Id!),clrReadinessTimeoutMs:5000,initializationTimeoutMs:5000).Result;
 	public static ResidentInjection ApplyResident(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,byte[] endpointSecret,string residentStagingDirectory,int clrReadinessTimeoutMs=5000,int initializationTimeoutMs=5000) {
 		if(endpointSecret is null||endpointSecret.Length!=32) throw new ArgumentException("The resident endpoint secret must be exactly 32 bytes.",nameof(endpointSecret));
 		if(String.IsNullOrWhiteSpace(residentStagingDirectory)) throw new ArgumentException("A resident staging directory is required.",nameof(residentStagingDirectory));
-		var outcome=ApplyCore(processId,definition,definitionPath,payloadDirectory,"pipe",endpointSecret,residentStagingDirectory,clrReadinessTimeoutMs,initializationTimeoutMs);
+		var outcome=ApplyCore(processId,definition,definitionPath,payloadDirectory,"pipe",endpointSecret,HookOwnership.Qualify(HookOwnership.WatcherController,definition.Id!),residentStagingDirectory,clrReadinessTimeoutMs,initializationTimeoutMs);
 		return new ResidentInjection(outcome.Result,outcome.ImagePath,outcome.CreationTicks,Required(outcome.Report,"probe_instance_id"),Required(outcome.Report,"pipe_name"),Convert.FromBase64String(Required(outcome.Report,"pipe_nonce_base64")),Required(outcome.Report,"patch_id"),Int64.Parse(Required(outcome.Report,"hooks_version"),CultureInfo.InvariantCulture));
 	}
-	static InjectionOutcome ApplyCore(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,string endpoint,byte[]? endpointSecret,string? residentStagingDirectory=null,int clrReadinessTimeoutMs=5000,int initializationTimeoutMs=5000) {
+	static InjectionOutcome ApplyCore(int processId,HookDefinition definition,string definitionPath,string? payloadDirectory,string endpoint,byte[]? endpointSecret,string residentHookId,string? residentStagingDirectory=null,int clrReadinessTimeoutMs=5000,int initializationTimeoutMs=5000) {
 		if(clrReadinessTimeoutMs is < 250 or > 30000) throw new ArgumentOutOfRangeException(nameof(clrReadinessTimeoutMs));
 		if(initializationTimeoutMs is < 1000 or > 30000) throw new ArgumentOutOfRangeException(nameof(initializationTimeoutMs));
 		using var process=Process.GetProcessById(processId);
@@ -34,7 +35,7 @@ public static class OneShotInjector {
 			var nativePath=Path.Combine(staging,"HookLab.NativeBootstrap.x64.dll");
 			File.Copy(payload.Native,nativePath,false);
 			File.Copy(payload.Managed,Path.Combine(staging,"HookLab.Bootstrap.dll"),false);
-			File.WriteAllText(Path.Combine(staging,"initialize.params"),Parameters(imagePath,processId,creationTicks,completion,definition,endpoint,endpointSecret),new UTF8Encoding(false));
+			File.WriteAllText(Path.Combine(staging,"initialize.params"),Parameters(imagePath,processId,creationTicks,completion,definition,endpoint,endpointSecret,residentHookId),new UTF8Encoding(false));
 			NativeLoader.Load(processId,nativePath);
 			var wait=Stopwatch.StartNew();
 			var report=WaitForCompletion(process,completion,TimeSpan.FromMilliseconds(initializationTimeoutMs));
@@ -54,12 +55,12 @@ public static class OneShotInjector {
 		}
 	}
 
-	public static string Parameters(string imagePath,int processId,long creationTicks,string completion,HookDefinition definition,string endpoint="none",byte[]? endpointSecret=null) {
+	public static string Parameters(string imagePath,int processId,long creationTicks,string completion,HookDefinition definition,string endpoint="none",byte[]? endpointSecret=null,string? residentHookId=null) {
 		var target=definition.Target!; var hook=definition.Hook!;
 		var source=Convert.ToBase64String(Encoding.UTF8.GetBytes(hook.Source!));
 		var values=new[] {
-			Pair("host_id","apply-once"),Pair("image_path",imagePath),Pair("process_id",processId.ToString(CultureInfo.InvariantCulture)),Pair("process_creation_utc_ticks",creationTicks.ToString(CultureInfo.InvariantCulture)),
-			Pair("architecture","x64"),Pair("runtime_id","v4.0.30319"),Pair("appdomain_id","1"),Pair("endpoint",endpoint),Pair("completion_path",completion),Pair("hook_id",definition.Id!),
+			Pair("host_id",HookLab.Host.Transport.Discovery.DgSpyStateRoot.ResidentHostId),Pair("image_path",imagePath),Pair("process_id",processId.ToString(CultureInfo.InvariantCulture)),Pair("process_creation_utc_ticks",creationTicks.ToString(CultureInfo.InvariantCulture)),
+			Pair("architecture","x64"),Pair("runtime_id","v4.0.30319"),Pair("appdomain_id","1"),Pair("endpoint",endpoint),Pair("completion_path",completion),Pair("hook_id",residentHookId??definition.Id!),
 			Pair("hook_kind",hook.Kind!),Pair("hook_assembly",target.Assembly!),Pair("hook_type",target.DeclaringType!),Pair("hook_method",target.Method!),Pair("hook_module_mvid",target.ModuleMvid!),
 			Pair("hook_metadata_token",target.MetadataToken.ToString(CultureInfo.InvariantCulture)),Pair("hook_declaring_type",target.DeclaringType!),Pair("hook_method_signature",target.Signature!),Pair("hook_il_sha256",target.IlSha256!),
 			Pair("hook_source_base64",source),Pair("hook_revision",hook.Revision.ToString(CultureInfo.InvariantCulture)),Pair("maximum_events_per_second",hook.MaximumEventsPerSecond.ToString(CultureInfo.InvariantCulture)),Pair("maximum_string_length",hook.MaximumStringLength.ToString(CultureInfo.InvariantCulture))

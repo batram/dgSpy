@@ -17,6 +17,7 @@ param(
     [int]$RpcPort = 0,
     [string]$RunDirectory,
 	[switch]$ResidentInitializeOnly,
+	[switch]$WatcherFirstResident,
     [switch]$FixtureChild,
     [string]$FixtureExitPath,
     [int]$FixtureExitAfterMs
@@ -335,6 +336,7 @@ function Run-Negative([string]$Label, [scriptblock]$Mutate, [scriptblock]$Assert
 }
 
 New-Item -ItemType Directory -Force -Path $RunDirectory | Out-Null
+if ($WatcherFirstResident) { $env:HOOKLAB_RESIDENT_STATE_ROOT = Join-Path $RunDirectory 'resident-state' }
 try {
     if (-not (Test-Path -LiteralPath $targetExe)) { throw "unoptimized Release/net48 target not built: $targetExe" }
     $tickFacts = Get-MethodFacts $targetExe 'Milestone1Target.Program' 'Tick'
@@ -348,6 +350,70 @@ try {
     Say "host pid=$hostId rpc_port=$RpcPort"
 
 	if ($ResidentInitializeOnly) {
+		if ($WatcherFirstResident) {
+			Say 'watcher-first shared resident, host restart, and owner-only removal'
+			$fixture = Start-Fixture 'watcher-first' 90000
+			$definitions = Join-Path $RunDirectory 'definitions'
+			$watcherState = Join-Path $RunDirectory 'watcher-state'
+			New-Item -ItemType Directory -Force -Path $definitions,$watcherState | Out-Null
+			$watcherMarker = Join-Path $RunDirectory 'watcher-prefix.txt'
+			$escapedWatcherMarker = $watcherMarker.Replace('\','\\').Replace('"','\"')
+			$watcherSource = 'public static class WatcherFirstPrefix { public static bool Prefix(int input) { System.IO.File.AppendAllText("' + $escapedWatcherMarker + '", input.ToString() + "\n"); return true; } }'
+			$definition = [ordered]@{
+				schemaVersion=1; id='watcher-first-prefix'; process=[ordered]@{ fileName='Milestone1Target.exe' }
+				target=[ordered]@{ assembly='Milestone1Target'; moduleMvid=$tickFacts.Mvid; declaringType='Milestone1Target.Program'; method='Tick'; metadataToken=[int]$tickFacts.Token; signature=$tickFacts.Signature; ilSha256=$tickFacts.IlSha256 }
+				hook=[ordered]@{ kind='Prefix'; revision=1; enabled=$true; source=$watcherSource; maximumEventsPerSecond=10; maximumStringLength=128 }
+			}
+			[IO.File]::WriteAllText((Join-Path $definitions 'watcher-first.json'),($definition | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+			$watcherDll = Join-Path $configuredLayout 'hooklab-watcher\HookLab.Watcher.dll'
+			$watcherOut = Join-Path $RunDirectory 'watcher.out'
+			$watcherErr = Join-Path $RunDirectory 'watcher.err'
+			$watcherArguments = '"' + $watcherDll + '" run --definitions "' + $definitions + '" --state-root "' + $watcherState + '" --payload-dir "' + (Join-Path $configuredLayout 'hooklab-watcher\payload') + '" --poll-ms 25'
+			$watcher = Start-Process -FilePath 'dotnet' -ArgumentList $watcherArguments -PassThru -RedirectStandardOutput $watcherOut -RedirectStandardError $watcherErr
+			$null = $startedProcesses.Add($watcher)
+			$watcherStatus = $null
+			$watcherDeadline = [DateTime]::UtcNow.AddSeconds(20)
+			do {
+				Start-Sleep -Milliseconds 100
+				$statusText = (& dotnet $watcherDll status --pid $fixture.Id) -join "`n"
+				if ($LASTEXITCODE -eq 0) { $watcherStatus = $statusText | ConvertFrom-Json }
+				$watcherHook = @(@($watcherStatus.residents)[0].hooks | Where-Object { $_.controller -eq 'watcher' -and $_.hookId -eq 'watcher-first-prefix' })[0]
+			} while (-not $watcherHook -and [DateTime]::UtcNow -lt $watcherDeadline)
+			$watcherResident = @($watcherStatus.residents)[0]
+			Check 'watcher creates the first resident and owned hook' ($null -ne $watcherHook -and $watcherHook.assemblySimpleName -ceq 'Milestone1Target') ("probe=" + $watcherResident.probeInstanceId + " assembly=" + $watcherHook.assemblySimpleName)
+			$sessionId = Attach-Fixture $fixture
+			try {
+				$initialized = Rpc 'initialize_hooklab' @{ session_id=$sessionId; process_id=$fixture.Id } 130
+				Check 'dgSpy adopts the watcher-created resident' ($initialized.adopted -eq $true -and $initialized.probe_instance_id -eq $watcherResident.probeInstanceId) ("adopted=" + $initialized.adopted + " probe=" + $initialized.probe_instance_id)
+				$listed = Rpc 'list_hooks' @{ session_id=$sessionId; process_id=$fixture.Id }
+				$foreign = @($listed.hooks | Where-Object { $_.controller -eq 'watcher' })[0]
+				Check 'dgSpy inventories the watcher hook as foreign and inspect-only' ($foreign.owned -eq $false -and @($foreign.capabilities).Count -eq 0 -and $foreign.assembly_simple_name -ceq 'Milestone1Target') ("owned=" + $foreign.owned + " capabilities=" + (@($foreign.capabilities) -join ','))
+				$dgSpyMarker = Join-Path $RunDirectory 'dgspy-prefix.txt'
+				$escapedDgSpyMarker = $dgSpyMarker.Replace('\','\\').Replace('"','\"')
+				$dgSpySource = 'public static class DgSpySecondPrefix { public static bool Prefix(int input) { System.IO.File.AppendAllText("' + $escapedDgSpyMarker + '", input.ToString() + "\n"); return true; } }'
+				$installed = Rpc 'install_hook' @{ session_id=$sessionId; process_id=$fixture.Id; hook_id='dgspy-second-prefix'; kind='Prefix'; module_id=$script:carrierModuleId; assembly='Milestone1Target'; declaring_type='Milestone1Target.Program'; method='Tick'; method_token=[int]$tickFacts.Token; signature=$tickFacts.Signature; module_mvid=$tickFacts.Mvid; il_sha256=$tickFacts.IlSha256; source=$dgSpySource; revision=1 } 70
+				Check 'dgSpy adds its own second hook to the shared resident' ($installed.hook.controller -eq 'dgspy' -and $installed.hook.owned -eq $true) ("patch=" + $installed.hook.patch_id)
+				$null = Rpc 'detach' @{ session_id=$sessionId } 30
+				$sessionId = $null
+				Stop-Process -Id $hostId -Force -ErrorAction Stop
+				$hostId = & (Join-Path $PSScriptRoot 'TestSupport\Start-DgSpyHost.ps1') -RpcPort 0 -TargetFramework $TargetFramework
+				$RpcPort = [int]$env:DGSPY_RPC_PORT
+				$sessionId = Attach-Fixture $fixture
+				$reinitialized = Rpc 'initialize_hooklab' @{ session_id=$sessionId; process_id=$fixture.Id } 130
+				$afterRestart = Rpc 'list_hooks' @{ session_id=$sessionId; process_id=$fixture.Id }
+				Check 'after dgSpy restart the same resident and both hooks are inventoried' ($reinitialized.adopted -eq $true -and $reinitialized.probe_instance_id -eq $watcherResident.probeInstanceId -and @($afterRestart.hooks).Count -eq 2) ("probe=" + $reinitialized.probe_instance_id + " hooks=" + @($afterRestart.hooks).Count)
+				$removed = Rpc 'remove_hook' @{ session_id=$sessionId; process_id=$fixture.Id; hook_id='dgspy-second-prefix' } 30
+				$remaining = Rpc 'list_hooks' @{ session_id=$sessionId; process_id=$fixture.Id }
+				Check 'removing the dgSpy-owned hook preserves the watcher hook' ($removed.removed -eq $true -and @($remaining.hooks).Count -eq 1 -and @($remaining.hooks)[0].controller -eq 'watcher') ("remaining=" + @($remaining.hooks).Count + " owner=" + @($remaining.hooks)[0].controller)
+				$markerDeadline = [DateTime]::UtcNow.AddSeconds(10)
+				do { Start-Sleep -Milliseconds 100 } while (-not (Test-Path -LiteralPath $watcherMarker) -and [DateTime]::UtcNow -lt $markerDeadline)
+				Check 'the preserved watcher hook still executes' (Test-Path -LiteralPath $watcherMarker) $watcherMarker
+			}
+			finally { if ($sessionId) { try { Detach-Fixture $sessionId $fixture $false } catch { Say ("cleanup detach failed for watcher-first resident: " + $_.Exception.Message) } } }
+			if ($fail -ne 0) { throw "HookLab watcher-first resident smoke failed: $fail failed, $pass passed. See $driverLog" }
+			Say "RESULT pass=$pass fail=$fail"
+			return
+		}
 		Say 'resident initialization and first pipe-only hook'
 		$fixture = Start-Fixture 'resident-initialize' 90000
 		$sessionId = Attach-Fixture $fixture
@@ -375,6 +441,15 @@ try {
 				module_mvid=$tickFacts.Mvid; il_sha256=$tickFacts.IlSha256; source=$prefixSource; revision=1
 			} 70
 			Check 'custom Prefix revision 1 installs through the resident pipe' ($installed.installed -eq $true -and $installed.hook.compiled -eq $true -and $installed.hook.revision -eq 1) ("patch_id=" + $installed.hook.patch_id)
+			$watcherDll = Join-Path $configuredLayout 'hooklab-watcher\HookLab.Watcher.dll'
+			$standaloneStatusText = (& dotnet $watcherDll status --pid $fixture.Id) -join "`n"
+			$standaloneExitCode = $LASTEXITCODE
+			Say ("standalone watcher status exit=" + $standaloneExitCode + " response=" + ($standaloneStatusText -replace "`r?`n",';'))
+			$standaloneStatus = $standaloneStatusText | ConvertFrom-Json
+			$standaloneResident = @($standaloneStatus.residents)[0]
+			$standaloneHook = @($standaloneResident.hooks)[0]
+			Check 'standalone watcher adopts the live dgSpy resident' ($standaloneStatus.status -eq 'ok' -and $standaloneResident.probeInstanceId -eq $initialized.probe_instance_id -and $standaloneHook.controller -eq 'dgspy') ("probe=" + $standaloneResident.probeInstanceId + " controller=" + $standaloneHook.controller)
+			Check 'standalone inventory round-trips exact assembly case' ($standaloneHook.assemblySimpleName -ceq 'Milestone1Target') ("assembly=" + $standaloneHook.assemblySimpleName)
 			$markerDeadline = [DateTime]::UtcNow.AddSeconds(10)
 			do { Start-Sleep -Milliseconds 100 } while (-not (Test-Path -LiteralPath $behaviorMarker) -and [DateTime]::UtcNow -lt $markerDeadline)
 			Check 'custom Prefix executes inside the running target' (Test-Path -LiteralPath $behaviorMarker) $behaviorMarker
@@ -521,6 +596,7 @@ finally {
     }
     if ($hostId) { Stop-Process -Id $hostId -Force -ErrorAction SilentlyContinue }
     Remove-Item Env:DGSPY_RPC_PORT -ErrorAction SilentlyContinue
+	Remove-Item Env:HOOKLAB_RESIDENT_STATE_ROOT -ErrorAction SilentlyContinue
     $remaining = @($startedProcesses | Where-Object { Get-Process -Id $_.Id -ErrorAction SilentlyContinue })
     Check 'no process started by the smoke remains' ($remaining.Count -eq 0) ("remaining=" + (($remaining | ForEach-Object { $_.Id }) -join ','))
     Say "passed=$pass failed=$fail"

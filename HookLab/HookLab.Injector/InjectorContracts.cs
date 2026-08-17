@@ -34,6 +34,9 @@ public sealed record ResidentStatusResult(
 
 public sealed record ResidentHookStatus(
 	string PatchId,
+	string Controller,
+	string HookId,
+	string AssemblySimpleName,
 	string Kind,
 	string ModuleMvid,
 	int MetadataToken,

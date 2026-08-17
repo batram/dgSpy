@@ -198,6 +198,22 @@ public sealed class TransportTests {
 	}
 
 	[Fact]
+	public void Net48ProbeServesTwoAuthenticatedControllersConcurrently() {
+		using var temporary = new TemporaryDirectory(); using var harness = StartHarness("serve", temporary.Path, 20);
+		WaitFor(Path.Combine(temporary.Path, "harness-result.txt"));
+		var record = new ProbeDiscoveryStore(temporary.Path).Discover(new AlwaysCurrent(), DateTime.UtcNow).Single();
+		using var dgSpy = new ProbeConnection(record.PipeName, record.Secret, record.EndpointNonce, timeoutMilliseconds: 2000);
+		Assert.Equal(0, dgSpy.Send(Request("status", "{}", null)).ExpectedHooksVersion);
+		using var watcher = new ProbeConnection(record.PipeName, record.Secret, record.EndpointNonce, timeoutMilliseconds: 2000);
+		Assert.Equal(0, watcher.Send(Request("status", "{}", null)).ExpectedHooksVersion);
+		Assert.Equal(1, dgSpy.Send(Request("mutate", "{\"owner\":\"dgspy\"}", 0)).ExpectedHooksVersion);
+		var stale = watcher.Send(Request("mutate", "{\"owner\":\"watcher\"}", 0));
+		Assert.Equal("error", stale.Operation); Assert.Contains("stale_hooks_version", stale.PayloadJson, StringComparison.Ordinal);
+		Assert.Equal(1, watcher.Send(Request("status", "{}", null)).ExpectedHooksVersion);
+		harness.Kill(); harness.WaitForExit(5000);
+	}
+
+	[Fact]
 	public void StalledAuthenticationTimesOutAndDoesNotWedgeListener() {
 		using var temporary = new TemporaryDirectory();
 		using var process = StartHarness("stall-auth", temporary.Path, 1);
