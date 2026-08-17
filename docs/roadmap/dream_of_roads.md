@@ -1,9 +1,9 @@
 # Dream of roads
 
-This is dgSpy's ordered roadmap for open product work as of 2026-08-17. It is not a release promise.
-The current product already includes the verified x64 CLR v4 and Mono/Unity debugger bridge, remote-host
-routing, immutable packaging, compiled HookLab hooks, its GUI editor, and the installed standalone
-watcher. Preserve those foundations; do not restart completed plans.
+This is dgSpy's ordered roadmap for open product work as of 2026-08-18. It is not a release promise.
+The current product already includes verified x64 CLR v4, CoreCLR, and Mono/Unity debugger bridges,
+remote-host routing, immutable packaging, compiled HookLab hooks across CLR v4 and CoreCLR, its GUI
+editor, and the installed standalone watcher. Preserve those foundations; do not restart completed plans.
 
 ## How to travel the roadmap
 
@@ -35,31 +35,11 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Establish a reliable CoreCLR debugger boundary from the retained Barnyard failures.
-2. Revisit high-risk execution, editing, and scripting one workflow at a time.
-3. Keep compatibility expansions parked until product scope changes.
-4. Improve HookLab authoring only when a concrete failing hook exists.
+1. Revisit high-risk execution, editing, and scripting one workflow at a time.
+2. Keep compatibility expansions parked until product scope changes.
+3. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - establish the CoreCLR debugger boundary
-
-Promote the retained Barnyard evidence into three ordered, independently verified slices:
-
-1. Resolve `mscordbi.dll` and `mscordaccore.dll` by the filename, architecture, PE timestamp, and
-   `SizeOfImage` identity supplied by `ICLRDebuggingLibraryProvider3`. Search adjacent files, a private
-   verified cache, and all installed x64 `Microsoft.NETCore.App` runtimes without selecting one from a
-   single-file apphost's version. Keep downloads optional, explicit, atomic, and outside the dispatcher.
-2. Reproduce and capture the managed callback that leaves Barnyard suspended while the session reports
-   running. Enforce one observable terminal disposition per accepted callback without an unconditional
-   broad-`finally` continue that could corrupt counters, queued callbacks, intentional stops, or detach.
-3. Only after ordinary CoreCLR attach, pause, continue, breakpoint, evaluation, detach, and failure
-   behavior have their own live gate, design CoreCLR HookLab as a separate runtime backend. Do not weaken
-   the proven CLR v4 resident, identity, guard, authentication, revision, or ownership boundaries.
-
-The current product boundary remains x64 CLR v4 and Mono/Unity until those gates pass. The active
-evidence, investigation order, and acceptance criteria live in
-`docs/local/work/coreclr-debugger.md`.
-
-## Road 2 - consider high-risk capabilities separately
+## Road 1 - consider high-risk capabilities separately
 
 General target C# execution, assembly editing or project export, live method-body replacement, and
 dnSpy-host scripting are separate trust domains. HookLab's bounded compiler authorizes none of them.
@@ -76,16 +56,16 @@ If a named workflow justifies one, proceed roughly in this order:
 Each capability requires its own permission, bounds, audit policy, remote-default-off behavior,
 side-effect reporting, and end-to-end refusal tests.
 
-## Road 3 - parked horizons
+## Road 2 - parked horizons
 
 x86, native debugging, broad Mono HookLab support, reverse patches, generic hook providers,
-profiler/ReJIT, and Visual Basic parity remain outside the current x64 CLR v4 and Unity scope.
+profiler/ReJIT, and Visual Basic parity remain outside the current x64 CLR v4, CoreCLR, and Unity scope.
 
 Deterministic Unity fixtures, headless Mono connection-failure handling, and broader multi-session
 isolation are independent quality projects. Promote one only with a concrete workflow, fixture, and
 acceptance boundary.
 
-## Road 4 - improve HookLab authoring when demanded
+## Road 3 - improve HookLab authoring when demanded
 
 There is currently no failing base hook that justifies an authoring slice. Generic methods and declaring
 types, additional resident compiler references, a larger source boundary, Roslyn editor assistance,
