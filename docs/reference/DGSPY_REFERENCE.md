@@ -99,7 +99,10 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
 `export_hook_package` revalidates the exact live process identity and exports one installed compiled
 hook below `DGSPY_EXPORT_ROOT` as a canonical watcher deployment. The deployment contains its closed
 package plus a profile whose `enabled` field is always `false`; export never changes the target or
-enables automatic watcher operation. Existing output is refused unless `overwrite=true` is explicit.
+enables automatic watcher operation. The complete export is ACL-protected before atomic publication.
+Existing output is refused unless `overwrite=true` is explicit. The installed watcher accepts the result
+through `enroll --deployment <directory>`; enrollment independently verifies it, publishes atomically,
+and leaves the profile disabled until `enable-profile <id>` is explicit.
 
 ## State and lifetime rules
 

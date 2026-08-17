@@ -77,7 +77,24 @@ watcher restart adopts authenticated live residents and reconciles desired state
 dgSpy's side-effecting `export_hook_package` operation writes a watcher-compatible deployment below its
 configured `DGSPY_EXPORT_ROOT`. It freezes the retained compiled source and exact live process/module/
 method guards, writes a closed package with the canonical digest, and creates a disabled sibling profile.
-Export alone never enrolls the package into the installed watcher or enables automatic deployment.
+Export also closes and protects the complete deployment tree before publication. Export alone never
+enrolls the package into the installed watcher or enables automatic deployment.
+
+Enroll a canonical export with the installed executable:
+
+```powershell
+& $watcher enroll --deployment C:\path\to\exported-deployment
+& $watcher status
+& $watcher enable-profile vmconnect-fullscreen-user
+```
+
+Enrollment revalidates the closed inventory, digest, owner/ACL, reparse-point absence, profile and hook
+identity conflicts, and the combined catalog before atomically publishing beneath
+`%LOCALAPPDATA%\Programs\HookLab.Watcher.Enrolled`. It records the profile as disabled before publication,
+so neither export nor enrollment can patch a process. Use `--replace` only to replace the same profile;
+any validation or publication failure restores the prior tree and exact control state. The watcher keeps
+serving its last good complete catalog generation while a reload is invalid. Explicit `enable-profile`
+is the sole opt-in to future matching processes.
 
 The default notification policy is defined per profile (`all`, `errors`, or `none`). The durable
 operational record is `%LOCALAPPDATA%\HookLab\watcher-audit.jsonl`, which rotates at its configured bound.
@@ -85,6 +102,10 @@ operational record is `%LOCALAPPDATA%\HookLab\watcher-audit.jsonl`, which rotate
 Persisted lifecycle is read back against the exact watcher PID and process-creation identity. A recorded
 `running` process that no longer exists is reported as `stale`, with `recordedLifecycle` and
 `processAlive` retained so historical state cannot masquerade as a live watcher.
+
+`--enrollment-root`, `--profiles-root`, and `--state-root` are test/deployment overrides. A `run` using
+`--state-root` isolates control, status, audit, resident discovery credentials, and resident payload
+leases together; it does not consult the default per-user state.
 
 ## Uninstall
 

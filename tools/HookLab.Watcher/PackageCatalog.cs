@@ -108,27 +108,38 @@ internal sealed class WatchProfile {
 
 internal static class ProfileCatalog {
 	static readonly JsonSerializerOptions JsonOptions=new() { PropertyNamingPolicy=JsonNamingPolicy.CamelCase,PropertyNameCaseInsensitive=false,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow };
-	public static IReadOnlyList<WatchDefinition> Load(string directory) {
+	public static IReadOnlyList<WatchDefinition> Load(string directory,bool allowEmpty=false) {
 		var root=Path.GetFullPath(directory); if(!Directory.Exists(root)) throw new DirectoryNotFoundException("Profiles directory does not exist: "+root);
-		var rootPaths=Directory.GetFiles(root,"*.json",SearchOption.TopDirectoryOnly); var paths=(rootPaths.Length>0?rootPaths:Directory.GetDirectories(root,"*",SearchOption.TopDirectoryOnly).SelectMany(child=>Directory.GetFiles(child,"*.json",SearchOption.TopDirectoryOnly))).OrderBy(value=>value,StringComparer.OrdinalIgnoreCase).ToArray(); if(paths.Length==0) throw new InvalidDataException("Profiles directory contains no JSON profiles at its root or immediate deployment directories: "+root);
+		var paths=ProfilePaths(root); if(paths.Length==0) { if(allowEmpty) return Array.Empty<WatchDefinition>(); throw new InvalidDataException("Profiles directory contains no JSON profiles at its root or immediate deployment directories: "+root); }
 		var result=new List<WatchDefinition>(); var ids=new HashSet<string>(StringComparer.Ordinal);
 		foreach(var path in paths) {
-			var profileRoot=Path.GetDirectoryName(path)!;
-			WatchProfile profile; try { profile=JsonSerializer.Deserialize<WatchProfile>(File.ReadAllBytes(path),JsonOptions)??throw new InvalidDataException("Profile is empty."); } catch(JsonException ex) { throw new InvalidDataException("Profile JSON is invalid: "+ex.Message,ex); }
+			var profile=Read(path);
 			if(profile.SchemaVersion!=1||String.IsNullOrWhiteSpace(profile.Id)||!ids.Add(profile.Id)) throw new InvalidDataException("Profile schema or ID is invalid or duplicated.");
 			if(profile.Scope is not ("explicit" or "launcher" or "user")) throw new InvalidDataException("Profile scope is unsupported: "+profile.Scope);
 			if(!profile.Enabled) continue;
-			if(profile.NotificationPolicy is not ("errors" or "all" or "none")) throw new InvalidDataException("Profile notificationPolicy is unsupported: "+profile.Id);
-			if(profile.ClrReadinessTimeoutMs is < 250 or > 30000||profile.InitializationTimeoutMs is < 1000 or > 30000) throw new InvalidDataException("Profile readiness or initialization deadline is outside the supported bounds: "+profile.Id);
-			if(String.IsNullOrWhiteSpace(profile.PackagePath)||Path.IsPathRooted(profile.PackagePath)||profile.PackagePath.Replace('\\','/').Split('/').Any(part=>part is "" or "." or "..")) throw new InvalidDataException("Profile packagePath must be normalized and relative to the profiles directory.");
-			var packageRoot=Path.GetFullPath(Path.Combine(profileRoot,profile.PackagePath)); if(!packageRoot.StartsWith(Path.TrimEndingDirectorySeparator(profileRoot)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Profile packagePath escapes its deployment directory.");
-			var package=PackageLoader.Load(packageRoot);
-			if(package.PackageId!=profile.PackageId||package.Digest!=profile.PackageDigest?.ToLowerInvariant()) throw new InvalidDataException("Profile package identity or digest does not match verified package content: "+profile.Id);
-			if((profile.PermittedExecutablePaths??new()).Any(path=>!Path.IsPathFullyQualified(path))) throw new InvalidDataException("Profile permitted executable paths must be fully qualified: "+profile.Id);
-			var permitted=(profile.PermittedExecutablePaths??new()).Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(); if(permitted.Length==0) throw new InvalidDataException("Enabled profile requires at least one permitted executable path: "+profile.Id);
-			result.Add(new WatchDefinition(package.ManifestPath,package.Definition,package.Digest,profile.Id,package.PackageId,permitted,profile.NotificationPolicy!,profile.ClrReadinessTimeoutMs,profile.InitializationTimeoutMs));
+			result.Add(LoadEnabled(path,profile));
 		}
 		var duplicateHook=result.GroupBy(value=>value.Value.Id!,StringComparer.Ordinal).FirstOrDefault(group=>group.Count()>1); if(duplicateHook is not null) throw new InvalidDataException("Enabled profiles contain duplicate hook ID: "+duplicateHook.Key);
 		return result;
+	}
+	internal static (string ProfilePath,WatchProfile Profile,LoadedPackage Package) LoadExport(string directory) {
+		var root=Path.GetFullPath(directory); if(!Directory.Exists(root)) throw new DirectoryNotFoundException("Exported deployment does not exist: "+root);
+		var paths=Directory.GetFiles(root,"*.json",SearchOption.TopDirectoryOnly); if(paths.Length!=1) throw new InvalidDataException("Exported deployment must contain exactly one profile.");
+		var profile=Read(paths[0]); if(profile.SchemaVersion!=1||String.IsNullOrWhiteSpace(profile.Id)||profile.Scope!="user"||profile.Enabled) throw new InvalidDataException("Exported profile must be a disabled schema-1 user profile.");
+		var definition=LoadEnabled(paths[0],profile); var package=PackageLoader.Load(Path.GetDirectoryName(definition.Path)!);
+		return (paths[0],profile,package);
+	}
+	internal static void Write(string path,WatchProfile profile)=>File.WriteAllText(path,JsonSerializer.Serialize(profile,JsonOptions),new UTF8Encoding(false));
+	static string[] ProfilePaths(string root) { var rootPaths=Directory.GetFiles(root,"*.json",SearchOption.TopDirectoryOnly); return (rootPaths.Length>0?rootPaths:Directory.GetDirectories(root,"*",SearchOption.TopDirectoryOnly).SelectMany(child=>Directory.GetFiles(child,"*.json",SearchOption.TopDirectoryOnly))).OrderBy(value=>value,StringComparer.OrdinalIgnoreCase).ToArray(); }
+	static WatchProfile Read(string path) { try { return JsonSerializer.Deserialize<WatchProfile>(File.ReadAllBytes(path),JsonOptions)??throw new InvalidDataException("Profile is empty."); } catch(JsonException ex) { throw new InvalidDataException("Profile JSON is invalid: "+ex.Message,ex); } }
+	static WatchDefinition LoadEnabled(string path,WatchProfile profile) {
+		if(profile.NotificationPolicy is not ("errors" or "all" or "none")) throw new InvalidDataException("Profile notificationPolicy is unsupported: "+profile.Id);
+		if(profile.ClrReadinessTimeoutMs is < 250 or > 30000||profile.InitializationTimeoutMs is < 1000 or > 30000) throw new InvalidDataException("Profile readiness or initialization deadline is outside the supported bounds: "+profile.Id);
+		if(String.IsNullOrWhiteSpace(profile.PackagePath)||Path.IsPathRooted(profile.PackagePath)||profile.PackagePath.Replace('\\','/').Split('/').Any(part=>part is "" or "." or "..")) throw new InvalidDataException("Profile packagePath must be normalized and relative to the profiles directory.");
+		var profileRoot=Path.GetDirectoryName(path)!; var packageRoot=Path.GetFullPath(Path.Combine(profileRoot,profile.PackagePath)); if(!packageRoot.StartsWith(Path.TrimEndingDirectorySeparator(profileRoot)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Profile packagePath escapes its deployment directory.");
+		var package=PackageLoader.Load(packageRoot); if(package.PackageId!=profile.PackageId||package.Digest!=profile.PackageDigest?.ToLowerInvariant()) throw new InvalidDataException("Profile package identity or digest does not match verified package content: "+profile.Id);
+		if((profile.PermittedExecutablePaths??new()).Any(value=>!Path.IsPathFullyQualified(value))) throw new InvalidDataException("Profile permitted executable paths must be fully qualified: "+profile.Id);
+		var permitted=(profile.PermittedExecutablePaths??new()).Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(); if(permitted.Length==0) throw new InvalidDataException("Enabled profile requires at least one permitted executable path: "+profile.Id);
+		return new WatchDefinition(package.ManifestPath,package.Definition,package.Digest,profile.Id,package.PackageId,permitted,profile.NotificationPolicy!,profile.ClrReadinessTimeoutMs,profile.InitializationTimeoutMs);
 	}
 }

@@ -5,6 +5,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -257,10 +259,30 @@ namespace dgSpy.Extension {
 				if(!target.StartsWith(prefix,StringComparison.OrdinalIgnoreCase)) throw new RpcException("path_not_allowed","The HookLab export path is outside DGSPY_EXPORT_ROOT."); RejectReparsePath(root,Path.GetDirectoryName(target)!); if(Directory.Exists(target)&&(File.GetAttributes(target)&System.IO.FileAttributes.ReparsePoint)!=0) throw new RpcException("path_not_allowed","The HookLab export path is a reparse point.");
 				var overwrite=(bool?)source.Arguments["overwrite"]??false; if((Directory.Exists(target)||File.Exists(target))&&!overwrite) throw new RpcException("file_exists","HookLab export already exists: "+target);
 				HookPackageExportResult result;
-				try { result=HookPackageExporter.Export(target,new HookPackageExportRequest { PackageId=Required(source.Arguments,"package_id"),ProfileId=Required(source.Arguments,"profile_id"),DisplayName=(string?)source.Arguments["display_name"]??hookId,PackageRevision=definition.Revision,ProcessFileName=Path.GetFileName(definition.ImagePath),PermittedExecutablePath=Path.GetFullPath(definition.ImagePath),Assembly=definition.Assembly,ModuleMvid=definition.Mvid,DeclaringType=definition.DeclaringType,Method=definition.Method,MetadataToken=definition.MethodToken,Signature=definition.Signature,IlSha256=definition.IlSha256,HookId=definition.HookId,HookKind=definition.Kind,HookRevision=definition.Revision,HookEnabled=record.Enabled,Source=definition.Source,MaximumEventsPerSecond=definition.MaximumEventsPerSecond,MaximumStringLength=definition.MaximumStringLength,NotificationPolicy=(string?)source.Arguments["notification_policy"]??"errors",ClrReadinessTimeoutMs=(int?)source.Arguments["clr_readiness_timeout_ms"]??5000,InitializationTimeoutMs=(int?)source.Arguments["initialization_timeout_ms"]??10000 },overwrite); }
+				try { result=HookPackageExporter.Export(target,new HookPackageExportRequest { PackageId=Required(source.Arguments,"package_id"),ProfileId=Required(source.Arguments,"profile_id"),DisplayName=(string?)source.Arguments["display_name"]??hookId,PackageRevision=definition.Revision,ProcessFileName=Path.GetFileName(definition.ImagePath),PermittedExecutablePath=Path.GetFullPath(definition.ImagePath),Assembly=definition.Assembly,ModuleMvid=definition.Mvid,DeclaringType=definition.DeclaringType,Method=definition.Method,MetadataToken=definition.MethodToken,Signature=definition.Signature,IlSha256=definition.IlSha256,HookId=definition.HookId,HookKind=definition.Kind,HookRevision=definition.Revision,HookEnabled=record.Enabled,Source=definition.Source,MaximumEventsPerSecond=definition.MaximumEventsPerSecond,MaximumStringLength=definition.MaximumStringLength,NotificationPolicy=(string?)source.Arguments["notification_policy"]??"errors",ClrReadinessTimeoutMs=(int?)source.Arguments["clr_readiness_timeout_ms"]??5000,InitializationTimeoutMs=(int?)source.Arguments["initialization_timeout_ms"]??10000 },overwrite,ProtectExportTree); }
 				catch(InvalidDataException ex) { throw new RpcException("invalid_arguments",ex.Message); }
 				var audit=host.AuditMutation(source.Operation,"hook_id="+hookId+" package_id="+Required(source.Arguments,"package_id")+" path="+result.DeploymentPath+" digest="+result.PackageDigest);
 				return new { hook_id=hookId,package_id=Required(source.Arguments,"package_id"),profile_id=Required(source.Arguments,"profile_id"),deployment_path=result.DeploymentPath,package_path=result.PackagePath,profile_path=result.ProfilePath,package_digest=result.PackageDigest,profile_enabled=false,audit_id=audit };
+			}
+			static void ProtectExportTree(string root) {
+				var identities=new IdentityReference[]{WindowsIdentity.GetCurrent().User??throw new UnauthorizedAccessException("Current Windows identity has no SID."),new SecurityIdentifier(WellKnownSidType.LocalSystemSid,null),new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid,null)};
+				var security=new DirectorySecurity(); security.SetAccessRuleProtection(true,false); foreach(var identity in identities) security.AddAccessRule(new FileSystemAccessRule(identity,FileSystemRights.FullControl,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow)); SetDirectorySecurity(root,security);
+				foreach(var directory in Directory.EnumerateDirectories(root,"*",SearchOption.AllDirectories)) { var value=new DirectorySecurity(); value.SetAccessRuleProtection(false,false); SetDirectorySecurity(directory,value); }
+				foreach(var file in Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories)) { var value=new FileSecurity(); value.SetAccessRuleProtection(false,false); SetFileSecurity(file,value); }
+			}
+			static void SetDirectorySecurity(string path,DirectorySecurity security) {
+#if NETFRAMEWORK
+				new DirectoryInfo(path).SetAccessControl(security);
+#else
+				FileSystemAclExtensions.SetAccessControl(new DirectoryInfo(path),security);
+#endif
+			}
+			static void SetFileSecurity(string path,FileSecurity security) {
+#if NETFRAMEWORK
+				new FileInfo(path).SetAccessControl(security);
+#else
+				FileSystemAclExtensions.SetAccessControl(new FileInfo(path),security);
+#endif
 			}
 
 			public async Task<object> ReadEventsAsync(RpcHost host,RpcRequest source,CancellationToken token) {

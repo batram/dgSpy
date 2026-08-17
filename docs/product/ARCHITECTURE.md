@@ -105,12 +105,18 @@ cannot adopt the one it discovered.
 `HookLab.Packaging` is the runtime-neutral writer for watcher deployment exports. The dgSpy extension
 uses it to atomically freeze one retained compiled hook below `DGSPY_EXPORT_ROOT`; the watcher consumes
 the result through its existing strict package loader. Every export includes a disabled profile, so
-creating a package never opts a process into unattended injection.
+creating a package never opts a process into unattended injection. Before publication the extension
+protects the closed export tree with the same narrow Windows principals required by watcher enrollment.
+The installed watcher revalidates and atomically copies a canonical export into a separately protected
+enrollment root, records its profile as disabled before publication, and validates the combined built-in
+and enrolled catalog. Failed replacement restores both the previous tree and exact control state. Runtime
+reload retains the last good complete catalog generation when a candidate generation is invalid.
 
 The supported pipeline publishes the watcher as a closed, separately owned layout subtree. Its elevated
 installer verifies the parent layout inventory, digests, owner/ACL, path containment, and reparse-point
 absence before an atomic per-user install. A highest-available interactive logon task reads only the
-installed packages and bootstrap payloads. Mutable control/status/audit state is separate, and stdout is
+installed packages, enrolled packages, and bootstrap payloads. Mutable control/status/audit state is
+separate, and stdout is
 not an operational control channel. Upgrade and uninstall stop only the exact installed watcher image;
 they never terminate targets, remove resident patches, or delete live resident payload leases.
 

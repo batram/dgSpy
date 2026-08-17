@@ -158,7 +158,7 @@ internal sealed class WatcherInstaller {
 		}
 		if(requireClosed) { var actual=Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories).Select(path=>Path.GetRelativePath(root,path).Replace('\\','/')).Where(path=>path!=ManifestName).OrderBy(path=>path,StringComparer.Ordinal).ToArray(); var expected=manifest.Files.Select(file=>file.Path).OrderBy(path=>path,StringComparer.Ordinal).ToArray(); if(!actual.SequenceEqual(expected,StringComparer.Ordinal)) throw new InvalidDataException("Installed watcher inventory is not closed."); }
 	}
-	static void VerifyAcl(string path) {
+	internal static void VerifyAcl(string path) {
 		if(!OperatingSystem.IsWindows()) return;
 		FileSystemSecurity security=Directory.Exists(path)?FileSystemAclExtensions.GetAccessControl(new DirectoryInfo(path)):FileSystemAclExtensions.GetAccessControl(new FileInfo(path));
 		var owner=security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier; var current=WindowsIdentity.GetCurrent().User;
@@ -168,7 +168,7 @@ internal sealed class WatcherInstaller {
 		foreach(var rule in security.GetAccessRules(true,true,typeof(SecurityIdentifier)).OfType<FileSystemAccessRule>()) if(rule.AccessControlType==AccessControlType.Allow&&broad.Contains(rule.IdentityReference.Value)&&(rule.FileSystemRights&(FileSystemRights.Write|FileSystemRights.Modify|FileSystemRights.FullControl|FileSystemRights.ChangePermissions|FileSystemRights.TakeOwnership))!=0) throw new UnauthorizedAccessException("Watcher input grants broad write access: "+path);
 	}
 	static void CopyClosedTree(string source,string destination,InstallManifest manifest) { Directory.CreateDirectory(destination); foreach(var file in manifest.Files) { var target=Path.Combine(destination,file.Path); Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(Path.Combine(source,file.Path),target); } File.WriteAllBytes(Path.Combine(destination,ManifestName),JsonSerializer.SerializeToUtf8Bytes(manifest)); }
-	static void ProtectTree(string root) {
+	internal static void ProtectTree(string root) {
 		if(!OperatingSystem.IsWindows()) return;
 		var identities=new IdentityReference[]{WindowsIdentity.GetCurrent().User??throw new UnauthorizedAccessException("Current Windows identity has no SID."),new SecurityIdentifier(WellKnownSidType.LocalSystemSid,null),new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid,null)};
 		var security=new DirectorySecurity(); security.SetAccessRuleProtection(true,false); foreach(var identity in identities) security.AddAccessRule(new FileSystemAccessRule(identity,FileSystemRights.FullControl,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow)); FileSystemAclExtensions.SetAccessControl(new DirectoryInfo(root),security);

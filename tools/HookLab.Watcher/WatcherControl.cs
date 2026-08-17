@@ -15,6 +15,9 @@ internal sealed class WatchControlStore {
 	public WatchControlStore(string? path=null) { this.path=Path.GetFullPath(path??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"HookLab","watcher-control.json")); Directory.CreateDirectory(Path.GetDirectoryName(this.path)!); }
 	public WatchControl Read() { lock(gate) { if(!File.Exists(path)) return WatchControl.Active; using var document=JsonDocument.Parse(File.ReadAllBytes(path)); var root=document.RootElement; if(root.GetProperty("schemaVersion").GetInt32()!=1) throw new InvalidDataException("Watcher control schema is unsupported."); var disabled=root.GetProperty("disabledProfiles").EnumerateArray().Select(value=>value.GetString()??throw new InvalidDataException("Watcher control contains a null profile ID.")).ToHashSet(StringComparer.Ordinal); return new(root.GetProperty("paused").GetBoolean(),disabled); } }
 	public WatchControl Update(bool? paused=null,string? enableProfile=null,string? disableProfile=null) { lock(gate) { var current=Read(); var disabled=current.DisabledProfiles.ToHashSet(StringComparer.Ordinal); if(enableProfile is not null) disabled.Remove(enableProfile); if(disableProfile is not null) disabled.Add(disableProfile); var next=new WatchControl(paused??current.Paused,disabled); Write(next); return next; } }
+	internal void Replace(WatchControl value) { lock(gate) Write(value); }
+	internal bool Exists() { lock(gate) return File.Exists(path); }
+	internal void Delete() { lock(gate) { if(File.Exists(path)) File.Delete(path); } }
 	void Write(WatchControl value) { var temporary=path+"."+Guid.NewGuid().ToString("N")+".tmp"; File.WriteAllText(temporary,JsonSerializer.Serialize(new { schemaVersion=1,paused=value.Paused,disabledProfiles=value.DisabledProfiles.OrderBy(id=>id,StringComparer.Ordinal) }),new UTF8Encoding(false)); File.Move(temporary,path,true); }
 }
 
@@ -28,9 +31,23 @@ internal sealed class StaticWatchCatalog : IWatchCatalog {
 }
 internal sealed class ReloadingProfileCatalog : IWatchCatalog {
 	readonly string directory; readonly object gate=new(); CatalogSnapshot current; string fingerprint; DateTime nextCheck;
-	public ReloadingProfileCatalog(string directory) { this.directory=Path.GetFullPath(directory); var definitions=ProfileCatalog.Load(this.directory); current=new(StaticWatchCatalog.Generation(definitions),definitions); fingerprint=Fingerprint(); }
-	public CatalogSnapshot Current() { lock(gate) { if(DateTime.UtcNow<nextCheck) return current; nextCheck=DateTime.UtcNow.AddMilliseconds(500); try { var observed=Fingerprint(); if(observed==fingerprint&&current.Error is null) return current; var definitions=ProfileCatalog.Load(directory); current=new(StaticWatchCatalog.Generation(definitions),definitions); fingerprint=observed; } catch(Exception ex) { current=current with { Error=ex.Message }; } return current; } }
+	readonly bool allowEmpty;
+	public ReloadingProfileCatalog(string directory,bool allowEmpty=false) { this.directory=Path.GetFullPath(directory); this.allowEmpty=allowEmpty; Directory.CreateDirectory(this.directory); var definitions=ProfileCatalog.Load(this.directory,allowEmpty); current=new(StaticWatchCatalog.Generation(definitions),definitions); fingerprint=Fingerprint(); }
+	public CatalogSnapshot Current() { lock(gate) { if(DateTime.UtcNow<nextCheck) return current; nextCheck=DateTime.UtcNow.AddMilliseconds(500); try { var observed=Fingerprint(); if(observed==fingerprint&&current.Error is null) return current; var definitions=ProfileCatalog.Load(directory,allowEmpty); current=new(StaticWatchCatalog.Generation(definitions),definitions); fingerprint=observed; } catch(Exception ex) { current=current with { Error=ex.Message }; } return current; } }
 	string Fingerprint() { using var sha=SHA256.Create(); var values=Directory.EnumerateFiles(directory,"*",SearchOption.AllDirectories).OrderBy(path=>path,StringComparer.OrdinalIgnoreCase).Select(path=>Path.GetRelativePath(directory,path)+":"+Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))); return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(String.Join("\n",values)))).ToLowerInvariant(); }
+}
+
+internal sealed class CompositeWatchCatalog:IWatchCatalog {
+	readonly IWatchCatalog[] catalogs; readonly object gate=new(); CatalogSnapshot current;
+	public CompositeWatchCatalog(params IWatchCatalog[] catalogs) { this.catalogs=catalogs; current=Merge(true); }
+	public CatalogSnapshot Current() { lock(gate) { var candidate=Merge(false); if(candidate.Error is null) current=candidate; else current=current with { Error=candidate.Error }; return current; } }
+	CatalogSnapshot Merge(bool throwOnError) {
+		var snapshots=catalogs.Select(value=>value.Current()).ToArray(); var error=String.Join("; ",snapshots.Select(value=>value.Error).Where(value=>!String.IsNullOrWhiteSpace(value))); var definitions=snapshots.SelectMany(value=>value.Definitions).ToArray();
+		var duplicateProfile=definitions.Where(value=>value.ProfileId is not null).GroupBy(value=>value.ProfileId!,StringComparer.Ordinal).FirstOrDefault(group=>group.Count()>1); if(duplicateProfile is not null) error=Append(error,"Duplicate enabled profile ID: "+duplicateProfile.Key);
+		var duplicateHook=definitions.GroupBy(value=>value.Value.Id!,StringComparer.Ordinal).FirstOrDefault(group=>group.Count()>1); if(duplicateHook is not null) error=Append(error,"Duplicate enabled hook ID: "+duplicateHook.Key);
+		if(throwOnError&&!String.IsNullOrEmpty(error)) throw new InvalidDataException(error); return new(StaticWatchCatalog.Generation(definitions),definitions,String.IsNullOrEmpty(error)?null:error);
+	}
+	static string Append(string current,string next)=>String.IsNullOrEmpty(current)?next:current+"; "+next;
 }
 
 internal sealed class WatcherStatusStore {

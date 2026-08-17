@@ -44,7 +44,7 @@ public sealed class HookPackageExportResult {
 public static class HookPackageExporter {
 	static readonly JsonSerializerOptions JsonOptions=new JsonSerializerOptions { PropertyNamingPolicy=JsonNamingPolicy.CamelCase,WriteIndented=true };
 
-	public static HookPackageExportResult Export(string deploymentPath,HookPackageExportRequest request,bool overwrite=false) {
+	public static HookPackageExportResult Export(string deploymentPath,HookPackageExportRequest request,bool overwrite=false,Action<string>? protectStaging=null) {
 		Validate(request);
 		var target=Path.GetFullPath(deploymentPath); var parent=Directory.GetParent(target)?.FullName??throw new InvalidDataException("Deployment path has no parent.");
 		Directory.CreateDirectory(parent);
@@ -63,6 +63,7 @@ public static class HookPackageExporter {
 			var manifestPath=Path.Combine(package,"hooklab-package.json"); WriteJson(manifestPath,manifest); var packageDigest=PackageDigest(manifestPath,new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase) { ["hook.cs"]=sourceDigest });
 			var profile=new { schemaVersion=1,id=request.ProfileId,enabled=false,scope="user",packagePath="package",packageId=request.PackageId,packageDigest,permittedExecutablePaths=new[]{request.PermittedExecutablePath},notificationPolicy=request.NotificationPolicy,clrReadinessTimeoutMs=request.ClrReadinessTimeoutMs,initializationTimeoutMs=request.InitializationTimeoutMs };
 			var profilePath=Path.Combine(staging,request.ProfileId+".json"); WriteJson(profilePath,profile);
+			protectStaging?.Invoke(staging);
 			if(File.Exists(target)) throw new IOException("HookLab deployment path names a file: "+target);
 			if(Directory.Exists(target)) Directory.Move(target,backup);
 			try { Directory.Move(staging,target); }

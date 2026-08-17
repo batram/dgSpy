@@ -35,33 +35,16 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Complete the dgSpy-to-watcher package journey with verified enrollment and explicit enablement.
-2. Preserve intentional watcher operating state across installation and upgrade.
-3. Let dgSpy and the watcher safely share one resident HookLab generation.
-4. Add an honest unelevated operator surface for watcher operations that really exist.
-5. Resolve controller continuity and independent safe stimulus during bounded waits.
-6. Fix narrowly reproduced MCP correctness and usability defects.
-7. Improve HookLab authoring only when concrete hooks require it.
-8. Revisit high-risk execution, editing, and scripting one workflow at a time.
-9. Keep compatibility expansions parked until product scope changes.
+1. Preserve intentional watcher operating state across installation and upgrade.
+2. Let dgSpy and the watcher safely share one resident HookLab generation.
+3. Add an honest unelevated operator surface for watcher operations that really exist.
+4. Resolve controller continuity and independent safe stimulus during bounded waits.
+5. Fix narrowly reproduced MCP correctness and usability defects.
+6. Improve HookLab authoring only when concrete hooks require it.
+7. Revisit high-risk execution, editing, and scripting one workflow at a time.
+8. Keep compatibility expansions parked until product scope changes.
 
-## Road 1 - complete the hook export journey
-
-`export_hook_package` already freezes one installed compiled hook into a canonical watcher deployment
-with a disabled profile. Complete the operator journey:
-
-1. Live-verify export through RPC against an installed dgSpy package and the retained VMConnect hook.
-   Read back the exact package, manifest, target guards, source revision, digest, and disabled profile.
-2. Add atomic enrollment for canonical exports. Before publication, verify the digest, closed inventory,
-   owner and ACL, absence of reparse points, and same-ID conflicts.
-3. Keep enablement separate and explicit; export and enrollment must never patch future processes.
-4. Prove catalog-generation readback and last-good rollback. Failed enrollment must leave the previous
-   tree, catalog, profiles, targets, and resident hooks untouched.
-
-Exit evidence: one real hook travels from dgSpy authoring through export, enrollment, explicit enable,
-new-process application, disable, and readback without rebuilding or replacing the watcher.
-
-## Road 2 - preserve watcher operating intent
+## Road 1 - preserve watcher operating intent
 
 Close the remaining installer lifecycle ambiguity:
 
@@ -75,7 +58,7 @@ Close the remaining installer lifecycle ambiguity:
 Exit evidence: live upgrades from both running and intentionally stopped states, plus injected failure
 that proves rollback and target preservation.
 
-## Road 3 - share one resident between two controllers
+## Road 2 - share one resident between two controllers
 
 Make dgSpy and the watcher adopt either side's valid resident instead of injecting competing generations:
 
@@ -89,7 +72,7 @@ Make dgSpy and the watcher adopt either side's valid resident instead of injecti
 Exit evidence: live adoption in both directions while the original hook remains active, followed by
 restart, inventory, addition of a second hook, and removal of only the new owner's hook.
 
-## Road 4 - add an honest watcher operator surface
+## Road 3 - add an honest watcher operator surface
 
 Add an unelevated notification-area companion while keeping the elevated watcher headless. Show exact
 running, paused, error, stale, and stopped states; expose pause/resume, profile enable/disable, installed
@@ -102,15 +85,15 @@ removal until their ownership contracts exist.
 Exit evidence: main-desktop human acceptance and hidden-desktop automation of every exposed operation,
 including stale-state and privilege-boundary failures.
 
-## Road 5 - resolve control-plane continuity and concurrency
+## Road 4 - resolve control-plane continuity and concurrency
 
-### 5A. Choose the session recovery contract
+### 4A. Choose the session recovery contract
 
 Current recovery uses expiry or inspected `claim_session(force=true)` takeover. Decide whether that is
 sufficient or whether rightful-owner continuity requires a persisted, non-listable, revocable claim
 capability. Either choice needs restart, contention, expiry, release, transfer, and audit-redaction tests.
 
-### 5B. Permit safe stimulus during a bounded wait
+### 4B. Permit safe stimulus during a bounded wait
 
 Trace MCP client, Gateway, and host dispatch to locate the serialization boundary. Preserve mutation and
 func-eval serialization while allowing a bounded `run_to_*`/wait and an independent non-conflicting
@@ -119,7 +102,7 @@ stimulus to overlap.
 Exit evidence: the stimulus reaches the host before the deadline and completes the wait; timeout,
 cancellation, and disconnect strand neither request.
 
-## Road 6 - fix reproduced MCP quality defects
+## Road 5 - fix reproduced MCP quality defects
 
 Treat each item as an independent reproduction-led fix:
 
@@ -137,7 +120,7 @@ Treat each item as an independent reproduction-led fix:
 Do not reopen delivered neighbors: filtered member listings, session-scoped module identity, the
 development transcript, and explicit controller takeover already exist.
 
-## Road 7 - improve HookLab authoring when demanded
+## Road 6 - improve HookLab authoring when demanded
 
 Pull these only from a concrete failing hook: generic methods and declaring types, additional resident
 compiler references, a larger source boundary, Roslyn editor assistance, natural collision-safe
@@ -146,7 +129,7 @@ parameter names, or richer package management.
 Each slice needs a target fixture that fails before it, compilation and runtime rollback coverage, and
 the existing exact MVID, token, signature, and IL identity guarantees.
 
-## Road 8 - consider high-risk capabilities separately
+## Road 7 - consider high-risk capabilities separately
 
 General target C# execution, assembly editing or project export, live method-body replacement, and
 dnSpy-host scripting are separate trust domains. HookLab's bounded compiler authorizes none of them.
@@ -163,7 +146,7 @@ If a named workflow justifies one, proceed roughly in this order:
 Each capability requires its own permission, bounds, audit policy, remote-default-off behavior,
 side-effect reporting, and end-to-end refusal tests.
 
-## Road 9 - parked horizons
+## Road 8 - parked horizons
 
 CoreCLR, x86, native debugging, broad Mono HookLab support, reverse patches, generic hook providers,
 profiler/ReJIT, and Visual Basic parity remain outside the current x64 CLR v4 and Unity scope. Useful

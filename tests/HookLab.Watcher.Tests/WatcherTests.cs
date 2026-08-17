@@ -18,6 +18,7 @@ public sealed class WatcherTests {
 	public void Control_options_are_strict() {
 		Assert.True(ControlOptions.TryParse(new[]{"pause"},out var pause)); Assert.True(pause.Paused);
 		Assert.True(ControlOptions.TryParse(new[]{"disable-profile","alpha"},out var disable)); Assert.Equal("alpha",disable.DisableProfile);
+		Assert.True(ControlOptions.TryParse(new[]{"enable-profile","alpha","--state-root","state"},out var isolated)); Assert.Equal(Path.GetFullPath(Path.Combine("state","watcher-control.json")),isolated.ControlPath);
 		Assert.False(ControlOptions.TryParse(new[]{"disable-profile",""},out _)); Assert.False(ControlOptions.TryParse(new[]{"pause","now"},out _));
 	}
 
@@ -41,6 +42,7 @@ public sealed class WatcherTests {
 	public void Options_are_order_independent_and_bounded() {
 		Assert.True(WatchOptions.TryParse(new[]{"run","--max-parallel","7","--definitions","defs","--poll-ms","25","--audit","audit.jsonl"},out var value));
 		Assert.Equal(7,value.MaximumParallel); Assert.Equal(25,value.PollMilliseconds); Assert.EndsWith("defs",value.DefinitionsDirectory); Assert.EndsWith("audit.jsonl",value.AuditPath);
+		Assert.True(WatchOptions.TryParse(new[]{"run","--profiles","profiles","--additional-profiles","enrolled","--state-root","state"},out var isolated)); Assert.Equal(Path.GetFullPath("state"),isolated.StateRoot); Assert.EndsWith(Path.Combine("state","watcher-audit.jsonl"),isolated.AuditPath,StringComparison.OrdinalIgnoreCase);
 		Assert.False(WatchOptions.TryParse(new[]{"run","--definitions","defs","--poll-ms","24"},out _));
 		Assert.False(WatchOptions.TryParse(new[]{"run","--definitions","defs","--max-parallel","33"},out _));
 		Assert.False(WatchOptions.TryParse(new[]{"run","--definitions","a","--definitions","b"},out _));

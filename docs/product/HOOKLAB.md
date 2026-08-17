@@ -69,6 +69,9 @@ commands, upgrade behavior, and uninstall guarantees.
 `export_hook_package` freezes one retained compiled dgSpy hook into a canonical watcher deployment below
 `DGSPY_EXPORT_ROOT`. It revalidates the exact live process and guarded method identity, writes a closed
 package, and creates a disabled sibling profile. Export never enrolls or enables automatic deployment.
+The watcher can atomically enroll that canonical export into its separately protected enrollment root.
+Enrollment verifies the deployment again, rejects identity conflicts, and durably disables the profile
+before publication; automatic application begins only after an explicit `enable-profile` command.
 
 The debugger-integrated and standalone adapters currently retain separate resident ownership paths.
 Neither may inject a competing generation merely because it cannot adopt a resident it discovered.
@@ -83,7 +86,6 @@ Authenticated cross-adoption and preservation of foreign-owned hooks remain road
 - The editor provides C# classification and normal editing, but not a HookLab-owned Roslyn project,
   semantic completion, or advisory Roslyn diagnostics.
 - Generated parameters use conservative verbatim identifiers rather than polished conditional escaping.
-- Exported watcher packages require a future explicit installed enrollment operation.
 - Watcher upgrade does not yet restore the previous intentional running or stopped state.
 - Cross-adoption between watcher-created and dgSpy-created residents is not yet a supported workflow.
 
@@ -98,6 +100,6 @@ investigations, handoffs, and live evidence belong in the separate `docs/local` 
   restart, remove hooks, or modify target binaries.
 - Unknown and foreign-owned resident hooks are preserved.
 - Exact target guards fail closed; display names and first matches are never identity.
-- Elevated watcher inputs come only from closed, verified, immutable installation inventory. Mutable
-  policy, control, status, and audit state remains separate.
+- Elevated watcher inputs come only from closed, verified, immutable installation or enrollment
+  inventories. Mutable control, status, and audit state remains separate.
 - Loaded resident payloads are retired only after their exact target identity exits.
