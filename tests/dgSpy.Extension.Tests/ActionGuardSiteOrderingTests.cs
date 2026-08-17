@@ -74,6 +74,14 @@ public sealed class ActionGuardSiteOrderingTests {
 		Assert.Contains("public virtual bool TryGetBlock(DbgProcess? process, string operation, object? authorization, out DbgActionBlockInfo info)", source, StringComparison.Ordinal);
 	}
 
+	[Fact]
+	public void Discovery_faults_are_recorded_in_host_diagnostics() {
+		var host = Normalize(File.ReadAllText(Path.Combine(RepositoryRoot, @"Extensions\dgSpy.Extension\Rpc\RpcHost.cs")));
+		var identity = Normalize(File.ReadAllText(Path.Combine(RepositoryRoot, @"Extensions\dgSpy.Extension\Identity\RpcHost.Host.cs")));
+		Assert.Contains("if (ex is ProgramDiscoveryException) RecordOperationFault(ex.InnerException ?? ex);", host, StringComparison.Ordinal);
+		Assert.Contains("DispatcherFaultCount=(dispatcher?.FaultCount ?? 0)+operationFaults", identity, StringComparison.Ordinal);
+	}
+
 	static string RepositoryRoot => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
 
 	/// <summary>Line comments are removed so a future comment cannot break an ordering assertion, and

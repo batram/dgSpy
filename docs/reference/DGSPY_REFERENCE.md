@@ -148,6 +148,11 @@ and leaves the profile disabled until `enable-profile <id>` is explicit.
   `attach_providers`, ready to pass back. `UnityPlayer` is the multicast scan and never runs unless
   named. Each call replaces the set of valid `program_id` values — including a filtered call that
   returns nothing.
+- An attach provider can fail while probing a process that exits or denies access. `list_programs`
+  returns `program_discovery_failed` with operation, stage, provider, HRESULT/native error when known,
+  and a diagnostic ID; raw exception text remains local to the MCP Activity window. The contained
+  fault also increments the host's contained-fault diagnostics, so `get_host_info` and `doctor` report
+  the degraded host instead of claiming that the immediately preceding failure left it healthy.
 - `program_id` is composed from PID, runtime GUID, and the engine's discriminator (CLR version for
   CorDebug). `runtime_name` reports that discriminator; there is no duplicate string `runtime_id`.
   `runtime_guid` is what separates .NET Framework from Unity/Mono; they share a kind GUID.
@@ -242,6 +247,11 @@ and leaves the profile disabled until `enable-profile <id>` is explicit.
   `recovery` field to that error saying so. The reliable route is a breakpoint on a method the target
   actually reaches. Note the evaluable frame is often not frame 0 — a thread parked in `Thread.Sleep`
   evaluates in its caller's frame, so pass `frame_index`.
+- **`unsafe_point` describes this thread at this stop, not the whole process.** Field reads and direct
+  value writes can still work because they do not execute target code. For a func-eval, first inspect
+  the bounded `list_threads(include_evaluability=true)` result and select another returned evaluable
+  thread if one exists. Otherwise set a breakpoint or use `run_to_method`/`run_to_location` for a
+  method the target will actually reach; do not probe every thread with speculative evaluations.
 - **`compiler_error` separates your mistake from the engine's refusal.** True means the expression never
   compiled and nothing ran in the target, so fix the expression; false with an error means it compiled
   and the engine declined to execute it here, so the same call can succeed at another thread or stop.
@@ -487,14 +497,18 @@ delayed rather than withheld.
   member which plainly exists did not.
 - **`get_il` marks the offsets Mono will accept.** `is_sequence_point` per instruction answers the
   question that previously took trial and error. `has_sequence_points: false` means no PDB was
-  available — *not* that there are no legal offsets.
+  available — *not* that there are no legal offsets. `code_size` is the exclusive end offset of the IL
+  byte stream, so it is greater than the last instruction's starting `offset`; it is not an instruction
+  count or the last offset itself.
 - **Ambiguity is reported, never resolved by guessing.** An ambiguous type name or an overloaded method
   returns the candidates. A breakpoint silently placed in the wrong overload is undetectable from the
   caller's side.
 - **Metadata-backed in-memory and dynamic modules support breakpoints.**
   `get_csharp`, `get_il`, `list_types`, `list_members`, `get_metadata` and `get_raw_module` resolve them
   through dnSpy's metadata service. `get_raw_module` returns paged base64 with a whole-image SHA-256;
-  for a file-less module the image is reconstructed from runtime metadata.
+  `offset` and `count` are zero-based byte positions in that returned PE image, not RVAs, PE section
+  offsets, metadata tokens, or IL offsets. For a file-less module the image is reconstructed from
+  runtime metadata and is therefore a serialized metadata image, not an original on-disk file.
   Both breakpoint tools use the active engine's full `ModuleId`, including the discriminator required
   for file-less modules. `list_modules.can_set_breakpoint` is false only when no engine provider
   publishes a stable identity (for example Mono `eval-*` scratch modules with no metadata). A file-less
@@ -533,6 +547,12 @@ delayed rather than withheld.
   somewhere unrelated, which is worse than an error.
 - The gateway opens a new loopback TCP connection per request, so restarting dnSpy needs no gateway
   restart; calls fail while dnSpy is down and succeed again once the extension is listening.
+- Conditional breakpoint expressions execute on the target thread at the exact hit site. Avoid putting
+  them inside locks, hot callbacks, and reconnect/retry loops: even a valid condition can delay or wedge
+  the target there. Prefer an unconditional stop at a safer nearby site and inspect state afterwards.
+- Native `get_disassembly` blocks are the current runtime's JIT view. Instrumentation, tiering, and
+  split hot/cold code can change block kind, addresses, bytes, and IL mappings; do not treat them as a
+  stable reconstruction of the original method or compare addresses across sessions.
 - The debugger dispatcher contains and records exceptions from individual asynchronous callbacks so
   one bad cleanup/event callback cannot terminate the debugger thread and strand a paused target behind
   a modal dialog. `get_host_info` reports dispatcher fault count/detail plus evaluation queue state,

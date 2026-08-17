@@ -43,6 +43,7 @@ namespace dgSpy.Extension {
 		readonly OwnedBreakpointService ownedBreakpoints;
 		readonly ActionLeaseCoordinator actionLeases;
 		long lifecycleVersion,executionVersion,breakpointsVersion; string? stopId; string? connectionState; DateTime lastGatewayHeartbeatUtc;
+		long operationFaultCount,operationFaultUtcTicks; string? lastOperationFault;
 		readonly int rpcPort=int.TryParse(Environment.GetEnvironmentVariable("DGSPY_RPC_PORT"),out var value) ? value : 7351;
 		readonly RpcSecuritySettings rpcSecurity=RpcSecuritySettings.Load();
 		TcpListener? tcpListener;
@@ -416,7 +417,19 @@ namespace dgSpy.Extension {
 			case "analyze_symbol": return RpcResponse.Success(req.RequestId,await AnalyzeSymbolAsync(req,requestCancellation.Token).ConfigureAwait(false));
 			default: return RpcResponse.Failure(req.RequestId,"unsupported","Unknown operation: "+req.Operation);
 			}
-		} catch (OperationCanceledException) { return RpcResponse.Failure(req.RequestId,"deadline_exceeded","The operation exceeded its deadline."); } catch (Exception ex) { return RpcFailure.FromException(req,ex); } }
+		} catch (OperationCanceledException) { return RpcResponse.Failure(req.RequestId,"deadline_exceeded","The operation exceeded its deadline."); } catch (Exception ex) {
+			// Discovery providers execute outside the debugger callback queue, so the dispatcher's normal
+			// exception boundary cannot see their faults. Record the contained failure explicitly: the RPC
+			// still returns a safe structured error, while get_host_info/doctor stop claiming a clean host.
+			if (ex is ProgramDiscoveryException) RecordOperationFault(ex.InnerException ?? ex);
+			return RpcFailure.FromException(req,ex);
+		} }
+		void RecordOperationFault(Exception exception) {
+			Volatile.Write(ref lastOperationFault,exception.ToString());
+			Interlocked.Exchange(ref operationFaultUtcTicks,DateTime.UtcNow.Ticks);
+			Interlocked.Increment(ref operationFaultCount);
+			NotifyConnectionStateChanged();
+		}
 		// Unfiltered discovery probes every process on the machine. Passing process ids or names lets
 		// dnSpy skip the rest, which is the difference between seconds and milliseconds when the
 		// caller already knows what it is looking for.

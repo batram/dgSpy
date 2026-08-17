@@ -35,30 +35,11 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Fix narrowly reproduced MCP correctness and usability defects.
-2. Improve HookLab authoring only when concrete hooks require it.
-3. Revisit high-risk execution, editing, and scripting one workflow at a time.
-4. Keep compatibility expansions parked until product scope changes.
+1. Improve HookLab authoring only when concrete hooks require it.
+2. Revisit high-risk execution, editing, and scripting one workflow at a time.
+3. Keep compatibility expansions parked until product scope changes.
 
-## Road 1 - fix reproduced MCP quality defects
-
-Treat each item as an independent reproduction-led fix:
-
-1. Contain the intermittent wildcard `list_programs` access violation and make `doctor` report the fault.
-2. Add operation/correlation context and a recovery boundary to raw `internal_error` responses without
-   leaking arbitrary exception details.
-3. Recheck GUI-versus-MCP mutation races and enforce guards at the dispatcher only if reproduced.
-4. Explain unsafe func-eval stops and offer bounded candidate guidance without probing every thread.
-5. Document conditional-breakpoint risk in locks, hot callbacks, and retry loops.
-6. Clarify raw-module offsets, IL code-size semantics, and instrumented native disassembly; change code
-   only where a fixture proves the contract wrong.
-7. Add a public exact-MVID resolver only if real callers show the existing filtered discovery workflow
-   is too costly. Zero and ambiguous resolution must remain explicit failures.
-
-Do not reopen delivered neighbors: filtered member listings, session-scoped module identity, the
-development transcript, and explicit controller takeover already exist.
-
-## Road 2 - improve HookLab authoring when demanded
+## Road 1 - improve HookLab authoring when demanded
 
 Pull these only from a concrete failing hook: generic methods and declaring types, additional resident
 compiler references, a larger source boundary, Roslyn editor assistance, natural collision-safe
@@ -67,7 +48,7 @@ parameter names, or richer package management.
 Each slice needs a target fixture that fails before it, compilation and runtime rollback coverage, and
 the existing exact MVID, token, signature, and IL identity guarantees.
 
-## Road 3 - consider high-risk capabilities separately
+## Road 2 - consider high-risk capabilities separately
 
 General target C# execution, assembly editing or project export, live method-body replacement, and
 dnSpy-host scripting are separate trust domains. HookLab's bounded compiler authorizes none of them.
@@ -84,7 +65,7 @@ If a named workflow justifies one, proceed roughly in this order:
 Each capability requires its own permission, bounds, audit policy, remote-default-off behavior,
 side-effect reporting, and end-to-end refusal tests.
 
-## Road 4 - parked horizons
+## Road 3 - parked horizons
 
 CoreCLR, x86, native debugging, broad Mono HookLab support, reverse patches, generic hook providers,
 profiler/ReJIT, and Visual Basic parity remain outside the current x64 CLR v4 and Unity scope. Useful

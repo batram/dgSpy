@@ -2311,7 +2311,7 @@
     },
     {
       "name": "update_breakpoint",
-      "description": "THIS IS WHERE CONDITIONAL BREAKPOINTS LIVE. Change an existing breakpoint\u0027s enabled state, condition, hit count, or trace message, using a breakpoint_id from set_breakpoint, set_il_breakpoint or list_breakpoints. A condition (\u0060i == 3\u0060, \u0060name == \u0022x\u0022\u0060) or a hit count is how you stop at one specific loop iteration; stepping to it, or computing which iteration it would be, is neither necessary nor reliable. Conditions and hit counts are evaluated by the engine inside the target, so a condition that cannot be evaluated fails at hit time rather than here \u2014 list_breakpoints reports engine_hit_count, counted before the condition runs, which separates \u0022condition never true\u0022 from \u0022never reached\u0022. Pass an empty string for condition or trace_message to clear it; omit a field to leave it unchanged.",
+      "description": "THIS IS WHERE CONDITIONAL BREAKPOINTS LIVE. Change an existing breakpoint\u0027s enabled state, condition, hit count, or trace message, using a breakpoint_id from set_breakpoint, set_il_breakpoint or list_breakpoints. A condition (\u0060i == 3\u0060, \u0060name == \u0022x\u0022\u0060) or a hit count is how you stop at one specific loop iteration; stepping to it, or computing which iteration it would be, is neither necessary nor reliable. Conditions and hit counts are evaluated by the engine on the target thread at the hit site, so avoid conditions inside locks, hot callbacks, and reconnect/retry loops: even a valid expression can delay or wedge the target there. A condition that cannot be evaluated fails at hit time rather than here \u2014 list_breakpoints reports engine_hit_count, counted before the condition runs, which separates \u0022condition never true\u0022 from \u0022never reached\u0022. Pass an empty string for condition or trace_message to clear it; omit a field to leave it unchanged.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2327,7 +2327,7 @@
           },
           "condition": {
             "type": "string",
-            "description": "Expression in the target\u0027s language. Empty string clears the condition."
+            "description": "Expression evaluated on the target thread at the hit site. Avoid locks, hot callbacks, and retry loops. Empty string clears the condition."
           },
           "condition_kind": {
             "type": "string",
@@ -2804,7 +2804,7 @@
     },
     {
       "name": "get_disassembly",
-      "description": "Return managed IL or the selected frame\u0027s JIT native code blocks. Unsupported native bodies return a structured capability failure.",
+      "description": "Return managed IL or the selected frame\u0027s current JIT native code blocks. Native blocks may be instrumented, tiered, or split; their addresses, bytes, kind, and IL mappings describe this stopped runtime instance, not a stable reconstruction of the original method. Unsupported native bodies return a structured capability failure.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4689,7 +4689,7 @@
     },
     {
       "name": "get_raw_module",
-      "description": "Read a loaded module image as a paged base64 chunk with total size and SHA-256. File-less modules are reconstructed from runtime metadata.",
+      "description": "Read a loaded PE module image as paged base64. offset and count are zero-based byte positions in the returned PE image, not RVA, file section offset, metadata token, or IL offset. total_size and SHA-256 cover the whole image. File-less modules are reconstructed from runtime metadata, so their bytes are a serialized metadata image rather than an original file.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4710,12 +4710,14 @@
           },
           "offset": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Zero-based byte offset in the returned PE image."
           },
           "count": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 1048576
+            "maximum": 1048576,
+            "description": "Maximum image bytes to return."
           }
         },
         "required": [

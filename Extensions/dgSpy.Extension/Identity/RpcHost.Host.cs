@@ -19,15 +19,20 @@ namespace dgSpy.Extension {
 		HostInfo Host() {
 			string? session; lock(sync) session=sessionId;
 			var dispatcher=manager.Dispatcher as dnSpy.Contracts.Debugger.IDbgDispatcherDiagnostics;
+			var operationFaults=System.Threading.Interlocked.Read(ref operationFaultCount);
+			var operationFaultTicks=System.Threading.Interlocked.Read(ref operationFaultUtcTicks);
+			var operationFaultUtc=operationFaultTicks==0 ? (DateTime?)null : new DateTime(operationFaultTicks,DateTimeKind.Utc);
+			var dispatcherFaultUtc=dispatcher?.LastFaultUtc;
+			var operationFaultIsNewest=operationFaultUtc.HasValue && (!dispatcherFaultUtc.HasValue || operationFaultUtc.Value>dispatcherFaultUtc.Value);
 			// Three conditions, not two, because they need three different responses. A contained fault
 			// is history: the dispatcher caught it, kept running, and the host still works — reporting
 			// that as "degraded" forever after one recovered fault told callers to stop using a host
 			// that was fine. "unavailable" is the one that ends the host: the debugger thread is gone,
 			// every control operation now fails immediately, and no session it still names is real.
-			var dispatcherState=dispatcher is null ? "healthy" : dispatcher.IsShutdown ? "unavailable" : dispatcher.FaultCount==0 ? "healthy" : "faulted";
+			var dispatcherState=dispatcher?.IsShutdown==true ? "unavailable" : (dispatcher?.FaultCount ?? 0)+operationFaults==0 ? "healthy" : "faulted";
 			var evaluationState=evaluations.State;
 			var connectionState=dispatcherState!="unavailable" && evaluationState!="degraded" ? "connected" : "degraded";
-			var lastFault=dispatcher?.LastFault;
+			var lastFault=operationFaultIsNewest ? System.Threading.Volatile.Read(ref lastOperationFault) : dispatcher?.LastFault;
 			if(lastFault?.Length>4096) lastFault=lastFault.Substring(0,4096);
 			var dispatcherRecovery=dispatcherState switch {
 				"unavailable" => DispatcherUnavailableRecovery,
@@ -51,8 +56,8 @@ namespace dgSpy.Extension {
 				DnSpyProcessId=System.Diagnostics.Process.GetCurrentProcess().Id,
 				ConnectionState=connectionState,
 				DispatcherState=dispatcherState,
-				DispatcherFaultCount=dispatcher?.FaultCount ?? 0,
-				LastDispatcherFaultUtc=dispatcher?.LastFaultUtc,
+				DispatcherFaultCount=(dispatcher?.FaultCount ?? 0)+operationFaults,
+				LastDispatcherFaultUtc=operationFaultIsNewest ? operationFaultUtc : dispatcherFaultUtc,
 				LastDispatcherFault=lastFault,
 				DispatcherRecovery=dispatcherRecovery,
 				EvaluationQueueState=evaluationState,

@@ -844,6 +844,8 @@ try {
 
 	$il = Invoke-Tool -Name 'get_il' -Arguments @{ session_id = $sessionId; module = $targetExe; method_token = $methodToken }
 	Assert-That 'get_il disassembles the method by token' (@($il.instructions).Count -gt 0 -and $il.method_token -eq $methodToken)
+	$lastIlOffset = (@($il.instructions) | Measure-Object -Property offset -Maximum).Maximum
+	Assert-That 'get_il code_size is the exclusive end of the IL stream' ($il.code_size -gt $lastIlOffset) "(code_size $($il.code_size), last offset $lastIlOffset)"
 	Assert-That 'get_il names the method and its declaring type' ($il.full_name -match 'Tick' -and $il.declaring_type -eq 'Milestone1Target.Program')
 	# This is what makes Mono's sequence-point rule discoverable instead of trial and error.
 	Assert-That 'get_il marks which offsets a Mono breakpoint could bind at' ($il.has_sequence_points -and @($il.instructions | Where-Object { $_.is_sequence_point }).Count -ge 1)

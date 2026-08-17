@@ -311,7 +311,9 @@ namespace dgSpy.Extension {
 				return new MethodBodyInfo {
 					Module=metadata.Name?.ToString() ?? "",ModuleId=moduleId,MethodToken=method.MDToken.ToUInt32(),
 					FullName=method.FullName,DeclaringType=method.DeclaringType?.FullName,
-					MaxStack=body.MaxStack,CodeSize=instructions.Length==0 ? 0 : instructions[instructions.Length-1].Offset,
+					// Code size is the exclusive end of the IL stream, not the last instruction's start offset.
+					// dnlib owns operand encoding and therefore owns this calculation.
+					MaxStack=body.MaxStack,CodeSize=(uint)body.GetCodeSize(),
 					LocalCount=body.Variables.Count,ExceptionHandlerCount=body.ExceptionHandlers.Count,
 					// False means no PDB was available, not "no legal breakpoint offsets". Those are very
 					// different answers for a Mono caller and must not be conflated.
