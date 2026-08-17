@@ -57,7 +57,7 @@ from that layout:
 .\artifacts\layouts\local\hooklab-watcher\HookLab.Watcher.exe install
 ```
 
-See [HOOKLAB_WATCHER.md](HOOKLAB_WATCHER.md) for verification, control, upgrade, and uninstall behavior.
+See [HookLab watcher operation](../guides/HOOKLAB_WATCHER.md) for verification, control, upgrade, and uninstall behavior.
 
 Lower-level `build`, `build-host`, `build-components`, `compose`, `verify`, `package`, `verify-package`,
 and `snapshot` verbs exist for diagnostics and CI. `pipeline` is the normal shipping command.

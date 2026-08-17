@@ -1,8 +1,8 @@
 # HookLab standalone injector and watcher implementation plan
 
 Status: historical completed implementation plan. Current behavior is documented in
-[HookLab](../HOOKLAB.md), [watcher operation](../HOOKLAB_WATCHER.md), and
-[architecture](../ARCHITECTURE.md). Current ordering is in [Dream of roads](../dream_of_roads.md).
+[HookLab](../product/HOOKLAB.md), [watcher operation](../guides/HOOKLAB_WATCHER.md), and
+[architecture](../product/ARCHITECTURE.md). Current ordering is in [Dream of roads](../roadmap/dream_of_roads.md).
 
 ## Product goal
 
@@ -444,9 +444,9 @@ immutable component outputs and manifests.
 
 Before declaring each phase complete, update:
 
-- `docs/ARCHITECTURE.md` with the shared injector and standalone deployment boundary;
-- `docs/DGSPY_BASELINE.md` with the verified watcher package/build/install commands;
-- `docs/DGSPY_REFERENCE.md` only where dgSpy's public HookLab behavior changes;
+- `docs/product/ARCHITECTURE.md` with the shared injector and standalone deployment boundary;
+- `docs/reference/DGSPY_BASELINE.md` with the verified watcher package/build/install commands;
+- `docs/reference/DGSPY_REFERENCE.md` only where dgSpy's public HookLab behavior changes;
 - `docs/local/vmconnect-fullscreen-login-investigation.md` with current standalone acceptance evidence;
 - a watcher user guide covering package trust, profile scopes, logs, pause/disable, update mismatch, and
   uninstall behavior.

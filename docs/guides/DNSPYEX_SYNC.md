@@ -65,7 +65,7 @@ The automated gate is necessary and not sufficient.
 ```
 
 Use `Shared`, `CorDebug`, or `Unity` while iterating; require `Full` for acceptance. The original
-modernization acceptance record is in [history](history/MODERNIZATION_GATE.md).
+modernization acceptance record is in [history](../history/MODERNIZATION_GATE.md).
 
 What the gate does **not** cover is the failure mode described above. A part whose imports cannot
 be satisfied does not exist, nothing is logged, and everything that imported it disappears too.

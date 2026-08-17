@@ -909,7 +909,7 @@ namespace dgSpy.Extension {
 		PrimitiveValue[] GetPrimitiveLocals(DbgLanguage language,DbgEvaluationInfo eval,out bool rawLocals) { var nodes=LocalsNodes(language,eval,DbgValueNodeEvaluationOptions.NoFuncEval,out rawLocals); try { return nodes.Where(n=>n.Value is not null && n.Value.HasRawValue && n.Value.ValueType!=DbgSimpleValueType.Other && n.Value.ValueType!=DbgSimpleValueType.Void).Select(n=>{ var name=new DbgStringBuilderTextWriter(); var type=new DbgStringBuilderTextWriter(); n.FormatName(eval,name,DbgValueFormatterOptions.None); n.FormatActualType(eval,type,DbgValueFormatterTypeOptions.None,DbgValueFormatterOptions.None,null); return new PrimitiveValue { Name=name.Text,Type=type.Text,Value=n.Value!.RawValue }; }).ToArray(); } finally { manager.Close(nodes); } }
 		// RunContinuationsAsynchronously matters: without it every continuation after an await —
 		// response serialization, socket writes — runs inline on the debugger dispatcher thread, which
-		// stalls event delivery for every session. See docs/DGSPY_BASELINE.md.
+		// stalls event delivery for every session. See docs/reference/DGSPY_BASELINE.md.
 		// The token abandons the *wait*, not the queued work; dnSpy gives us no way to cancel a
 		// dispatcher callback, so the callback still runs and its result is dropped.
 		/// <summary>Detaches every live target before this process goes away. A host holding an ICorDebug

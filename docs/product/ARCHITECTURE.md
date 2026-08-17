@@ -43,7 +43,7 @@ dgSpy dnSpy Extension
   configured shared credential. The gateway verifies the extension's stable `host_id` during handshake.
   This remains the delivered local transport. For remote hosts, a centrally provisioned extension opens
   one persistent outbound connection and registers its expected identity with the Gateway; the same RPC
-  messages then travel over that reverse stream. See [remote hosts](REMOTE_HOSTS.md). Each deployment
+  messages then travel over that reverse stream. See [remote hosts](../guides/REMOTE_HOSTS.md). Each deployment
   selects plaintext or pinned mutual TLS; the separate MCP client-to-Gateway encrypted transport remains roadmap work.
 
 Every dispatched operation is also recorded into a bounded in-memory log that backs the **dgSpy MCP
@@ -159,4 +159,4 @@ live patching, or dnSpy-host scripting.
 Claims are engine-specific. “Implemented” means the code and contract exist; “verified” means exercised
 against a real dnSpy and target. Preserve separate CorDebug and Mono/Unity evidence with the relevant
 test fixtures. The completed 2026-08-04 acceptance record is available in
-[history](history/README.md).
+[history](../history/README.md).

@@ -6,7 +6,7 @@
     Some dgSpy defects are only visible in the GUI. The most important class is MEF
     composition failure: a part whose imports cannot be satisfied simply does not exist,
     nothing is logged, and everything that imported it disappears too. No automated suite
-    sees that -- see the "MEF composition fails silently" section of docs/DGSPY_BASELINE.md.
+    sees that -- see the "MEF composition fails silently" section of docs/reference/DGSPY_BASELINE.md.
 
     This script gives an agent eyes on the running GUI without a human at the keyboard:
     enumerate windows, dump control trees, expand combo boxes, click buttons, and capture

@@ -1,7 +1,7 @@
 # HookLab implementation plan
 
 Status: historical completed implementation plan. Current behavior is documented in
-[HookLab](../HOOKLAB.md); current ordering is in [Dream of roads](../dream_of_roads.md).
+[HookLab](../product/HOOKLAB.md); current ordering is in [Dream of roads](../roadmap/dream_of_roads.md).
 
 ## Product goal
 

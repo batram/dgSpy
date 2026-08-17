@@ -10,10 +10,10 @@ mostly upstream code; `dgSpy.*` projects are ours.
 
 | Document | What it settles |
 | --- | --- |
-| [docs/DGSPY_BASELINE.md](docs/DGSPY_BASELINE.md) | Build commands, host targets, and the failure modes that waste the most time. Read before improvising a build. |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the extension, gateway and CLI fit together. |
-| [docs/DGSPY_REFERENCE.md](docs/DGSPY_REFERENCE.md) | Tool surface and protocol reference. |
-| [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Installing and running a session. |
+| [docs/reference/DGSPY_BASELINE.md](docs/reference/DGSPY_BASELINE.md) | Build commands, host targets, and the failure modes that waste the most time. Read before improvising a build. |
+| [docs/product/ARCHITECTURE.md](docs/product/ARCHITECTURE.md) | How the extension, gateway and CLI fit together. |
+| [docs/reference/DGSPY_REFERENCE.md](docs/reference/DGSPY_REFERENCE.md) | Tool surface and protocol reference. |
+| [docs/guides/GETTING_STARTED.md](docs/guides/GETTING_STARTED.md) | Installing and running a session. |
 
 ## Scope
 
@@ -63,7 +63,7 @@ UI: menu entries gone, a dropdown missing options, a tool window empty. Before a
 constructor import, confirm the type is actually exported --- `[Export(typeof(T))]`, or an
 existing `[ImportingConstructor]` that already takes it. Public and obviously available is
 not evidence. `IAppCommandLineArgs` in particular is *not* a MEF export. The full account is
-in the "MEF composition fails silently" section of `docs/DGSPY_BASELINE.md`.
+in the "MEF composition fails silently" section of `docs/reference/DGSPY_BASELINE.md`.
 
 dnSpy does check this, but only under `Debug.Assert(config.ThrowOnErrors() == config)`, which
 the Release build we ship compiles away. `tests\dgSpy.Composition.Tests` performs that check

@@ -63,7 +63,7 @@ applies desired hooks, adopts authenticated residents, records bounded status/au
 pause and profile enable/disable. It runs without dnSpy, the Gateway, or MCP.
 
 The supported package contains a closed watcher layout and installer. See
-[HookLab watcher installation and operation](HOOKLAB_WATCHER.md) for installation, task supervision,
+[HookLab watcher installation and operation](../guides/HOOKLAB_WATCHER.md) for installation, task supervision,
 commands, upgrade behavior, and uninstall guarantees.
 
 `export_hook_package` freezes one retained compiled dgSpy hook into a canonical watcher deployment below
@@ -87,7 +87,7 @@ Authenticated cross-adoption and preservation of foreign-owned hooks remain road
 - Watcher upgrade does not yet restore the previous intentional running or stopped state.
 - Cross-adoption between watcher-created and dgSpy-created residents is not yet a supported workflow.
 
-These limitations are recorded and ordered in [Dream of roads](dream_of_roads.md). Detailed tasks,
+These limitations are recorded and ordered in [Dream of roads](../roadmap/dream_of_roads.md). Detailed tasks,
 investigations, handoffs, and live evidence belong in the separate `docs/local` work repository.
 
 ## Safety invariants

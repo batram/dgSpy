@@ -12,7 +12,7 @@ The extension is organized by responsibility: MEF lifetime at the root, RPC tran
 `Rpc/`, debugger scheduling and state in `Debugger/`, bounded cursor handling in `Events/`, and stable
 protocol identities in `Identity/`. See `Extensions/dgSpy.Extension/README.md` before adding tools.
 
-Build and deploy with `DgSpyTool pipeline` and `DgSpyTool install` (see [DGSPY_BASELINE.md](DGSPY_BASELINE.md)), then start dnSpy
+Build and deploy with `DgSpyTool pipeline` and `DgSpyTool install` (see [build baseline](DGSPY_BASELINE.md)), then start dnSpy
 and the gateway with the same `DGSPY_RPC_PORT`:
 
 ```powershell
@@ -42,7 +42,7 @@ client, host, session, correlation and text filters. A full transcript can conta
 values and paths even after token/password redaction, so enable and retain it deliberately.
 
 For packaged-host status and the extension-initiated Gateway registration flow, see
-[remote hosts](REMOTE_HOSTS.md).
+[remote hosts](../guides/REMOTE_HOSTS.md).
 
 ## Authentication
 
@@ -160,7 +160,7 @@ enables automatic watcher operation. Existing output is refused unless `overwrit
   broadcasts no discovery beacon, so `list_programs` can never see it and `attach` has no `program_id`
   to take. Pass `process_is_suspended: true` when the agent argument said `suspend=y`. The session is
   an attach either way, so `detach` leaves the target running. See
-  [historical Unity checklist](history/DGSPY_UNITY_CHECKLIST.md).
+  [historical Unity checklist](../history/DGSPY_UNITY_CHECKLIST.md).
 - A session that comes up and then fails reports `state: "faulted"` with `fault_message` — dnSpy's own
   connect-failure text when it produced one. Options dnSpy rejects outright are a caller error and
   return `attach_failed` instead, without creating a session. A faulted session still holds the
@@ -417,7 +417,7 @@ delayed rather than withheld.
   regular expression, and `kinds: ["literal"]` searches constant values and `ldc`/`ldstr` operands
   directly out of IL rather than decompiling, which is what makes it far cheaper than `search_text`.
   The port and the reasons for not driving dnSpy's own `IDocumentSearcher` are in
-  [implemented search proposal](history/SEARCH_PROPOSAL.md).
+  [implemented search proposal](../history/SEARCH_PROPOSAL.md).
 - **`search` results round-trip; nothing needs parsing.** A loaded-module hit carries an opaque,
   session-scoped `module_id`. Pass it unchanged to exact module tools: it identifies one dnSpy
   `DbgModule`, including process, runtime, app domain and load instance. An unloaded or replaced module
@@ -571,4 +571,4 @@ CorDebug surface. It stops everything it starts and exits non-zero on any failur
 
 The smoke script covers `attach_endpoint`'s argument validation and failure path only; its success
 path needs a Mono/Unity target; the completed manual acceptance record is in the
-[historical Unity checklist](history/DGSPY_UNITY_CHECKLIST.md).
+[historical Unity checklist](../history/DGSPY_UNITY_CHECKLIST.md).
