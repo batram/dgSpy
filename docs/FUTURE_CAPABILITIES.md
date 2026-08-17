@@ -9,7 +9,7 @@ through its bounded x64 desktop-CLR-v4 resident. That custom source is unsandbox
 but it is already governed by HookLab's exact target guards, lifecycle, and permissions. The sections
 below govern *general* execution outside HookLab, assembly editing/live replacement, and host scripting;
 they do not describe missing HookLab work. See the delivered boundary in the
-[HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md).
+[HookLab product documentation](HOOKLAB.md).
 
 ## Target C# execution
 

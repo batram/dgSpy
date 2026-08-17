@@ -1,8 +1,9 @@
 # dnSpyEx
 
 > This fork includes dgSpy, a local MCP debugger/decompiler extension and gateway. Start with the
-> [dgSpy documentation index](docs/README.md); the active work is in the
-> [dgSpy implementation plan](docs/IMPLEMENTATION_PLAN.md).
+> [dgSpy documentation index](docs/README.md); current product direction is in
+> [Dream of roads](docs/dream_of_roads.md), while bounded tasks live in the separate `docs/local` work
+> repository.
 > For first-run setup, client-spawned Gateway startup, and local or remote deployment, see the
 > [dgSpy quick start](docs/GETTING_STARTED.md).
 >

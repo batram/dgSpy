@@ -417,7 +417,7 @@ delayed rather than withheld.
   regular expression, and `kinds: ["literal"]` searches constant values and `ldc`/`ldstr` operands
   directly out of IL rather than decompiling, which is what makes it far cheaper than `search_text`.
   The port and the reasons for not driving dnSpy's own `IDocumentSearcher` are in
-  [SEARCH_PROPOSAL.md](SEARCH_PROPOSAL.md).
+  [implemented search proposal](history/SEARCH_PROPOSAL.md).
 - **`search` results round-trip; nothing needs parsing.** A loaded-module hit carries an opaque,
   session-scoped `module_id`. Pass it unchanged to exact module tools: it identifies one dnSpy
   `DbgModule`, including process, runtime, app domain and load instance. An unloaded or replaced module

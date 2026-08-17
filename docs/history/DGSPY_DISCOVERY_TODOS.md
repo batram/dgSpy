@@ -3,8 +3,8 @@
 ## Scope
 
 This document tracks defects in dgSpy's MCP-facing discovery behavior. It does not track upstream
-dnSpy CoreCLR engine defects; those are recorded separately in
-[DNSPY_CORECLR_TODOS.md](../DNSPY_CORECLR_TODOS.md).
+dnSpy CoreCLR engine defects; those are parked in the companion work repository at
+`work/backlog/coreclr-debugger.md`.
 
 ## Resolved: isolate unreadable processes during name-filtered discovery
 

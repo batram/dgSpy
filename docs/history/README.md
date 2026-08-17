@@ -17,5 +17,11 @@ regression or reconstructing a decision, but they do not define the current road
   pipeline and its dependency-cleanup milestones.
 - [Discovery isolation record](DGSPY_DISCOVERY_TODOS.md) — resolved: unreadable processes no longer fail
   name-filtered program discovery, with typed error provenance.
+- [HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md) — completed resident initialization,
+  compiled-hook lifecycle, GUI editor, and verification plan.
+- [HookLab watcher implementation plan](HOOKLAB_WATCHER_IMPLEMENTATION_PLAN.md) — completed standalone
+  injector/watcher design and H1/H2 delivery plan; open outcomes were promoted to the current roadmap.
+- [Search proposal](SEARCH_PROPOSAL.md) — implemented matching and bounded-search design retained as
+  rationale for the current reference contract.
 
 For current information, return to the [documentation index](../README.md).

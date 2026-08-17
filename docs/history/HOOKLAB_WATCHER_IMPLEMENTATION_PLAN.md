@@ -1,10 +1,8 @@
 # HookLab standalone injector and watcher implementation plan
 
-Status: phases 0-4 and the installed H1/H2 watcher path are delivered. This document remains the design
-authority for component, trust, lifecycle, and package boundaries; it is not the current ordered
-roadmap. Follow [Dream of roads](dream_of_roads.md) for sequence. The actionable remainder is the
-dgSpy export/enrollment, upgrade-state, management, and cross-controller adoption work under
-**Open interoperability follow-ups**.
+Status: historical completed implementation plan. Current behavior is documented in
+[HookLab](../HOOKLAB.md), [watcher operation](../HOOKLAB_WATCHER.md), and
+[architecture](../ARCHITECTURE.md). Current ordering is in [Dream of roads](../dream_of_roads.md).
 
 ## Product goal
 

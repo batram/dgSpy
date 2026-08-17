@@ -9,8 +9,6 @@ investigations, handoffs, and run evidence in the separate `docs/local` work rep
 ## Start here
 
 - [Dream of roads](dream_of_roads.md) — current aspirational roadmap and rough ordering of open work.
-- [Implementation plan](IMPLEMENTATION_PLAN.md) — compact delivered baseline and compatibility pointer;
-  retained for existing links.
 - [Architecture](ARCHITECTURE.md) — current boundaries, state model, ownership, and safety rules.
 - [Build baseline](DGSPY_BASELINE.md) — supported toolchain, build/deploy workflow, and retained patches.
 - [Tool and behavior reference](DGSPY_REFERENCE.md) — MCP tools, authentication, identities, events,
@@ -19,20 +17,12 @@ investigations, handoffs, and run evidence in the separate `docs/local` work rep
   focused fixes upstream.
 - [Remote hosts](REMOTE_HOSTS.md) — deploy packages and the target outbound registration/TLS design.
 
-## Feature design and delivered boundaries
+## Product features
 
-- [HookLab watcher implementation plan](HOOKLAB_WATCHER_IMPLEMENTATION_PLAN.md) — delivered standalone
-  watcher design plus the still-open enrollment, upgrade-state, and interoperability boundaries.
-- [HookLab implementation plan](HOOKLAB_IMPLEMENTATION_PLAN.md) — delivered scope: one direct GUI
-  and MCP path for guarded Harmony observation and custom hooks, plus a small deferred backlog
-  (generic-method templates, editor UX).
-
-## Completed proposals kept in place
-
-- [Search proposal](SEARCH_PROPOSAL.md) — implemented; retained as the standing rationale for the
-  ported dnSpy matching rules cited by the reference.
-- [CoreCLR follow-ups](DNSPY_CORECLR_TODOS.md) — parked investigation notes; CoreCLR is outside the
-  current dgSpy product scope and gate.
+- [HookLab](HOOKLAB.md) — current resident model, supported hooks, GUI/MCP surfaces, watcher relationship,
+  limitations, and safety invariants.
+- [HookLab watcher operation](HOOKLAB_WATCHER.md) — build, installation, commands, supervision, upgrade,
+  and uninstall behavior.
 
 ## Worked examples
 

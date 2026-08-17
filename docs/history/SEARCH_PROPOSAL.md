@@ -1,6 +1,6 @@
 # Proposal: a first-class `search` tool
 
-**Status: implemented.** Retained in place rather than moved to `docs/history/`, because
+**Status: implemented historical proposal.** Retained as rationale because
 `DGSPY_REFERENCE.md` cites it as the standing record of why this ports dnSpy's matching rules instead of
 consuming `IDocumentSearcher`. That reasoning is still current; the plan below is not a pending one.
 

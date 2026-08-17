@@ -1,9 +1,7 @@
 # HookLab implementation plan
 
-Status: delivered for its documented x64 desktop-CLR-v4 scope. The remaining generic-template,
-compiler-reference, and editor items are demand-led backlog, not the active product path. Follow
-[Dream of roads](dream_of_roads.md) for current ordering and the
-[watcher plan](HOOKLAB_WATCHER_IMPLEMENTATION_PLAN.md) for standalone interoperability boundaries.
+Status: historical completed implementation plan. Current behavior is documented in
+[HookLab](../HOOKLAB.md); current ordering is in [Dream of roads](../dream_of_roads.md).
 
 ## Product goal
 
@@ -259,7 +257,7 @@ round trip. Behavior-changing create/update, compiler rollback, enable/disable, 
 are package-proven through the PowerShell acceptance target. Retain `install_hook` for observational
 hooks and compatibility; use `create_hook` and `update_hook` for explicit compiled lifecycle semantics.
 
-The remaining build dependency cleanup from [BUILD_PIPELINE_TODO.md](history/BUILD_PIPELINE_TODO.md) is also
+The remaining build dependency cleanup from [BUILD_PIPELINE_TODO.md](BUILD_PIPELINE_TODO.md) is also
 complete: the packaged component build compiles `dgSpy.Extension` against explicit dnSpy contract and
 compile-dependency file references from immutable `host-raw`, while dgSpy and HookLab dependencies
 remain normal project references. The global `BuildProjectReferences=false` workaround is gone and a

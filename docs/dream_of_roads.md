@@ -25,19 +25,12 @@ plans. Preserve their tests and use them as the starting line.
 
 ## Road 0 - keep the map honest
 
-Before and during every slice, reconcile the document that motivated it with the code and move completed
-or superseded narrative to `docs/history/`. In particular:
+Before and during every slice, reconcile the document that motivated it with the code. Product truth
+stays in the main `docs`; bounded tasks, TODOs, investigations, handoffs, and evidence belong in the
+separate `docs/local` work repository. Completed or superseded product plans move to `docs/history/`.
 
-- `IMPLEMENTATION_PLAN.md` still proposes claim-token recovery, while current code exposes inspected,
-  explicit `claim_session(force=true)` takeover. That is an unresolved product choice, not an absent
-  reclaim mechanism.
-- `FUTURE_CAPABILITIES.md` still describes mutation hooks and custom HookLab C# as outside the first
-  version. They are delivered for the bounded HookLab resident; only *general* target-code execution
-  remains future work.
-- `HOOKLAB_WATCHER_IMPLEMENTATION_PLAN.md` phases 0-4 and the local H1/H2 narratives describe delivered
-  work. Their useful remaining material is the interoperability list and completion evidence.
-- Dated `docs/local` investigations, review logs, evidence folders, and `history_fail` plans are evidence,
-  not a backlog. Reproduce an issue against the current package before promoting it here.
+Dated investigations, review logs, evidence folders, and failed plans are evidence, not a backlog.
+Reproduce an old issue against the current package before promoting it here.
 
 For each road below, update the architecture/reference/baseline only when the public contract or supported
 operation changes. Keep live measurements in a dated evidence or local status document rather than
@@ -217,9 +210,10 @@ possible-side-effect reporting, and end-to-end refusal tests.
 
 CoreCLR, x86, native debugging, broad Mono HookLab support, reverse patches, generic hook providers,
 profiler/ReJIT, and Visual Basic parity are not part of the current x64 CLR v4/Unity product scope.
-`DNSPY_CORECLR_TODOS.md` records useful CoreCLR failure evidence, but it is a parked investigation, not
-the next milestone. If scope changes, begin with deterministic engine fixtures and capability truth;
-do not generalize the CorDebug implementation by assumption.
+The companion work repository retains useful CoreCLR failure evidence under
+`work/backlog/coreclr-debugger.md`, but it is parked work, not the next milestone. If scope changes,
+begin with deterministic engine fixtures and capability truth; do not generalize the CorDebug
+implementation by assumption.
 
 Likewise, deterministic Unity fixtures, headless Mono connection-failure handling, and broader
 multi-session isolation are independent quality projects. Promote one only with a concrete workflow,
