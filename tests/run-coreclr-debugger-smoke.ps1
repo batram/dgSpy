@@ -88,7 +88,10 @@ try {
 		} 10
 		if ($null -ne $script:boundBreakpoint) { $breakpoint = $script:boundBreakpoint }
 	}
-	Check 'a named CoreCLR breakpoint binds' ($breakpoint.bound -and $breakpoint.breakpoint_id) ("bound=" + $breakpoint.bound + " severity=" + $breakpoint.severity + " message=" + $breakpoint.message)
+	# Test the id for presence, not truthiness: dnSpy numbers breakpoints from zero per process, so the
+	# first breakpoint in a fresh host gets id 0, which PowerShell treats as $false. Locally the host
+	# has usually issued an id already and the bug stays hidden.
+	Check 'a named CoreCLR breakpoint binds' ($breakpoint.bound -and $null -ne $breakpoint.breakpoint_id) ("bound=" + $breakpoint.bound + " id=" + $breakpoint.breakpoint_id + " severity=" + $breakpoint.severity + " message=" + $breakpoint.message)
 	$null = Rpc 'continue' @{ session_id=$sessionId }
 	$stop = Rpc 'wait_for_stop' @{ session_id=$sessionId; after_event_id=$cursor; timeout_ms=15000 } 20
 	$breakState = Rpc 'get_session_state' @{ session_id=$sessionId }
