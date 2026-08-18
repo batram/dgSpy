@@ -16,6 +16,7 @@
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\HookLab\HookLab.Bootstrap\HookLab.Bootstrap.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\HookLab\HookLab.Injector\HookLab.Injector.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\tools\HookLab.Watcher\HookLab.Watcher.csproj" />
+    <ComponentProject Include="$(MSBuildThisFileDirectory)..\tools\HookLab.Watcher.Companion\HookLab.Watcher.Companion.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\dgSpy.Gateway\dgSpy.Gateway.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)..\dgSpy.Cli\dgSpy.Cli.csproj" />
     <ComponentProject Include="$(MSBuildThisFileDirectory)DgSpyTool\DgSpyTool.csproj" />
