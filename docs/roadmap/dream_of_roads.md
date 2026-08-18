@@ -35,11 +35,66 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Revisit high-risk execution, editing, and scripting one workflow at a time.
-2. Keep compatibility expansions parked until product scope changes.
-3. Improve HookLab authoring only when a concrete failing hook exists.
+1. Make runtime and architecture compatibility explicit, fast to probe, and diagnosable.
+2. Add a Mono HookLab resident on that framework.
+3. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
+4. Revisit high-risk execution, editing, and scripting one workflow at a time.
+5. Keep the remaining compatibility expansions parked until product scope changes.
+6. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - consider high-risk capabilities separately
+## Road 1 - make runtime backends an explicit compatibility framework
+
+CoreCLR HookLab proved that runtime differences are real but currently too distributed: backend choice,
+initialization, compiler dependencies, patch-engine assets, packaging, diagnostics, and live evidence
+cross several layers. Consolidate those differences without changing shipped CLR v4 or CoreCLR behavior.
+
+Travel this road in independently implemented, live-tested, retired, and committed subslices:
+
+1. Generate and verify an authoritative payload matrix with exact runtime, architecture, framework,
+   dependency, provenance, identity, and hash data.
+2. Add fast real-process resident compatibility probes for CLR v4 and each supported CoreCLR range;
+   keep packaged live gates authoritative.
+3. Introduce an immutable backend descriptor and narrow explicit CLR v4/CoreCLR backend contract.
+4. Isolate CodeDom and Roslyn behind a runtime-neutral compiler ABI.
+5. Standardize backend lifecycle states and bounded stage-aware resident errors.
+
+Road 1 exits only when the current CLR v4 and CoreCLR packaged live hook lifecycles remain green and
+the new manifest, probe, contract, compiler boundary, lifecycle, and diagnostics are documented in
+their owning product documents. The implementation-grade task and acceptance evidence live in
+`docs/local/work/runtime-backend-architecture-mono-x86.md`.
+
+## Road 2 - add a Mono HookLab resident
+
+Ordinary Mono/Unity debugging already exists. This road adds HookLab residency without depending on
+UCH, BepInEx, or another mod loader and without implying IL2CPP or AOT support.
+
+1. Prove one safe authenticated resident lifecycle on a disposable Mono/Unity fixture, including one
+   guarded prefix, event observation, removal, debugger detach, and healthy target survival.
+2. Add an explicit Mono backend with exact runtime/module identity and a pinned, live-proven compiler
+   and Harmony dependency policy.
+3. Extend the payload manifest, compatibility probe, package, disposable Unity fixture, and hidden-
+   desktop UCH live gates through retirement.
+
+Domain reloads, generics, inlining, finalizers, reconnect/adoption, and unsupported Mono variants need
+explicit supported or refused results. If safe residency requires native Mono embedding rather than
+debugger-driven managed loading, record that boundary before broadening implementation.
+
+## Road 3 - add x86 debugging and HookLab
+
+x86 is an architecture boundary, not a build flag. First prove whether the x64 host can control an x86
+CorDebug target without loading architecture-mismatched native debugger components. If it cannot, use
+the smallest authenticated x86 helper/sidecar boundary justified by the prototype.
+
+1. Prove and document the ordinary debugger architecture decision on a disposable CLR v4 x86 target.
+2. Add ordinary x86 debugging with exact matching runtime components and full x64 regression gates;
+   add CoreCLR x86 only for explicitly supported runtime versions.
+3. Add x86 native bootstrap/payload manifest slots and HookLab backend variants, auditing pointer size,
+   calling conventions, structure layout, discovery, adoption, packaging, and retirement.
+
+No x86 combination is advertised until its packaged ordinary-debugger and, where claimed, complete
+HookLab lifecycle passes. Cross-architecture discovery and adoption must fail deterministically.
+
+## Road 4 - consider high-risk capabilities separately
 
 General target C# execution, assembly editing or project export, live method-body replacement, and
 dnSpy-host scripting are separate trust domains. HookLab's bounded compiler authorizes none of them.
@@ -56,16 +111,16 @@ If a named workflow justifies one, proceed roughly in this order:
 Each capability requires its own permission, bounds, audit policy, remote-default-off behavior,
 side-effect reporting, and end-to-end refusal tests.
 
-## Road 2 - parked horizons
+## Road 5 - parked horizons
 
-x86, native debugging, broad Mono HookLab support, reverse patches, generic hook providers,
-profiler/ReJIT, and Visual Basic parity remain outside the current x64 CLR v4, CoreCLR, and Unity scope.
+Native debugging, IL2CPP, reverse patches, generic hook providers, profiler/ReJIT, and Visual Basic
+parity remain outside the current CLR v4, CoreCLR, and Unity/Mono scope.
 
 Deterministic Unity fixtures, headless Mono connection-failure handling, and broader multi-session
 isolation are independent quality projects. Promote one only with a concrete workflow, fixture, and
 acceptance boundary.
 
-## Road 3 - improve HookLab authoring when demanded
+## Road 6 - improve HookLab authoring when demanded
 
 There is currently no failing base hook that justifies an authoring slice. Generic methods and declaring
 types, additional resident compiler references, a larger source boundary, Roslyn editor assistance,
