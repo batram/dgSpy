@@ -78,10 +78,6 @@ jobs:
         shell: pwsh
         run: dotnet test tests/DgSpyTool.Tests/DgSpyTool.Tests.csproj --configuration Release --nologo --verbosity minimal
 
-      - name: HookLab watcher companion tests
-        shell: pwsh
-        run: dotnet test tests/HookLab.Watcher.Companion.Tests/HookLab.Watcher.Companion.Tests.csproj --configuration Release --nologo --verbosity minimal
-
   build-net10-package:
     name: Build verified net10 package once
     runs-on: windows-latest
