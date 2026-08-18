@@ -72,8 +72,23 @@ try {
 
 	if ($resumed.state -eq 'running') { $null = Rpc 'pause' @{ session_id=$sessionId } }
 	$breakpoint = Rpc 'set_breakpoint' @{ session_id=$sessionId; module='CoreClrDebuggerTarget'; type='CoreClrDebuggerTarget.Program'; method='Probe' }
-	Check 'a named CoreCLR breakpoint binds' ($breakpoint.bound -and $breakpoint.breakpoint_id) ("message=" + $breakpoint.message)
+	# Read the cursor before anything can replace $breakpoint: it is the event id from just before the
+	# breakpoint existed, and list_breakpoints does not carry it.
 	$cursor = $breakpoint.cursor_event_id
+	# Binding is asynchronous. dnSpy creates the breakpoint, then binds it on its engine thread, and
+	# "bound=false with an empty message" is the documented pending state, not a failure. A warm local
+	# machine has usually finished binding before the call returns; a hosted runner has not. Poll for
+	# it the way run-milestone1-smoke.ps1 already does instead of asserting the race.
+	if (-not $breakpoint.bound) {
+		$script:boundBreakpoint = $null
+		$null = Wait-For {
+			$current = @(Rpc 'list_breakpoints' @{} | Where-Object { $_.breakpoint_id -eq $breakpoint.breakpoint_id })[0]
+			if ($null -ne $current) { $script:boundBreakpoint = $current }
+			$null -ne $current -and $current.bound
+		} 10
+		if ($null -ne $script:boundBreakpoint) { $breakpoint = $script:boundBreakpoint }
+	}
+	Check 'a named CoreCLR breakpoint binds' ($breakpoint.bound -and $breakpoint.breakpoint_id) ("bound=" + $breakpoint.bound + " severity=" + $breakpoint.severity + " message=" + $breakpoint.message)
 	$null = Rpc 'continue' @{ session_id=$sessionId }
 	$stop = Rpc 'wait_for_stop' @{ session_id=$sessionId; after_event_id=$cursor; timeout_ms=15000 } 20
 	$breakState = Rpc 'get_session_state' @{ session_id=$sessionId }
