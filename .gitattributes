@@ -18,6 +18,12 @@
 /tests/** text=auto eol=lf
 /tools/** text=auto eol=lf
 
+# HookLab deployment packages are content-addressed: each profile pins a SHA-256 taken over the
+# exact bytes of its manifest and sources. End-of-line conversion rewrites those bytes, so a
+# digest authored on one checkout stops verifying on another -- and because the clean filter
+# normalizes the difference away, git reports the tree as clean either way. Keep them verbatim.
+/tools/HookLab.Watcher/deployments/** -text
+
 # cmd.exe and legacy batch consumers retain their native Windows convention.
 *.bat text eol=crlf
 *.cmd text eol=crlf

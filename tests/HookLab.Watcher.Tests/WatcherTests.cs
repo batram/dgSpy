@@ -129,11 +129,25 @@ public sealed class WatcherTests {
 	[Fact]
 	public async Task Runner_bounds_parallelism_and_isolates_failure() {
 		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl"));
-		var definitions=new[]{Definition("alpha","Target.exe"),Definition("beta","Other.exe")}; var current=0; var maximum=0; var calls=new ConcurrentBag<string>();
-		WatchApplyResult Apply(WatchWork work) { var now=Interlocked.Increment(ref current); maximum=Math.Max(maximum,now); calls.Add(work.Definition.Value.Id!); Thread.Sleep(40); Interlocked.Decrement(ref current); if(work.Process.ProcessId==2) throw new InvalidOperationException("contained failure"); return Result("ok"); }
+		var definitions=new[]{Definition("alpha","Target.exe"),Definition("beta","Other.exe")}; var gate=new object(); var current=0; var maximum=0; var calls=new ConcurrentBag<string>();
+		// Two items have to be in flight at once for the cap to be observable at all. Rendezvous
+		// rather than sleeping: a fixed 40ms sleep only overlaps if the agent schedules both threads
+		// promptly, which is why this observed 1 on CI. The third item cannot join -- the cap is 2 --
+		// so it finds the latch already set and runs straight through.
+		using var bothInFlight=new CountdownEvent(2);
+		WatchApplyResult Apply(WatchWork work) {
+			lock(gate) { maximum=Math.Max(maximum,++current); }
+			calls.Add(work.Definition.Value.Id!);
+			lock(gate) { if(bothInFlight.CurrentCount>0) bothInFlight.Signal(); }
+			bothInFlight.Wait(TimeSpan.FromSeconds(30));
+			lock(gate) { current--; }
+			if(work.Process.ProcessId==2) throw new InvalidOperationException("contained failure");
+			return Result("ok");
+		}
 		var runner=new WatchRunner(definitions,1,25,2,audit,null,apply:Apply);
 		runner.Schedule(new[]{new ProcessIdentity(1,1,"Target.exe",1),new ProcessIdentity(2,2,"Other.exe",1),new ProcessIdentity(3,3,"Target.exe",1)});
 		await runner.DrainAsync();
+		Assert.True(bothInFlight.IsSet,"The runner never had two work items in flight at once.");
 		Assert.Equal(2,maximum); Assert.Equal(3,calls.Count);
 		audit.Dispose();
 		var lines=File.ReadAllLines(System.IO.Path.Combine(directory.Path,"audit.jsonl")); Assert.Equal(3,lines.Length); Assert.Single(lines,line=>JsonDocument.Parse(line).RootElement.GetProperty("status").GetString()=="error");
