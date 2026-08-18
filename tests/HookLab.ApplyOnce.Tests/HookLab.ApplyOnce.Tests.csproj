@@ -14,7 +14,15 @@
   <ItemGroup>
     <ProjectReference Include="..\..\tools\HookLab.ApplyOnce\HookLab.ApplyOnce.csproj" />
   </ItemGroup>
+  <!-- Built, not referenced: net48 output a net10 test project must not link against. An <MSBuild>
+       call sits outside the restore graph, so restore it here or a clean checkout fails with
+       NETSDK1004. The extra global property on the Restore call forces the Build call into a fresh
+       evaluation that can see the assets file restore just wrote. -->
+  <ItemGroup>
+    <BuiltTestTarget Include="..\TestTargets\HookLab.ApplyOnceTarget\HookLab.ApplyOnceTarget.csproj" />
+  </ItemGroup>
   <Target Name="BuildApplyOnceTarget" BeforeTargets="Build">
-    <MSBuild Projects="..\TestTargets\HookLab.ApplyOnceTarget\HookLab.ApplyOnceTarget.csproj" Targets="Build" Properties="Configuration=$(Configuration)" />
+    <MSBuild Projects="@(BuiltTestTarget)" Targets="Restore" Properties="Configuration=$(Configuration);ExcludeRestorePackageImports=true" />
+    <MSBuild Projects="@(BuiltTestTarget)" Targets="Build" Properties="Configuration=$(Configuration)" />
   </Target>
 </Project>
