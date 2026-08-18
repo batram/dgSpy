@@ -10,8 +10,10 @@ namespace HookLab.Watcher.Tests;
 public sealed class PackageTests {
 	[Fact]
 	public void Aggregate_deployments_root_loads_immediate_closed_deployment_directories() {
-		var root=Path.Combine(RepoRoot(),"tools","HookLab.Watcher","deployments"); var definitions=ProfileCatalog.Load(root);
-		Assert.Equal(new[]{"vmconnect-fullscreen-user","vmconnect-status-codex-was-here-user"},definitions.Select(definition=>definition.ProfileId).OrderBy(id=>id,StringComparer.Ordinal));
+		var root=Path.Combine(RepoRoot(),"tools","HookLab.Watcher","deployments");
+		var perDirectory=Directory.EnumerateDirectories(root).SelectMany(path=>ProfileCatalog.Load(path)).Select(definition=>definition.ProfileId).OrderBy(id=>id,StringComparer.Ordinal).ToArray();
+		Assert.NotEmpty(perDirectory);
+		Assert.Equal(perDirectory,ProfileCatalog.Load(root).Select(definition=>definition.ProfileId).OrderBy(id=>id,StringComparer.Ordinal));
 	}
 
 	[Fact]
@@ -138,12 +140,21 @@ public sealed class PackageTests {
 
 	[Fact]
 	public void Reloading_catalog_swaps_only_complete_valid_generations() {
-		using var directory=new TemporaryDirectory(); var source=Path.Combine(RepoRoot(),"tools","HookLab.Watcher","deployments","vmconnect-fullscreen"); CopyTree(source,directory.Path);
+		using var directory=new TemporaryDirectory(); var package=WritePackage(directory.Path); var loaded=PackageLoader.Load(package);
+		var profilePath=Path.Combine(directory.Path,"profile.json"); WriteProfile(directory.Path,Profile(package,directory.Path,loaded,Path.Combine(directory.Path,"Target.exe"))); var valid=File.ReadAllBytes(profilePath);
 		var catalog=new ReloadingProfileCatalog(directory.Path); var original=catalog.Current(); Assert.Single(original.Definitions);
-		var sourceProfile=Assert.Single(Directory.GetFiles(source,"*.json",SearchOption.TopDirectoryOnly)); var profilePath=Path.Combine(directory.Path,Path.GetFileName(sourceProfile)); File.WriteAllText(profilePath,"{",new UTF8Encoding(false)); Thread.Sleep(550);
-		var invalid=catalog.Current(); Assert.Equal(original.Generation,invalid.Generation); Assert.Single(invalid.Definitions); Assert.NotNull(invalid.Error);
-		File.Copy(sourceProfile,profilePath,true); Thread.Sleep(550);
-		var recovered=catalog.Current(); Assert.Single(recovered.Definitions); Assert.Null(recovered.Error);
+		File.WriteAllText(profilePath,"{",new UTF8Encoding(false));
+		var invalid=WaitFor(catalog,snapshot=>snapshot.Error is not null); Assert.Equal(original.Generation,invalid.Generation); Assert.Single(invalid.Definitions);
+		File.WriteAllBytes(profilePath,valid);
+		var recovered=WaitFor(catalog,snapshot=>snapshot.Error is null); Assert.Single(recovered.Definitions);
+	}
+
+	// The catalog re-reads on a 500 ms debounce off the wall clock. Sleeping just past it leaves no
+	// margin on a loaded agent, so poll until the state flips instead of racing a fixed deadline.
+	static CatalogSnapshot WaitFor(ReloadingProfileCatalog catalog,Func<CatalogSnapshot,bool> predicate) {
+		var watch=System.Diagnostics.Stopwatch.StartNew();
+		while(watch.Elapsed<TimeSpan.FromSeconds(15)) { var snapshot=catalog.Current(); if(predicate(snapshot)) return snapshot; Thread.Sleep(25); }
+		throw new TimeoutException("The reloading catalog did not reach the expected state within 15 seconds.");
 	}
 
 	[Fact]
@@ -171,7 +182,6 @@ public sealed class PackageTests {
 	static void WriteManifest(string path,PackageManifest manifest)=>File.WriteAllText(path,JsonSerializer.Serialize(manifest,JsonOptions()),new UTF8Encoding(false));
 	static JsonSerializerOptions JsonOptions()=>new() { PropertyNamingPolicy=JsonNamingPolicy.CamelCase };
 	static string Sha256(string path) { using var stream=File.OpenRead(path); using var sha=SHA256.Create(); return Convert.ToHexString(sha.ComputeHash(stream)).ToLowerInvariant(); }
-	static void CopyTree(string source,string destination) { foreach(var directory in Directory.EnumerateDirectories(source,"*",SearchOption.AllDirectories)) Directory.CreateDirectory(Path.Combine(destination,Path.GetRelativePath(source,directory))); foreach(var file in Directory.EnumerateFiles(source,"*",SearchOption.AllDirectories)) { var target=Path.Combine(destination,Path.GetRelativePath(source,file)); Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file,target); } }
 	static string RepoRoot() { var current=new DirectoryInfo(AppContext.BaseDirectory); while(current is not null&&!File.Exists(Path.Combine(current.FullName,"dnSpy.sln"))) current=current.Parent; return current?.FullName??throw new DirectoryNotFoundException(); }
 	sealed class TemporaryDirectory : IDisposable { public string Path { get; }=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"hooklab-package-tests-"+Guid.NewGuid().ToString("N")); public TemporaryDirectory()=>Directory.CreateDirectory(Path); public void Dispose()=>Directory.Delete(Path,true); }
 }

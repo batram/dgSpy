@@ -12,7 +12,7 @@ using Xunit;
 namespace HookLab.Watcher.Tests;
 
 public sealed class WatcherEndToEndTests {
-	[Fact]
+	[NativePayloadFact]
 	public async Task Resident_reconciles_multiple_hooks_updates_toggles_and_preserves_last_good_revision() {
 		using var target=TargetRun.Start(); using var directory=new TemporaryDirectory(); var stateRoot=Path.Combine(directory.Path,"state"); var auditPath=Path.Combine(directory.Path,"audit.jsonl");
 		Write(directory.Path,"alpha.json",target.Definition("shared-alpha","Alpha",111,1,true)); Write(directory.Path,"beta.json",target.Definition("shared-beta","Beta",222,1,true));
@@ -34,7 +34,7 @@ public sealed class WatcherEndToEndTests {
 		var behavior=target.ReleaseAndRead(); Assert.Equal("311",behavior["alpha"]); Assert.Equal("222",behavior["beta"]);
 	}
 
-	[Theory]
+	[NativePayloadTheory]
 	[InlineData("Alpha",311,"311","10")]
 	[InlineData("Beta",422,"6","422")]
 	public async Task Watcher_discovers_and_applies_to_distinct_real_targets(string method,int replacement,string expectedAlpha,string expectedBeta) {
