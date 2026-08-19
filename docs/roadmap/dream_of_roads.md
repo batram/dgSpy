@@ -74,18 +74,23 @@ Travel this road in independently implemented, live-tested, retired, and committ
    controller and target identities, used by staging, completion, and any later shared artifact.
 5. Derive endpoint access control from that same identity pair rather than from whichever process
    happens to create the endpoint.
-6. Compute a target contract before anything mutates, and refuse with the exact failing precondition.
+6. Put the resident where the target's code actually is. Native initialization enters through
+   `ExecuteInDefaultAppDomain`, so on any host that runs its code in a secondary application domain -
+   every IIS worker - the resident lands somewhere that can never see the application's assemblies.
+   Address the domain as an explicit part of the target, and key residency by it.
+7. Compute a target contract before anything mutates, and refuse with the exact failing precondition.
    Report each precondition as satisfied, failed, or not provable before the attempt, so nothing that
    was merely unevaluable is reported as a pass. Expose the same computation as a read-only readiness
    probe that leaves the target process untouched.
-7. Vary identity in the live gates. Every current HookLab smoke runs debugger and target as the same
-   user on a developer machine, which satisfies all of these assumptions silently.
+8. Vary identity, and application domain, in the live gates. Every current HookLab smoke runs debugger
+   and target as the same user, in the default domain, on a developer machine - an environment that
+   satisfies every one of these assumptions silently.
 
-Road 1 exits only when the packaged CLR v4 and CoreCLR hook lifecycles remain green, a cross-identity
-target completes both of those lifecycles, and every precondition enumerated by subslice 6 is reachable
-as its own named refusal. Loader failures that only the target can decide stay stage-specific
-initialization failures and are not counted as preconditions. The implementation-grade task, the
-precondition matrix, and acceptance evidence live in
+Road 1 exits only when the packaged CLR v4 and CoreCLR hook lifecycles remain green, a target whose
+identity and application domain both differ from the debugger's completes both of those lifecycles, and
+every precondition enumerated by subslice 7 is reachable as its own named refusal. Loader failures that
+only the target can decide stay stage-specific initialization failures and are not counted as
+preconditions. The implementation-grade task, the precondition matrix, and acceptance evidence live in
 `docs/local/work/target-environment-contract.md`.
 
 Distributed component skew - host build against Gateway build and protocol - is an adjacent contract
