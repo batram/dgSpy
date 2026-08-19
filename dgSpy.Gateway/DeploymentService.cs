@@ -467,10 +467,15 @@ public sealed class DeploymentService {
 		var registry=Path.Combine(packageRoot,"gateway-hosts.json"); var replacing=RegistryContainsHost(registry,hostId);
 		Directory.CreateDirectory(output); Directory.CreateDirectory(packageRoot);
 		var bundleName=$"dgSpy-remote-host-{hostId}-win-x64";
-		var staging=Path.Combine(packageRoot,".staging-"+Guid.NewGuid().ToString("N")); var archive=Path.Combine(output,bundleName+".zip"); var temporaryArchive=archive+".tmp-"+Guid.NewGuid().ToString("N");
+		var archive=Path.Combine(output,bundleName+".zip"); var temporaryArchive=archive+".tmp-"+Guid.NewGuid().ToString("N");
 		try {
-			CopyTree(payload,staging,token); var state=Path.Combine(staging,"state"); Directory.CreateDirectory(state);
-			var credential=Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)); File.WriteAllText(Path.Combine(state,"host.id"),hostId,new UTF8Encoding(false)); File.WriteAllText(Path.Combine(state,"rpc.token"),credential,new UTF8Encoding(false));
+			// Every file that differs from the installed payload, keyed by its archive entry name. The
+			// package used to be built by copying the whole ~700MB self-contained tree into a staging
+			// directory, personalizing a handful of files there, and zipping that: three full passes over
+			// the tree to change nine files. The overlay is written straight into the archive instead, so
+			// the payload is read once and never copied.
+			var personalized=new SortedDictionary<string,byte[]>(StringComparer.OrdinalIgnoreCase);
+			var credential=Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)); personalized["state/host.id"]=Utf8(hostId); personalized["state/rpc.token"]=Utf8(credential);
 			var remote=new JsonObject { ["format_version"]=1,["host_id"]=hostId,["gateway_address"]=address,["gateway_port"]=useTls?7353:7352,["transport"]=useTls?"tls":"plaintext" };
 			var gatewayHost=new JsonObject { ["host_id"]=hostId,["display_name"]=hostId,["transport"]=useTls?"outbound_tls":"outbound",["token_file"]=hostId+".token" };
 			byte[]? serverPfx=null,serverCer=null,clientCer=null; string? serverPassword=null,clientPassword=null;
@@ -479,18 +484,19 @@ public sealed class DeploymentService {
 				if(File.Exists(serverPfxPath)&&File.Exists(serverCerPath)&&File.Exists(serverPasswordPath)) { serverPfx=File.ReadAllBytes(serverPfxPath); serverCer=File.ReadAllBytes(serverCerPath); serverPassword=File.ReadAllText(serverPasswordPath).Trim(); }
 				else { serverPassword=NewSecret(); (serverPfx,serverCer)=CreateCertificate(address,true,serverPassword); }
 				clientPassword=NewSecret(); var client=CreateCertificate(hostId,false,clientPassword); clientCer=client.Cer;
-				var certificates=Path.Combine(staging,"certificates"); Directory.CreateDirectory(certificates); File.WriteAllBytes(Path.Combine(certificates,"client.pfx"),client.Pfx); File.WriteAllText(Path.Combine(certificates,"client.password"),clientPassword,new UTF8Encoding(false)); File.WriteAllBytes(Path.Combine(certificates,"gateway-server.cer"),serverCer!);
+				personalized["certificates/client.pfx"]=client.Pfx; personalized["certificates/client.password"]=Utf8(clientPassword); personalized["certificates/gateway-server.cer"]=serverCer!;
 				remote["client_certificate_file"]="certificates/client.pfx"; remote["client_certificate_password_file"]="certificates/client.password"; remote["gateway_certificate_file"]="certificates/gateway-server.cer"; gatewayHost["client_certificate_file"]=hostId+"-client.cer";
 			}
-			File.WriteAllText(Path.Combine(staging,"remote-host.json"),remote.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })+"\n",new UTF8Encoding(false)); WriteRemoteManifest(staging,bundleName);
-			ZipFile.CreateFromDirectory(staging,temporaryArchive,compressionLevel,false);
+			personalized["remote-host.json"]=Utf8(remote.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })+"\n");
+			personalized["manifest.json"]=Utf8(RemoteManifest(payload,personalized,bundleName,token));
+			WriteRemoteArchive(temporaryArchive,payload,personalized,compressionLevel,token);
 			File.WriteAllText(Path.Combine(packageRoot,hostId+".token"),credential,new UTF8Encoding(false));
 			if(useTls) { File.WriteAllBytes(Path.Combine(packageRoot,"gateway-server.pfx"),serverPfx!); File.WriteAllBytes(Path.Combine(packageRoot,"gateway-server.cer"),serverCer!); File.WriteAllText(Path.Combine(packageRoot,"gateway-server.password"),serverPassword!,new UTF8Encoding(false)); File.WriteAllBytes(Path.Combine(packageRoot,hostId+"-client.cer"),clientCer!); }
 			UpdateRemoteRegistry(registry,hostId,address,gatewayHost,useTls); File.Move(temporaryArchive,archive,true);
 			var updated=HostRegistry.Load(registry,includeLocal:true); var listener=remoteListener ?? throw new GatewayControlException("listener_unavailable","The running Gateway does not expose its remote listener lifecycle service.");
 			var listenerReadiness=listener.EnsureConfigured(registry); router.Reload(updated);
-			await Task.CompletedTask; return new { host_id=hostId,archive_path=archive,sha256=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archive))),compression,transport=useTls?"mutual_tls":"authenticated_plaintext",launch_command=@".\dnSpy.exe",launcher_alternative=@".\launcher\Start-dgSpyRemoteHost.cmd",replaced_existing_host=replacing,transferred=false,executed=false,gateway_restart_required=false,gateway_ready=true,listener=listenerReadiness };
-		} finally { if(Directory.Exists(staging)) Directory.Delete(staging,true); if(File.Exists(temporaryArchive)) File.Delete(temporaryArchive); }
+			await Task.CompletedTask; return new { host_id=hostId,archive_path=archive,sha256=HashFile(archive),compression,transport=useTls?"mutual_tls":"authenticated_plaintext",launch_command=@".\dnSpy.exe",launcher_alternative=@".\launcher\Start-dgSpyRemoteHost.cmd",replaced_existing_host=replacing,transferred=false,executed=false,gateway_restart_required=false,gateway_ready=true,listener=listenerReadiness };
+		} finally { if(File.Exists(temporaryArchive)) File.Delete(temporaryArchive); }
 	}
 	async Task<object> RemoteReadinessAsync(string? hostId,HostRouter router,CancellationToken token) { if(string.IsNullOrWhiteSpace(hostId)) throw new GatewayControlException("invalid_arguments","host_id is required."); var hosts=await router.ListHostsAsync(token); var selected=hosts.Select(item=>System.Text.Json.JsonSerializer.Serialize(item)).FirstOrDefault(json=>json.Contains($"\"host_id\":\"{hostId}\"",StringComparison.Ordinal)); return new { host_id=hostId,registered=selected is not null,connected=selected?.Contains("\"state\":\"connected\"",StringComparison.Ordinal)==true,hosts }; }
 	object RevokeRemote(JsonObject args,HostRouter router) { RequireConfirm(args); var hostId=(string?)args["host_id"] ?? throw new GatewayControlException("invalid_arguments","host_id is required."); var registry=Environment.GetEnvironmentVariable("DGSPY_HOSTS_FILE") ?? Path.Combine(packageRoot,"gateway-hosts.json"); if(!File.Exists(registry)) return new { host_id=hostId,revoked=false,already_absent=true }; var root=JsonNode.Parse(File.ReadAllText(registry))!.AsObject(); var hosts=root["hosts"]!.AsArray(); var removed=hosts.Where(node=>(string?)node?["host_id"]==hostId).ToArray(); foreach(var node in removed) hosts.Remove(node); AtomicWrite(registry,root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })); if(removed.Length>0) { var updated=HostRegistry.Load(registry,includeLocal:true); var listener=remoteListener ?? throw new GatewayControlException("listener_unavailable","The running Gateway does not expose its remote listener lifecycle service."); listener.EnsureConfigured(registry); router.Reload(updated); } return new { host_id=hostId,revoked=removed.Length>0,already_absent=removed.Length==0,credentials_retained=true,gateway_restart_required=false,recovery=removed.Length>0?"The live connection was closed and the old credential is no longer accepted. Delete retained credential files after confirming no rollback is required.":null }; }
@@ -670,9 +676,59 @@ public sealed class DeploymentService {
 		if(server) { var san=new SubjectAlternativeNameBuilder(); if(IPAddress.TryParse(name,out var address)) san.AddIpAddress(address); else san.AddDnsName(name); request.CertificateExtensions.Add(san.Build()); }
 		using var certificate=request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5),DateTimeOffset.UtcNow.AddYears(5)); return (certificate.Export(X509ContentType.Pfx,password),certificate.Export(X509ContentType.Cert));
 	}
-	static void WriteRemoteManifest(string root,string bundleName) {
-		var files=new JsonArray(); foreach(var path in Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories).Where(path=>!Path.GetRelativePath(root,path).StartsWith("state"+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)&&!Path.GetFileName(path).Equals("manifest.json",StringComparison.OrdinalIgnoreCase)).OrderBy(path=>path,StringComparer.OrdinalIgnoreCase)) { var info=new FileInfo(path); files.Add(new JsonObject { ["path"]=Path.GetRelativePath(root,path).Replace('\\','/'),["size"]=info.Length,["sha256"]=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant() }); }
-		var manifest=new JsonObject { ["format_version"]=1,["bundle"]=bundleName,["target_framework"]="net10.0-windows",["runtime_identifier"]="win-x64",["self_contained"]=true,["files"]=files }; File.WriteAllText(Path.Combine(root,"manifest.json"),manifest.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })+"\n",new UTF8Encoding(false));
+	static byte[] Utf8(string value) => new UTF8Encoding(false).GetBytes(value);
+
+	/// <summary>Hashes a file without materializing it. The archive is several hundred megabytes, and
+	/// reading it into one <c>byte[]</c> to hash it bought a large-object allocation and a second full
+	/// read for nothing.</summary>
+	static string HashFile(string path) { using var stream=File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(stream)); }
+
+	/// <summary>The package manifest, computed over the installed payload plus the personalized overlay
+	/// without staging either. <c>state</c> is excluded because it holds the host credential, and a
+	/// manifest cannot describe itself. Entries are ordered by their path with the platform separator, so
+	/// the ordering is the one the staging-tree implementation produced.</summary>
+	static string RemoteManifest(string payload,IReadOnlyDictionary<string,byte[]> personalized,string bundleName,CancellationToken token) {
+		var entries=new List<(string Sort,string Path,long Size,string Sha)>();
+		foreach(var path in Directory.EnumerateFiles(payload,"*",SearchOption.AllDirectories)) {
+			token.ThrowIfCancellationRequested();
+			var relative=Path.GetRelativePath(payload,path);
+			// An overlaid file is described by the bytes that reach the archive, never by the payload copy
+			// it replaces.
+			if(ExcludedFromRemoteManifest(relative)||personalized.ContainsKey(relative.Replace('\\','/'))) continue;
+			using var stream=File.OpenRead(path);
+			entries.Add((relative,relative.Replace('\\','/'),stream.Length,Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant()));
+		}
+		foreach(var pair in personalized) {
+			if(ExcludedFromRemoteManifest(pair.Key)) continue;
+			entries.Add((pair.Key.Replace('/',Path.DirectorySeparatorChar),pair.Key,pair.Value.LongLength,Convert.ToHexString(SHA256.HashData(pair.Value)).ToLowerInvariant()));
+		}
+		var files=new JsonArray();
+		foreach(var entry in entries.OrderBy(value=>value.Sort,StringComparer.OrdinalIgnoreCase)) files.Add(new JsonObject { ["path"]=entry.Path,["size"]=entry.Size,["sha256"]=entry.Sha });
+		var manifest=new JsonObject { ["format_version"]=1,["bundle"]=bundleName,["target_framework"]="net10.0-windows",["runtime_identifier"]="win-x64",["self_contained"]=true,["files"]=files };
+		return manifest.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true })+"\n";
+	}
+	static bool ExcludedFromRemoteManifest(string relative) {
+		var normalized=relative.Replace('\\','/');
+		return normalized.StartsWith("state/",StringComparison.OrdinalIgnoreCase)||Path.GetFileName(normalized).Equals("manifest.json",StringComparison.OrdinalIgnoreCase);
+	}
+
+	/// <summary>Writes the package straight from the installed payload with the personalized files
+	/// overlaid. Streamed into the archive as it is built, so neither the tree nor any single entry is
+	/// held in memory, and the payload is never copied to disk first.</summary>
+	static void WriteRemoteArchive(string archivePath,string payload,IReadOnlyDictionary<string,byte[]> personalized,CompressionLevel level,CancellationToken token) {
+		using var file=new FileStream(archivePath,FileMode.CreateNew,FileAccess.Write,FileShare.None);
+		using var zip=new ZipArchive(file,ZipArchiveMode.Create);
+		foreach(var path in Directory.EnumerateFiles(payload,"*",SearchOption.AllDirectories)) {
+			token.ThrowIfCancellationRequested();
+			var name=Path.GetRelativePath(payload,path).Replace('\\','/');
+			if(personalized.ContainsKey(name)) continue;
+			zip.CreateEntryFromFile(path,name,level);
+		}
+		foreach(var pair in personalized) {
+			token.ThrowIfCancellationRequested();
+			using var stream=zip.CreateEntry(pair.Key,level).Open();
+			stream.Write(pair.Value,0,pair.Value.Length);
+		}
 	}
 
 	JsonObject? ReadCurrent() { var path=Path.Combine(installRoot,"current.json"); return File.Exists(path)?JsonNode.Parse(File.ReadAllText(path))!.AsObject():null; }

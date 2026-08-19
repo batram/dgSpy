@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -33,6 +34,31 @@ public sealed class DeploymentServiceTests : IDisposable {
 		var registry=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"state","packages","gateway-hosts.json")))!; Assert.Equal("remote-a",(string?)registry["hosts"]?[0]?["host_id"]); Assert.Equal("127.0.0.1",(string?)registry["listener"]?["address"]); Assert.Equal(7352,(int?)registry["listener"]?["plaintext_port"]);
 		Assert.True(router.IsRegistered("remote-a"));
 	}
+	/// <summary>The package is zipped straight from the installed payload with the personalized files
+	/// overlaid, instead of copying the whole self-contained tree into a staging directory first. The
+	/// manifest therefore has to describe the bytes that actually reach the archive - the overlay's, not
+	/// the payload copy they replace - and must still leave out the credential directory and itself.
+	/// </summary>
+	[Fact]
+	public async Task Remote_package_manifest_describes_the_bytes_in_the_archive_and_omits_the_credentials() {
+		var router=new HostRouter(); using var listener=new RemoteHostListener(router); var service=new DeploymentService(listener);
+		var result=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await service.ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-m"},{"gateway_address","127.0.0.1"},{"use_tls",true}},router,default)))!;
+		var archive=(string)result["archive_path"]!;
+		using var zip=ZipFile.OpenRead(archive);
+		var manifest=JsonNode.Parse(new StreamReader(zip.GetEntry("manifest.json")!.Open()).ReadToEnd())!;
+		var described=manifest["files"]!.AsArray().ToDictionary(node=>(string)node!["path"]!,node=>((long?)node!["size"],(string)node!["sha256"]!),StringComparer.OrdinalIgnoreCase);
+
+		Assert.DoesNotContain(described.Keys,path=>path.StartsWith("state/",StringComparison.OrdinalIgnoreCase));
+		Assert.DoesNotContain("manifest.json",described.Keys);
+		Assert.NotNull(zip.GetEntry("state/rpc.token"));
+		foreach(var name in new[]{"remote-host.json","certificates/client.pfx","certificates/gateway-server.cer","dnSpy.exe"}) {
+			var entry=zip.GetEntry(name)!;
+			using var stream=entry.Open(); using var bytes=new MemoryStream(); stream.CopyTo(bytes);
+			Assert.Equal((entry.Length,Convert.ToHexString(SHA256.HashData(bytes.ToArray())).ToLowerInvariant()),described[name]);
+		}
+		Assert.Equal((string?)result["sha256"],Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archive))));
+	}
+
 	[Fact]
 	public async Task Remote_package_defaults_to_mutual_tls_and_can_replace_the_same_host() {
 		var router=new HostRouter(); using var listener=new RemoteHostListener(router); var service=new DeploymentService(listener); var request=new JsonObject{{"host_id","remote-tls"},{"gateway_address","127.0.0.1"}};
