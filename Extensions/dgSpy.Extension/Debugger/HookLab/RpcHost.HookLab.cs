@@ -145,14 +145,14 @@ namespace dgSpy.Extension {
 					var backend=HookLabTargetEligibility.SelectBackend(process.Bitness,process.Architecture.ToString(),identities)!.Value;
 					var runtimeId=backend==HookLabTargetEligibility.Backend.CoreClr?CoreClrRuntimeId(process.Id):"v4.0.30319";
 					if(String.IsNullOrWhiteSpace(runtimeId)) throw new RpcException("hooklab_runtime_identity_unavailable","The debugger did not publish the exact CoreCLR runtime version.");
-					return (WasRunning:process.IsRunning,Backend:backend,RuntimeId:runtimeId);
+					return (WasRunning:process.IsRunning,Backend:backend,RuntimeId:runtimeId,DomainName:ResolveApplicationDomain(source,process));
 				},token).ConfigureAwait(false);
 				var wasRunning=target.WasRunning;
 				var completion=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-init-"+Guid.NewGuid().ToString("N")+".completion");
 				ProbeConnection? connection=null; byte[]? endpointSecret=null;
 				try {
 					var runtimeId=target.RuntimeId;
-					var identity=TargetIdentity(source.Arguments,processId,completion,runtimeId);
+					var identity=TargetIdentity(source.Arguments,processId,completion,runtimeId,target.DomainName);
 					var live=LiveTarget(processId,DgSpyStateRoot.ResidentHostId,runtimeId); var store=new ProbeDiscoveryStore(DgSpyStateRoot.SharedResidentRoot()); var discovered=store.DiscoverStrict(new ExtensionLiveTargets(runtimeId),DateTime.UtcNow).Where(value=>SameTarget(value.Target,live)).ToArray();
 					if(discovered.Length>1) throw new RpcException("hooklab_resident_ambiguous","Multiple authenticated HookLab residents name this exact target.");
 					Dictionary<string,string> completionReport;
@@ -522,9 +522,67 @@ namespace dgSpy.Extension {
 				return text;
 			}
 
-			static JsonObject TargetIdentity(JsonObject source,int processId,string completion,string runtimeId) {
-				try { using var process=Process.GetProcessById(processId); return new JsonObject { ["host_id"]=DgSpyStateRoot.ResidentHostId,["image_path"]=process.MainModule?.FileName ?? process.ProcessName,["process_id"]=processId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]=runtimeId,["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion }; }
+			static JsonObject TargetIdentity(JsonObject source,int processId,string completion,string runtimeId,string? applicationDomainName=null) {
+				try {
+					using var process=Process.GetProcessById(processId);
+					var identity=new JsonObject { ["host_id"]=DgSpyStateRoot.ResidentHostId,["image_path"]=process.MainModule?.FileName ?? process.ProcessName,["process_id"]=processId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]=runtimeId,["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion };
+					// Which application domain the native bootstrap should enter, by friendly name.
+					//
+					// Name and not id, because the native selector can only read a name: measured, the
+					// COM _AppDomain interface has no get_Id - it is the .NET 1.x class interface and
+					// AppDomain.Id arrived in 2.0. dnSpy's DbgAppDomain has both, so the translation
+					// happens here, where both are available, rather than reflectively in native code.
+					//
+					// Absent means the default domain, which is what ExecuteInDefaultAppDomain already
+					// does, so a single-domain target produces byte-identical parameters to before.
+					//
+					// appdomain_id above is deliberately still "1". It is part of the recorded target
+					// identity that discovery and adoption compare, and changing it is Road 1 subslice 3
+					// of subslice 6 - keying residency by (process, application domain). Today's model is
+					// one resident per process, and that still holds; this only chooses where it lives.
+					if(!String.IsNullOrEmpty(applicationDomainName)) identity["appdomain_name"]=applicationDomainName;
+					return identity;
+				}
+				catch(RpcException) { throw; }
 				catch(Exception ex) { throw new RpcException("target_unavailable","Could not read target process identity: "+ex.Message); }
+			}
+
+			/// <summary>Which application domain holds the code the caller intends to hook.
+			///
+			/// Returns null for "the default domain", which is the shipped behaviour and needs no
+			/// selection. Returns a friendly name when a specific domain must be entered.
+			///
+			/// The refusal in the middle is the point of the whole road. A process with several
+			/// application domains and no domain named is exactly the live IIS case: defaulting silently
+			/// puts the resident in the default domain, where the application's assemblies are not, and
+			/// the failure surfaces much later as "No loaded assembly matches hook_assembly". Naming the
+			/// domains here turns that into one sentence, before anything is injected.</summary>
+			static string? ResolveApplicationDomain(RpcRequest source,dnSpy.Contracts.Debugger.DbgProcess process) {
+				var domains=process.Runtimes.SelectMany(runtime=>runtime.AppDomains).ToArray();
+				int? requested=null;
+				if(source.Arguments.TryGetPropertyValue("app_domain_id",out var node)&&node is not null) {
+					var text=node.ToString();
+					if(!Int32.TryParse(text,NumberStyles.Integer,CultureInfo.InvariantCulture,out var value))
+						throw new RpcException("invalid_arguments","app_domain_id must be the numeric application domain id that list_modules reports for the module you intend to hook.");
+					requested=value;
+				}
+				var describe=new Func<string>(()=>String.Join(", ",domains.Select(domain=>domain.Id.ToString(CultureInfo.InvariantCulture)+"="+domain.Name)));
+				if(requested is null) {
+					if(domains.Length<=1) return null;
+					throw new RpcException("hooklab_application_domain_required",
+						"This process runs code in "+domains.Length.ToString(CultureInfo.InvariantCulture)+" application domains, so HookLab will not guess which one to enter. "+
+						"Pass app_domain_id naming the domain that holds the code you intend to hook; list_modules reports it per module. Domains: "+describe());
+				}
+				var selected=domains.Where(domain=>domain.Id==requested.Value).ToArray();
+				if(selected.Length==0)
+					throw new RpcException("hooklab_application_domain_not_found","No application domain with id "+requested.Value.ToString(CultureInfo.InvariantCulture)+" is loaded in this process. Domains: "+describe());
+				var name=selected[0].Name;
+				// The resident is selected by name in the target, so two domains sharing one is a refusal
+				// rather than a coin flip.
+				if(domains.Count(domain=>String.Equals(domain.Name,name,StringComparison.Ordinal))>1)
+					throw new RpcException("hooklab_application_domain_ambiguous","More than one application domain in this process is named '"+name+"', and the resident selects its domain by name. Domains: "+describe());
+				// A single-domain process needs no selection at all, so it keeps the shipped path exactly.
+				return domains.Length<=1?null:name;
 			}
 			static string CoreClrRuntimeId(int processId) {
 				try {

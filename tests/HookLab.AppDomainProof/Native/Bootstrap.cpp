@@ -180,6 +180,16 @@ static DWORD WINAPI Worker(void*) {
 				if(SUCCEEDED(unknown->QueryInterface(__uuidof(mscorlib::_AppDomain),reinterpret_cast<void**>(&domain)))&&domain!=nullptr) {
 					BSTR name=nullptr;
 					if(SUCCEEDED(domain->get_FriendlyName(&name))&&name!=nullptr) {
+						// Selection is by friendly name because that is the only identifier available
+						// here. Measured: `_AppDomain` has no `get_Id` - it is the .NET 1.x class
+						// interface and AppDomain.Id arrived in 2.0 - so a native selector cannot match
+						// on the numeric app_domain_id the MCP surface carries without invoking the
+						// property reflectively.
+						//
+						// The product answer is therefore to translate on the managed side, where
+						// dnSpy's DbgAppDomain exposes BOTH Id and Name: the extension resolves the
+						// caller's app_domain_id to a friendly name and writes that into
+						// initialize.params, and native code matches the name it can actually read.
 						wchar_t line[512];
 						swprintf_s(line,L"domain[%d]=%s\r\n",index,name);
 						log+=line;

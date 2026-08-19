@@ -24,8 +24,19 @@ public sealed class InjectedNativeImportPolicyTests {
 	/// <summary>Modules an injected artifact may import. KERNEL32 is present in every Windows process
 	/// before anything is injected; mscoree is present in every process hosting a CLR, which is the
 	/// only kind of process this artifact is ever injected into. Nothing else is guaranteed to exist
-	/// on a machine we do not control.</summary>
-	static readonly string[] AllowedModules={ "kernel32.dll","mscoree.dll" };
+	/// on a machine we do not control.
+	///
+	/// OLEAUT32 was added deliberately on 2026-08-19, when the native bootstrap gained the ability to
+	/// enter a chosen application domain. Reaching a specific AppDomain means talking COM to
+	/// <c>_AppDomain</c>, and <c>BSTR</c> and <c>SAFEARRAY</c> live in oleaut32; there is no way to do
+	/// it without them. It qualifies on the same test as the other two: a core Windows DLL, present on
+	/// every installation and listed in KnownDLLs, so no machine can be missing it.
+	///
+	/// That is the whole distinction this list exists to enforce. The import that caused the original
+	/// incident, VCRUNTIME140_1.dll, ships with a Visual C++ redistributable that a server may simply
+	/// not have. "Always present on Windows" and "usually installed" are different claims, and only the
+	/// first one belongs here.</summary>
+	static readonly string[] AllowedModules={ "kernel32.dll","mscoree.dll","oleaut32.dll" };
 
 	/// <summary>File names of the native artifacts the product injects into a target process.</summary>
 	static readonly string[] InjectedArtifactNames={ "HookLab.NativeBootstrap.x64.dll" };
