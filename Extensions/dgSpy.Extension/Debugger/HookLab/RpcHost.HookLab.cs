@@ -131,10 +131,10 @@ namespace dgSpy.Extension {
 				var session=Required(source.Arguments,"session_id");
 				var processId=RequiredInt(source.Arguments,"process_id");
 				RuntimeRecord existing;
-				lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) { HookLabUiBridge.SetInitialized(); return Initialized(existing,false); }
+				lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) { RefuseDomainMismatch(source,existing); HookLabUiBridge.SetInitialized(); return Initialized(existing,false); }
 				await initialization.WaitAsync(token).ConfigureAwait(false);
 				try {
-					lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) { HookLabUiBridge.SetInitialized(); return Initialized(existing,false); }
+					lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) { RefuseDomainMismatch(source,existing); HookLabUiBridge.SetInitialized(); return Initialized(existing,false); }
 
 				var target=await host.OnDebuggerAsync(()=>{
 					host.CheckVersion(source);
@@ -145,21 +145,23 @@ namespace dgSpy.Extension {
 					var backend=HookLabTargetEligibility.SelectBackend(process.Bitness,process.Architecture.ToString(),identities)!.Value;
 					var runtimeId=backend==HookLabTargetEligibility.Backend.CoreClr?CoreClrRuntimeId(process.Id):"v4.0.30319";
 					if(String.IsNullOrWhiteSpace(runtimeId)) throw new RpcException("hooklab_runtime_identity_unavailable","The debugger did not publish the exact CoreCLR runtime version.");
-					return (WasRunning:process.IsRunning,Backend:backend,RuntimeId:runtimeId,DomainName:ResolveApplicationDomain(source,process));
+					return (WasRunning:process.IsRunning,Backend:backend,RuntimeId:runtimeId,Domain:ResolveApplicationDomain(source,process));
 				},token).ConfigureAwait(false);
 				var wasRunning=target.WasRunning;
 				var completion=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-init-"+Guid.NewGuid().ToString("N")+".completion");
 				ProbeConnection? connection=null; byte[]? endpointSecret=null;
 				try {
 					var runtimeId=target.RuntimeId;
-					var identity=TargetIdentity(source.Arguments,processId,completion,runtimeId,target.DomainName);
-					var live=LiveTarget(processId,DgSpyStateRoot.ResidentHostId,runtimeId); var store=new ProbeDiscoveryStore(DgSpyStateRoot.SharedResidentRoot()); var discovered=store.DiscoverStrict(new ExtensionLiveTargets(runtimeId),DateTime.UtcNow).Where(value=>SameTarget(value.Target,live)).ToArray();
+					var identity=TargetIdentity(source.Arguments,processId,completion,runtimeId,target.Domain.Name,target.Domain.IdentityId);
+					// SameTarget here, with the domain: adoption must not hand back a resident living in a
+					// different application domain than the one this operation is for.
+					var live=LiveTarget(processId,DgSpyStateRoot.ResidentHostId,runtimeId,target.Domain.IdentityId); var store=new ProbeDiscoveryStore(DgSpyStateRoot.SharedResidentRoot()); var discovered=store.DiscoverStrict(new ExtensionLiveTargets(runtimeId),DateTime.UtcNow).Where(value=>SameTarget(value.Target,live)).ToArray();
 					if(discovered.Length>1) throw new RpcException("hooklab_resident_ambiguous","Multiple authenticated HookLab residents name this exact target.");
 					Dictionary<string,string> completionReport;
 					if(discovered.Length==1) {
 						var health=store.VerifyHealthAndRefresh(discovered[0],2000); var adopted=discovered[0];
 						connection=new ProbeConnection(adopted.PipeName,adopted.Secret,adopted.EndpointNonce);
-						var adoptedRuntime=new RuntimeRecord(session,processId,connection,health.Status.ExpectedHooksVersion??0,adopted.ProbeInstanceId,true); connection=null; Inventory(adoptedRuntime,health.Status.PayloadJson);
+						var adoptedRuntime=new RuntimeRecord(session,processId,connection,health.Status.ExpectedHooksVersion??0,adopted.ProbeInstanceId,true,target.Domain.IdentityId); connection=null; Inventory(adoptedRuntime,health.Status.PayloadJson);
 						lock(gate) runtimes.Add(RuntimeKey(session,processId),adoptedRuntime); StartEventPump(adoptedRuntime); HookLabUiBridge.SetInitialized(); return Initialized(adoptedRuntime,true,adopted:true);
 					}
 					endpointSecret=ProbeAuthentication.CreateSecret(); identity["endpoint_secret_base64"]=Convert.ToBase64String(endpointSecret);
@@ -180,7 +182,7 @@ namespace dgSpy.Extension {
 					if(target.Backend==HookLabTargetEligibility.Backend.CoreClr) await SynchronizeCoreClrAsync(host,source,token).ConfigureAwait(false);
 					var pipe=Required(completionReport,"pipe_name","HookLab initialization did not report its control pipe."); var nonce=Convert.FromBase64String(Required(completionReport,"pipe_nonce_base64","HookLab initialization did not report its endpoint nonce.")); var probe=Required(completionReport,"probe_instance_id","HookLab initialization did not report its probe identity.");
 					connection=new ProbeConnection(pipe,endpointSecret,nonce);
-					var runtime=new RuntimeRecord(session,processId,connection,Long(completionReport,"hooks_version"),probe,false);
+					var runtime=new RuntimeRecord(session,processId,connection,Long(completionReport,"hooks_version"),probe,false,target.Domain.IdentityId);
 					store.Write(new ProbeDiscoveryRecord(live,probe,pipe,nonce,endpointSecret,1,DateTime.UtcNow.Add(ProbeDiscoveryStore.DiscoveryRecordLifetime)));
 					var status=await SendRawAsync(runtime,"status","{}",token).ConfigureAwait(false); Inventory(runtime,status);
 					lock(gate) runtimes.Add(RuntimeKey(session,processId),runtime);
@@ -522,10 +524,10 @@ namespace dgSpy.Extension {
 				return text;
 			}
 
-			static JsonObject TargetIdentity(JsonObject source,int processId,string completion,string runtimeId,string? applicationDomainName=null) {
+			static JsonObject TargetIdentity(JsonObject source,int processId,string completion,string runtimeId,string? applicationDomainName=null,string applicationDomainId=DefaultApplicationDomainId) {
 				try {
 					using var process=Process.GetProcessById(processId);
-					var identity=new JsonObject { ["host_id"]=DgSpyStateRoot.ResidentHostId,["image_path"]=process.MainModule?.FileName ?? process.ProcessName,["process_id"]=processId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]=runtimeId,["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion };
+					var identity=new JsonObject { ["host_id"]=DgSpyStateRoot.ResidentHostId,["image_path"]=process.MainModule?.FileName ?? process.ProcessName,["process_id"]=processId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]=runtimeId,["appdomain_id"]=applicationDomainId,["endpoint"]="pipe",["completion_path"]=completion };
 					// Which application domain the native bootstrap should enter, by friendly name.
 					//
 					// Name and not id, because the native selector can only read a name: measured, the
@@ -557,18 +559,29 @@ namespace dgSpy.Extension {
 			/// puts the resident in the default domain, where the application's assemblies are not, and
 			/// the failure surfaces much later as "No loaded assembly matches hook_assembly". Naming the
 			/// domains here turns that into one sentence, before anything is injected.</summary>
-			static string? ResolveApplicationDomain(RpcRequest source,dnSpy.Contracts.Debugger.DbgProcess process) {
+			/// <summary>The application domain the caller asked for, or null when they named none. Parsed
+			/// without touching the debugger so the already-initialized fast path can use it too.</summary>
+			static int? RequestedApplicationDomain(RpcRequest source) {
+				if(!source.Arguments.TryGetPropertyValue("app_domain_id",out var node)||node is null) return null;
+				if(!Int32.TryParse(node.ToString(),NumberStyles.Integer,CultureInfo.InvariantCulture,out var value))
+					throw new RpcException("invalid_arguments","app_domain_id must be the numeric application domain id that list_modules reports for the module you intend to hook.");
+				return value;
+			}
+
+			/// <summary>The domain to enter, and the value that identifies it in the recorded target
+			/// identity.
+			///
+			/// <para>The identity keeps its historical <c>"1"</c> whenever no specific domain was chosen,
+			/// which is every target that works today. Identity is used for matching rather than for
+			/// display, so what matters is that the recorded value and the live value are computed by the
+			/// same rule - and holding the old rule for the old case means no existing record stops
+			/// matching.</para></summary>
+			static (string? Name,string IdentityId) ResolveApplicationDomain(RpcRequest source,dnSpy.Contracts.Debugger.DbgProcess process) {
 				var domains=process.Runtimes.SelectMany(runtime=>runtime.AppDomains).ToArray();
-				int? requested=null;
-				if(source.Arguments.TryGetPropertyValue("app_domain_id",out var node)&&node is not null) {
-					var text=node.ToString();
-					if(!Int32.TryParse(text,NumberStyles.Integer,CultureInfo.InvariantCulture,out var value))
-						throw new RpcException("invalid_arguments","app_domain_id must be the numeric application domain id that list_modules reports for the module you intend to hook.");
-					requested=value;
-				}
+				var requested=RequestedApplicationDomain(source);
 				var describe=new Func<string>(()=>String.Join(", ",domains.Select(domain=>domain.Id.ToString(CultureInfo.InvariantCulture)+"="+domain.Name)));
 				if(requested is null) {
-					if(domains.Length<=1) return null;
+					if(domains.Length<=1) return (null,DefaultApplicationDomainId);
 					throw new RpcException("hooklab_application_domain_required",
 						"This process runs code in "+domains.Length.ToString(CultureInfo.InvariantCulture)+" application domains, so HookLab will not guess which one to enter. "+
 						"Pass app_domain_id naming the domain that holds the code you intend to hook; list_modules reports it per module. Domains: "+describe());
@@ -582,7 +595,36 @@ namespace dgSpy.Extension {
 				if(domains.Count(domain=>String.Equals(domain.Name,name,StringComparison.Ordinal))>1)
 					throw new RpcException("hooklab_application_domain_ambiguous","More than one application domain in this process is named '"+name+"', and the resident selects its domain by name. Domains: "+describe());
 				// A single-domain process needs no selection at all, so it keeps the shipped path exactly.
-				return domains.Length<=1?null:name;
+				return domains.Length<=1
+					?(null,DefaultApplicationDomainId)
+					:(name,requested.Value.ToString(CultureInfo.InvariantCulture));
+			}
+
+			/// <summary>What the recorded identity has always carried for "the domain we entered", back
+			/// when the native path could only ever enter the default one.</summary>
+			const string DefaultApplicationDomainId="1";
+
+			/// <summary>Refuses when this process already has a resident and the caller named a different
+			/// application domain.
+			///
+			/// <para>The model is still one resident per process, so the alternative to refusing is
+			/// handing back a resident in a domain the caller did not ask for and letting them install
+			/// hooks that can never bind - which is the failure this road exists to remove, moved one step
+			/// later. Naming no domain still returns the existing resident: there is nothing to choose
+			/// when it already exists.</para>
+			///
+			/// <para>One resident per domain is the obvious next step and is deliberately not taken here.
+			/// It needs a domain in the runtime key and therefore in every operation that names a process,
+			/// which is a surface change rather than a keying change.</para></summary>
+			static void RefuseDomainMismatch(RpcRequest source,RuntimeRecord existing) {
+				var requested=RequestedApplicationDomain(source);
+				if(requested is null) return;
+				var wanted=requested.Value.ToString(CultureInfo.InvariantCulture);
+				if(String.Equals(wanted,existing.AppDomainId,StringComparison.Ordinal)) return;
+				throw new RpcException("hooklab_application_domain_conflict",
+					"HookLab is already initialized in this process in application domain "+existing.AppDomainId+
+					", and this request names domain "+wanted+". One resident per process is supported, so remove the existing "+
+					"resident before initializing in a different domain.");
 			}
 			static string CoreClrRuntimeId(int processId) {
 				try {
@@ -595,8 +637,21 @@ namespace dgSpy.Extension {
 				}
 				catch(Exception ex) when(ex is not RpcException) { throw new RpcException("hooklab_runtime_identity_unavailable","Could not derive the exact loaded CoreCLR runtime identity: "+ex.Message); }
 			}
-			static TargetIdentity LiveTarget(int processId,string hostId=DgSpyStateRoot.ResidentHostId,string runtimeId="v4.0.30319") { using var process=Process.GetProcessById(processId); return new TargetIdentity(hostId,process.MainModule?.FileName??throw new InvalidOperationException("Target image is unavailable."),processId,process.StartTime.ToUniversalTime(),"x64",runtimeId,"1"); }
-			static bool SameTarget(TargetIdentity left,TargetIdentity right)=>(left.HostId==DgSpyStateRoot.ResidentHostId||left.HostId=="apply-once")&&left.ProcessId==right.ProcessId&&left.ProcessCreationTimeUtc.ToUniversalTime().Ticks==right.ProcessCreationTimeUtc.ToUniversalTime().Ticks&&String.Equals(Path.GetFullPath(left.ImagePath),Path.GetFullPath(right.ImagePath),StringComparison.OrdinalIgnoreCase)&&left.Architecture==right.Architecture&&left.RuntimeId==right.RuntimeId&&left.AppDomainId==right.AppDomainId;
+			// appDomainId defaults to what this always recorded. It only matters to callers that compare
+			// with SameTarget; ExtensionLiveTargets compares with SameProcessTarget and ignores it.
+			static TargetIdentity LiveTarget(int processId,string hostId=DgSpyStateRoot.ResidentHostId,string runtimeId="v4.0.30319",string appDomainId=DefaultApplicationDomainId) { using var process=Process.GetProcessById(processId); return new TargetIdentity(hostId,process.MainModule?.FileName??throw new InvalidOperationException("Target image is unavailable."),processId,process.StartTime.ToUniversalTime(),"x64",runtimeId,appDomainId); }
+			// Two different questions, and only one of them involves the application domain.
+			//
+			// "Is this record still about a live process that is the same process?" must NOT consider the
+			// domain. DiscoverCore treats a record it is told is not current as either garbage to delete
+			// or an integrity failure to quarantine, so answering false for a perfectly valid resident
+			// that merely lives in another domain would destroy it - and "preserve unknown and
+			// foreign-owned resident hooks" is an invariant of this whole road.
+			//
+			// "Is this record the resident I am operating on?" must consider it, or an operation aimed at
+			// domain 3 adopts the resident in domain 2.
+			static bool SameProcessTarget(TargetIdentity left,TargetIdentity right)=>HookLabTargetMatch.SameProcess(left,right,DgSpyStateRoot.ResidentHostId);
+			static bool SameTarget(TargetIdentity left,TargetIdentity right)=>HookLabTargetMatch.SameTarget(left,right,DgSpyStateRoot.ResidentHostId);
 			// Reading a process can fail in three ways, and only one of them is "no such process".
 			// ArgumentException is that one. Process.MainModule and Process.StartTime additionally throw
 			// Win32Exception when the process cannot be opened - a recycled PID now owned by another
@@ -620,7 +675,7 @@ namespace dgSpy.Extension {
 			// not_provable_preflight is exactly this shape. Recorded in the task, not folded in here.
 			sealed class ExtensionLiveTargets : ILiveTargetIdentity,ILiveTargetLiveness {
 				readonly string runtimeId; public ExtensionLiveTargets(string runtimeId="v4.0.30319")=>this.runtimeId=runtimeId;
-				public bool IsCurrent(TargetIdentity identity) { try { return SameTarget(identity,LiveTarget(identity.ProcessId,identity.HostId,runtimeId)); } catch(ArgumentException) { return false; } catch(InvalidOperationException) { return false; } catch(System.ComponentModel.Win32Exception) { return false; } }
+				public bool IsCurrent(TargetIdentity identity) { try { return SameProcessTarget(identity,LiveTarget(identity.ProcessId,identity.HostId,runtimeId)); } catch(ArgumentException) { return false; } catch(InvalidOperationException) { return false; } catch(System.ComponentModel.Win32Exception) { return false; } }
 				public bool IsAlive(TargetIdentity identity) { try { using var process=Process.GetProcessById(identity.ProcessId); return process.StartTime.ToUniversalTime().Ticks==identity.ProcessCreationTimeUtc.ToUniversalTime().Ticks; } catch(ArgumentException) { return false; } catch(InvalidOperationException) { return false; } catch(System.ComponentModel.Win32Exception) { return false; } }
 			}
 
@@ -683,7 +738,7 @@ namespace dgSpy.Extension {
 			sealed class HookRecord { public HookRecord(HookDefinition definition,string patchId) { Definition=definition; PatchId=patchId; } public HookDefinition Definition { get; } public string PatchId { get; } public bool Enabled=true; public MethodDef? MethodDefinition; }
 			sealed class ResidentHookRecord { public ResidentHookRecord(string sessionId,int processId,string patchId,string controller,string hookId,string assemblySimpleName,string kind,string mvid,int metadataToken,string declaringType,string signature,string ilSha256,string sourceSha256,int revision,bool enabled) { SessionId=sessionId; ProcessId=processId; PatchId=patchId; Controller=controller; HookId=hookId; AssemblySimpleName=assemblySimpleName; Kind=kind; Mvid=mvid; MetadataToken=metadataToken; DeclaringType=declaringType; Signature=signature; IlSha256=ilSha256; SourceSha256=sourceSha256; Revision=revision; Enabled=enabled; } public string SessionId,PatchId,Controller,HookId,AssemblySimpleName,Kind,Mvid,DeclaringType,Signature,IlSha256,SourceSha256; public int ProcessId,MetadataToken,Revision; public bool Enabled; public string Key=>SessionId+"\n"+ProcessId.ToString(CultureInfo.InvariantCulture)+"\n"+PatchId; }
 			sealed class HookCarrier { public HookCarrier(string moduleId,int methodToken,int ilOffset,int[] nearbyOffsets,string appDomainId) { ModuleId=moduleId; MethodToken=methodToken; IlOffset=ilOffset; NearbyOffsets=nearbyOffsets; AppDomainId=appDomainId; } public string ModuleId { get; } public int MethodToken { get; } public int IlOffset { get; } public int[] NearbyOffsets { get; } public string AppDomainId { get; } }
-			sealed class RuntimeRecord : IDisposable { public RuntimeRecord(string sessionId,int processId,ProbeConnection connection,long hooksVersion,string probeInstanceId,bool adopted) { SessionId=sessionId; ProcessId=processId; Connection=connection; HooksVersion=hooksVersion; ProbeInstanceId=probeInstanceId; Adopted=adopted; } public string SessionId { get; } public int ProcessId { get; } public string ProbeInstanceId { get; } public bool Adopted { get; } public ProbeConnection Connection { get; } public long HooksVersion; public SemaphoreSlim OperationGate { get; }=new SemaphoreSlim(1,1); public CancellationTokenSource Cancellation { get; }=new CancellationTokenSource(); public Task? Pump; public void Dispose() { Cancellation.Cancel(); Connection.Dispose(); OperationGate.Dispose(); Cancellation.Dispose(); } }
+			sealed class RuntimeRecord : IDisposable { public RuntimeRecord(string sessionId,int processId,ProbeConnection connection,long hooksVersion,string probeInstanceId,bool adopted,string appDomainId=DefaultApplicationDomainId) { SessionId=sessionId; ProcessId=processId; Connection=connection; HooksVersion=hooksVersion; ProbeInstanceId=probeInstanceId; Adopted=adopted; AppDomainId=appDomainId; } public string SessionId { get; } public int ProcessId { get; } public string ProbeInstanceId { get; } public bool Adopted { get; } public string AppDomainId { get; } public ProbeConnection Connection { get; } public long HooksVersion; public SemaphoreSlim OperationGate { get; }=new SemaphoreSlim(1,1); public CancellationTokenSource Cancellation { get; }=new CancellationTokenSource(); public Task? Pump; public void Dispose() { Cancellation.Cancel(); Connection.Dispose(); OperationGate.Dispose(); Cancellation.Dispose(); } }
 			sealed class HookEventRecord { public HookEventRecord(long cursor,string sequence,string patchId,string payloadJson,long dropped) { Cursor=cursor; Sequence=sequence; PatchId=patchId; PayloadJson=payloadJson; Dropped=dropped; } public long Cursor { get; } public string Sequence { get; } public string PatchId { get; } public string PayloadJson { get; } public long Dropped { get; } }
 
 			sealed class HookDefinition {
