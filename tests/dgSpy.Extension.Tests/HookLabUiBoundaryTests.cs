@@ -65,7 +65,11 @@ public sealed class HookLabUiBoundaryTests {
 		var initialize=source.IndexOf("publicasyncTask<object>InitializeAsync",StringComparison.Ordinal);
 		var eligibility=source.IndexOf("HookLabTargetEligibility.UnsupportedReason",initialize,StringComparison.Ordinal);
 		var refusal=source.IndexOf("thrownewRpcException(\"unsupported_hooklab_target\"",eligibility,StringComparison.Ordinal);
-		var completion=source.IndexOf("dgspy-hooklab-init-",initialize,StringComparison.Ordinal);
+		// Where staging begins. This used to anchor on the "dgspy-hooklab-init-" temp file name; the
+		// completion report now lives in the exchange area, so the anchor is the point that area is
+		// planned. The property being asserted is unchanged: nothing is staged for a target that policy
+		// has not accepted yet.
+		var completion=source.IndexOf("ExchangeAreaPlan.For(",initialize,StringComparison.Ordinal);
 		var resume=source.IndexOf("awaitResumeAsync(host,source,token)",initialize,StringComparison.Ordinal);
 		var inject=source.IndexOf("awaitInitializeAutonomouslyAsync",initialize,StringComparison.Ordinal);
 		Assert.True(initialize>=0 && eligibility>initialize && refusal>eligibility,"Initialization must apply the explicit target policy.");

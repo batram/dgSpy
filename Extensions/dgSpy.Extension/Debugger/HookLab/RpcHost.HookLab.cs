@@ -133,6 +133,10 @@ namespace dgSpy.Extension {
 				RuntimeRecord existing;
 				lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) { RefuseDomainMismatch(source,existing); HookLabUiBridge.SetInitialized(); return Initialized(existing,false); }
 				await initialization.WaitAsync(token).ConfigureAwait(false);
+				// Set when initialization fails and its staged files are kept. It is named in the error
+				// rather than left for someone to find, because a preserved directory nobody is told
+				// about is the same as a deleted one.
+				string? preservedExchange=null;
 				try {
 					lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) { RefuseDomainMismatch(source,existing); HookLabUiBridge.SetInitialized(); return Initialized(existing,false); }
 
@@ -148,7 +152,15 @@ namespace dgSpy.Extension {
 					return (WasRunning:process.IsRunning,Backend:backend,RuntimeId:runtimeId,Domain:ResolveApplicationDomain(source,process));
 				},token).ConfigureAwait(false);
 				var wasRunning=target.WasRunning;
-				var completion=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-init-"+Guid.NewGuid().ToString("N")+".completion");
+				// One location derived from BOTH identities, rather than Path.GetTempPath() answering
+				// "the debugger's" and saying nothing about the target. Against a target running as
+				// another account the debugger's temp directory is unreadable, which is defect 3 of the
+				// live incident: the staged payload was there, and the target could not see it.
+				var controllerSid=HookLab.Injector.ProcessIdentity.TryGetCurrentSid()
+					?? throw new RpcException("hooklab_identity_unavailable","This host could not read its own Windows identity, so the exchange area for initialization cannot be derived.");
+				var exchange=HookLab.Injector.ExchangeAreaPlan.For(controllerSid,HookLab.Injector.ProcessIdentity.TryGetUserSid(processId),"dgspy-hooklab-"+processId.ToString(CultureInfo.InvariantCulture)).Materialize();
+				var completion=Path.Combine(exchange.Path,"completion.txt");
+				var initializationSucceeded=false;
 				ProbeConnection? connection=null; byte[]? endpointSecret=null;
 				try {
 					var runtimeId=target.RuntimeId;
@@ -174,7 +186,7 @@ namespace dgSpy.Extension {
 							completionReport=await ExecuteInitializationOperationAsync(host,source,PayloadOperation.initialize,identity,token,true).ConfigureAwait(false);
 							completionReport=await ReadCompletionAsync(completion,token).ConfigureAwait(false);
 						}
-						else { await ResumeAsync(host,source,token).ConfigureAwait(false); completionReport=await InitializeAutonomouslyAsync(processId,identity,token).ConfigureAwait(false); }
+						else { await ResumeAsync(host,source,token).ConfigureAwait(false); completionReport=await InitializeAutonomouslyAsync(processId,identity,exchange.Path,token).ConfigureAwait(false); }
 					}
 					finally { }
 					if(!String.Equals(completionReport.TryGetValue("status",out var completedStatus)?completedStatus:null,"ok",StringComparison.Ordinal))
@@ -189,25 +201,33 @@ namespace dgSpy.Extension {
 					connection=null;
 					StartEventPump(runtime);
 					HookLabUiBridge.SetInitialized();
+					initializationSucceeded=true;
 					return Initialized(runtime,true,adopted:false);
 				}
 				finally {
 					if(endpointSecret is not null) Array.Clear(endpointSecret,0,endpointSecret.Length);
 					connection?.Dispose();
-					TryDelete(completion);
+					// Preserve on ambiguity. This used to delete unconditionally, which destroyed the
+					// staged files every time initialization failed - precisely when they were the only
+					// record of what the target had been offered, and precisely what the live
+					// investigation needed and did not have.
+					if(!initializationSucceeded) { exchange.Preserve(); preservedExchange=exchange.Path; }
+					exchange.Dispose();
 					if(wasRunning) await ResumeAsync(host,source,CancellationToken.None).ConfigureAwait(false);
 					else await EnsurePausedAsync(host,source,CancellationToken.None).ConfigureAwait(false);
 				}
 				}
-				catch(RpcException) { throw; }
-				catch(Exception ex) { throw new RpcException("hooklab_initialization_failed",ex.GetType().Name+": "+ex.Message); }
+				catch(RpcException ex) { throw preservedExchange is null?ex:new RpcException(ex.Code,ex.Message+" The staged files were preserved at "+preservedExchange+"."); }
+				catch(Exception ex) { throw new RpcException("hooklab_initialization_failed",ex.GetType().Name+": "+ex.Message+(preservedExchange is null?"":" The staged files were preserved at "+preservedExchange+".")); }
 				finally { initialization.Release(); }
 			}
 
-			static async Task<Dictionary<string,string>> InitializeAutonomouslyAsync(int processId,JsonObject parameters,CancellationToken token) {
-				var staging=Path.Combine(Path.GetTempPath(),"dgspy-hooklab-native-"+processId.ToString(CultureInfo.InvariantCulture)+"-"+Guid.NewGuid().ToString("N"));
+			// Stages into the exchange area rather than into a second directory of its own, so the payload
+			// the target must read and the completion report it must write share one location with one
+			// authored DACL. It does not own that directory and does not remove it; the caller does.
+			static async Task<Dictionary<string,string>> InitializeAutonomouslyAsync(int processId,JsonObject parameters,string staging,CancellationToken token) {
 				Directory.CreateDirectory(staging);
-				try {
+				{
 					using var payload=dgSpy.Extension.PayloadDelivery.HookLabPayloadResolver.Open();
 					var nativeSource=Path.Combine(payload.HostRoot,"hooklab","HookLab.NativeBootstrap.x64.dll");
 					if(!File.Exists(nativeSource)) throw new RpcException("hooklab_native_initializer_missing","The installed host does not contain the HookLab x64 initializer. Rebuild or reinstall dgSpy.");
@@ -225,7 +245,6 @@ namespace dgSpy.Extension {
 						throw new RpcException("hooklab_initialization_failed","HookLab worker reported: "+String.Join("; ",report.Select(pair=>pair.Key+"="+pair.Value)));
 					return report;
 				}
-				finally { TryDeleteDirectory(staging); }
 			}
 
 			public object Status(string sessionId,int? processId) {
@@ -725,8 +744,10 @@ namespace dgSpy.Extension {
 				}
 				throw new RpcException("hook_operation_timed_out","HookLab worker did not publish a complete ready record within 20 seconds.");
 			}
-			static void TryDelete(string path) { try { File.Delete(path); } catch { } }
-			static void TryDeleteDirectory(string path) { try { Directory.Delete(path,true); } catch { } }
+			// TryDelete and TryDeleteDirectory lived here. Both are gone: the exchange area owns the
+			// lifetime of everything staged for an initialization, including whether it survives a
+			// failure, and leaving unconditional deletes lying around is how that decision gets quietly
+			// taken again somewhere else.
 			static string Required(Dictionary<string,string> values,string key,string message) => values.TryGetValue(key,out var value) && !String.IsNullOrWhiteSpace(value) ? value : throw new RpcException("hook_operation_failed",message);
 			static long Long(Dictionary<string,string> values,string key) => values.TryGetValue(key,out var value) && Int64.TryParse(value,NumberStyles.Integer,CultureInfo.InvariantCulture,out var parsed) ? parsed : 0;
 			static string ParameterText(JsonObject values) => String.Join("\n",values.Select(pair=>pair.Key+"="+(string?)pair.Value))+"\n";
