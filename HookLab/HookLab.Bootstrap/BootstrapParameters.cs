@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Security.Principal;
 
 namespace HookLab.Bootstrap {
 	/// <summary>Bounded initialization data, parsed with BCL string handling only.
@@ -17,7 +18,7 @@ namespace HookLab.Bootstrap {
 
 		static readonly string[] KnownKeys = {
 			"host_id", "image_path", "process_id", "process_creation_utc_ticks", "architecture", "runtime_id",
-			"appdomain_id", "event_capacity", "byte_capacity", "endpoint", "endpoint_secret_base64", "completion_path",
+			"appdomain_id", "event_capacity", "byte_capacity", "endpoint", "endpoint_secret_base64", "controller_sid", "completion_path",
 			"hook_id", "hook_kind", "hook_assembly", "hook_type", "hook_method", "hook_module_mvid",
 			"hook_metadata_token", "hook_declaring_type", "hook_method_signature", "hook_il_sha256",
 			"hook_source_base64", "hook_revision", "maximum_events_per_second", "maximum_string_length",
@@ -45,6 +46,23 @@ namespace HookLab.Bootstrap {
 				if (!Values.TryGetValue("endpoint_secret_base64", out var value)) return null;
 				try { var bytes = Convert.FromBase64String(value); if (bytes.Length != 32) throw new ArgumentException("endpoint_secret_base64 must decode to exactly 32 bytes."); return bytes; }
 				catch (FormatException ex) { throw new ArgumentException("endpoint_secret_base64 is not valid base64.", ex); }
+			}
+		}
+		/// <summary>The SID of the account that initiated initialization, when it is not the account the target
+		/// runs as. The control pipe's DACL is protected and names only the probe's own SID, which is correct
+		/// while debugger and target share an identity and denies the debugger outright when they do not - an
+		/// IIS worker under a service account being the case that found it. Naming the controller here grants
+		/// it, and only it, access to the pipe.
+		///
+		/// <para>This does not widen the trust boundary. Whoever writes these parameters already chooses the
+		/// bytes this process loads and executes, so they are strictly more privileged than anything the pipe
+		/// DACL could grant. The value is still parsed as a SID rather than trusted as a string, so a malformed
+		/// or non-SID value is a refusal instead of a silently unprotected endpoint.</para></summary>
+		internal SecurityIdentifier? ControllerSid {
+			get {
+				if (!Values.TryGetValue("controller_sid", out var value)) return null;
+				try { return new SecurityIdentifier(value); }
+				catch (ArgumentException ex) { throw new ArgumentException("controller_sid is not a valid SID.", ex); }
 			}
 		}
 		internal string? CompletionPath => Values.TryGetValue("completion_path", out var value) ? value : null;
@@ -85,6 +103,10 @@ namespace HookLab.Bootstrap {
 				throw new ArgumentException("Missing required initialization key for endpoint=none: completion_path", nameof(text));
 			if (values.ContainsKey("endpoint_secret_base64") && values["endpoint"] != "pipe")
 				throw new ArgumentException("endpoint_secret_base64 requires endpoint=pipe.", nameof(text));
+			// Same reasoning as the secret: a principal named for an endpoint that is never created is a
+			// mistake in the caller, not something to accept and ignore.
+			if (values.ContainsKey("controller_sid") && values["endpoint"] != "pipe")
+				throw new ArgumentException("controller_sid requires endpoint=pipe.", nameof(text));
 			// All or nothing: a half-specified hook would otherwise silently install with a guard field
 			// defaulted, which is the one thing a guard must never do.
 			var present = 0;

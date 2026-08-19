@@ -54,6 +54,35 @@ namespace HookLab.Bootstrap.Tests {
 			finally { try { File.Delete(completion); File.Delete(completion + ".tmp"); } catch { } }
 		}
 
+		/// <summary>A target running under a different account than its debugger builds a control pipe whose
+		/// protected DACL names only the target's own SID, so the debugger is denied on a pipe that was created
+		/// for it. Naming the controller grants it. The same-user case, which is what this test can run, must
+		/// keep working unchanged - the probe drops a controller that is already the pipe's owner.</summary>
+		[Fact]
+		public void A_named_controller_is_accepted_and_changes_nothing_when_it_is_the_current_account() {
+			var completion = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".hooklab-completion");
+			try {
+				using (var runner = BootstrapRunner.Create("bootstrap-controller-sid")) {
+					var sid = System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value;
+					var prepared = Report.Parse(runner.Prepare(Parameters(runner, completion).With("endpoint", "pipe").With("controller_sid", sid).ToString()));
+					Assert.Equal("ok", prepared["status"]);
+					Assert.False(string.IsNullOrWhiteSpace(prepared["pipe_name"]));
+				}
+			}
+			finally { try { File.Delete(completion); File.Delete(completion + ".tmp"); } catch { } }
+		}
+
+		[Theory]
+		[InlineData("none", "S-1-5-18")]
+		[InlineData("pipe", "not-a-sid")]
+		[InlineData("pipe", "S-1-5-")]
+		public void Controller_sid_requires_pipe_and_a_well_formed_sid(string endpoint, string sid) {
+			using (var runner = BootstrapRunner.Create("bootstrap-invalid-controller-" + endpoint + "-" + sid.Length)) {
+				var report = Report.Parse(runner.Prepare(Parameters(runner, Path.GetTempFileName()).With("endpoint", endpoint).With("controller_sid", sid).ToString()));
+				Assert.Equal("error", report["status"]);
+			}
+		}
+
 		[Theory]
 		[InlineData("none", "AQID")]
 		[InlineData("pipe", "not-base64")]

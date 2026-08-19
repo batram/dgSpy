@@ -314,7 +314,7 @@ namespace HookLab.Bootstrap {
 			try {
 				if (parameters.Endpoint == "pipe") {
 					var endpointSecret = parameters.EndpointSecret;
-					pipe = new ProbePipeServer(HandleCommand, injectedSecret: endpointSecret, authenticationEnabled: endpointSecret != null);
+					pipe = new ProbePipeServer(HandleCommand, injectedSecret: endpointSecret, authenticationEnabled: endpointSecret != null, controllerSid: parameters.ControllerSid);
 					PipeConstructionCountForTest++;
 					if (!pipe.WaitUntilListening(2000)) throw new InvalidOperationException("HookLab probe listener did not become ready: " + (pipe.ListenerFailure ?? "timeout"));
 				}

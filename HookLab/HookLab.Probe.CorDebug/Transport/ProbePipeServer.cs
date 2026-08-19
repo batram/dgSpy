@@ -48,6 +48,7 @@ namespace HookLab.Probe.CorDebug.Transport {
 		readonly ProbeCommandHandler commandHandler;
 		readonly byte[] endpointNonce;
 		readonly string pipeName;
+		readonly SecurityIdentifier? controllerSid;
 		readonly Thread listener;
 		readonly int authenticationTimeoutMilliseconds;
 		readonly bool authenticationEnabled;
@@ -85,8 +86,9 @@ namespace HookLab.Probe.CorDebug.Transport {
 		/// array is copied, so the caller may clear its own. When null (the default) the probe generates its own
 		/// secret and hands it out once through <see cref="TakeInitialEndpoint"/>, which is the behaviour every
 		/// pre-existing caller gets.</param>
-		public ProbePipeServer(ProbeCommandHandler commandHandler, int authenticationTimeoutMilliseconds = 5000, byte[]? injectedSecret = null, bool authenticationEnabled = true) {
+		public ProbePipeServer(ProbeCommandHandler commandHandler, int authenticationTimeoutMilliseconds = 5000, byte[]? injectedSecret = null, bool authenticationEnabled = true, SecurityIdentifier? controllerSid = null) {
 			this.commandHandler = commandHandler ?? throw new ArgumentNullException(nameof(commandHandler));
+			this.controllerSid = controllerSid;
 			if (authenticationTimeoutMilliseconds <= 0) throw new ArgumentOutOfRangeException(nameof(authenticationTimeoutMilliseconds));
 			this.authenticationTimeoutMilliseconds = authenticationTimeoutMilliseconds;
 			this.authenticationEnabled = authenticationEnabled;
@@ -204,6 +206,13 @@ namespace HookLab.Probe.CorDebug.Transport {
 			var security = new PipeSecurity();
 			security.SetAccessRuleProtection(true, false);
 			security.AddAccessRule(new PipeAccessRule(sid, PipeAccessRights.FullControl, AccessControlType.Allow));
+			// The controller is a second principal, never a replacement: the DACL stays protected and fully
+			// enumerated. Without this, a target running under a different account than the debugger - an IIS
+			// worker under a service account, say - creates a pipe its own controller cannot open, and the
+			// initialization succeeds right up to the point where the host tries to talk to it. Skipped when it
+			// is the same account, so the same-user case keeps exactly the DACL it had.
+			if (controllerSid != null && controllerSid != sid)
+				security.AddAccessRule(new PipeAccessRule(controllerSid, PipeAccessRights.ReadWrite, AccessControlType.Allow));
 			Type? aclType = null;
 			try {
 				var aclAssemblyPath = Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "System.IO.Pipes.AccessControl.dll");

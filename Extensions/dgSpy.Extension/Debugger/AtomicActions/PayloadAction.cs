@@ -248,7 +248,7 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		/// imported; <c>PayloadActionRequestTests</c> reads that source file and fails when they diverge.</summary>
 		public static readonly string[] KnownParameterKeys={
 			"host_id","image_path","process_id","process_creation_utc_ticks","architecture","runtime_id",
-			"appdomain_id","event_capacity","byte_capacity","endpoint","endpoint_secret_base64","completion_path",
+			"appdomain_id","event_capacity","byte_capacity","endpoint","endpoint_secret_base64","controller_sid","completion_path",
 			"hook_id","hook_kind","hook_assembly","hook_type","hook_method","hook_module_mvid",
 			"hook_metadata_token","hook_declaring_type","hook_method_signature","hook_il_sha256",
 			"hook_source_base64","hook_revision","maximum_events_per_second","maximum_string_length",
@@ -345,6 +345,8 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 			if(endpoint!="none" && endpoint!="pipe") throw new RpcException("invalid_arguments","payload_parameters endpoint must be exactly none or pipe.");
 			if(Value(parsed,"endpoint_secret_base64") is not null && endpoint!="pipe")
 				throw new RpcException("invalid_arguments","payload_parameters endpoint_secret_base64 requires endpoint=pipe.");
+			if(Value(parsed,"controller_sid") is not null && endpoint!="pipe")
+				throw new RpcException("invalid_arguments","payload_parameters controller_sid requires endpoint=pipe.");
 			if(Value(parsed,"completion_path") is null) throw new RpcException("invalid_arguments","payload_parameters must set completion_path: commit publishes its result to that file.");
 			return parsed;
 		}

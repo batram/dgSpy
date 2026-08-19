@@ -163,6 +163,10 @@ namespace dgSpy.Extension {
 						lock(gate) runtimes.Add(RuntimeKey(session,processId),adoptedRuntime); StartEventPump(adoptedRuntime); HookLabUiBridge.SetInitialized(); return Initialized(adoptedRuntime,true,adopted:true);
 					}
 					endpointSecret=ProbeAuthentication.CreateSecret(); identity["endpoint_secret_base64"]=Convert.ToBase64String(endpointSecret);
+					// Who will be opening the control pipe. The probe protects that pipe's DACL and names only
+					// its own SID, so a target running as another account builds an endpoint this host cannot
+					// open. Named here, it is granted; when the two accounts match the probe ignores it.
+					if(WindowsIdentity.GetCurrent().User is SecurityIdentifier controller) identity["controller_sid"]=controller.Value;
 					try {
 						if(target.Backend==HookLabTargetEligibility.Backend.CoreClr) {
 							completionReport=await ExecuteInitializationOperationAsync(host,source,PayloadOperation.initialize,identity,token,true).ConfigureAwait(false);
