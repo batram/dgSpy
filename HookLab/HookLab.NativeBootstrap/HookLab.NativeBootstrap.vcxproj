@@ -8,7 +8,16 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration"><ConfigurationType>DynamicLibrary</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries><PlatformToolset>v143</PlatformToolset><CharacterSet>Unicode</CharacterSet></PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'"><OutDir>$(ProjectDir)bin\Release\</OutDir><IntDir>$(ProjectDir)obj\Release\</IntDir><TargetName>HookLab.NativeBootstrap.x64</TargetName></PropertyGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'"><ClCompile><WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError><PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile><Link><SubSystem>Windows</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation><AdditionalDependencies>mscoree.lib;%(AdditionalDependencies)</AdditionalDependencies></Link></ItemDefinitionGroup>
+  <!-- Static CRT, deliberately. This DLL is injected into a target process on a machine we do not
+       control, so every import it carries is a dependency that machine must already satisfy. The
+       default Release runtime (/MD) made it import VCRUNTIME140_1.dll, which ships only with the
+       VC++ 2019 or later redistributable; a Windows Server 2019 host carrying only the 2015/2017
+       redistributable has vcruntime140.dll and msvcp140.dll but not that one, so LoadLibraryW in the
+       target returned NULL with ERROR_MOD_NOT_FOUND and initialization reported only that the runtime
+       component did not load. Statically linking leaves KERNEL32 and mscoree, both always present.
+       Injecting a second, differently-versioned CRT into a target's process space was never wanted
+       either. -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'"><ClCompile><WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError><RuntimeLibrary>MultiThreaded</RuntimeLibrary><PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile><Link><SubSystem>Windows</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation><AdditionalDependencies>mscoree.lib;%(AdditionalDependencies)</AdditionalDependencies></Link></ItemDefinitionGroup>
   <ItemGroup><ClCompile Include="Bootstrap.cpp" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
