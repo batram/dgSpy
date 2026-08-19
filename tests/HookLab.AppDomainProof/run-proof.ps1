@@ -16,13 +16,13 @@ New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
 function Step([string]$Name) { Write-Host "== $Name ==" -ForegroundColor Cyan }
 
 Step 'build managed pieces'
-foreach ($project in 'App\AppDomainProof.App.csproj','Managed\AppDomainProof.Payload.csproj','Fixture\AppDomainProof.Fixture.csproj') {
+foreach ($project in 'App\AppDomainProof.App.csproj','Embedded\AppDomainProof.Embedded.csproj','Managed\AppDomainProof.Payload.csproj','Fixture\AppDomainProof.Fixture.csproj') {
     dotnet build (Join-Path $here $project) -c Release --nologo -v:q | Out-Null
     if ($LASTEXITCODE) { throw "build failed: $project" }
 }
-# One directory, because the payload is loaded by absolute path from beside the native DLL and the
-# fixture's application base has to contain the app assembly.
-foreach ($pattern in 'App\bin\Release\net48\AppDomainProof.App.dll','Managed\bin\Release\net48\AppDomainProof.Payload.dll','Fixture\bin\Release\net48\AppDomainProof.Fixture.exe') {
+# One directory, because the payload is read from beside the native DLL and the fixture's application
+# base has to contain the app assembly.
+foreach ($pattern in 'App\bin\Release\net48\AppDomainProof.App.dll','Embedded\bin\Release\net48\AppDomainProof.Embedded.dll','Managed\bin\Release\net48\AppDomainProof.Payload.dll','Fixture\bin\Release\net48\AppDomainProof.Fixture.exe') {
     Copy-Item (Join-Path $here $pattern) $artifacts -Force
 }
 
@@ -87,7 +87,7 @@ try {
     $domainProof = Join-Path $artifacts 'domain-proof.txt'
     $deadline = (Get-Date).AddSeconds(20)
     while (-not (Test-Path $nativeProof) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
-    foreach ($proof in @($nativeProof, $domainProof, (Join-Path $artifacts 'marker-facts.txt'), (Join-Path $artifacts 'domain-proof-error.txt'))) {
+    foreach ($proof in @($nativeProof, $domainProof, (Join-Path $artifacts 'in-memory-proof.txt'), (Join-Path $artifacts 'marker-facts.txt'), (Join-Path $artifacts 'domain-proof-error.txt'))) {
         if (Test-Path $proof) {
             Write-Host ("-- " + (Split-Path $proof -Leaf) + " --") -ForegroundColor Yellow
             # The native prototype writes wide characters with no BOM, so it has to be read as Unicode

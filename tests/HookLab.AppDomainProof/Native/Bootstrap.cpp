@@ -20,6 +20,7 @@
 #include <metahost.h>
 #include <mscoree.h>
 #include <string>
+#include <vector>
 
 // mscorlib's type library declares _AppDomain. raw_interfaces_only keeps the smart-pointer wrappers
 // out; this code manages lifetimes explicitly so every failure path is visible.
@@ -51,10 +52,99 @@ static void Write(const std::wstring& directory,const wchar_t* name,const std::w
 	CloseHandle(file);
 }
 
+static bool ReadAllBytes(const std::wstring& path,std::vector<BYTE>& bytes) {
+	HANDLE file=CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+	if(file==INVALID_HANDLE_VALUE) return false;
+	LARGE_INTEGER size{};
+	bool ok=GetFileSizeEx(file,&size)!=FALSE&&size.QuadPart>0&&size.QuadPart<64*1024*1024;
+	if(ok) {
+		bytes.resize(static_cast<size_t>(size.QuadPart));
+		DWORD read=0;
+		ok=ReadFile(file,bytes.data(),static_cast<DWORD>(bytes.size()),&read,nullptr)!=FALSE&&read==bytes.size();
+	}
+	CloseHandle(file);
+	return ok;
+}
+
+// The bytes have to reach the CLR as a SAFEARRAY of unsigned char, which is how a managed byte[]
+// crosses COM. This is the difference between "here are the bytes" and CreateInstanceFrom's "here is
+// a path, go and bind it yourself".
+static SAFEARRAY* ToSafeArray(const std::vector<BYTE>& bytes) {
+	SAFEARRAY* array=SafeArrayCreateVector(VT_UI1,0,static_cast<ULONG>(bytes.size()));
+	if(array==nullptr) return nullptr;
+	void* data=nullptr;
+	if(FAILED(SafeArrayAccessData(array,&data))) { SafeArrayDestroy(array); return nullptr; }
+	memcpy(data,bytes.data(),bytes.size());
+	SafeArrayUnaccessData(array);
+	return array;
+}
+
 static std::wstring Hex(const wchar_t* label,HRESULT hr) {
 	wchar_t buffer[64];
 	swprintf_s(buffer,L"%s=0x%08X\r\n",label,static_cast<unsigned int>(hr));
 	return buffer;
+}
+
+// Byte-load an assembly into an already-chosen domain and invoke a static method on it.
+//
+// _AppDomain::Load_3 is AppDomain.Load(byte[]) through COM, and _Type::InvokeMember_3 is
+// Type.InvokeMember. Together they are the native equivalent of what the managed bootstrap does, which
+// is what product HookLab needs: nothing is bound from a path, so there is no disk provenance for the
+// CLR to prefer and no file the target has to be able to read at bind time.
+static std::wstring EnterInMemory(mscorlib::_AppDomain* domain,const std::wstring& assemblyPath,const std::wstring& directory) {
+	std::wstring log;
+	std::vector<BYTE> bytes;
+	if(!ReadAllBytes(assemblyPath,bytes)) { log+=L"read_payload_bytes=failed\r\n"; return log; }
+	wchar_t sizeText[64];
+	swprintf_s(sizeText,L"payload_bytes=%zu\r\n",bytes.size());
+	log+=sizeText;
+
+	SAFEARRAY* raw=ToSafeArray(bytes);
+	if(raw==nullptr) { log+=L"safearray=failed\r\n"; return log; }
+
+	mscorlib::_Assembly* loaded=nullptr;
+	HRESULT hr=domain->Load_3(raw,&loaded);
+	log+=Hex(L"load_3",hr);
+	SafeArrayDestroy(raw);
+	if(FAILED(hr)||loaded==nullptr) return log;
+
+	mscorlib::_Type* type=nullptr;
+	BSTR typeName=SysAllocString(L"AppDomainProof.Payload.InMemoryEntry");
+	hr=loaded->GetType_2(typeName,&type);
+	log+=Hex(L"get_type",hr);
+	SysFreeString(typeName);
+
+	if(SUCCEEDED(hr)&&type!=nullptr) {
+		// InvokeMethod | Public | Static. Spelled numerically because the generated enum names vary
+		// between mscorlib.tlh revisions and this prototype should not depend on which one is present.
+		const long bindingFlags=0x0100|0x0010|0x0008;
+		SAFEARRAY* arguments=SafeArrayCreateVector(VT_VARIANT,0,1);
+		if(arguments!=nullptr) {
+			VARIANT argument; VariantInit(&argument);
+			argument.vt=VT_BSTR;
+			argument.bstrVal=SysAllocString(directory.c_str());
+			LONG index=0;
+			SafeArrayPutElement(arguments,&index,&argument);
+			VariantClear(&argument);
+
+			VARIANT target; VariantInit(&target); target.vt=VT_EMPTY;   // static: no instance
+			VARIANT result; VariantInit(&result);
+			BSTR method=SysAllocString(L"Initialize");
+			hr=type->InvokeMember_3(method,static_cast<mscorlib::BindingFlags>(bindingFlags),nullptr,target,arguments,&result);
+			log+=Hex(L"invoke_member",hr);
+			if(SUCCEEDED(hr)&&result.vt==VT_I4) {
+				wchar_t returned[64];
+				swprintf_s(returned,L"entry_returned=%d\r\n",result.lVal);
+				log+=returned;
+			}
+			SysFreeString(method);
+			VariantClear(&result);
+			SafeArrayDestroy(arguments);
+		}
+		type->Release();
+	}
+	loaded->Release();
+	return log;
 }
 
 static DWORD WINAPI Worker(void*) {
@@ -94,6 +184,15 @@ static DWORD WINAPI Worker(void*) {
 						swprintf_s(line,L"domain[%d]=%s\r\n",index,name);
 						log+=line;
 						if(wcscmp(name,TargetDomainName)==0) {
+							// The in-memory route runs FIRST, deliberately. CreateInstanceFrom below binds
+							// this same file by path into this same domain, and if it ran first the byte
+							// load would be operating on a domain that already had the assembly loaded from
+							// disk - a confound that would leave "did Load_3 really load these bytes"
+							// arguable. Run against a domain that has never seen the file and it is not.
+							log+=EnterInMemory(domain,assembly,directory);
+
+							// The path route, already proven, kept as the control: a run that fails the
+							// in-memory route still shows whether the domain itself was reachable at all.
 							BSTR assemblyPath=SysAllocString(assembly.c_str());
 							BSTR typeName=SysAllocString(L"AppDomainProof.Payload.DomainEntry");
 							mscorlib::_ObjectHandle* handleOut=nullptr;
