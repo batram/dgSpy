@@ -1,15 +1,43 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <!-- Multi-targeted so the dgSpy extension can reference this library instead of keeping a private
+       copy of the injector. The extension targets net48;net10.0-windows, and this project targeting
+       only net10.0-windows is the reason the consumption recorded in the watcher implementation plan
+       never happened after the core was extracted. Both dependencies below were already net48-capable,
+       so nothing cascades.
+
+       LangVersion is explicit because the SDK default for a .NET Framework target is 7.3, and these
+       sources use file-scoped namespaces and record structs. -->
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <TargetFrameworks>net48;net10.0-windows</TargetFrameworks>
     <PlatformTarget>x64</PlatformTarget>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
     <AssemblyName>HookLab.Injector</AssemblyName>
+  </PropertyGroup>
+  <!-- The RID belongs to the net10 target only. It is what HookLab.ApplyOnce and HookLab.Watcher
+       publish against; a .NET Framework target neither needs nor understands it. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\HookLab.Contracts\HookLab.Contracts.csproj" />
     <ProjectReference Include="..\HookLab.Host.Transport\HookLab.Host.Transport.csproj" />
+  </ItemGroup>
+  <!-- net48 has no System.Runtime.CompilerServices.IsExternalInit, so records and init-only setters
+       will not compile against it. IsExternalInit is a source-only package that declares the missing
+       type; PrivateAssets=all keeps it out of anything that references this library, and it adds no
+       assembly to ship. Same package and same declaration as Extensions\dnSpy.StringSearcher, which
+       already needed it - this follows the tree's convention rather than hand-rolling a shim.
+
+       System.Text.Json is in the framework from net10 but a package on net48. The extension already
+       uses it on both targets, so it is not new to the graph this library joins. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="System.Text.Json" Version="9.0.0" />
+    <PackageReference Include="IsExternalInit" Version="1.0.3">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="HookLab.ApplyOnce.Tests" />

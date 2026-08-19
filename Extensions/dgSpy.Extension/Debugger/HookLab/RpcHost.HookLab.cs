@@ -213,7 +213,10 @@ namespace dgSpy.Extension {
 					File.Copy(nativeSource,nativePath,false);
 					File.Copy(payload.PayloadPath,Path.Combine(staging,"HookLab.Bootstrap.dll"),false);
 					File.WriteAllText(Path.Combine(staging,"initialize.params"),ParameterText(parameters),new System.Text.UTF8Encoding(false));
-					NativeHookLabInitializer.Load(processId,nativePath);
+					// Fully qualified rather than a using: HookLab.Injector also declares a HookDefinition,
+					// and this file resolves that name against HookLab.Contracts. Importing the namespace
+					// here would make every HookDefinition in the file ambiguous.
+					HookLab.Injector.RemoteLibraryLoader.Load(processId,nativePath);
 					var completion=Required(parameters,"completion_path");
 					var report=await ReadCompletionAsync(completion,token).ConfigureAwait(false);
 					if(!String.Equals(report.TryGetValue("status",out var status)?status:null,"ok",StringComparison.Ordinal))

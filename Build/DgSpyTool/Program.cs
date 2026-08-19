@@ -7,7 +7,15 @@ using System.Text.Json;
 return await DgSpyBuildTool.RunAsync(args);
 
 internal static class DgSpyBuildTool {
-	static readonly string[] ExtensionFiles={"dgSpy.Extension.x.dll","dgSpy.Extension.x.pdb","dgSpy.Protocol.dll","dgSpy.Protocol.pdb","HookLab.Contracts.dll","HookLab.Contracts.pdb","HookLab.Packaging.dll","HookLab.Packaging.pdb","HookLab.Host.Transport.dll","HookLab.Host.Transport.pdb"};
+	// Every assembly the extension needs at run time, named rather than globbed, so a build-output
+	// change cannot quietly add a file to the packaged host. HookLab.Injector joined this list when the
+	// extension started consuming the injector library instead of keeping a private copy of native
+	// loading; leaving it out packaged an extension that loaded, composed and served every other
+	// request, and threw FileNotFoundException at the first initialize_hooklab.
+	// internal so the pipeline tests build their fixture from this list rather than restating it. It was
+	// restated, and adding one entry here turned an unrelated compose test red for no reason a reader
+	// could see.
+	internal static readonly string[] ExtensionFiles={"dgSpy.Extension.x.dll","dgSpy.Extension.x.pdb","dgSpy.Protocol.dll","dgSpy.Protocol.pdb","HookLab.Contracts.dll","HookLab.Contracts.pdb","HookLab.Packaging.dll","HookLab.Packaging.pdb","HookLab.Host.Transport.dll","HookLab.Host.Transport.pdb","HookLab.Injector.dll","HookLab.Injector.pdb"};
 	static readonly HashSet<string> FrameworkOverrides=new(StringComparer.OrdinalIgnoreCase){"Microsoft.VisualBasic.dll","System.Diagnostics.EventLog.dll","System.Drawing.dll","System.Security.Cryptography.Pkcs.dll","System.Security.Cryptography.Xml.dll","WindowsBase.dll"};
 	const string ManifestName="dgspy-layout.json";
 

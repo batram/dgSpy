@@ -23,7 +23,7 @@ namespace HookLab.Injector {
 	/// The target-side loader stays authoritative for load failure. Nothing here predicts whether a
 	/// library will load; it reports what the target decided.
 	/// </summary>
-	static class RemoteLibraryLoader {
+	public static class RemoteLibraryLoader {
 		// --- Shared page layout -------------------------------------------------------------------
 		//
 		// One allocation, one page, PAGE_EXECUTE_READWRITE, in the target:
@@ -232,7 +232,7 @@ namespace HookLab.Injector {
 	}
 
 	/// <summary>What the target's loader decided about one library.</summary>
-	readonly struct RemoteLoadResult {
+	public readonly struct RemoteLoadResult {
 		public RemoteLoadResult(string libraryPath,ulong moduleHandle,int lastError,bool stubCompleted) {
 			LibraryPath=libraryPath; ModuleHandle=moduleHandle; LastError=lastError; StubCompleted=stubCompleted;
 		}
@@ -260,7 +260,7 @@ namespace HookLab.Injector {
 		}
 	}
 
-	sealed class RemoteLibraryLoadException : InvalidOperationException {
+	public sealed class RemoteLibraryLoadException : InvalidOperationException {
 		public RemoteLibraryLoadException(RemoteLoadResult result,string libraryPath):base(result.Describe()) {
 			Win32Error=result.LastError; Win32ErrorName=result.LastErrorName; StubCompleted=result.StubCompleted; LibraryPath=libraryPath;
 		}

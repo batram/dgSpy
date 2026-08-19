@@ -8,13 +8,13 @@
 	<ProjectReference Include="..\..\HookLab\HookLab.Packaging\HookLab.Packaging.csproj" />
 	<ProjectReference Include="..\..\HookLab\HookLab.Host.Transport\HookLab.Host.Transport.csproj" />
 	</ItemGroup>
-	<!-- One implementation of the remote loader, compiled into both. HookLab.Injector targets
-	     net10.0-windows only and this extension still multi-targets net48, so a project reference is
-	     not available yet; Road 1 subslice 3 replaces this link with one. A linked source file is
-	     preferable to a second copy of x64 stub emission, which is the kind of code that must exist
-	     exactly once. -->
+	<!-- HookLab.Injector is the sole owner of standalone target initialization, as the watcher
+	     implementation plan set out when the injector core was extracted. The extension consumes it
+	     rather than keeping a private copy of native loading; that consumption is what Road 1 subslice
+	     3 finally landed, after multi-targeting the library so this net48 target could reference it.
+	     The dependency runs one way only - nothing below HookLab.Injector references dnSpy or dgSpy. -->
 	<ItemGroup>
-		<Compile Include="..\..\HookLab\HookLab.Injector\RemoteLibraryLoader.cs" Link="Debugger\HookLab\RemoteLibraryLoader.cs" />
+		<ProjectReference Include="..\..\HookLab\HookLab.Injector\HookLab.Injector.csproj" />
 	</ItemGroup>
 	<!-- Packaged component builds consume the immutable host artifact structurally: none of these
 	     references can enter or rebuild the upstream dnSpy project graph. Ordinary IDE/source builds
