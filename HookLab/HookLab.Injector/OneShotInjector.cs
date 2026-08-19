@@ -36,7 +36,7 @@ public static class OneShotInjector {
 			File.Copy(payload.Native,nativePath,false);
 			File.Copy(payload.Managed,Path.Combine(staging,"HookLab.Bootstrap.dll"),false);
 			File.WriteAllText(Path.Combine(staging,"initialize.params"),Parameters(imagePath,processId,creationTicks,completion,definition,endpoint,endpointSecret,residentHookId),new UTF8Encoding(false));
-			NativeLoader.Load(processId,nativePath);
+			RemoteLibraryLoader.Load(processId,nativePath);
 			var wait=Stopwatch.StartNew();
 			var report=WaitForCompletion(process,completion,TimeSpan.FromMilliseconds(initializationTimeoutMs));
 			completed=true;
@@ -101,17 +101,3 @@ public sealed record ResidentInjection(string Result,string ImagePath,long Creat
 public sealed class TargetExitedException : Exception { public TargetExitedException(string message,Exception innerException):base(message,innerException) { } }
 public sealed class ClrReadinessTimeoutException : TimeoutException { public ClrReadinessTimeoutException(string message):base(message) { } }
 
-internal static class NativeLoader {
-	const uint ProcessAccess=0x0002|0x0008|0x0020|0x0400, CommitReserve=0x1000|0x2000;
-	public static void Load(int processId,string libraryPath) { using var process=Process.GetProcessById(processId); var handle=OpenProcess(ProcessAccess,false,processId); if(handle==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(),"Could not open target process. Run ApplyOnce elevated if necessary."); try { var bytes=Encoding.Unicode.GetBytes(Path.GetFullPath(libraryPath)+'\0'); var remote=VirtualAllocEx(handle,IntPtr.Zero,(UIntPtr)bytes.Length,CommitReserve,4); if(remote==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(),"Could not allocate bootstrap storage."); try { if(!WriteProcessMemory(handle,remote,bytes,(UIntPtr)bytes.Length,out var written)||written.ToUInt64()!=(ulong)bytes.Length) throw new Win32Exception(Marshal.GetLastWin32Error(),"Could not write bootstrap path."); var localKernel=GetModuleHandle("kernel32.dll"); var localLoader=GetProcAddress(localKernel,"LoadLibraryW"); var remoteKernel=process.Modules.Cast<ProcessModule>().Single(module=>String.Equals(module.ModuleName,"kernel32.dll",StringComparison.OrdinalIgnoreCase)).BaseAddress; var remoteLoader=new IntPtr(remoteKernel.ToInt64()+localLoader.ToInt64()-localKernel.ToInt64()); var thread=CreateRemoteThread(handle,IntPtr.Zero,UIntPtr.Zero,remoteLoader,remote,0,IntPtr.Zero); if(thread==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(),"Could not start bootstrap thread."); try { if(WaitForSingleObject(thread,30000)!=0) throw new TimeoutException("Native bootstrap did not load within 30 seconds."); if(!GetExitCodeThread(thread,out var exitCode)||exitCode==0) throw new InvalidOperationException("Native bootstrap DLL did not load."); } finally { CloseHandle(thread); } } finally { VirtualFreeEx(handle,remote,UIntPtr.Zero,0x8000); } } finally { CloseHandle(handle); } }
-	[DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inheritHandle,int processId);
-	[DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr VirtualAllocEx(IntPtr process,IntPtr address,UIntPtr size,uint allocationType,uint protection);
-	[DllImport("kernel32.dll",SetLastError=true)] static extern bool VirtualFreeEx(IntPtr process,IntPtr address,UIntPtr size,uint freeType);
-	[DllImport("kernel32.dll",SetLastError=true)] static extern bool WriteProcessMemory(IntPtr process,IntPtr address,byte[] buffer,UIntPtr size,out UIntPtr written);
-	[DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr CreateRemoteThread(IntPtr process,IntPtr attributes,UIntPtr stackSize,IntPtr startAddress,IntPtr parameter,uint flags,IntPtr threadId);
-	[DllImport("kernel32.dll",SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle,uint milliseconds);
-	[DllImport("kernel32.dll",SetLastError=true)] static extern bool GetExitCodeThread(IntPtr thread,out uint exitCode);
-	[DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
-	[DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern IntPtr GetModuleHandle(string moduleName);
-	[DllImport("kernel32.dll",CharSet=CharSet.Ansi)] static extern IntPtr GetProcAddress(IntPtr module,string name);
-}
