@@ -536,10 +536,31 @@ namespace dgSpy.Extension {
 			}
 			static TargetIdentity LiveTarget(int processId,string hostId=DgSpyStateRoot.ResidentHostId,string runtimeId="v4.0.30319") { using var process=Process.GetProcessById(processId); return new TargetIdentity(hostId,process.MainModule?.FileName??throw new InvalidOperationException("Target image is unavailable."),processId,process.StartTime.ToUniversalTime(),"x64",runtimeId,"1"); }
 			static bool SameTarget(TargetIdentity left,TargetIdentity right)=>(left.HostId==DgSpyStateRoot.ResidentHostId||left.HostId=="apply-once")&&left.ProcessId==right.ProcessId&&left.ProcessCreationTimeUtc.ToUniversalTime().Ticks==right.ProcessCreationTimeUtc.ToUniversalTime().Ticks&&String.Equals(Path.GetFullPath(left.ImagePath),Path.GetFullPath(right.ImagePath),StringComparison.OrdinalIgnoreCase)&&left.Architecture==right.Architecture&&left.RuntimeId==right.RuntimeId&&left.AppDomainId==right.AppDomainId;
+			// Reading a process can fail in three ways, and only one of them is "no such process".
+			// ArgumentException is that one. Process.MainModule and Process.StartTime additionally throw
+			// Win32Exception when the process cannot be opened - a recycled PID now owned by another
+			// account, an elevated process, a protected one - and InvalidOperationException when it is
+			// exiting. This type caught only ArgumentException, so a Win32Exception escaped discovery,
+			// escaped initialization, and surfaced as a bare "Win32Exception: Access is denied.".
+			//
+			// One record left over from an earlier session was therefore enough to make EVERY
+			// initialize_hooklab on the machine fail, for any target and any backend, naming nothing that
+			// pointed at a file on disk. Records live five minutes unless a health check refreshes them,
+			// so that record was expired garbage the scan would have deleted on its own had it been able
+			// to reach the check.
+			//
+			// HookLab.Injector's SystemLiveTargets - the watcher's copy of this same concept - already
+			// handled all three. This aligns the two rather than inventing a third policy.
+			//
+			// Open question deliberately not settled here: false from IsAlive means "provably dead" and
+			// DiscoverCore deletes the record, so a target we merely cannot read is treated as one that
+			// is gone. With a five-minute lifetime that is nearly always right, but "cannot determine" and
+			// "provably dead" are different answers and Road 1 subslice 7 owns the distinction -
+			// not_provable_preflight is exactly this shape. Recorded in the task, not folded in here.
 			sealed class ExtensionLiveTargets : ILiveTargetIdentity,ILiveTargetLiveness {
 				readonly string runtimeId; public ExtensionLiveTargets(string runtimeId="v4.0.30319")=>this.runtimeId=runtimeId;
-				public bool IsCurrent(TargetIdentity identity) { try { return SameTarget(identity,LiveTarget(identity.ProcessId,identity.HostId,runtimeId)); } catch(ArgumentException) { return false; } }
-				public bool IsAlive(TargetIdentity identity) { try { using var process=Process.GetProcessById(identity.ProcessId); return process.StartTime.ToUniversalTime().Ticks==identity.ProcessCreationTimeUtc.ToUniversalTime().Ticks; } catch(ArgumentException) { return false; } }
+				public bool IsCurrent(TargetIdentity identity) { try { return SameTarget(identity,LiveTarget(identity.ProcessId,identity.HostId,runtimeId)); } catch(ArgumentException) { return false; } catch(InvalidOperationException) { return false; } catch(System.ComponentModel.Win32Exception) { return false; } }
+				public bool IsAlive(TargetIdentity identity) { try { using var process=Process.GetProcessById(identity.ProcessId); return process.StartTime.ToUniversalTime().Ticks==identity.ProcessCreationTimeUtc.ToUniversalTime().Ticks; } catch(ArgumentException) { return false; } catch(InvalidOperationException) { return false; } catch(System.ComponentModel.Win32Exception) { return false; } }
 			}
 
 			static async Task EnsurePausedAsync(RpcHost host,RpcRequest source,CancellationToken token) {
