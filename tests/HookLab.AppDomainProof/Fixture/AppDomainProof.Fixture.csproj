@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>AppDomainProof.Fixture</AssemblyName>
+    <RootNamespace>AppDomainProof.Fixture</RootNamespace>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <!-- Deliberately no reference to AppDomainProof.App. The fixture loads it by path into the secondary
+       domain only; referencing it here would put it in the default domain's closure and defeat the
+       control this proof depends on. run-proof.ps1 places both assemblies in one directory. -->
+</Project>
