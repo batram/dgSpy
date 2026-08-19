@@ -66,6 +66,43 @@ if ($RpcPort -le 0) {
 	$probe.Stop()
 }
 
+# Is this port bindable at all? Windows reserves large TCP ranges for Hyper-V and WinNAT, and the
+# ranges move between boots. A port inside one fails to bind with AccessDenied, so the host starts
+# normally, never listens, and the readiness probe below reports only "the host is running but never
+# listened" - forty seconds later, naming nothing that would lead anyone to a port reservation.
+#
+# Measured 2026-08-19 on this machine: 7361, 7363, 7365, 7367 and 7369 were all inside the excluded
+# range 7354-7453, so every smoke with a fixed port in that band failed identically while 7351 passed.
+# Checking here turns that into an immediate, named refusal.
+if ($RpcPort -gt 0) {
+	try {
+		$bindProbe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $RpcPort)
+		$bindProbe.Start()
+		$bindProbe.Stop()
+	}
+	catch [Net.Sockets.SocketException] {
+		$socketError = $_.Exception.SocketErrorCode
+		if ($socketError -eq [Net.Sockets.SocketError]::AccessDenied) {
+			$excluded = (netsh int ipv4 show excludedportrange protocol=tcp) 2>$null
+			$range = ''
+			foreach ($line in $excluded) {
+				if ($line -match '^\s*(\d+)\s+(\d+)') {
+					if ($RpcPort -ge [int]$Matches[1] -and $RpcPort -le [int]$Matches[2]) { $range = "$($Matches[1])-$($Matches[2])"; break }
+				}
+			}
+			$where = if ($range) { "It falls inside the Windows excluded port range $range." } else { 'It is reserved by the system.' }
+			throw ("RPC port $RpcPort cannot be bound (AccessDenied). $where " +
+				'Windows reserves these ranges for Hyper-V/WinNAT and they change between boots; nothing in dgSpy can bind one. ' +
+				'List them with: netsh int ipv4 show excludedportrange protocol=tcp . ' +
+				'Either pass -RpcPort 0 to take a free ephemeral port, or choose a port outside every reserved range.')
+		}
+		if ($socketError -eq [Net.Sockets.SocketError]::AddressAlreadyInUse) {
+			throw "RPC port $RpcPort is already in use. Another dgSpy host or an installed dgSpy is probably holding it; stop it or pass -RpcPort 0."
+		}
+		throw "RPC port $RpcPort cannot be bound: $socketError."
+	}
+}
+
 $env:DGSPY_RPC_PORT = "$RpcPort"
 
 # --dgspy-no-window-activation is a dgSpy patch to dnSpy. -WindowStyle Hidden only sets the initial

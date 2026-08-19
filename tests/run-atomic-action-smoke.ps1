@@ -16,9 +16,14 @@
 [CmdletBinding()]
 param(
     [ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows',
-    # Not 7351: an installed dgSpy holding that port would make this smoke test the wrong host.
-    [int]$RpcPort = 7369,
-    [int]$GatewayPort = 7358,
+    # 0 means a free ephemeral port, chosen by Start-DgSpyHost and read back from DGSPY_RPC_PORT below.
+    # Not 7351: an installed dgSpy holding that port would make this smoke test the wrong host. It used
+    # to be 7369, which turned out to sit inside a Windows Hyper-V/WinNAT reserved range on at least one
+    # machine, so dnSpy started, could not bind, and the smoke failed with a 40 s "never listened".
+    # Those ranges move between boots, so no fixed port is safe; an ephemeral one avoids both problems.
+    [int]$RpcPort = 0,
+    # 17358, not 7358: 7358 is inside that same reserved range. The other smokes all use 173xx.
+    [int]$GatewayPort = 17358,
     [string]$RunDirectory
 )
 
@@ -184,7 +189,7 @@ function Test-BreakpointSnapshot([string[]]$Expected, [string[]]$Actual) {
 New-Item -ItemType Directory -Force -Path $RunDirectory | Out-Null
 try {
     if (-not (Test-Path -LiteralPath $targetExe)) { throw "CorDebug target not built: $targetExe" }
-    if (@(Get-NetTCPConnection -State Listen -LocalPort $RpcPort -ErrorAction SilentlyContinue).Count) { throw "port $RpcPort is already in use" }
+    if ($RpcPort -gt 0 -and @(Get-NetTCPConnection -State Listen -LocalPort $RpcPort -ErrorAction SilentlyContinue).Count) { throw "port $RpcPort is already in use" }
 
     $targetOut = Join-Path $RunDirectory 'target.out'
     $targetErr = Join-Path $RunDirectory 'target.err'
@@ -220,6 +225,9 @@ try {
     $env:DGSPY_URL = $gatewayUrl
     $env:DGSPY_TOKEN = $gatewayToken
     $hostId = & (Join-Path $PSScriptRoot 'TestSupport\Start-DgSpyHost.ps1') -RpcPort $RpcPort -TargetFramework $TargetFramework
+    # Start-DgSpyHost exports the port it actually bound, which is the only one that matters when 0 was
+    # requested. Everything below talks to $RpcPort directly, so read it back before any of it runs.
+    $RpcPort = [int]$env:DGSPY_RPC_PORT
     $gatewayProcess = Start-Process -FilePath 'dotnet' -ArgumentList ('"' + $gatewayDll + '"') `
         -WorkingDirectory (Split-Path $gatewayDll) -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $RunDirectory 'gateway.out') -RedirectStandardError (Join-Path $RunDirectory 'gateway.err')

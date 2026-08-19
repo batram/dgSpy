@@ -47,7 +47,10 @@ param(
 	[ValidateSet('net10.0-windows','net48')][string]$TargetFramework = 'net10.0-windows',
 	# Distinct from every other smoke's ports so two can run without colliding.
 	[int]$GatewayPort = 17362,
-	[int]$RpcPort = 7363
+	# 0 takes a free ephemeral port; Start-DgSpyHost exports the choice as DGSPY_RPC_PORT. Was 7363,
+	# which falls inside a Windows Hyper-V/WinNAT reserved range on at least one machine. Those ranges
+	# move between boots, so no fixed port is safe.
+	[int]$RpcPort = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -93,6 +96,7 @@ try {
 	$env:DGSPY_URL = $gatewayUrl
 	$env:DGSPY_TOKEN = $token
 	$dnSpyHostId = & "$PSScriptRoot\TestSupport\Start-DgSpyHost.ps1" -RpcPort $RpcPort -TargetFramework $TargetFramework
+	$RpcPort = [int]$env:DGSPY_RPC_PORT
 	$gatewayProcess = Start-Process -FilePath 'dotnet' -ArgumentList ('"' + $gatewayDll + '"') `
 		-WorkingDirectory (Split-Path $gatewayDll) -WindowStyle Hidden -PassThru `
 		-RedirectStandardOutput (Join-Path $runDirectory 'gateway.out') -RedirectStandardError (Join-Path $runDirectory 'gateway.err')
