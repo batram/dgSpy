@@ -36,6 +36,9 @@ static class CompatibilityProbe {
 				if (family.ExpectedRefusal is not null) {
 					failures++;
 					Console.Error.WriteLine($"FAIL  {family.Id}  a leg that is supposed to be refused completed instead.");
+					// The lifecycle it managed, not just the fact that it managed one: a boundary that moves
+					// is a question about what is now possible, and the stages it reached are the answer.
+					foreach (var line in report) Console.Error.WriteLine("      " + line);
 					Console.Error.WriteLine($"      Expected: {family.ExpectedRefusal.Because}");
 					Console.Error.WriteLine("      If that boundary has genuinely moved, the family's ExpectedRefusal is what to update - and the product's Mono support statements with it.");
 					continue;

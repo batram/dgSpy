@@ -129,9 +129,12 @@ there cannot build the control endpoint's access control - the protection that k
 off a channel able to patch the process. An endpoint whose protection cannot be stated is not a
 supported configuration, so the resident refuses instead of creating one.
 
-Everything else a Mono resident would need does work, which is why the refusal is drawn at exactly that
-point: the payload graph - contracts, resident, Roslyn, and the pinned CLR v4 Harmony - loads and goes
-resident on Unity's Mono unchanged. What that costs is a control endpoint, not a runtime port.
+Much of what a Mono resident would need does already work - the payload graph loads and goes resident
+on Unity's Mono unchanged, and with the endpoint check lifted experimentally a complete hook lifecycle
+runs on the existing CLR v4 payload slots. But the target does not then survive: the resident retires
+cleanly and the process reliably crashes inside Mono's own shutdown. Residency on Mono needs both an
+endpoint whose protection can be stated and a target that is still alive afterwards; neither is
+available today, and the second is why the first is not merely a formality.
 
 A range is a claim that a packaged live hook lifecycle has actually run there. Adding one needs its own
 evidence, not an expectation that it should work.

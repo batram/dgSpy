@@ -46,37 +46,49 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Give the Mono resident a control endpoint whose protection can be stated, then complete the backend.
+1. Stop a Mono resident crashing its target on retirement, give it a protectable endpoint, then finish
+   the backend.
 2. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
 3. Revisit high-risk execution, editing, and scripting one workflow at a time.
 4. Keep the remaining compatibility expansions parked until product scope changes.
 5. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - give the Mono resident a control endpoint it can protect
+## Road 1 - make a Mono resident survivable, then give it an endpoint it can protect
 
-The mechanism question is answered and the answer is narrow. On a Unity-accurate x64 Mono fixture, the
-whole payload graph - contracts, resident, Roslyn, and the pinned CLR v4 Harmony - loads and goes
-resident unchanged, and residency then stops at exactly one thing: Unity's Mono implements neither
-`WindowsIdentity.GetCurrent().User` nor `PipeSecurity.AddAccessRule`, so the control endpoint's access
-control cannot be built. That is a class-library boundary, upstream of every arrival question, and it
-is the same whether the payload arrives by debugger-driven managed loading or native embedding. The
-resident refuses there by name today, an opt-in probe leg asserts the refusal, and the supported-runtime
+The mechanism question is answered, and the payload work is largely already done. On a Unity-accurate
+x64 Mono fixture the whole payload graph - contracts, resident, Roslyn, and the pinned CLR v4 Harmony -
+loads and goes resident unchanged, and with the endpoint check lifted experimentally a **complete hook
+lifecycle runs on the existing CLR v4 payload slots**: compile, install, live behavior change, events,
+removal, and a clean resident retirement. So the matrix needs rows rather than assets, and Road 1.2's
+dependency questions are answered.
+
+Two independent things block it, and the second was found only by measuring past the first:
+
+1. **The target does not survive retirement.** The resident retires cleanly - endpoint down, hooks
+   removed, `behavior_commit=stopped` - and the process then crashes inside Mono's own shutdown with an
+   access violation, preceded by an eglib `assertion 'filename != NULL' failed`. Reproducible eight
+   runs out of nine. Not the fixture host, not byte-loading as such, and not the parked listener
+   thread; each was tested separately. Root-cause it before anything else on this road: a resident that
+   kills the target on detach is the one outcome the invariants forbid outright, and no endpoint design
+   changes it.
+2. **The control endpoint has no statable protection.** Unity's Mono implements neither
+   `WindowsIdentity.GetCurrent().User` nor `PipeSecurity.AddAccessRule`, so the endpoint's access
+   control cannot be built. A class-library boundary, upstream of every arrival question and identical
+   whether the payload arrives by debugger-driven managed loading or native embedding. The candidates
+   are a descriptor built through `advapi32`/`CreateNamedPipeW` and wrapped, which keeps the current
+   guarantee at the cost of native interop in the resident; or a different endpoint carrying the
+   existing challenge-response, which needs an explicit account of what defence in depth is lost.
+
+The resident refuses at (2) today, an opt-in probe leg asserts that refusal, and the supported-runtime
 statement says so. See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes) and
 [The Mono leg](../product/HOOKLAB.md#the-mono-leg).
 
-What remains is a decision with evidence behind it, then the rest of the road:
+Then the rest of the road:
 
-1. Choose how a Mono resident gets an endpoint whose protection can be stated. The two candidates are
-   building the security descriptor through `advapi32`/`CreateNamedPipeW` and wrapping the handle,
-   which keeps the exact current guarantee at the cost of native interop in the resident; or a
-   different endpoint - loopback, say - carrying the existing challenge-response, which needs an
-   explicit argument about what defence in depth is lost. Refusing remains correct until one of them
-   has live evidence.
-2. Add an explicit Mono backend with exact runtime/module identity and a pinned, live-proven compiler
-   and Harmony dependency policy. The matrix probably needs new rows rather than new payload bytes -
-   the existing CLR v4 slots load on Unity's Mono - but that is a measurement to repeat once residency
-   completes, not a conclusion to carry forward.
-3. Extend the payload manifest, compatibility probe, package, disposable Unity fixture, and hidden-
+3. Add an explicit Mono backend with exact runtime/module identity and a pinned, live-proven compiler
+   and Harmony dependency policy, promoting the payload findings above from measurement to declared
+   matrix rows.
+4. Extend the payload manifest, compatibility probe, package, disposable Unity fixture, and hidden-
    desktop UCH live gates through retirement. The probe's Mono leg becomes a lifecycle rather than a
    boundary assertion at that point.
 
