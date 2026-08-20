@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -31,6 +32,7 @@ internal static class DgSpyBuildTool {
 			var options=Options.Parse(arguments.Skip(1).ToArray());
 				switch(arguments[0].ToLowerInvariant()) {
 				case "pipeline": Pipeline(options); break;
+				case "prune": Prune(options); break;
 				case "build": Build(options); break;
 				case "build-host": BuildHost(options); break;
 				case "build-components": BuildComponents(options); break;
@@ -64,6 +66,69 @@ internal static class DgSpyBuildTool {
 	});
 
 	static int Help() { Console.WriteLine("install-dgspy codex|claude [--force]\ninstall-dgspy host-only\nDgSpyTool pipeline|build|build-host|build-components|compose|verify|package|verify-package|install|snapshot"); return 2; }
+
+	/// <summary>The four artifact areas the pipeline writes, each keyed by build id.</summary>
+	internal static readonly string[] BuildIdScopedAreas={ "layouts",@"packages\dgspy-win-x64","host-raw","dgspy-components" };
+
+	/// <summary>
+	/// Ages out single-use build outputs.
+	///
+	/// The pipeline is immutable by design: it never overwrites a layout or a package, which is what
+	/// makes a build reproducible and a verification meaningful. Immutable with no retention is
+	/// unbounded growth, though, and one day of gate runs is about 25 GB - each run leaves a layout, a
+	/// package, a raw host and a component tree behind, and nothing ever removed them.
+	///
+	/// Only build ids that look single-use are eligible: a name containing a 32-character hex run, which
+	/// is what a generated id like <c>gate-3f9c...</c> has and what a deliberate one like <c>local</c> or
+	/// <c>glorpy</c> does not. That distinction is the point. A generated id is used once and never named
+	/// again; a named id is reused and may be referenced by something outside this tool, so it is never
+	/// touched however old it looks.
+	/// </summary>
+	static void Prune(Options options) {
+		var artifacts=Full(options.Value("artifacts") ?? Path.Combine(Full(options.Value("repo") ?? Environment.CurrentDirectory),"artifacts"));
+		var keep=Int32.TryParse(options.Value("keep"),NumberStyles.Integer,CultureInfo.InvariantCulture,out var parsed)?parsed:3;
+		if(keep<1) throw new ArgumentException("--keep must be at least 1; retaining nothing would delete the build a gate just verified.");
+		var dryRun=options.Flag("dry-run");
+		// Never remove the layout a caller is actively using, whatever its age or name.
+		var inUse=Environment.GetEnvironmentVariable("DGSPY_LAYOUT_ROOT");
+		var protectedPath=String.IsNullOrWhiteSpace(inUse)?null:Full(inUse);
+		long reclaimed=0; var removed=0; var kept=0;
+		foreach(var area in BuildIdScopedAreas) {
+			var root=Path.Combine(artifacts,area);
+			if(!Directory.Exists(root)) continue;
+			var candidates=new DirectoryInfo(root).GetDirectories()
+				.Where(directory=>IsSingleUseBuildId(directory.Name))
+				.OrderByDescending(directory=>directory.LastWriteTimeUtc)
+				.ToArray();
+			foreach(var directory in candidates.Take(keep)) kept++;
+			foreach(var directory in candidates.Skip(keep)) {
+				if(protectedPath is not null&&String.Equals(directory.FullName,protectedPath,StringComparison.OrdinalIgnoreCase)) { kept++; continue; }
+				var size=DirectorySize(directory);
+				Console.WriteLine((dryRun?"would remove ":"removing ")+directory.FullName+" ("+(size/(1024*1024)).ToString(CultureInfo.InvariantCulture)+" MB)");
+				if(!dryRun) { try { directory.Delete(true); } catch(Exception ex) { Console.Error.WriteLine("could not remove "+directory.FullName+": "+ex.Message); continue; } }
+				reclaimed+=size; removed++;
+			}
+		}
+		Console.WriteLine((dryRun?"prune (dry run): ":"prune: ")+removed.ToString(CultureInfo.InvariantCulture)+" removed, "+kept.ToString(CultureInfo.InvariantCulture)+" retained, "+(reclaimed/(1024L*1024L)).ToString(CultureInfo.InvariantCulture)+" MB");
+	}
+
+	/// <summary>True when a build id was machine-generated for one run, which is the only kind this tool
+	/// will delete. Recognised by a 32-character hex run, matching both <c>gate-3f9c...</c> and the
+	/// <c>.gate-3f9c....staging-8a1b...</c> debris an interrupted run leaves behind.</summary>
+	internal static bool IsSingleUseBuildId(string name) {
+		var run=0;
+		foreach(var ch in name) {
+			var hex=(ch>='0'&&ch<='9')||(ch>='a'&&ch<='f')||(ch>='A'&&ch<='F');
+			if(hex) { if(++run>=32) return true; }
+			else run=0;
+		}
+		return false;
+	}
+
+	static long DirectorySize(DirectoryInfo directory) {
+		try { return directory.EnumerateFiles("*",SearchOption.AllDirectories).Sum(file=>file.Length); }
+		catch(Exception) { return 0; }
+	}
 
 	static void Pipeline(Options options) {
 		var (repo,artifacts,buildId)=ResolvePipelineOptions(options);
