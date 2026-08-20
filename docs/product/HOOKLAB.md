@@ -1,8 +1,9 @@
 # HookLab
 
-HookLab adds exactly guarded Harmony hooks to an attached x64 desktop CLR v4 process. It supports direct
-authoring through dgSpy and automatic application through the separately installed HookLab watcher.
-CoreCLR-only targets, x86, and Mono/Unity residents are outside the current HookLab boundary.
+HookLab adds exactly guarded Harmony hooks to an attached x64 CLR v4 or CoreCLR process, through two
+separate explicit backends. It supports direct authoring through dgSpy and automatic application
+through the separately installed HookLab watcher. x86 and Mono/Unity residents are outside the current
+HookLab boundary.
 
 ## Resident model
 
@@ -16,6 +17,43 @@ hooks removes their behavioral effect but is not an assembly unload operation.
 Every target method is guarded by exact module MVID, metadata token, signature, and original IL SHA-256.
 The public `module_id` used to select the live module is opaque and session-scoped; rediscover it after
 every attach and fail on zero or ambiguous resolution.
+
+## Resident payload matrix
+
+HookLab ships one payload file, and every assembly it injects travels inside it as hash-verified bytes.
+The build generates a payload matrix describing that set, and it is the authoritative account of what
+enters a target. Each entry records:
+
+- the slot id and its role - contracts, resident, compiler, compiler-support, or patch engine;
+- the carrier that holds the bytes: the bootstrap, or the resident probe nested inside it;
+- the embedded resource name, target framework, and architecture;
+- the runtime families the payload is valid on, `clrv4`, `coreclr`, or both;
+- the exact assembly name, version, and public key token;
+- provenance - the project or the pinned NuGet package and version it came from;
+- the other slots it needs at run time, and its SHA-256.
+
+The runtime axis is real, not decorative: the patch engine is `net48` Harmony on CLR v4 and `net6.0`
+Harmony on CoreCLR, and compilation is CodeDom on CLR v4 and Roslyn on CoreCLR. The matrix is where
+those differences are stated once, instead of being recoverable only by reading the loaders that branch
+on them.
+
+Three things verify it, at different times and against different evidence:
+
+- The build fails if a declared slot has no file, so a payload cannot go missing silently.
+- Composition and every later `verify` read the matrix out of the packaged payload and prove it against
+  that payload's own bytes - digest and assembly identity per slot, and, in the other direction, that no
+  embedded payload resource is undeclared. An unmanifested resident DLL fails the package. The layout's
+  `hooklab/hooklab-payload-matrix.json` is a projection of that verified matrix, and verification
+  re-derives it rather than trusting it.
+- The resident parses the matrix at load time and serves only the identities it declares, from embedded
+  bytes, after verifying each digest and version.
+
+A modern .NET target framework may not claim `clrv4`; the reverse is deliberately not asserted, because
+the pinned `net462` `System.Collections.Immutable` really does load in a CoreCLR target.
+
+Note what the matrix does not claim. It records that a payload is *valid* on a runtime family, not that
+every payload is *used* on it, and it is not a substitute for the packaged live hook lifecycle gates -
+it fails a wrong payload set earlier and by name, not instead.
 
 ## Identity and the control channel
 

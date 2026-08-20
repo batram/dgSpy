@@ -130,6 +130,17 @@ Mono/Unity jobs. The local Unity fixture is `C:\Users\mjb\develop\UCH-dev\uch-de
 HookLab independently verifies its payload-specific manifest and the payload entry in
 `dgspy-layout.json`. Developer build-output layouts are not supported.
 
+`hooklab\hooklab-payload-manifest.json` describes the payload file the host opens.
+`hooklab\hooklab-payload-matrix.json` describes what is inside it: every resident payload's role,
+carrier, runtime family, framework, architecture, assembly identity, provenance, dependencies, and
+digest. `compose`, `verify`, `package`, and `verify-package` all re-read the matrix out of the packaged
+payload and prove it against that payload's own bytes, in both directions - every declared slot must be
+present at the declared identity and digest, and every embedded payload resource must be declared. A
+payload added to the bootstrap or to the resident probe without a matrix entry fails package
+verification rather than shipping unnoticed. See
+[Resident payload matrix](../product/HOOKLAB.md#resident-payload-matrix) for what the matrix states and
+what it deliberately does not.
+
 ## Silent failures
 
 MEF composition can remove an extension part without a release log when imports are unsatisfied.

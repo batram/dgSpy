@@ -196,9 +196,25 @@ namespace HookLab.Bootstrap.Tests {
 		}
 
 		[Fact]
-		public void A_malformed_manifest_line_refuses() {
-			Assert.Throws<BootstrapIntegrityException>(() => EmbeddedAssemblyResolver.ParseManifest("only|two"));
-			Assert.Throws<BootstrapIntegrityException>(() => EmbeddedAssemblyResolver.ParseManifest("name|resource|not-a-digest"));
+		public void A_malformed_matrix_refuses() {
+			Assert.Throws<BootstrapIntegrityException>(() => PayloadMatrix.Parse("only|two"));
+			Assert.Throws<BootstrapIntegrityException>(() => PayloadMatrix.Parse(PayloadMatrix.Header + "\nname|resident|bootstrap|r|net48|x64|clrv4|name|1.0.0.0|none|project:a||not-a-digest"));
+		}
+
+		/// <summary>The resident reads its own payload matrix at load time, so a matrix that cannot be
+		/// parsed there is a target that cannot be initialized. This proves the shipped one parses and that
+		/// it describes the runtime axis the two backends actually differ on.</summary>
+		[Fact]
+		public void The_embedded_matrix_describes_both_runtime_families() {
+			var matrix = EmbeddedAssemblyResolver.EmbeddedMatrix();
+			Assert.Equal(PayloadRuntimes.ClrV4, matrix["Harmony.Desktop"].Runtimes);
+			Assert.Equal(PayloadRuntimes.CoreClr, matrix["Harmony.CoreClr"].Runtimes);
+			// Carried by the probe, so deliberately not served by this resolver - but described, which is
+			// the whole difference between a payload that ships and a payload that is accounted for.
+			Assert.All(matrix.Carried(PayloadCarrier.Probe), entry => Assert.Equal(PayloadRole.PatchEngine, entry.Role));
+			Assert.Equal(5, matrix.Carried(PayloadCarrier.Bootstrap).Count());
+			Assert.Equal("nuget:lib.harmony/2.4.2", matrix["Harmony.Desktop"].Provenance);
+			Assert.Equal("project:HookLab/HookLab.Probe.CorDebug", matrix["HookLab.Probe.CorDebug"].Provenance);
 		}
 
 		[Fact]

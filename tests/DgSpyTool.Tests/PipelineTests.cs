@@ -168,7 +168,11 @@ public sealed class PipelineTests : IDisposable {
 		// From the tool's own list, not a copy of it. This used to restate the ten names, so adding one
 		// file to the packaged extension failed a compose test that has nothing to do with the change.
 		foreach(var name in DgSpyBuildTool.ExtensionFiles) Write(components,name,name=="dgSpy.Protocol.dll"?"protocol":name);
-		var bootstrap=Write(root,"bootstrap.payload","bootstrap"); var native=Write(root,"native.dll","native"); var launcher=Dir("launcher");
+		// The real bootstrap, not a text placeholder: composition now reads the payload's embedded resident
+		// matrix and verifies it against the payload's own bytes, so a fixture that is not a managed
+		// assembly would exercise a compose path the product never takes.
+		var bootstrap=Path.Combine(root,"bootstrap.payload"); File.Copy(HookLabPayload.Path(),bootstrap);
+		var native=Write(root,"native.dll","native"); var launcher=Dir("launcher");
 		Write(launcher,"Start-dgSpyRemoteHost.ps1","launcher"); Write(launcher,"Start-dgSpyRemoteHost.cmd","launcher");
 		var watcher=Dir("watcher"); Write(watcher,"HookLab.Watcher.exe","watcher"); Write(watcher,"HookLab.Watcher.Companion.exe","companion"); Write(watcher,"payload/HookLab.Bootstrap.dll","bootstrap"); Write(watcher,"payload/HookLab.NativeBootstrap.x64.dll","native"); Write(watcher,"deployments/vmconnect-fullscreen/vmconnect-fullscreen.json","profile");
 		return new[]{host,components,cli,gateway,bootstrap,native,launcher,watcher};

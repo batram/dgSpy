@@ -16,12 +16,18 @@ namespace HookLab.Bootstrap {
 	}
 
 	sealed class EmbeddedAssemblyEntry {
-		internal EmbeddedAssemblyEntry(string name, string resourceName, string sha256) {
-			Name = name; ResourceName = resourceName; Sha256 = sha256;
+		internal EmbeddedAssemblyEntry(string name, string resourceName, string sha256) : this(name, resourceName, sha256, null) { }
+		internal EmbeddedAssemblyEntry(string name, string resourceName, string sha256, Version? expectedVersion) {
+			Name = name; ResourceName = resourceName; Sha256 = sha256; ExpectedVersion = expectedVersion;
 		}
 		internal string Name { get; }
 		internal string ResourceName { get; }
 		internal string Sha256 { get; }
+		/// <summary>The version the payload matrix says these bytes carry, or null when the entry was built
+		/// without a matrix. A digest proves the bytes are the ones the build hashed; this proves the build
+		/// hashed the assembly it meant to, so swapping one pinned dependency for another version of itself
+		/// is refused by name rather than by an opaque digest mismatch.</summary>
+		internal Version? ExpectedVersion { get; }
 	}
 
 	/// <summary>Resolves exactly the identities named in the build-time manifest, from embedded bytes,
@@ -32,7 +38,7 @@ namespace HookLab.Bootstrap {
 	/// the resolve hook is the only thing that can hand back an already-loaded instance. Returning a second
 	/// copy would give the probe a different HookLab.Contracts than the one its callers hold.</summary>
 	sealed class EmbeddedAssemblyResolver {
-		internal const string ManifestResourceName = "HookLab.Bootstrap.Payloads.manifest.txt";
+		internal const string ManifestResourceName = PayloadMatrix.ResourceName;
 		internal const string PayloadResourcePrefix = "HookLab.Bootstrap.Payloads.";
 
 		readonly object gate = new object();
@@ -55,10 +61,23 @@ namespace HookLab.Bootstrap {
 			if (manifest.Count == 0) throw new BootstrapIntegrityException("The embedded payload manifest is empty.");
 		}
 
+		/// <summary>Builds the resolver from the build-generated payload matrix, serving exactly the entries
+		/// the matrix says this assembly carries. Payloads carried by the probe - the pinned Harmony assets -
+		/// are described by the same matrix but deliberately not served here: a second embedded copy would
+		/// win the bind and leave two patch engines resident.</summary>
 		internal static EmbeddedAssemblyResolver FromEmbeddedManifest() {
 			var assembly = typeof(EmbeddedAssemblyResolver).Assembly;
-			return new EmbeddedAssemblyResolver(ParseManifest(ReadText(assembly, ManifestResourceName)), name => ReadResource(assembly, name));
+			var matrix = PayloadMatrix.Parse(ReadText(assembly, PayloadMatrix.ResourceName));
+			var entries = matrix.Carried(PayloadCarrier.Bootstrap)
+				.Select(entry => new EmbeddedAssemblyEntry(entry.AssemblyName, entry.ResourceName, entry.Sha256, entry.AssemblyVersion))
+				.ToArray();
+			return new EmbeddedAssemblyResolver(entries, name => ReadResource(assembly, name));
 		}
+
+		/// <summary>The matrix this assembly was built with, for diagnostics and for tests that need to
+		/// compare what the build declared against what the bytes actually are.</summary>
+		internal static PayloadMatrix EmbeddedMatrix() =>
+			PayloadMatrix.Parse(ReadText(typeof(EmbeddedAssemblyResolver).Assembly, PayloadMatrix.ResourceName));
 
 		internal IReadOnlyList<string> ManifestIdentities => manifest.Keys.OrderBy(x => x, StringComparer.Ordinal).ToArray();
 		internal int LoadCount { get { lock (gate) return loadCount; } }
@@ -119,6 +138,8 @@ namespace HookLab.Bootstrap {
 			var loadedName = assembly.GetName();
 			if (!string.Equals(loadedName.Name, entry.Name, StringComparison.Ordinal))
 				throw new BootstrapIntegrityException("Embedded payload identity mismatch: manifest says " + entry.Name + ", assembly says " + loadedName.Name + ".");
+			if (entry.ExpectedVersion != null && loadedName.Version != entry.ExpectedVersion)
+				throw new BootstrapIntegrityException("Embedded payload identity mismatch for " + entry.Name + ": manifest says version " + entry.ExpectedVersion + ", assembly says " + loadedName.Version + ".");
 			resolved.Add(entry.Name, assembly);
 			loadCount++;
 			return assembly;
@@ -202,23 +223,7 @@ namespace HookLab.Bootstrap {
 			lastRefusal = what + ": " + why;
 		}
 
-		internal static IReadOnlyList<EmbeddedAssemblyEntry> ParseManifest(string text) {
-			if (text == null) throw new ArgumentNullException(nameof(text));
-			var entries = new List<EmbeddedAssemblyEntry>();
-			foreach (var raw in text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)) {
-				var line = raw.Trim();
-				if (line.Length == 0) continue;
-				var parts = line.Split('|');
-				if (parts.Length != 3) throw new BootstrapIntegrityException("Malformed manifest line: " + line);
-				var digest = Normalize(parts[2]);
-				if (digest.Length != 64 || !digest.All(IsHex)) throw new BootstrapIntegrityException("Malformed manifest digest: " + parts[2]);
-				entries.Add(new EmbeddedAssemblyEntry(parts[0].Trim(), parts[1].Trim(), digest));
-			}
-			return entries;
-		}
-
-		static bool IsHex(char value) => (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
-		static string Normalize(string value) => (value ?? "").Replace("-", "").Trim().ToLowerInvariant();
+		static string Normalize(string value) => PayloadMatrix.NormalizeDigest(value);
 
 		internal static string Sha256Hex(byte[] bytes) {
 			using (var sha = SHA256.Create()) {

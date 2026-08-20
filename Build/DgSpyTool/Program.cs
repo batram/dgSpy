@@ -19,6 +19,8 @@ internal static class DgSpyBuildTool {
 	internal static readonly string[] ExtensionFiles={"dgSpy.Extension.x.dll","dgSpy.Extension.x.pdb","dgSpy.Protocol.dll","dgSpy.Protocol.pdb","HookLab.Contracts.dll","HookLab.Contracts.pdb","HookLab.Packaging.dll","HookLab.Packaging.pdb","HookLab.Host.Transport.dll","HookLab.Host.Transport.pdb","HookLab.Injector.dll","HookLab.Injector.pdb"};
 	static readonly HashSet<string> FrameworkOverrides=new(StringComparer.OrdinalIgnoreCase){"Microsoft.VisualBasic.dll","System.Diagnostics.EventLog.dll","System.Drawing.dll","System.Security.Cryptography.Pkcs.dll","System.Security.Cryptography.Xml.dll","WindowsBase.dll"};
 	const string ManifestName="dgspy-layout.json";
+	internal const string PayloadFileName="hooklab-bootstrap.net48.payload";
+	internal const string PayloadMatrixFileName="hooklab-payload-matrix.json";
 
 	public static Task<int> RunAsync(string[] arguments) {
 		try {
@@ -258,12 +260,18 @@ internal static class DgSpyBuildTool {
 			var extension=Path.Combine(bin,"Extensions","dgSpy"); Directory.CreateDirectory(extension);
 			foreach(var name in ExtensionFiles) CopyOwned(Path.Combine(options.Required("components"),name),Path.Combine(extension,name),"extension",staging,ownership,false);
 			var hooklab=Path.Combine(staging,"hooklab"); Directory.CreateDirectory(hooklab);
-			var payload=Path.Combine(hooklab,"hooklab-bootstrap.net48.payload");
+			var payload=Path.Combine(hooklab,PayloadFileName);
 			CopyOwned(options.Required("bootstrap"),payload,"hooklab",staging,ownership,false);
 			CopyOwned(options.Required("native-bootstrap"),Path.Combine(hooklab,"HookLab.NativeBootstrap.x64.dll"),"hooklab",staging,ownership,false);
 			var payloadInfo=new { format_version=1,payloads=new[]{new { id="hooklab_bootstrap",file=Path.GetFileName(payload),target_framework="net48",architecture="x64",size=new FileInfo(payload).Length,sha256=Hash(payload) }} };
 			File.WriteAllText(Path.Combine(hooklab,"hooklab-payload-manifest.json"),JsonSerializer.Serialize(payloadInfo,JsonOptions)+Environment.NewLine);
 			ownership[Relative(staging,Path.Combine(hooklab,"hooklab-payload-manifest.json"))]="hooklab";
+			// The delivery manifest above describes the one file the host opens. This describes what is
+			// inside it: every resident payload, which runtime family it is for, where it came from, and
+			// what identity it carries. Written from the payload's own embedded matrix after that matrix has
+			// been proved against the payload's bytes, so it is a projection of evidence, not a restatement.
+			File.WriteAllText(Path.Combine(hooklab,PayloadMatrixFileName),JsonSerializer.Serialize(PayloadMatrixVerification.Publishable(PayloadMatrixVerification.VerifyPayloadFile(payload)),JsonOptions)+Environment.NewLine);
+			ownership[Relative(staging,Path.Combine(hooklab,PayloadMatrixFileName))]="hooklab";
 			WriteManifest(staging,ownership);
 			Verify(staging);
 			if(Directory.Exists(output)) Directory.Move(output,previous);
@@ -288,10 +296,21 @@ internal static class DgSpyBuildTool {
 	static void Verify(string layoutPath) {
 		var root=Full(layoutPath); var manifestPath=Path.Combine(root,ManifestName);
 		var manifest=VerifyInventoryOnly(root);
-		Require(root,"dnSpy.exe"); Require(root,"bin/dnSpy.dll"); Require(root,"bin/dgspy.exe"); Require(root,"bin/dgSpy.Gateway.exe"); Require(root,"bin/Extensions/dgSpy/dgSpy.Extension.x.dll"); Require(root,"hooklab/HookLab.NativeBootstrap.x64.dll"); Require(root,"hooklab-watcher/HookLab.Watcher.exe"); Require(root,"hooklab-watcher/HookLab.Watcher.Companion.exe"); Require(root,"hooklab-watcher/payload/HookLab.Bootstrap.dll"); Require(root,"hooklab-watcher/payload/HookLab.NativeBootstrap.x64.dll"); Require(root,"hooklab-watcher/deployments/vmconnect-fullscreen/vmconnect-fullscreen.json"); Require(root,"launcher/Start-dgSpyRemoteHost.ps1"); Require(root,"launcher/Start-dgSpyRemoteHost.cmd");
+		Require(root,"dnSpy.exe"); Require(root,"bin/dnSpy.dll"); Require(root,"bin/dgspy.exe"); Require(root,"bin/dgSpy.Gateway.exe"); Require(root,"bin/Extensions/dgSpy/dgSpy.Extension.x.dll"); Require(root,"hooklab/HookLab.NativeBootstrap.x64.dll"); Require(root,"hooklab-watcher/HookLab.Watcher.exe"); Require(root,"hooklab-watcher/HookLab.Watcher.Companion.exe"); Require(root,"hooklab-watcher/payload/HookLab.Bootstrap.dll"); Require(root,"hooklab-watcher/payload/HookLab.NativeBootstrap.x64.dll"); Require(root,"hooklab-watcher/deployments/vmconnect-fullscreen/vmconnect-fullscreen.json"); Require(root,"launcher/Start-dgSpyRemoteHost.ps1"); Require(root,"launcher/Start-dgSpyRemoteHost.cmd"); Require(root,"hooklab/"+PayloadFileName); Require(root,"hooklab/hooklab-payload-manifest.json"); Require(root,"hooklab/"+PayloadMatrixFileName);
 		var rootProtocol=Hash(Path.Combine(root,"bin","dgSpy.Protocol.dll")); var extensionProtocol=Hash(Path.Combine(root,"bin","Extensions","dgSpy","dgSpy.Protocol.dll"));
 		if(rootProtocol!=extensionProtocol) throw new InvalidOperationException("App-base and extension protocol assemblies differ.");
+		VerifyPayloadMatrix(root);
 		Console.WriteLine($"verified {manifest.Files.Length} files: {root}");
+	}
+	/// <summary>Re-derives the resident payload matrix from the packaged payload's own bytes and requires
+	/// the published projection to agree with it exactly. Running this in Verify rather than only in
+	/// Compose is the point: package verification, installation checks and CI all reach it, so a layout
+	/// whose payload was replaced after composition cannot pass by carrying an agreeable JSON file.</summary>
+	static void VerifyPayloadMatrix(string root) {
+		var matrix=PayloadMatrixVerification.VerifyPayloadFile(Path.Combine(root,"hooklab",PayloadFileName));
+		var published=Path.Combine(root,"hooklab",PayloadMatrixFileName);
+		var expected=JsonSerializer.Serialize(PayloadMatrixVerification.Publishable(matrix),JsonOptions)+Environment.NewLine;
+		if(File.ReadAllText(published)!=expected) throw new InvalidOperationException("The published payload matrix differs from the matrix inside the HookLab payload: "+published);
 	}
 	static LayoutManifest VerifyInventoryOnly(string root) {
 		var manifestPath=Path.Combine(root,ManifestName); if(!File.Exists(manifestPath)) throw new InvalidOperationException("Artifact manifest is missing: "+manifestPath);

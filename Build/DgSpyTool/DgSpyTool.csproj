@@ -1,4 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><RuntimeIdentifiers>win-x64</RuntimeIdentifiers></PropertyGroup>
   <ItemGroup><InternalsVisibleTo Include="DgSpyTool.Tests" /></ItemGroup>
+  <!-- Source-linked, not referenced: the resident's parser is a net48 assembly this net10 tool must not
+       load, and a second hand-written copy of the format would be free to disagree with the one that
+       actually runs inside a target. Same arrangement HookLab.Host.Transport uses for the probe's wire
+       codec, and for the same reason. -->
+  <ItemGroup><Compile Include="..\..\HookLab\HookLab.Bootstrap\PayloadMatrix.cs" Link="PayloadMatrix.cs" /></ItemGroup>
 </Project>

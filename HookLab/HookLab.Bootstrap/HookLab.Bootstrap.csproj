@@ -31,32 +31,98 @@
        PrepareResourceNames has already split the resource items and a late addition is silently dropped -
        the assembly builds clean and ships with no payload at all. -->
   <Target Name="EmbedBootstrapPayloads" DependsOnTargets="ResolveReferences" BeforeTargets="AssignTargetPaths">
+    <!-- One declaration per resident payload, and the only place the runtime/architecture/framework/
+         provenance/identity facts are stated. Everything downstream - what gets embedded, what the
+         resident resolver serves, what the packaging tool verifies - is derived from these rows, so a
+         payload cannot ship without also being described. The digests are generated below from the exact
+         files resolved here; the identities are pinned, and DgSpyTool proves the pins against the bytes.
+
+         PayloadId/Asm* metadata names are deliberately un-reserved: Identity, Filename and Version are
+         well-known item metadata and assigning them here would either fail or silently mean something
+         else. Carrier says which assembly holds the bytes - the two Harmony assets live inside the probe,
+         which is why they were previously described nowhere at all. -->
     <ItemGroup>
-	  <BootstrapPayload Include="@(ReferencePath)" Condition="'%(Filename)' == 'HookLab.Contracts' Or '%(Filename)' == 'HookLab.Probe.CorDebug'" />
-	  <BootstrapPayload Include="$(NuGetPackageRoot)microsoft.codeanalysis.common\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.dll" />
-	  <BootstrapPayload Include="$(NuGetPackageRoot)microsoft.codeanalysis.csharp\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.CSharp.dll" />
-	  <BootstrapPayload Include="$(NuGetPackageRoot)system.collections.immutable\10.0.1\lib\net462\System.Collections.Immutable.dll" />
+      <PayloadMatrixEntry Include="@(ReferencePath)" Condition="'%(Filename)' == 'HookLab.Contracts'">
+        <PayloadId>HookLab.Contracts</PayloadId><Role>contracts</Role><Carrier>bootstrap</Carrier>
+        <ResourceName>HookLab.Bootstrap.Payloads.HookLab.Contracts.dll</ResourceName>
+        <Tfm>netstandard2.0</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr</Runtimes>
+        <AsmName>HookLab.Contracts</AsmName><AsmVersion>1.0.0.0</AsmVersion><AsmToken>none</AsmToken>
+        <Provenance>project:HookLab/HookLab.Contracts</Provenance><Requires></Requires>
+      </PayloadMatrixEntry>
+      <PayloadMatrixEntry Include="@(ReferencePath)" Condition="'%(Filename)' == 'HookLab.Probe.CorDebug'">
+        <PayloadId>HookLab.Probe.CorDebug</PayloadId><Role>resident</Role><Carrier>bootstrap</Carrier>
+        <ResourceName>HookLab.Bootstrap.Payloads.HookLab.Probe.CorDebug.dll</ResourceName>
+        <Tfm>net48</Tfm><Arch>x64</Arch><Runtimes>clrv4,coreclr</Runtimes>
+        <AsmName>HookLab.Probe.CorDebug</AsmName><AsmVersion>1.0.0.0</AsmVersion><AsmToken>none</AsmToken>
+        <Provenance>project:HookLab/HookLab.Probe.CorDebug</Provenance>
+        <Requires>HookLab.Contracts,Microsoft.CodeAnalysis.CSharp,Harmony.Desktop,Harmony.CoreClr</Requires>
+      </PayloadMatrixEntry>
+      <PayloadMatrixEntry Include="$(NuGetPackageRoot)microsoft.codeanalysis.common\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.dll">
+        <PayloadId>Microsoft.CodeAnalysis</PayloadId><Role>compiler</Role><Carrier>bootstrap</Carrier>
+        <ResourceName>HookLab.Bootstrap.Payloads.Microsoft.CodeAnalysis.dll</ResourceName>
+        <Tfm>netstandard2.0</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr</Runtimes>
+        <AsmName>Microsoft.CodeAnalysis</AsmName><AsmVersion>5.6.0.0</AsmVersion><AsmToken>31bf3856ad364e35</AsmToken>
+        <Provenance>nuget:microsoft.codeanalysis.common/5.6.0</Provenance>
+        <Requires>System.Collections.Immutable</Requires>
+      </PayloadMatrixEntry>
+      <PayloadMatrixEntry Include="$(NuGetPackageRoot)microsoft.codeanalysis.csharp\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.CSharp.dll">
+        <PayloadId>Microsoft.CodeAnalysis.CSharp</PayloadId><Role>compiler</Role><Carrier>bootstrap</Carrier>
+        <ResourceName>HookLab.Bootstrap.Payloads.Microsoft.CodeAnalysis.CSharp.dll</ResourceName>
+        <Tfm>netstandard2.0</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr</Runtimes>
+        <AsmName>Microsoft.CodeAnalysis.CSharp</AsmName><AsmVersion>5.6.0.0</AsmVersion><AsmToken>31bf3856ad364e35</AsmToken>
+        <Provenance>nuget:microsoft.codeanalysis.csharp/5.6.0</Provenance>
+        <Requires>Microsoft.CodeAnalysis,System.Collections.Immutable</Requires>
+      </PayloadMatrixEntry>
+      <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.collections.immutable\10.0.1\lib\net462\System.Collections.Immutable.dll">
+        <PayloadId>System.Collections.Immutable</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
+        <ResourceName>HookLab.Bootstrap.Payloads.System.Collections.Immutable.dll</ResourceName>
+        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr</Runtimes>
+        <AsmName>System.Collections.Immutable</AsmName><AsmVersion>10.0.0.1</AsmVersion><AsmToken>b03f5f7f11d50a3a</AsmToken>
+        <Provenance>nuget:system.collections.immutable/10.0.1</Provenance><Requires></Requires>
+      </PayloadMatrixEntry>
+      <!-- Carried by the probe, not by this assembly: the probe extracts exactly one of these by corlib
+           name. They are hashed and described here so that the shipped set of resident bytes is complete
+           in one artifact, and DgSpyTool reads them back out of the probe payload to prove it. -->
+      <PayloadMatrixEntry Include="$(NuGetPackageRoot)lib.harmony\2.4.2\lib\net48\0Harmony.dll">
+        <PayloadId>Harmony.Desktop</PayloadId><Role>patch-engine</Role><Carrier>probe</Carrier>
+        <ResourceName>HookLab.Probe.CorDebug.Backends.Desktop.0Harmony.dll</ResourceName>
+        <Tfm>net48</Tfm><Arch>any</Arch><Runtimes>clrv4</Runtimes>
+        <AsmName>0Harmony</AsmName><AsmVersion>2.4.2.0</AsmVersion><AsmToken>none</AsmToken>
+        <Provenance>nuget:lib.harmony/2.4.2</Provenance><Requires></Requires>
+      </PayloadMatrixEntry>
+      <PayloadMatrixEntry Include="$(NuGetPackageRoot)lib.harmony\2.4.2\lib\net6.0\0Harmony.dll">
+        <PayloadId>Harmony.CoreClr</PayloadId><Role>patch-engine</Role><Carrier>probe</Carrier>
+        <ResourceName>HookLab.Probe.CorDebug.Backends.CoreClr.0Harmony.dll</ResourceName>
+        <Tfm>net6.0</Tfm><Arch>any</Arch><Runtimes>coreclr</Runtimes>
+        <AsmName>0Harmony</AsmName><AsmVersion>2.4.2.0</AsmVersion><AsmToken>none</AsmToken>
+        <Provenance>nuget:lib.harmony/2.4.2</Provenance><Requires></Requires>
+      </PayloadMatrixEntry>
     </ItemGroup>
     <PropertyGroup>
-      <BootstrapPayloadNames>@(BootstrapPayload->'%(Filename)')</BootstrapPayloadNames>
+      <BootstrapPayloadNames>@(PayloadMatrixEntry->'%(PayloadId)')</BootstrapPayloadNames>
     </PropertyGroup>
     <Error Condition="!$(BootstrapPayloadNames.Contains('HookLab.Contracts'))" Text="HookLab.Contracts was not resolved, so the bootstrap would ship without it. Resolved: $(BootstrapPayloadNames)" />
     <Error Condition="!$(BootstrapPayloadNames.Contains('HookLab.Probe.CorDebug'))" Text="HookLab.Probe.CorDebug was not resolved, so the bootstrap would ship without it. Resolved: $(BootstrapPayloadNames)" />
     <Error Condition="!$(BootstrapPayloadNames.Contains('Microsoft.CodeAnalysis')) Or !$(BootstrapPayloadNames.Contains('Microsoft.CodeAnalysis.CSharp'))" Text="Roslyn was not resolved, so compiled hooks would fail in CoreCLR targets. Resolved: $(BootstrapPayloadNames)" />
-    <GetFileHash Files="@(BootstrapPayload)" Algorithm="SHA256" HashEncoding="hex">
-      <Output TaskParameter="Items" ItemName="BootstrapPayloadHash" />
+    <Error Condition="!Exists('%(PayloadMatrixEntry.FullPath)')" Text="Payload matrix slot '%(PayloadMatrixEntry.PayloadId)' has no file at %(PayloadMatrixEntry.FullPath)." />
+    <GetFileHash Files="@(PayloadMatrixEntry)" Algorithm="SHA256" HashEncoding="hex">
+      <Output TaskParameter="Items" ItemName="PayloadMatrixHashed" />
     </GetFileHash>
-    <WriteLinesToFile File="$(IntermediateOutputPath)hooklab-bootstrap-manifest.txt"
-                      Lines="@(BootstrapPayloadHash->'%(Filename)|HookLab.Bootstrap.Payloads.%(Filename).dll|%(FileHash)')"
+    <ItemGroup>
+      <PayloadMatrixLine Include="hooklab-payload-matrix|2" />
+      <PayloadMatrixLine Include="@(PayloadMatrixHashed->'%(PayloadId)|%(Role)|%(Carrier)|%(ResourceName)|%(Tfm)|%(Arch)|%(Runtimes)|%(AsmName)|%(AsmVersion)|%(AsmToken)|%(Provenance)|%(Requires)|%(FileHash)')" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(IntermediateOutputPath)hooklab-payload-matrix.txt"
+                      Lines="@(PayloadMatrixLine)"
                       Overwrite="true" WriteOnlyWhenDifferent="true" />
     <ItemGroup>
-      <EmbeddedResource Include="@(BootstrapPayloadHash)">
-        <LogicalName>HookLab.Bootstrap.Payloads.%(Filename).dll</LogicalName>
+      <EmbeddedResource Include="@(PayloadMatrixHashed)" Condition="'%(Carrier)' == 'bootstrap'">
+        <LogicalName>%(ResourceName)</LogicalName>
       </EmbeddedResource>
-      <EmbeddedResource Include="$(IntermediateOutputPath)hooklab-bootstrap-manifest.txt">
-        <LogicalName>HookLab.Bootstrap.Payloads.manifest.txt</LogicalName>
+      <EmbeddedResource Include="$(IntermediateOutputPath)hooklab-payload-matrix.txt">
+        <LogicalName>HookLab.Bootstrap.Payloads.matrix.txt</LogicalName>
       </EmbeddedResource>
-      <FileWrites Include="$(IntermediateOutputPath)hooklab-bootstrap-manifest.txt" />
+      <FileWrites Include="$(IntermediateOutputPath)hooklab-payload-matrix.txt" />
     </ItemGroup>
   </Target>
 </Project>
