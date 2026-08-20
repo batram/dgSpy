@@ -9,19 +9,58 @@ namespace dgSpy.Gateway.Tests;
 /// skewed host among several, an unpackaged side, two commit formats that are equal, a dirty tree --
 /// are all reachable here and none of them is reachable from a live registry on demand.</summary>
 public sealed class GatewayBuildTests {
+	const string ThisMachine="GATEWAY-BOX";
 	static JsonNode Compare(string? gatewayCommit,DateTime? gatewayBuilt,params GatewayBuild.HostBuild[] hosts) =>
-		JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(GatewayBuild.CompareHostBuilds(gatewayCommit,gatewayBuilt,(IReadOnlyList<GatewayBuild.HostBuild>)hosts)))!;
+		JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(GatewayBuild.CompareHostBuilds(gatewayCommit,gatewayBuilt,(IReadOnlyList<GatewayBuild.HostBuild>)hosts,ThisMachine)))!;
 	static readonly DateTime Noon=new(2026,8,8,12,22,0,DateTimeKind.Utc);
 	static readonly DateTime Afternoon=new(2026,8,8,14,14,0,DateTimeKind.Utc);
 
 	[Fact]
-	public void Differing_commits_are_skew_and_the_older_side_is_named() {
-		var result=Compare("bf5ed03551ff00112233445566778899aabbccdd",Afternoon,new GatewayBuild.HostBuild("local","26ccdd25",Noon));
+	public void Differing_commits_are_skew_and_the_older_side_is_named_for_a_host_on_this_machine() {
+		var result=Compare("bf5ed03551ff00112233445566778899aabbccdd",Afternoon,new GatewayBuild.HostBuild("local","26ccdd25",Noon,ThisMachine));
 		Assert.True((bool?)result["skewed"]); Assert.True((bool?)result["known"]);
 		Assert.Equal("differs",(string?)result["hosts"]![0]!["comparison"]);
 		Assert.Equal("bf5ed03551ff",(string?)result["gateway_commit"]);
 		Assert.Contains("newer",(string?)result["detail"]!);
 		Assert.NotNull((string?)result["recovery"]);
+	}
+
+	/// <summary>A build time is a file timestamp read on the machine holding the file, so ordering the
+	/// Gateway's against a remote host's compares two clocks that nothing keeps in agreement.
+	///
+	/// Measured on a lab VM sitting four years in the past: a host carrying code built minutes earlier
+	/// reported 2022, which the old comparison stated as "the Gateway is the newer build" - with a
+	/// recovery line telling the operator to bring the host onto the Gateway's payload, exactly
+	/// backwards, and produced precisely when someone is trying to work out which side is stale.</summary>
+	[Fact]
+	public void A_remote_hosts_build_time_is_never_ordered_against_the_gateways() {
+		var hostInThePast=new GatewayBuild.HostBuild("winagain-iis","26ccdd25",new DateTime(2022,8,14,0,59,0,DateTimeKind.Utc),"WIN-12SS5R8D4UO");
+		var detail=(string?)Compare("bf5ed03551ff00112233445566778899aabbccdd",Afternoon,hostInThePast)["detail"]!;
+		Assert.DoesNotContain("the Gateway is the newer build",detail,StringComparison.OrdinalIgnoreCase);
+		Assert.DoesNotContain("the Gateway is the older build",detail,StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("another machine's clock",detail,StringComparison.Ordinal);
+		Assert.Contains("compare commits, not times",detail,StringComparison.Ordinal);
+		Assert.Contains("winagain-iis on WIN-12SS5R8D4UO",detail,StringComparison.Ordinal);
+	}
+
+	/// <summary>A host that never named its machine is treated as remote. Unknown is not "ours": the
+	/// whole point is to claim an ordering only where one clock demonstrably produced both timestamps.</summary>
+	[Fact]
+	public void A_host_that_names_no_machine_is_not_assumed_local() {
+		var detail=(string?)Compare("bf5ed03551ff00112233445566778899aabbccdd",Afternoon,new GatewayBuild.HostBuild("nameless","26ccdd25",Noon))["detail"]!;
+		Assert.Contains("no two of these build times share a clock",detail,StringComparison.Ordinal);
+		Assert.Contains("an unnamed machine",detail,StringComparison.Ordinal);
+	}
+
+	/// <summary>Mixed: the local host is ordered, the remote one is not, and both facts are reported
+	/// rather than the weaker one silencing the stronger.</summary>
+	[Fact]
+	public void A_local_and_a_remote_host_are_reported_differently_in_one_answer() {
+		var detail=(string?)Compare("bf5ed03551ff00112233445566778899aabbccdd",Afternoon,
+			new GatewayBuild.HostBuild("local","26ccdd25",Noon,ThisMachine),
+			new GatewayBuild.HostBuild("winagain-iis","77aabb99",new DateTime(2022,8,14,0,59,0,DateTimeKind.Utc),"WIN-12SS5R8D4UO"))["detail"]!;
+		Assert.Contains("Among the hosts on this machine, the Gateway is the newer build.",detail,StringComparison.Ordinal);
+		Assert.Contains("winagain-iis on WIN-12SS5R8D4UO is remote",detail,StringComparison.Ordinal);
 	}
 	/// <summary>The two sides do not format a commit alike: a host truncates to eight characters, the
 	/// package manifest carries the full forty. Demanding equal strings would report skew on every

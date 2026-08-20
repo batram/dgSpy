@@ -52,8 +52,10 @@ public static class GatewayBuild {
 		provenance=BuildCommit is null ? "unpackaged" : "package_manifest",
 	};
 
-	/// <summary>A registered host's build, reduced to the two things a comparison needs.</summary>
-	internal readonly record struct HostBuild(string HostId,string? Commit,DateTime? BuiltUtc);
+	/// <summary>A registered host's build, reduced to what a comparison needs. MachineName is part of
+	/// that: a build time is a file timestamp, so two of them are only comparable when one clock
+	/// produced both.</summary>
+	internal readonly record struct HostBuild(string HostId,string? Commit,DateTime? BuiltUtc,string? MachineName=null);
 
 	/// <summary>Both skew comparisons, plus one flag worth scanning for.</summary>
 	public static object Skew(object[] hosts) {
@@ -66,7 +68,7 @@ public static class GatewayBuild {
 				var hostId=(string?)node?["host_id"] ?? "unknown";
 				var info=node?["host"];
 				DateTime? built=null; try { built=(DateTime?)info?["build_time_utc"]; } catch { }
-				parsed.Add(new HostBuild(hostId,(string?)info?["build_commit"],built));
+				parsed.Add(new HostBuild(hostId,(string?)info?["build_commit"],built,(string?)info?["machine_name"]));
 			}
 			catch { parsed.Add(new HostBuild("unknown",null,null)); }
 		}
@@ -87,7 +89,10 @@ public static class GatewayBuild {
 	/// The Gateway has no git and cannot order two commits, so it never claims one side is "behind".
 	/// It says they differ, and where both build times are known it says which is older, which is
 	/// what it can actually prove.</summary>
-	internal static object CompareHostBuilds(string? gatewayCommit,DateTime? gatewayBuilt,IReadOnlyList<HostBuild> hosts) {
+	internal static object CompareHostBuilds(string? gatewayCommit,DateTime? gatewayBuilt,IReadOnlyList<HostBuild> hosts,string? machineName=null) {
+		// Passed rather than read, so "which of these timestamps share a clock" stays a decision a test
+		// can drive. Defaulted, so no caller has to know the question is being asked.
+		var machine=machineName ?? Environment.MachineName;
 		var compared=hosts.Select(host=>new {
 			host_id=host.HostId,
 			build_commit=host.Commit,
@@ -109,7 +114,7 @@ public static class GatewayBuild {
 				recovery=(string?)null };
 		}
 		var names=string.Join(", ",differing.Select(host=>$"{host.host_id} at {host.build_commit}"));
-		var older=Older(gatewayBuilt,hosts.Where(host=>differing.Any(d=>d.host_id==host.HostId)).Select(host=>host.BuiltUtc).ToArray());
+		var older=Older(gatewayBuilt,hosts.Where(host=>differing.Any(d=>d.host_id==host.HostId)).ToArray(),machine);
 		return new { known=true,skewed=true,gateway_commit=(string?)Shorten(gatewayCommit),hosts=compared,
 			detail=$"The Gateway is running {Shorten(gatewayCommit)} but {names}. The tool descriptions, schemas and response shapes come from the Gateway; the debugger answers come from the host. {older} Treat anything either side reports as belonging to its own build, not to one tree.",
 			recovery=(string?)"Redeploy so both sides come from one commit: call launch_local_host to bring the hosts onto the installed payload, and reinstall dgSpy if the Gateway is the older side. Record both commits in any bug report written before that happens." };
@@ -128,13 +133,38 @@ public static class GatewayBuild {
 	}
 	static (string Sha,bool Dirty) Split(string commit) =>
 		commit.EndsWith("-dirty",StringComparison.Ordinal) ? (commit[..^6],true) : (commit,false);
-	static string Older(DateTime? gateway,IReadOnlyList<DateTime?> hosts) {
-		if(gateway is null || hosts.Count==0 || hosts.Any(time=>time is null)) return "Neither side's build time is known on both ends, so which one is older cannot be said.";
-		var newestHost=hosts.Max()!.Value; var oldestHost=hosts.Min()!.Value;
-		if(gateway.Value<oldestHost) return "The Gateway is the older build.";
-		if(gateway.Value>newestHost) return "The Gateway is the newer build.";
-		return "The build times do not separate them cleanly.";
+	/// <summary>Which side is older, said only where it can be proved.
+	///
+	/// <para>A build time is a file timestamp read on the machine that holds the file. Ordering the
+	/// Gateway's against a remote host's therefore compares two machines' clocks, and nothing makes them
+	/// agree: measured on a lab VM whose clock sat four years in the past, a host carrying code built
+	/// minutes earlier reported 2022 and would have been called the older build - with a recovery line
+	/// telling the operator to bring the host onto the Gateway's payload, which is backwards. That is a
+	/// confident falsehood produced exactly when someone is trying to work out which side is stale.</para>
+	///
+	/// <para>So: order only hosts on this machine, where one clock produced both timestamps, and for the
+	/// rest say what is actually true - the times identify the builds and cannot be sequenced. The same
+	/// reasoning the rest of dgSpy applies to a DACL that has not been access-checked.</para></summary>
+	static string Older(DateTime? gateway,IReadOnlyList<HostBuild> hosts,string machine) {
+		if(gateway is null || hosts.Count==0) return "Neither side's build time is known on both ends, so which one is older cannot be said.";
+		var local=hosts.Where(host=>host.BuiltUtc is not null && Same(host.MachineName,machine)).Select(host=>host.BuiltUtc!.Value).ToArray();
+		var remote=hosts.Where(host=>!Same(host.MachineName,machine)).ToArray();
+		var ordered=local.Length==0
+			?"No differing host runs on this machine, so no two of these build times share a clock."
+			:gateway.Value<local.Min()
+				?"Among the hosts on this machine, the Gateway is the older build."
+				:gateway.Value>local.Max()
+					?"Among the hosts on this machine, the Gateway is the newer build."
+					:"Among the hosts on this machine, the build times do not separate them cleanly.";
+		return remote.Length==0
+			?ordered
+			:ordered+" "+String.Join(", ",remote.Select(host=>host.HostId+" on "+(host.MachineName ?? "an unnamed machine")))+
+				(remote.Length==1?" is remote, so its":" are remote, so their")+
+				" build time comes from another machine's clock and cannot be ordered against this one - compare commits, not times.";
 	}
+
+	static bool Same(string? left,string? right) =>
+		left is not null && right is not null && String.Equals(left,right,StringComparison.OrdinalIgnoreCase);
 
 	/// <summary>Whether this process is still the build that is installed. This is the case that cost
 	/// the most: dgSpy is reinstalled, the agent's MCP server keeps running out of the tree it loaded
