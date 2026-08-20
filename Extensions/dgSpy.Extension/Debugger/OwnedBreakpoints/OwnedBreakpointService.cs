@@ -35,14 +35,8 @@ namespace dgSpy.Extension.Debugger.OwnedBreakpoints {
 		OwnedBreakpointService(IDgSpyOwnedBreakpointService engineBreakpoints) => this.engineBreakpoints=engineBreakpoints;
 
 		public bool IsSupported(DbgRuntime runtime) => engineBreakpoints.IsSupported(runtime);
-		public async Task ReconcileRunAsync(DbgRuntime runtime,CancellationToken cancellationToken) {
-			if (!IsSupported(runtime)) throw new NotSupportedException("CorDebug state reconciliation is unavailable for this debugger engine.");
-			var completed=new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-			engineBreakpoints.ReconcileRun(runtime,error=>completed.TrySetResult(error));
-			await WaitWithCancellationAsync(completed.Task,cancellationToken).ConfigureAwait(false);
-			var error=await completed.Task.ConfigureAwait(false);
-			if (error is not null) throw new InvalidOperationException(error);
-		}
+		public Task ReconcileRunAsync(DbgRuntime runtime,CancellationToken cancellationToken) =>
+			CorDebugRunReconciliation.RunAsync(IsSupported(runtime),completed=>engineBreakpoints.ReconcileRun(runtime,completed),cancellationToken);
 		public IReadOnlyList<OwnedBreakpoint> Owners { get { lock(sync) return owners.ToArray(); } }
 
 		public async Task<OwnedBreakpoint> AddOwnerAsync(DbgRuntime runtime, DbgDotNetCodeLocation location,

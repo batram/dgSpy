@@ -332,7 +332,10 @@ namespace dgSpy.Extension {
 							// status=ok - it was scheduled the moment the host gave up and resumed. The
 							// CLR v4 branch below has always resumed before its wait; this one did not.
 							//
-							// Idempotent: the CorDebug engine continues only when its own state is paused.
+							// Preserve the ordinary manager-owned continue path when its state is honest, then
+							// reconcile the CorDebug engine in case func-eval left the two states split. Both
+							// operations are idempotent against an already-running target.
+							await ResumeAsync(host,source,token).ConfigureAwait(false);
 							await ReconcileCoreClrRunAsync(host,source,token).ConfigureAwait(false);
 							completionReport=await ReadCompletionAsync(completion,token).ConfigureAwait(false);
 						}
