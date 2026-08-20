@@ -20,6 +20,7 @@ namespace HookLab.Probe.Tests {
 		static readonly MethodInfo PreexistingShadowMethod = typeof(PreexistingShadowFixture).GetMethod(nameof(PreexistingShadowFixture.Add))!;
 		static readonly MethodInfo UnrelatedLoadMethod = typeof(UnrelatedLoadFixture).GetMethod(nameof(UnrelatedLoadFixture.Add))!;
 		static readonly MethodInfo RemovedShadowMethod = typeof(RemovedShadowFixture).GetMethod(nameof(RemovedShadowFixture.Add))!;
+		static readonly MethodInfo IdenticalCopyMethod = typeof(IdenticalCopyFixture).GetMethod(nameof(IdenticalCopyFixture.Add))!;
 		static readonly MethodInfo InstanceTargetMethod = typeof(InstanceFixture).GetMethod(nameof(InstanceFixture.Calculate))!;
 		static readonly MethodInfo RefOutTargetMethod = typeof(Fixture).GetMethod(nameof(Fixture.RefOut))!;
 		static readonly MethodInfo PrivateTargetMethod = typeof(PrivateInstanceFixture).GetMethod(nameof(PrivateInstanceFixture.Calculate))!;
@@ -609,6 +610,56 @@ namespace HookLab.Probe.Tests {
 			finally { try { System.IO.Directory.Delete(directory, true); } catch (Exception) { } }
 		}
 
+		/// <summary>Byte-identical assemblies share a module version id and are still two modules, and
+		/// Harmony patched exactly one of them - so an MVID comparison calls a genuinely dead hook healthy.
+		/// The first implementation of this check compared MVIDs and would have.
+		///
+		/// <para>Reached by byte-loading, which is the route that actually produces this: <c>LoadFrom</c> on
+		/// a copied file returns the assembly already loaded, because the LoadFrom context binds by
+		/// assembly identity rather than by path, so two identical files cannot coexist that way.
+		/// <c>Assembly.Load(byte[])</c> creates a second, context-free assembly with the same identity and
+		/// the same MVID - and HookLab's own payloads arrive exactly like that.</para></summary>
+		[Fact]
+		public void AByteLoadedIdenticalCopyStillShadowsTheHook() {
+			var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "hooklab-shadow-" + Guid.NewGuid().ToString("N"));
+			System.IO.Directory.CreateDirectory(directory);
+			try {
+				// The hook goes on the EMITTED assembly's method, not on a fixture in this one. An earlier
+				// version of this test hooked the local fixture and asserted only NotEmpty - which passed
+				// against the MVID implementation too, because the fixture and the emitted copy are
+				// different modules anyway. It proved nothing about identical copies.
+				var path = System.IO.Path.Combine(directory, "Shadowing.Copy1.dll");
+				var first = EmitCallableAssembly(directory, "Shadowing.Copy1", "Shadowing.Work");
+				var method = first.GetType("Shadowing.Work", true)!.GetMethod("Tick")!;
+				var second = Assembly.Load(System.IO.File.ReadAllBytes(path));
+				Assert.Equal(first.ManifestModule.ModuleVersionId, second.ManifestModule.ModuleVersionId);
+				Assert.NotSame(first.ManifestModule, second.ManifestModule);
+
+				using (var runtime = Runtime()) {
+					runtime.Install(method, ShadowableDocument(method), 0);
+					var shadowed = Assert.Single(runtime.GetState().ShadowedHooks);
+					Assert.Equal("Shadowing.Work", shadowed.DeclaringType);
+				}
+			}
+			finally { try { System.IO.Directory.Delete(directory, true); } catch (Exception) { } }
+		}
+
+		/// <summary>An assembly with one real, callable static method, saved and loaded from disk, so a hook
+		/// can be installed on it and a second byte-identical load can compete with it.</summary>
+		static Assembly EmitCallableAssembly(string directory, string assemblyName, string typeName) {
+			var builder = AppDomain.CurrentDomain.DefineDynamicAssembly(new AssemblyName(assemblyName), System.Reflection.Emit.AssemblyBuilderAccess.RunAndSave, directory);
+			var type = builder.DefineDynamicModule(assemblyName, assemblyName + ".dll").DefineType(typeName, System.Reflection.TypeAttributes.Public);
+			var method = type.DefineMethod("Tick", System.Reflection.MethodAttributes.Public | System.Reflection.MethodAttributes.Static, typeof(int), new[] { typeof(int) });
+			var il = method.GetILGenerator();
+			il.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+			il.Emit(System.Reflection.Emit.OpCodes.Ldc_I4_1);
+			il.Emit(System.Reflection.Emit.OpCodes.Add);
+			il.Emit(System.Reflection.Emit.OpCodes.Ret);
+			type.CreateType();
+			builder.Save(assemblyName + ".dll");
+			return Assembly.LoadFrom(System.IO.Path.Combine(directory, assemblyName + ".dll"));
+		}
+
 		/// <summary>An assembly that redefines nothing the probe hooked is ordinary traffic - a busy
 		/// process loads assemblies constantly - and reporting it would make the real signal worthless.</summary>
 		[Fact]
@@ -749,6 +800,9 @@ namespace HookLab.Probe.Tests {
 		[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
 	}
 	public static class UnrelatedLoadFixture {
+		[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
+	}
+	public static class IdenticalCopyFixture {
 		[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
 	}
 	public static class RemovedShadowFixture {

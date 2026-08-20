@@ -83,7 +83,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 
 		/// <summary>Records one hook as shadowed if the given assembly defines its declaring type from a
 		/// different module. Callers hold <see cref="gate"/>.</summary>
-		void NoteShadowing((string PatchId, string DeclaringType, Guid ModuleMvid) entry, Assembly candidateAssembly) {
+		void NoteShadowing((string PatchId, string DeclaringType, Module Module) entry, Assembly candidateAssembly) {
 			if (shadowed.ContainsKey(entry.PatchId) || string.IsNullOrEmpty(entry.DeclaringType)) return;
 			Type? candidate;
 			// A half-resolvable assembly throws from GetType, and a dynamic one can be mid-definition.
@@ -91,7 +91,13 @@ namespace HookLab.Probe.CorDebug.Patching {
 			try { candidate = candidateAssembly.GetType(entry.DeclaringType, false); } catch (Exception) { return; }
 			// Same declaring type from a different module: the new one is what fresh calls resolve to, so
 			// the patch is on code that is no longer being entered.
-			if (candidate == null || candidate.Module.ModuleVersionId == entry.ModuleMvid) return;
+			//
+			// Module identity, not the module version id. Two loads of byte-identical assemblies share an
+			// MVID and are still two modules, and Harmony patched exactly one of them - so an MVID
+			// comparison calls a genuinely shadowed hook healthy whenever the newer generation happens to
+			// be an identical copy. What is being asked is "is the type I would resolve now in the module
+			// I patched", which only reference identity answers.
+			if (candidate == null || ReferenceEquals(candidate.Module, entry.Module)) return;
 			shadowed[entry.PatchId] = new ShadowedHookState(entry.PatchId, entry.DeclaringType,
 				SafeName(candidateAssembly));
 		}
@@ -113,7 +119,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 		/// install.</para></summary>
 		void NoteShadowingAtInstall(string patchId, MethodBase method) {
 			try {
-				var entry = (PatchId: patchId, DeclaringType: method.DeclaringType?.FullName ?? "", ModuleMvid: method.Module.ModuleVersionId);
+				var entry = (PatchId: patchId, DeclaringType: method.DeclaringType?.FullName ?? "", Module: method.Module);
 				if (string.IsNullOrEmpty(entry.DeclaringType)) return;
 				foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies()) {
 					NoteShadowing(entry, assembly);
@@ -125,11 +131,11 @@ namespace HookLab.Probe.CorDebug.Patching {
 
 		/// <summary>Every installed hook as (patch id, declaring type, the module it was patched in),
 		/// observation and compiled alike. Callers hold <see cref="gate"/>.</summary>
-		IEnumerable<(string PatchId, string DeclaringType, Guid ModuleMvid)> Targets() {
+		IEnumerable<(string PatchId, string DeclaringType, Module Module)> Targets() {
 			foreach (var hook in hooks.Values)
-				yield return (hook.PatchId, hook.Method.DeclaringType?.FullName ?? "", hook.Method.Module.ModuleVersionId);
+				yield return (hook.PatchId, hook.Method.DeclaringType?.FullName ?? "", hook.Method.Module);
 			foreach (var hook in compiledHooks.Values)
-				yield return (hook.PatchId, hook.Method.DeclaringType?.FullName ?? "", hook.Method.Module.ModuleVersionId);
+				yield return (hook.PatchId, hook.Method.DeclaringType?.FullName ?? "", hook.Method.Module);
 		}
 
 		internal static ProbeRuntime CreateAfterInventory(ProbeInitialization initialization, BackendInventoryResult inventory) => new ProbeRuntime(initialization, inventory);
