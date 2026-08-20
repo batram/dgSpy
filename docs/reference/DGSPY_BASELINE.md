@@ -125,6 +125,20 @@ To consume a package exactly as CI does:
 GUI tests must run on a hidden desktop so no window can steal focus; use the hidden-desktop helper
 from your agent environment (the script is not part of this repository).
 
+Wrapping the gate in that helper is not enough for the two cross-identity legs. They run from Task
+Scheduler, and the desktop a process lands on is chosen by whatever calls `CreateProcess` - the
+scheduler, not the wrapper - so they arrive on the interactive desktop and dnSpy appears on screen.
+`-WindowStyle Hidden` on the task hides only its PowerShell console; WPF ignores it. Point the legs at
+the launcher instead, and `Invoke-CrossIdentitySmokeTask.ps1` relaunches the smoke on a hidden desktop
+from inside the task:
+
+```powershell
+$env:DGSPY_HIDDEN_DESKTOP_LAUNCHER = 'C:\path\to\Invoke-OnHiddenDesktop.ps1'
+```
+
+With the variable unset the legs still pass; they are simply visible. The request file records
+`hidden_desktop_launcher: null`, which is the thing to check when a gate run flashes a dnSpy window.
+
 CI builds the net10 package once and passes the identical verified artifact to CorDebug and all three
 Mono/Unity jobs. The local Unity fixture is `C:\Users\mjb\develop\UCH-dev\uch-debug-target`.
 

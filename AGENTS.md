@@ -59,6 +59,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\TestSupport\Register-C
 That creates the non-admin `dgspy-fixture` account and registers two scheduled tasks. Afterwards the
 gate runs both legs with no elevation and no prompt: attaching across accounts needs
 `SeDebugPrivilege`, and the tasks supply it rather than the gate demanding an elevated shell every run.
+
+**Those two legs will show dnSpy on your screen unless you point them at a hidden-desktop launcher.**
+Task Scheduler spawns them in the interactive session, so the desktop is chosen by the scheduler and
+nothing wrapped around the gate can change it. Set the path to your launcher before running the gate
+and the task relaunches the smoke on a hidden desktop itself:
+
+```bash
+$env:DGSPY_HIDDEN_DESKTOP_LAUNCHER = 'C:\path\to\Invoke-OnHiddenDesktop.ps1'
+```
+
+It is machine-local personal tooling, so the repository names the variable and never a path.
 Without the setup the gate skips those legs and names why. The smokes refuse to fall back to a
 same-user run, since a cross-identity gate that quietly runs as one identity is the gap they close.
 
