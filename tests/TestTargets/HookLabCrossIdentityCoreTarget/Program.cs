@@ -37,10 +37,13 @@ namespace HookLabCrossIdentityCoreTarget {
 				// report saying worker_queue_ms=20899 against a 20 s deadline - the work had been done and
 				// published, just too late. A fixture that idles ten times longer than the proven one is
 				// testing its own cadence as much as the product.
+				// Timestamped, because a gap in these is the difference between "the target was suspended"
+				// and "the target ran but the resident's worker was never scheduled" - two very different
+				// explanations for an initialization that times out with the work already done.
 				var value = 0;
 				while (true) {
 					value = Work.Tick(value % 1000);
-					Write(facts, "TICK " + value.ToString(CultureInfo.InvariantCulture));
+					Write(facts, "TICK " + value.ToString(CultureInfo.InvariantCulture) + " " + DateTime.UtcNow.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
 					Thread.Sleep(25);
 				}
 			}

@@ -37,9 +37,18 @@ if (-not $task) {
 
 $exchange = Join-Path $env:ProgramData 'dgSpy\fixture'
 New-Item -ItemType Directory -Force -Path $exchange | Out-Null
-$resultPath = Join-Path $exchange ("result-$Which.json")
+New-Item -ItemType Directory -Force -Path $RunDirectory | Out-Null
+# The result lands in the run directory rather than the shared exchange, because the task runs
+# ELEVATED and this does not: a result file written by an administrator token cannot be replaced by
+# this one, so the second run failed with "Access to the path is denied" before it started anything.
+# The run directory is created here, per run, by this token. The request stays in the shared location
+# because the direction of that transfer is the safe one - written unelevated, read elevated.
+$resultPath = Join-Path $RunDirectory 'task-result.json'
 if (Test-Path $resultPath) { Remove-Item $resultPath -Force }
-$request = [ordered]@{ repo_root = $RepoRoot; layout_root = $env:DGSPY_LAYOUT_ROOT; run_directory = $RunDirectory; requested_utc = [DateTime]::UtcNow.ToString('o') }
+# DGSPY_HIDDEN_DESKTOP_LAUNCHER is optional and machine-local: a script that starts a process on a
+# private desktop, so a task running in the interactive session does not put dnSpy on the user's screen.
+# Passed through rather than read by the task, which inherits none of this shell's environment.
+$request = [ordered]@{ repo_root = $RepoRoot; layout_root = $env:DGSPY_LAYOUT_ROOT; run_directory = $RunDirectory; hidden_desktop_launcher = $env:DGSPY_HIDDEN_DESKTOP_LAUNCHER; requested_utc = [DateTime]::UtcNow.ToString('o') }
 Set-Content -LiteralPath (Join-Path $exchange ("request-$Which.json")) -Value ($request | ConvertTo-Json) -Encoding utf8
 
 Write-Host "cross-identity ($Which): triggering scheduled task \dgSpy\$taskName" -ForegroundColor DarkGray
