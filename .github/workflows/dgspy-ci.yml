@@ -74,10 +74,6 @@ jobs:
         shell: pwsh
         run: dotnet test tests/dgSpy.Extension.Tests/dgSpy.Extension.Tests.csproj --configuration Release --nologo --verbosity minimal
 
-      - name: Immutable build pipeline tests
-        shell: pwsh
-        run: dotnet test tests/DgSpyTool.Tests/DgSpyTool.Tests.csproj --configuration Release --nologo --verbosity minimal
-
   build-net10-package:
     name: Build verified net10 package once
     runs-on: windows-latest
@@ -102,6 +98,15 @@ jobs:
             --build-id "${{ github.sha }}" `
             --layout "${{ runner.temp }}/dgspy-layout" `
             --package "${{ runner.temp }}/dgspy-package"
+      # These tests inspect the artifact rather than reasoning about it, and they fail rather than
+      # skip when there is nothing to inspect - a vacuous pass is the thing they exist to prevent.
+      # So they run here, against the package this job just composed, not in the test job that has
+      # no artifact at all. Before publication, so a broken layout is never uploaded.
+      - name: Immutable build pipeline tests
+        shell: pwsh
+        env:
+          DGSPY_LAYOUT_ROOT: ${{ runner.temp }}/dgspy-package/cli
+        run: dotnet test tests/DgSpyTool.Tests/DgSpyTool.Tests.csproj --configuration Release --nologo --verbosity minimal
       - name: Upload verified package
         uses: actions/upload-artifact@v4
         with:
