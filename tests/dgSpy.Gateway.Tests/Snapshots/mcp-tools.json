@@ -549,7 +549,7 @@
     },
     {
       "name": "initialize_hooklab",
-      "description": "SIDE EFFECTING. Initialize HookLab in the selected process. dgSpy pauses only as needed, selects an evaluable managed thread, injects the resident runtime, verifies its control channel, and restores the process\u0027s prior running state.",
+      "description": "SIDE EFFECTING. Initialize HookLab in the selected process. dgSpy pauses only as needed, selects an evaluable managed thread, injects the resident runtime, verifies its control channel, and restores the process\u0027s prior running state. A process that runs code in more than one application domain - every IIS worker - is refused unless app_domain_id names the one to enter, because a resident in the wrong domain can never see the application\u0027s assemblies.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -562,6 +562,10 @@
           },
           "process_id": {
             "type": "integer"
+          },
+          "app_domain_id": {
+            "type": "integer",
+            "description": "Application domain to place the resident in, as list_modules reports app_domain_id for the module you intend to hook. Omit for a single-domain process. Required when the process has several domains: the refusal lists them as id=name. One resident per process, so naming a different domain than the existing resident is refused rather than silently ignored."
           },
           "expected_execution_version": {
             "type": "integer",

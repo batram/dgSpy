@@ -346,7 +346,11 @@ public sealed class ToolCatalogTests {
 	[Fact]
 	public void HookLab_initialization_owns_injection_and_install_requires_no_carrier() {
 		var initialize=ToolCatalog.All.Single(tool=>Name(tool)=="initialize_hooklab");
-		Assert.Equal(new[]{"expected_execution_version","host_id","process_id","session_id"},InputProperties(initialize).Keys.OrderBy(value=>value,StringComparer.Ordinal));
+		// app_domain_id selects WHICH application domain the resident is placed in. It is target
+		// selection, not a carrier: initialization still chooses its own arrival path, which is what the
+		// arrival_* assertions below protect. A process with several domains is refused without it,
+		// because a resident in the wrong domain can never see the application's assemblies.
+		Assert.Equal(new[]{"app_domain_id","expected_execution_version","host_id","process_id","session_id"},InputProperties(initialize).Keys.OrderBy(value=>value,StringComparer.Ordinal));
 		var install=ToolCatalog.All.Single(tool=>Name(tool)=="install_hook");
 		var properties=InputProperties(install);
 		Assert.DoesNotContain("arrival_module_id",properties.Keys);
