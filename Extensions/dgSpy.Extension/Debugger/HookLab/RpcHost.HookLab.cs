@@ -346,9 +346,20 @@ namespace dgSpy.Extension {
 						throw new RpcException("hooklab_initialization_failed","HookLab worker reported: "+String.Join("; ",completionReport.Select(pair=>pair.Key+"="+pair.Value)));
 					if(target.Backend.SynchronizesAfterArrival) await SynchronizeCoreClrAsync(host,source,token).ConfigureAwait(false);
 					var pipe=Required(completionReport,"pipe_name","HookLab initialization did not report its control pipe."); var nonce=Convert.FromBase64String(Required(completionReport,"pipe_nonce_base64","HookLab initialization did not report its endpoint nonce.")); var probe=Required(completionReport,"probe_instance_id","HookLab initialization did not report its probe identity.");
+					// Recorded the moment the resident's endpoint identity is known, and before anything is
+					// attempted against it. This used to sit after the connection succeeded, which meant any
+					// failure between here and there - a refused authentication, a pipe that vanished - left
+					// a resident that was up, authenticated and listening, with the only credential to it
+					// zeroed in the finally below and no record anywhere. Unreachable by adoption, by a later
+					// initialize_hooklab, by anything, until the target exited.
+					//
+					// Writing it first cannot describe a resident that does not exist: the report this reads
+					// is the resident's own, published after its listener was up. The worst case is a record
+					// for a resident that later dies, which is exactly what DiscoverStrict and the record's
+					// expiry already handle.
+					store.Write(new ProbeDiscoveryRecord(live,probe,pipe,nonce,endpointSecret,1,DateTime.UtcNow.Add(ProbeDiscoveryStore.DiscoveryRecordLifetime)));
 					connection=new ProbeConnection(pipe,endpointSecret,nonce);
 					var runtime=new RuntimeRecord(session,processId,connection,Long(completionReport,"hooks_version"),probe,false,target.Domain.IdentityId);
-					store.Write(new ProbeDiscoveryRecord(live,probe,pipe,nonce,endpointSecret,1,DateTime.UtcNow.Add(ProbeDiscoveryStore.DiscoveryRecordLifetime)));
 					var status=await SendRawAsync(runtime,"status","{}",token).ConfigureAwait(false); Inventory(runtime,status);
 					lock(gate) runtimes.Add(RuntimeKey(session,processId),runtime);
 					connection=null;
@@ -956,6 +967,9 @@ namespace dgSpy.Extension {
 
 
 			const int CompletionDeadlineSeconds=20;
+			/// <summary>How long a timed-out initialization keeps looking for a resident it would otherwise
+			/// orphan. Reached only on failure.</summary>
+			const int CompletionCleanupGraceSeconds=5;
 
 			/// <summary>Waits for the resident's ready record.
 			///
@@ -981,9 +995,25 @@ namespace dgSpy.Extension {
 			static async Task<Dictionary<string,string>> ReadCompletionAsync(string path,CancellationToken token) {
 				var report=await PollCompletionAsync(path,TimeSpan.FromSeconds(CompletionDeadlineSeconds),token).ConfigureAwait(false);
 				if(report is not null) return report;
+				// A second, bounded window - and deliberately not the one that was tried and reverted.
+				//
+				// That one waited longer hoping the resident would finish, which was answered: it moved
+				// worker_queue_ms by exactly the extra wait and fixed nothing, because the target was held
+				// by the wait itself. This one exists for the opposite reason. Giving up here is not free:
+				// a resident that came up is authenticated, listening, and reachable only through the
+				// secret this operation is about to zero. So before abandoning anything, find out whether
+				// there is something to abandon, and if there is, take the normal path and adopt it - which
+				// records it, and is a truthful answer besides, because the initialization did happen.
+				//
+				// It costs nothing on a healthy run, because a healthy run never reaches this line.
+				report=await PollCompletionAsync(path,TimeSpan.FromSeconds(CompletionCleanupGraceSeconds),token).ConfigureAwait(false);
+				if(report is not null) return report;
+				// Nothing published in either window. The resident may still come up later and be orphaned;
+				// that residue is bounded by this grace and is not silent - the preserved exchange area and
+				// this message are what is left of it.
 				var late=TryReadLateReport(path);
 				throw new RpcException("hook_operation_timed_out","HookLab worker did not publish a complete ready record within "+
-					CompletionDeadlineSeconds.ToString(CultureInfo.InvariantCulture)+" seconds."+late);
+					(CompletionDeadlineSeconds+CompletionCleanupGraceSeconds).ToString(CultureInfo.InvariantCulture)+" seconds."+late);
 			}
 
 			/// <summary>Polls for a <b>complete</b> ready record, or null when the window closes. The target

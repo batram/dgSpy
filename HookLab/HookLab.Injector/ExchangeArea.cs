@@ -129,9 +129,14 @@ namespace HookLab.Injector {
 		public PreconditionResult TargetEffectiveAccess { get; }
 		public string TargetEffectiveAccessDetail { get; }
 
+		/// <summary>How long a preserved area is kept. Long enough that a failure investigated the next
+		/// working week still has its evidence, short enough that the root cannot grow without bound.</summary>
+		internal static readonly TimeSpan PreservedRetention=TimeSpan.FromDays(14);
+
 		internal static ExchangeArea Create(ExchangeAreaPlan plan) {
 			if(plan is null) throw new ArgumentNullException(nameof(plan));
 			Directory.CreateDirectory(plan.Root);
+			PrunePreserved(System.IO.Path.GetDirectoryName(plan.Root),DateTime.UtcNow-PreservedRetention);
 			if(!plan.CrossIdentity||plan.Target is null)
 				return new ExchangeArea(plan.Root,false,PreconditionResult.Satisfied,"Controller and target are the same principal.");
 
@@ -182,6 +187,29 @@ namespace HookLab.Injector {
 		/// which destroyed the evidence every single time this failed - including on the live worker,
 		/// where the staged files were the only way to see what the target had been offered.</para></summary>
 		public void Preserve()=>preserved=true;
+
+		/// <summary>Removes preserved areas older than the cutoff, best effort.
+		///
+		/// <para>Preserving on failure is right - the staged files are the only record of what a target was
+		/// offered - but nothing removed them, so they accumulated one directory per failure forever. Thirty
+		/// five of them were sitting in the machine-wide root on one developer machine after a single
+		/// afternoon of chasing an intermittent timeout.</para>
+		///
+		/// <para>Age, not count: a count would delete the oldest failure of a cluster, which is usually the
+		/// one worth reading. Best effort throughout, because the machine-wide root is shared between
+		/// principals and another account's directory is not this process's to delete - a failure to remove
+		/// one is not a reason to fail the initialization that is starting.</para></summary>
+		internal static void PrunePreserved(string? root,DateTime cutoffUtc) {
+			if(string.IsNullOrEmpty(root)) return;
+			try {
+				if(!Directory.Exists(root)) return;
+				foreach(var directory in Directory.GetDirectories(root)) {
+					try { if(Directory.GetLastWriteTimeUtc(directory)<cutoffUtc) Directory.Delete(directory,true); }
+					catch { }
+				}
+			}
+			catch { }
+		}
 
 		public void Dispose() {
 			if(preserved) return;

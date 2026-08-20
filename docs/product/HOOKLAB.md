@@ -71,6 +71,23 @@ generic arguments. Selection reads the corlib name and builds one backend withou
 Host-side compilation is deliberately not offered. It would need its own decision about exact target
 reference identities, compiler recipes, hashes, and trust.
 
+## A failed initialization does not orphan a resident
+
+Initialization records the resident's endpoint identity - pipe, nonce, credential, probe instance - in
+the protected discovery store the moment the resident publishes it, before anything is attempted
+against it. Everything after that point is therefore recoverable: a refused authentication, a lost
+pipe, or a host that goes away leaves a resident that the next `initialize_hooklab` discovers and
+adopts, rather than one that is up, authenticated, listening, and reachable by nobody.
+
+A timed-out initialization keeps looking for a short bounded window before giving up, for the same
+reason. A resident that published late is adopted and reported as ready, because it is - and because
+abandoning a live authenticated resident is worse than answering slowly. That window is only ever
+reached by a failing initialization.
+
+Staged files from a failed initialization are preserved as evidence and removed after fourteen days.
+Preserving them is deliberate: they are the only record of what a target was offered. Removing them
+eventually is equally deliberate, because nothing else did.
+
 ## Resident stages and refusal reports
 
 A resident refusal report names the stage it failed in, before it names anything else. The stages are
