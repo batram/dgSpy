@@ -175,6 +175,21 @@ verification rather than shipping unnoticed. See
 [Resident payload matrix](../product/HOOKLAB.md#resident-payload-matrix) for what the matrix states and
 what it deliberately does not.
 
+## A stale nested publish bin ships as bin/bin
+
+`dotnet publish` never removes files it no longer produces. The whole publish directory becomes the
+layout's `bin`, so a `bin` left inside the publish output by an older layout scheme becomes `bin/bin`
+and ships: a second copy of every host contract and extension assembly, surviving every rebuild.
+
+Found on 2026-08-20 carrying 866 files, some dated 2017. It was invisible for as long as the duplicates
+stayed interface-compatible. When a host contract interface gained one method, the stale extension
+beside the fresh one still implemented the old interface, its `[Export]` lost its match, and the whole
+part - plus everything that imported it - disappeared from MEF composition without a log line.
+
+`build-host` now refuses a publish directory containing a nested `bin`, and `verify` refuses a layout
+containing `bin/bin`. If either fires, delete the named directory and build again; on a clean clone
+neither exists.
+
 ## Silent failures
 
 MEF composition can remove an extension part without a release log when imports are unsatisfied.

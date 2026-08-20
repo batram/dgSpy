@@ -165,6 +165,19 @@ internal static class DgSpyBuildTool {
 		Run(repo,"dotnet","build",Path.Combine(repo,"Build","AppHostPatcher","AppHostPatcher.csproj"),"-c","Release","-f","net48","--nologo","-v:minimal","-clp:ErrorsOnly");
 		Run(repo,"dotnet","publish",Path.Combine(repo,"dnSpy.sln"),"-c","Release","-f","net10.0-windows","-r","win-x64","--self-contained","true","--nologo","-v:minimal","-clp:ErrorsOnly");
 		if(!File.Exists(Path.Combine(publish,"dnSpy.exe"))) throw new InvalidOperationException("Host publish output is missing: "+publish);
+		// The whole publish directory becomes the layout's bin, so a bin inside it becomes bin/bin and
+		// ships. dotnet publish never deletes what it no longer produces, so one left by an older layout
+		// scheme survives every rebuild: 866 files, some dated 2017, including a second copy of every host
+		// contract and extension assembly.
+		//
+		// That was invisible for as long as the duplicates stayed interface-compatible. When
+		// IDgSpyOwnedBreakpointService gained a method, the stale extension beside the fresh one still
+		// implemented the old interface, the export lost its match, and the owned-breakpoint service
+		// vanished from composition - taking everything that imported it, silently, in the way this
+		// repository documents and the composition test exists to catch.
+		if(Directory.Exists(Path.Combine(publish,"bin")))
+			throw new InvalidOperationException("The host publish output contains a stale nested bin directory: "+Path.Combine(publish,"bin")+
+				". dotnet publish does not remove it, and composing it would ship a second copy of every host assembly as bin/bin. Delete that directory and build again.");
 		PublishDirectory(output,staging=>{
 			var content=Path.Combine(staging,"content"); var bin=Path.Combine(content,"bin"); CopyDirectory(publish,bin);
 			foreach(var exe in new[]{"dnSpy.exe","dnSpy.Console.exe"}) { var from=Path.Combine(bin,exe); var to=Path.Combine(content,exe); File.Move(from,to); Run(repo,Path.Combine(repo,"Build","AppHostPatcher","bin","Release","net48","AppHostPatcher.exe"),to,"-d","bin"); }
@@ -297,6 +310,13 @@ internal static class DgSpyBuildTool {
 		var root=Full(layoutPath); var manifestPath=Path.Combine(root,ManifestName);
 		var manifest=VerifyInventoryOnly(root);
 		Require(root,"dnSpy.exe"); Require(root,"bin/dnSpy.dll"); Require(root,"bin/dgspy.exe"); Require(root,"bin/dgSpy.Gateway.exe"); Require(root,"bin/Extensions/dgSpy/dgSpy.Extension.x.dll"); Require(root,"hooklab/HookLab.NativeBootstrap.x64.dll"); Require(root,"hooklab-watcher/HookLab.Watcher.exe"); Require(root,"hooklab-watcher/HookLab.Watcher.Companion.exe"); Require(root,"hooklab-watcher/payload/HookLab.Bootstrap.dll"); Require(root,"hooklab-watcher/payload/HookLab.NativeBootstrap.x64.dll"); Require(root,"hooklab-watcher/deployments/vmconnect-fullscreen/vmconnect-fullscreen.json"); Require(root,"launcher/Start-dgSpyRemoteHost.ps1"); Require(root,"launcher/Start-dgSpyRemoteHost.cmd"); Require(root,"hooklab/"+PayloadFileName); Require(root,"hooklab/hooklab-payload-manifest.json"); Require(root,"hooklab/"+PayloadMatrixFileName);
+		// The other end of the check in BuildHost. That one refuses the cause at the moment it is created;
+		// this refuses the result however it arrived, including from a host artifact composed before the
+		// cause was understood. A second copy of every host assembly under bin/bin removes MEF parts
+		// without logging anything.
+		if(Directory.Exists(Path.Combine(root,"bin","bin")))
+			throw new InvalidOperationException("The layout contains a duplicate host assembly tree at bin/bin: "+Path.Combine(root,"bin","bin")+
+				". It shadows the real one during MEF composition and silently removes parts. Rebuild the host artifact from a publish directory with no nested bin.");
 		var rootProtocol=Hash(Path.Combine(root,"bin","dgSpy.Protocol.dll")); var extensionProtocol=Hash(Path.Combine(root,"bin","Extensions","dgSpy","dgSpy.Protocol.dll"));
 		if(rootProtocol!=extensionProtocol) throw new InvalidOperationException("App-base and extension protocol assemblies differ.");
 		VerifyPayloadMatrix(root);
