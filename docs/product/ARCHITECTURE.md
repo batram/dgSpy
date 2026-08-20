@@ -95,6 +95,29 @@ contract deliberately remains an expiring controller lease plus inspected, warne
 there is no persisted or listable claim capability to steal, retain, revoke, or redact. Ownership changes
 never change target state.
 
+## HookLab runtime backends
+
+`HookLabBackends` is the host's complete, concrete table of supported runtime backends - two rows,
+`clrv4-x64` and `coreclr-x64` - and one immutable `HookLabBackend` states everything that varies with
+the runtime: family, architecture, how the payload arrives (native bootstrap or one debugger
+evaluation), whether the runtime id is a constant or must be read from the live target, whether the
+debugger is re-synchronised afterwards, and which payload matrix slots supply its patch engine and
+compiler.
+
+Selection is deterministic. A target that matches no row is refused by name; a process that has loaded
+both runtimes - which really happens - resolves by declared priority rather than by the order of a
+chain of conditionals, and CLR v4 wins. The .NET Framework runtime GUID alone is not an identity,
+because CLR v2 shares it.
+
+The payload ids are the ids in the [resident payload matrix](HOOKLAB.md#resident-payload-matrix), so
+the host's statement of what a runtime uses and the build's statement of what it ships for that runtime
+are the same string, and a contract test requires them to agree. Adding a row is meant to require the
+evidence a new row implies; it is a proved-support table, not a provider ecosystem.
+
+Shared initialization orchestration reads the backend rather than re-deriving runtime facts. One place
+still dispatches on the declared arrival mode, because the two mechanisms genuinely differ and both
+need host services - but it is the only place that knows which is which.
+
 ## Standalone HookLab injection boundary
 
 `HookLab.Injector` is the package-neutral standalone boundary for x64 desktop CLR v4 targets. It owns

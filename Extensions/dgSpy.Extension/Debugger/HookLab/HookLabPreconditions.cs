@@ -155,8 +155,8 @@ namespace dgSpy.Extension {
 		static Precondition Runtime(Facts facts) {
 			// Deliberately answered independently of architecture: reporting only the first failure would
 			// rebuild the serial hunt this contract exists to replace.
-			var backend=HookLabTargetEligibility.SelectBackend(64,"X64",facts.Runtimes);
-			if(backend is not null) return new Precondition(RuntimeSupported,PreconditionOutcome.Satisfied,"The target has loaded "+backend.Value+".");
+			var backend=HookLabBackends.Select(64,"X64",facts.Runtimes);
+			if(backend is not null) return new Precondition(RuntimeSupported,PreconditionOutcome.Satisfied,"The target has loaded "+backend.Name+".");
 			var names=facts.Runtimes.Select(runtime=>String.IsNullOrWhiteSpace(runtime.Name)?runtime.Guid.ToString("D"):runtime.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 			return new Precondition(RuntimeSupported,PreconditionOutcome.Failed,
 				"HookLab supports desktop CLR v4 and CoreCLR; the target exposes "+

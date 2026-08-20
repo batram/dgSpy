@@ -48,24 +48,25 @@ CoreCLR HookLab proved that runtime differences are real but currently too distr
 initialization, compiler dependencies, patch-engine assets, packaging, diagnostics, and live evidence
 cross several layers. Consolidate those differences without changing shipped CLR v4 or CoreCLR behavior.
 
-Two pieces are done. The build states every resident payload's role, carrier, runtime family,
+Three pieces are done. The build states every resident payload's role, carrier, runtime family,
 framework, architecture, identity, provenance, dependencies, and digest, and package verification
-proves it against the shipped bytes in both directions. A compatibility probe then drives a complete
+proves it against the shipped bytes in both directions. A compatibility probe drives a complete
 resident lifecycle against real CLR v4 and CoreCLR targets in seconds, before any GUI gate, failing
-with a named stage and payload identity; supported CoreCLR versions are now declared rather than
-implied. See [Resident payload matrix](../product/HOOKLAB.md#resident-payload-matrix) and
-[Resident compatibility probe](../product/HOOKLAB.md#resident-compatibility-probe).
+with a named stage and payload identity; supported CoreCLR versions are declared rather than implied.
+And the host now has one immutable backend row per supported runtime, naming the same payload slots the
+build ships, with deterministic selection and no runtime conditionals left scattered through shared
+orchestration. See [Resident payload matrix](../product/HOOKLAB.md#resident-payload-matrix),
+[Resident compatibility probe](../product/HOOKLAB.md#resident-compatibility-probe), and
+[HookLab runtime backends](../product/ARCHITECTURE.md#hooklab-runtime-backends).
 
 Travel the rest of this road in independently implemented, live-tested, retired, and committed
 subslices:
 
-1. Introduce an immutable backend descriptor and narrow explicit CLR v4/CoreCLR backend contract.
-2. Isolate CodeDom and Roslyn behind a runtime-neutral compiler ABI.
-3. Standardize backend lifecycle states and bounded stage-aware resident errors.
+1. Isolate CodeDom and Roslyn behind a runtime-neutral compiler ABI.
+2. Standardize backend lifecycle states and bounded stage-aware resident errors.
 
 This road exits only when the current CLR v4 and CoreCLR packaged live hook lifecycles remain green and
-the contract, compiler boundary, lifecycle, and diagnostics are documented in their owning product
-documents. The implementation-grade task and acceptance evidence live in
+the compiler boundary, lifecycle, and diagnostics are documented in their owning product documents. The implementation-grade task and acceptance evidence live in
 `docs/local/work/runtime-backend-architecture-mono-x86.md`.
 
 ## Road 2 - add a Mono HookLab resident

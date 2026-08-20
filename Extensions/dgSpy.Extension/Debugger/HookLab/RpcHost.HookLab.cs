@@ -265,9 +265,11 @@ namespace dgSpy.Extension {
 					var process=host.SelectProcess(source);
 					// Guaranteed by the architecture and runtime preconditions above; a null here would mean
 					// the contract and this path disagree about the same facts.
-					var backend=HookLabTargetEligibility.SelectBackend(process.Bitness,process.Architecture.ToString(),gathered.Facts.Runtimes)
-						?? throw new RpcException("unsupported_hooklab_target",HookLabTargetEligibility.UnsupportedReason(process.Bitness,process.Architecture.ToString(),gathered.Facts.Runtimes) ?? "The target became unsupported after its preconditions were evaluated.");
-					var runtimeId=backend==HookLabTargetEligibility.Backend.CoreClr?CoreClrRuntimeId(process.Id):"v4.0.30319";
+					var backend=HookLabBackends.Select(process.Bitness,process.Architecture.ToString(),gathered.Facts.Runtimes)
+						?? throw new RpcException("unsupported_hooklab_target",HookLabBackends.UnsupportedReason(process.Bitness,process.Architecture.ToString(),gathered.Facts.Runtimes) ?? "The target became unsupported after its preconditions were evaluated.");
+					// The backend says whether its runtime has one version or many. This used to be
+					// "CoreCLR means read it from the process", restated here as a conditional.
+					var runtimeId=backend.FixedRuntimeId ?? CoreClrRuntimeId(process.Id);
 					if(String.IsNullOrWhiteSpace(runtimeId)) throw new RpcException("hooklab_runtime_identity_unavailable","The debugger did not publish the exact CoreCLR runtime version.");
 					return (WasRunning:process.IsRunning,Backend:backend,RuntimeId:runtimeId,Domain:gathered.Domain);
 				},token).ConfigureAwait(false);
@@ -315,7 +317,10 @@ namespace dgSpy.Extension {
 					// the payload cannot parse is still cheap to refuse.
 					dgSpy.Extension.Debugger.AtomicActions.PayloadActionRequest.EnsureKnownParameterKeys(identity.Select(pair=>pair.Key));
 					try {
-						if(target.Backend==HookLabTargetEligibility.Backend.CoreClr) {
+						// Dispatch on the backend's declared arrival mode. The mechanisms genuinely differ and
+						// both need host services, so this stays one switch in one place rather than being
+						// hidden behind indirection - but it is the only place left that knows which is which.
+						if(target.Backend.Arrival==HookLabArrival.DebuggerEvaluation) {
 							completionReport=await ExecuteInitializationOperationAsync(host,source,PayloadOperation.initialize,identity,token,true).ConfigureAwait(false);
 							// The report is written by a worker thread INSIDE the target, so the target has
 							// to be running to produce it. Waiting for it while the process is stopped is a
@@ -336,7 +341,7 @@ namespace dgSpy.Extension {
 					finally { }
 					if(!String.Equals(completionReport.TryGetValue("status",out var completedStatus)?completedStatus:null,"ok",StringComparison.Ordinal))
 						throw new RpcException("hooklab_initialization_failed","HookLab worker reported: "+String.Join("; ",completionReport.Select(pair=>pair.Key+"="+pair.Value)));
-					if(target.Backend==HookLabTargetEligibility.Backend.CoreClr) await SynchronizeCoreClrAsync(host,source,token).ConfigureAwait(false);
+					if(target.Backend.SynchronizesAfterArrival) await SynchronizeCoreClrAsync(host,source,token).ConfigureAwait(false);
 					var pipe=Required(completionReport,"pipe_name","HookLab initialization did not report its control pipe."); var nonce=Convert.FromBase64String(Required(completionReport,"pipe_nonce_base64","HookLab initialization did not report its endpoint nonce.")); var probe=Required(completionReport,"probe_instance_id","HookLab initialization did not report its probe identity.");
 					connection=new ProbeConnection(pipe,endpointSecret,nonce);
 					var runtime=new RuntimeRecord(session,processId,connection,Long(completionReport,"hooks_version"),probe,false,target.Domain.IdentityId);
