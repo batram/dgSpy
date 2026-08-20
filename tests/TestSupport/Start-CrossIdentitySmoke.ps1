@@ -51,6 +51,21 @@ if (Test-Path $resultPath) { Remove-Item $resultPath -Force }
 $request = [ordered]@{ repo_root = $RepoRoot; layout_root = $env:DGSPY_LAYOUT_ROOT; run_directory = $RunDirectory; hidden_desktop_launcher = $env:DGSPY_HIDDEN_DESKTOP_LAUNCHER; requested_utc = [DateTime]::UtcNow.ToString('o') }
 Set-Content -LiteralPath (Join-Path $exchange ("request-$Which.json")) -Value ($request | ConvertTo-Json) -Encoding utf8
 
+# Say it out loud rather than only recording it. Unset, this leg runs on the interactive desktop and
+# puts a real dnSpy window on whoever's screen is attached - and it still passes, so nothing else in
+# the run reports it. That silence is how it went unnoticed on 2026-08-20: the outcome was visible in
+# task-result.json as detail="completed" instead of "completed on the hidden desktop", which nobody
+# reads on a green run. Not fatal, because a headless runner has no screen to protect and no launcher
+# to name.
+if ([string]::IsNullOrWhiteSpace($env:DGSPY_HIDDEN_DESKTOP_LAUNCHER)) {
+	Write-Host ("cross-identity ($Which): DGSPY_HIDDEN_DESKTOP_LAUNCHER is not set, so this leg runs on the " +
+		"interactive desktop and dnSpy will appear on screen. Set it to your hidden-desktop launcher to keep it quiet.") -ForegroundColor Yellow
+}
+elseif (-not (Test-Path $env:DGSPY_HIDDEN_DESKTOP_LAUNCHER)) {
+	Write-Host ("cross-identity ($Which): DGSPY_HIDDEN_DESKTOP_LAUNCHER points at nothing (" +
+		$env:DGSPY_HIDDEN_DESKTOP_LAUNCHER + "), so this leg runs on the interactive desktop.") -ForegroundColor Yellow
+}
+
 Write-Host "cross-identity ($Which): triggering scheduled task \dgSpy\$taskName" -ForegroundColor DarkGray
 Start-ScheduledTask -TaskPath '\dgSpy\' -TaskName $taskName
 
