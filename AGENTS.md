@@ -48,6 +48,20 @@ git submodule update --init --recursive
 .\tests\run-modernization-gate.ps1 -Stage CorDebug
 ```
 
+Two live legs run the debugger and the target as **different Windows accounts**, because every other
+gate runs them as the same user in the default application domain - the arrangement that hid five
+defects until a live IIS worker found them. They need a one-time, elevated setup:
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\TestSupport\Register-CrossIdentitySmokeTasks.ps1
+```
+
+That creates the non-admin `dgspy-fixture` account and registers two scheduled tasks. Afterwards the
+gate runs both legs with no elevation and no prompt: attaching across accounts needs
+`SeDebugPrivilege`, and the tasks supply it rather than the gate demanding an elevated shell every run.
+Without the setup the gate skips those legs and names why. The smokes refuse to fall back to a
+same-user run, since a cross-identity gate that quietly runs as one identity is the gap they close.
+
 Other stages and smokes live in `tests\`. Treat harness code as carefully as product code:
 a harness bug looks exactly like a product bug and costs a full verify cycle. When a bug in
 your own tooling turned out to be the cause, say so explicitly in your final message ---

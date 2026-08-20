@@ -2,7 +2,7 @@
 <#
 Cross-identity CoreCLR HookLab lifecycle smoke. ASCII-only; run on a hidden desktop; must run elevated.
 
-The CoreCLR half of Road 1 subslice 8. Its net48 sibling
+The CoreCLR half of the target environment contract, subslice 8. Its net48 sibling
 (run-hooklab-cross-identity-smoke.ps1) covers two axes; this one covers exactly one, and the
 difference is a property of the runtime rather than a gap:
 

@@ -10,7 +10,7 @@ namespace AppDomainProof.App {
 	/// it reports about itself.
 	///
 	/// This stands in for the ASP.NET App_Web_* assembly whose absence produced the failure that
-	/// motivated Road 1 subslice 6.
+	/// motivated the target environment contract, subslice 6.
 	///
 	/// The constructor does the reporting, and nothing in the default domain ever calls a method on the
 	/// proxy. That is not style: a single <c>proxy.GetType()</c> in the fixture loaded this assembly into

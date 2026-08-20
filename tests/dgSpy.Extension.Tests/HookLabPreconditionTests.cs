@@ -8,7 +8,7 @@ using Xunit;
 
 namespace dgSpy.Extension.Tests;
 
-/// <summary>Road 1's precondition matrix, as a contract rather than as a sequence of throws discovered
+/// <summary>The target environment contract's precondition matrix, as a contract rather than as a sequence of throws discovered
 /// one deployment at a time. Every row has to be reachable as a named failure, and no row may degrade to
 /// satisfied because it could not be evaluated.</summary>
 public sealed class HookLabPreconditionTests {
@@ -99,7 +99,7 @@ public sealed class HookLabPreconditionTests {
 	}
 
 	/// <summary>The three ways the application-domain row fails, each proven live or refused live during
-	/// Road 1 subslice 6.</summary>
+	/// the target environment contract, subslice 6.</summary>
 	[Fact]
 	public void Several_domains_and_none_named_refuses_and_lists_them() {
 		var facts=Healthy();
@@ -175,7 +175,7 @@ public sealed class HookLabPreconditionTests {
 		Assert.Equal(PreconditionOutcome.Satisfied,Row(HookLabPreconditions.Evaluate(Healthy()),HookLabPreconditions.ExchangeTargetEffectiveAccess).Result);
 	}
 
-	/// <summary>Road 1 asks subslice 7 to fix, per precondition, which unprovable results are hard
+	/// <summary>The target environment contract asks subslice 7 to fix, per precondition, which unprovable results are hard
 	/// refusals. All three answer "no", and this asserts that the answer is stated rather than inferred
 	/// from the absence of a refusal: each is decided by the attempt itself and reported with a named
 	/// failure when it goes wrong, so refusing up front would trade a diagnosable failure for a guess that

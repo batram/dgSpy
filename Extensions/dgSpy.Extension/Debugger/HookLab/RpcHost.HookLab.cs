@@ -879,7 +879,7 @@ namespace dgSpy.Extension {
 			// Open question deliberately not settled here: false from IsAlive means "provably dead" and
 			// DiscoverCore deletes the record, so a target we merely cannot read is treated as one that
 			// is gone. With a five-minute lifetime that is nearly always right, but "cannot determine" and
-			// "provably dead" are different answers and Road 1 subslice 7 owns the distinction -
+			// "provably dead" are different answers and the target environment contract's subslice 7 owns the distinction -
 			// not_provable_preflight is exactly this shape. Recorded in the task, not folded in here.
 			sealed class ExtensionLiveTargets : ILiveTargetIdentity,ILiveTargetLiveness {
 				readonly string runtimeId; public ExtensionLiveTargets(string runtimeId="v4.0.30319")=>this.runtimeId=runtimeId;

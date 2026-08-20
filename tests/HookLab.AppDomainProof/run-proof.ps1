@@ -1,4 +1,4 @@
-# Road 1 subslice 6 prototype runner. Builds the fixture, the domain-only app assembly, the payload and
+# Target environment contract, subslice 6: prototype runner. Builds the fixture, the domain-only app assembly, the payload and
 # the native prototype, starts the fixture, injects, and prints what came back.
 #
 # ASCII-only. Runs the fixture with no window; nothing here opens a GUI.

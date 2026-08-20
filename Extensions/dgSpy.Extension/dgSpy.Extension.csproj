@@ -10,7 +10,7 @@
 	</ItemGroup>
 	<!-- HookLab.Injector is the sole owner of standalone target initialization, as the watcher
 	     implementation plan set out when the injector core was extracted. The extension consumes it
-	     rather than keeping a private copy of native loading; that consumption is what Road 1 subslice
+	     rather than keeping a private copy of native loading; that consumption is what the target environment contract's subslice
 	     3 finally landed, after multi-targeting the library so this net48 target could reference it.
 	     The dependency runs one way only - nothing below HookLab.Injector references dnSpy or dgSpy. -->
 	<ItemGroup>

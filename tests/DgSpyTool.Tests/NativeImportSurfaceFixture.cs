@@ -2,7 +2,7 @@
 //
 // The policy test needs an image that violates the allowlist. Building one with /MD would make the
 // gate depend on whichever Visual C++ toolchain happens to be installed on the machine running it -
-// the exact class of ambient assumption Road 1 exists to remove - and a checked-in prebuilt DLL is a
+// the exact class of ambient assumption the target environment contract exists to remove - and a checked-in prebuilt DLL is a
 // binary blob nobody can review and that could be mistaken for product. So the fixture is
 // synthesised here: a minimal PE32+ image carrying nothing but the two import directories, byte-for-
 // byte deterministic and pinned by digest in the test.

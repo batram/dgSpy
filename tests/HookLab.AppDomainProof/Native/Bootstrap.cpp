@@ -1,4 +1,4 @@
-// Road 1 subslice 6 prototype: can native initialization enter a CHOSEN AppDomain?
+// Target environment contract, subslice 6 prototype: can native initialization enter a CHOSEN AppDomain?
 //
 // The shipped bootstrap enters through ICLRRuntimeHost::ExecuteInDefaultAppDomain, which by
 // construction can only ever reach the default domain. Every IIS worker runs application code in a

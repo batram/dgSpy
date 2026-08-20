@@ -13,7 +13,7 @@ namespace dgSpy.Gateway.Tests;
 ///
 /// <para>This has happened twice, and both times the feature was reported done first. <c>payload</c> was
 /// unreachable because <c>action_kind</c> is hard-enumerated. <c>app_domain_id</c> was unreachable for
-/// the whole of Road 1 subslice 6 steps 1 to 3, and surfaced only when the feature was finally used
+/// the whole of the target environment contract's subslice 6, steps 1 to 3, and surfaced only when the feature was finally used
 /// against a live IIS worker - the sheet recording it says plainly: "No test could catch it: nothing
 /// drives the MCP schema against the extension's argument reading."</para>
 ///

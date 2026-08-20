@@ -59,7 +59,7 @@ public sealed class HookLabUiBoundaryTests {
 		Assert.Contains("report.ContainsKey(\"pipe_name\")",source,StringComparison.Ordinal);
 	}
 
-	/// <summary>The property is unchanged and the anchors moved, because Road 1 subslice 7 replaced the
+	/// <summary>The property is unchanged and the anchors moved, because the target environment contract's subslice 7 replaced the
 	/// inline eligibility check with the whole precondition contract. What used to be asserted - an
 	/// unsupported target is refused before anything is staged, resumed or injected - is now the weaker
 	/// half of what holds: <em>every</em> precondition is evaluated and refused before the first mutation,

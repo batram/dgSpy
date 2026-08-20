@@ -1,6 +1,6 @@
 # AppDomain entry prototype
 
-Road 1 subslice 6 rests on one question the task sheet leaves open:
+Target environment contract, subslice 6 rests on one question the task sheet leaves open:
 
 > Whether native initialization can be taught to enter a chosen domain is an open question -
 > `ExecuteInDefaultAppDomain` cannot, and the alternatives (a domain-manager, or entering through a

@@ -114,7 +114,7 @@ try {
 		# fixture on whichever host framework the gate is exercising.
 		Invoke-Checked 'Atomic-action live smoke' { .\tests\run-atomic-action-smoke.ps1 }
 		Invoke-Checked 'HookLab install live smoke' { .\tests\run-hooklab-install-smoke.ps1 }
-		# Road 1 subslice 8. Every leg above runs the debugger and the target as one user in the default
+		# Target environment contract, subslice 8. Every leg above runs the debugger and the target as one user in the default
 		# application domain - the arrangement that hid five defects until a live IIS worker found them,
 		# and three more on 2026-08-20. This one runs the target as a second local account and hooks code
 		# that exists only in a second application domain.

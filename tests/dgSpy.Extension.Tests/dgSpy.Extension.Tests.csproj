@@ -55,7 +55,7 @@
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\HookLab\HookCarrierSelectionPolicy.cs" Link="Debugger\HookLab\HookCarrierSelectionPolicy.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\HookLab\HookSourceTemplate.cs" Link="Debugger\HookLab\HookSourceTemplate.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\HookLab\HookLabTargetEligibility.cs" Link="Debugger\HookLab\HookLabTargetEligibility.cs" />
-	<!-- Road 1 subslice 7. The target contract is kept BCL-only for exactly the reason the entries above
+	<!-- Target environment contract, subslice 7. The contract type is kept BCL-only for exactly the reason the entries above
 	     give: it is the decision that gates every mutation initialization performs, and a decision that
 	     only exists inside a partial of RpcHost ships uncovered. It also cannot reference
 	     HookLab.Injector, which targets net48 and net10-windows while this project is net7. -->

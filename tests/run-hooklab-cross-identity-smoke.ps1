@@ -2,7 +2,7 @@
 <#
 Cross-identity, cross-domain HookLab lifecycle smoke. ASCII-only; run on a hidden desktop.
 
-Road 1 subslice 8. Every other HookLab gate runs the debugger and the target as the same user, in the
+Target environment contract, subslice 8. Every other HookLab gate runs the debugger and the target as the same user, in the
 default application domain, on a developer machine - an environment that silently satisfies every
 assumption the 2026-08-19 incident violated. Five defects hid behind that arrangement, and three more
 were found by hand against a live IIS worker on 2026-08-20 because no gate could reach them:
