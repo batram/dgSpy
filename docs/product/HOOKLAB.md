@@ -71,6 +71,23 @@ generic arguments. Selection reads the corlib name and builds one backend withou
 Host-side compilation is deliberately not offered. It would need its own decision about exact target
 reference identities, compiler recipes, hashes, and trust.
 
+## Resident stages and refusal reports
+
+A resident refusal report names the stage it failed in, before it names anything else. The stages are
+stable strings: `parameters`, `payload_verify`, `dependency_resolution`, `residency_commit`,
+`behavior_commit`, `retirement`, and `precondition` for a refusal made before any work began.
+
+The stage comes first because it is what makes the rest readable - "could not load file or assembly"
+means one thing while the payload closure is being resolved and another once the probe is committing
+residency. Alongside it the report carries the exception type and message, up to three inner exception
+links, whether payloads are resident, endpoint teardown and command quiescence state, and whether a
+retained cleanup can still be retried. The chain is bounded because the report travels through a file
+and a pipe, where an unbounded one is a denial of service rather than a diagnostic.
+
+Finer stages the resident cannot honestly distinguish - compiler creation, compile, patch-engine load,
+patch install - happen past the boundary where the bootstrap can still tell them apart, and are not
+claimed.
+
 ## Supported runtimes
 
 CLR v4 has one version. CoreCLR does not, so the versions HookLab is supported on are stated rather

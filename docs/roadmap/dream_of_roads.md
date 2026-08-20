@@ -35,40 +35,41 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Make runtime and architecture compatibility explicit, fast to probe, and diagnosable.
+1. Find what holds a target across the initialization wait, and make timeout readback deterministic.
 2. Add a Mono HookLab resident on that framework.
 3. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
 4. Revisit high-risk execution, editing, and scripting one workflow at a time.
 5. Keep the remaining compatibility expansions parked until product scope changes.
 6. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - make runtime backends an explicit compatibility framework
+## Road 1 - find what holds a target across the initialization wait
 
-CoreCLR HookLab proved that runtime differences are real but currently too distributed: backend choice,
-initialization, compiler dependencies, patch-engine assets, packaging, diagnostics, and live evidence
-cross several layers. Consolidate those differences without changing shipped CLR v4 or CoreCLR behavior.
+The compatibility framework this road set out to build is done. Runtime differences are now stated
+once each and proved against what ships:
 
-Three pieces are done. The build states every resident payload's role, carrier, runtime family,
-framework, architecture, identity, provenance, dependencies, and digest, and package verification
-proves it against the shipped bytes in both directions. A compatibility probe drives a complete
-resident lifecycle against real CLR v4 and CoreCLR targets in seconds, before any GUI gate, failing
-with a named stage and payload identity; supported CoreCLR versions are declared rather than implied.
-And the host now has one immutable backend row per supported runtime, naming the same payload slots the
-build ships, with deterministic selection and no runtime conditionals left scattered through shared
-orchestration. See [Resident payload matrix](../product/HOOKLAB.md#resident-payload-matrix),
-[Resident compatibility probe](../product/HOOKLAB.md#resident-compatibility-probe), and
-[HookLab runtime backends](../product/ARCHITECTURE.md#hooklab-runtime-backends).
+- the build declares every resident payload's role, carrier, runtime family, framework, architecture,
+  identity, provenance, dependencies and digest, and package verification proves that manifest against
+  the shipped bytes in both directions - [Resident payload matrix](../product/HOOKLAB.md#resident-payload-matrix);
+- a compatibility probe drives a complete resident lifecycle against real CLR v4 and CoreCLR targets in
+  seconds, before any GUI gate, failing with a named stage and payload identity, and the supported
+  CoreCLR versions are declared rather than implied - [Resident compatibility probe](../product/HOOKLAB.md#resident-compatibility-probe);
+- the host has one immutable backend row per supported runtime, naming the same payload slots the build
+  ships, with deterministic selection - [HookLab runtime backends](../product/ARCHITECTURE.md#hooklab-runtime-backends);
+- CodeDom and Roslyn sit behind a runtime-neutral compiler boundary a metadata test keeps closed -
+  [Compilation boundary](../product/HOOKLAB.md#compilation-boundary);
+- refusal reports name the stage they failed in and carry bounded exception chains -
+  [Resident stages and refusal reports](../product/HOOKLAB.md#resident-stages-and-refusal-reports).
 
-CodeDom and Roslyn are now isolated behind a runtime-neutral compiler boundary, with a metadata test
-refusing either technology in a shared signature, field, or generic instantiation - see
-[Compilation boundary](../product/HOOKLAB.md#compilation-boundary).
+What remains is one defect the road uncovered and did not close, and the road is now that defect. The
+cross-identity CoreCLR leg fails roughly two runs in six with `hook_operation_timed_out`, while its own
+report says the resident succeeded in two milliseconds. Measurement, not inference: the target's worker
+is scheduled when the host's wait **ends**, whatever length that wait is given, and not when the target
+is resumed. Waiting longer and resuming again were both tried and both refuted.
 
-One subslice remains:
-
-1. Standardize backend lifecycle states and bounded stage-aware resident errors.
-
-This road exits only when the current CLR v4 and CoreCLR packaged live hook lifecycles remain green and
-the lifecycle states and diagnostics are documented in their owning product documents. The implementation-grade task and acceptance evidence live in
+So: find what holds the target across the initialization wait and releases it only as the operation
+unwinds, then make mutation timeout readback and partial-initialization cleanup deterministic. Until
+that is done, the packaged CLR v4 and CoreCLR live hook lifecycles are not reliably green, and this
+road does not exit. The implementation-grade task and acceptance evidence live in
 `docs/local/work/runtime-backend-architecture-mono-x86.md`.
 
 ## Road 2 - add a Mono HookLab resident

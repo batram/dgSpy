@@ -943,26 +943,49 @@ namespace dgSpy.Extension {
 				catch(Exception ex) { return " The report could not be read while diagnosing the timeout: "+ex.GetType().Name+"."; }
 			}
 
+
+			const int CompletionDeadlineSeconds=20;
+
+			/// <summary>Waits for the resident's ready record.
+			///
+			/// <para><b>Do not attack the intermittent cross-identity CoreCLR timeout by waiting longer or
+			/// by resuming again. Both were tried and measured on 2026-08-20.</b> Five failures at a 20 s
+			/// deadline reported <c>worker_queue_ms</c> of 20899, 20928, 20935, 20951 and 20929 - deadline
+			/// plus ~930 ms. Adding a second resume and a five-second grace window moved that to 26014 and
+			/// 26024 - deadline plus grace plus ~1 s - and the failure rate did not move at all: two of six
+			/// runs, the same as before. The grace was reverted.</para>
+			///
+			/// <para>That pair of measurements is worth more than the fix that failed. The target's worker
+			/// is scheduled when this wait <em>ends</em>, whatever length it is given, and not when the
+			/// target is resumed - so something on the host side holds the target across the wait and
+			/// releases it as the operation unwinds. The wait is the block, and no amount of it is ever
+			/// enough. Every report said <c>status=ok</c> with <c>behavior_elapsed_ms=2</c>: once let run,
+			/// the resident finishes in two milliseconds.</para>
+			///
+			/// <para>Finding what holds it is open work. Until then the deadline keeps its original length,
+			/// and <see cref="TryReadLateReport"/> makes the refusal say what really happened.</para></summary>
 			static async Task<Dictionary<string,string>> ReadCompletionAsync(string path,CancellationToken token) {
-				var deadline=DateTime.UtcNow.AddSeconds(20);
+				var report=await PollCompletionAsync(path,TimeSpan.FromSeconds(CompletionDeadlineSeconds),token).ConfigureAwait(false);
+				if(report is not null) return report;
+				var late=TryReadLateReport(path);
+				throw new RpcException("hook_operation_timed_out","HookLab worker did not publish a complete ready record within "+
+					CompletionDeadlineSeconds.ToString(CultureInfo.InvariantCulture)+" seconds."+late);
+			}
+
+			/// <summary>Polls for a <b>complete</b> ready record, or null when the window closes. The target
+			/// writes the report incrementally, so file existence - and even its first status line - do not
+			/// mean the record has been fully published.</summary>
+			static async Task<Dictionary<string,string>?> PollCompletionAsync(string path,TimeSpan window,CancellationToken token) {
+				var deadline=DateTime.UtcNow+window;
 				while(DateTime.UtcNow<deadline) {
 					token.ThrowIfCancellationRequested();
 					if(File.Exists(path)) {
 						var report=ParseReport(File.ReadAllText(path));
-						// The target writes the report incrementally. File existence, and even its first
-						// status line, do not mean the ready record has been fully published yet.
 						if(report.TryGetValue("status",out var status) && (!String.Equals(status,"ok",StringComparison.Ordinal) || report.ContainsKey("pipe_name"))) return report;
 					}
 					await Task.Delay(50,token).ConfigureAwait(false);
 				}
-				// The explanation is usually sitting in the file this just gave up on. Measured on the
-				// cross-identity CoreCLR fixture: two timeouts whose reports said status=ok with
-				// worker_queue_ms=20899 and 20928 - the resident had done and published the work, 0.9
-				// seconds past the deadline. Reporting a bare timeout there sends the reader looking for a
-				// failure that did not happen, which is precisely the diagnosability defect this road
-				// exists to remove.
-				var late=TryReadLateReport(path);
-				throw new RpcException("hook_operation_timed_out","HookLab worker did not publish a complete ready record within 20 seconds."+late);
+				return null;
 			}
 			// TryDelete and TryDeleteDirectory lived here. Both are gone: the exchange area owns the
 			// lifetime of everything staged for an initialization, including whether it survives a

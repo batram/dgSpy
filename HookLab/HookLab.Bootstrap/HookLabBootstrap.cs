@@ -45,19 +45,25 @@ namespace HookLab.Bootstrap {
 		public static string Prepare(string parameters) {
 			lock (Gate) {
 				EmbeddedAssemblyResolver? installed = null;
+				// Advanced as each stage is entered, so a refusal reports where it happened rather than
+				// leaving the reader to infer it from an exception type that several stages can throw.
+				var stage = ResidentStages.Parameters;
 				try {
 					var parsed = BootstrapParameters.Parse(parameters);
 					if (parsed.Endpoint != "none" && parsed.Endpoint != "pipe") throw new ArgumentException("Prepare requires endpoint=none or endpoint=pipe.", nameof(parameters));
+					stage = ResidentStages.PayloadVerify;
 					installed = resolver ?? EmbeddedAssemblyResolver.FromEmbeddedManifest();
 					installed.Install(); resolver = installed;
 					// Before any payload code runs, not after: a binding is worth checking only while
 					// nothing has acted on it.
+					stage = ResidentStages.DependencyResolution;
 					installed.VerifyPayloadBindings();
+					stage = ResidentStages.ResidencyCommit;
 					var outcome = ProbeStartup.Prepare(parsed);
 					ResidentLauncher.Prepare(parsed);
 					return Describe(outcome, installed) + "generation_identity=" + ResidentLauncher.GenerationIdentity + "\npayloads_resident=true\n";
 				}
-				catch (Exception ex) { return Error(ex.GetType().FullName ?? "Exception", ex.Message, installed != null && installed.LoadCount != 0); }
+				catch (Exception ex) { return Error(stage, ex.GetType().FullName ?? "Exception", ex.Message, installed != null && installed.LoadCount != 0, ex); }
 			}
 		}
 
@@ -79,7 +85,7 @@ namespace HookLab.Bootstrap {
 			return startedResult;
 		}
 
-		internal static string WorkerError(Exception ex) => Error(ex.GetType().FullName ?? "Exception", ex.Message, true);
+		internal static string WorkerError(Exception ex) => Error(ResidentStages.BehaviorCommit, ex.GetType().FullName ?? "Exception", ex.Message, true, ex);
 
 		/// <summary>Installs the manifest-restricted resolver, byte-loads the probe and its contracts from
 		/// verified embedded bytes, and calls ProbeInitializer.Initialize. Returns a bounded, line-oriented
@@ -101,36 +107,40 @@ namespace HookLab.Bootstrap {
 		[MethodImpl(MethodImplOptions.NoInlining)]
 		public static string Start(string parameters) {
 			lock (Gate) {
-				if (startedResult != null) return Error("already_started", "This bootstrap has already run in this AppDomain.", false);
+				if (startedResult != null) return Error(ResidentStages.Precondition, "already_started", "This bootstrap has already run in this AppDomain.", false);
 				if (ProbeStartup.HasRetainedCleanup) {
 					ProbeStartup.Shutdown();
 					if (ProbeStartup.HasRetainedCleanup)
-						return Error("cleanup_pending",
+						return Error(ResidentStages.Precondition, "cleanup_pending",
 							"A previous attempt's cleanup is still outstanding and retrying it did not clear it. Refusing to initialize " +
 							"over a runtime that may still be patched or an endpoint that may still be accepting connections.",
 							resolver != null && resolver.LoadCount != 0);
 				}
 				EmbeddedAssemblyResolver? installed = null;
+				var stage = ResidentStages.Parameters;
 				try {
 					var parsed = BootstrapParameters.Parse(parameters);
 					// One resolver per AppDomain, reused across retries. A refused attempt that already loaded a
 					// payload leaves it resident, and a second handler over the same identities would either
 					// answer with the first one's cache or hand out a duplicate - both worse than reusing it.
+					stage = ResidentStages.PayloadVerify;
 					installed = resolver ?? EmbeddedAssemblyResolver.FromEmbeddedManifest();
 					installed.Install();
 					resolver = installed;
 					// Verify what every payload identity binds to while nothing has used one yet. This also
 					// has to sit after Install, for the same reason the ProbeStartup call below does.
+					stage = ResidentStages.DependencyResolution;
 					installed.VerifyPayloadBindings();
 					// Everything past this line lives in ProbeStartup, whose jitting is what first resolves a
 					// probe type - which is why it must happen after Install and never be inlined into here.
+					stage = ResidentStages.ResidencyCommit;
 					var outcome = ProbeStartup.Run(parsed);
 					startedResult = Describe(outcome, installed);
 					return startedResult;
 				}
 				catch (Exception ex) {
 					var retained = Rollback(installed);
-					return Error(ex.GetType().FullName ?? "Exception", ex.Message, retained);
+					return Error(stage, ex.GetType().FullName ?? "Exception", ex.Message, retained, ex);
 				}
 			}
 		}
@@ -162,7 +172,7 @@ namespace HookLab.Bootstrap {
 				var wasStarted = startedResult != null;
 				var wasPrepared = ProbeStartup.Runtime != null;
 				if (!wasStarted && !wasPrepared && !ProbeStartup.HasRetainedCleanup)
-					return Error("not_started", "This bootstrap has not run in this AppDomain.", false);
+					return Error(ResidentStages.Retirement, "not_started", "This bootstrap has not run in this AppDomain.", false);
 				var cleanup = ProbeStartup.Shutdown();
 				// The endpoint state is the persistent one, not just this attempt's: an attempt that only
 				// retried the runtime handle must not be allowed to report a clean stop over a listener an
@@ -248,9 +258,13 @@ namespace HookLab.Bootstrap {
 		/// cleanup_retry_possible belongs here and not only in the shutdown report: a failed start is exactly
 		/// where retained handles have no started state to advertise them, so a caller reading only this
 		/// report had no way to learn that a Shutdown still had work to do.</summary>
-		static string Error(string type, string message, bool payloadsResident) {
+		static string Error(string stage, string type, string message, bool payloadsResident, Exception? exception = null) {
 			var lines = new List<string> {
 				"status=error",
+				// First, and before the exception type: which stage failed is the field that makes the
+				// others readable. "Could not load file or assembly" means one thing at dependency
+				// resolution and another entirely at residency commit.
+				"stage=" + stage,
 				"error_type=" + Sanitize(type),
 				"error_message=" + Sanitize(message),
 				"payloads_resident=" + (payloadsResident ? "true" : "false"),
@@ -265,6 +279,9 @@ namespace HookLab.Bootstrap {
 				"behavior_commit=not_started",
 				"prototype_compromises=identity_partly_self_asserted,no_residency_rollback",
 			};
+			// The chain, bounded. A loader failure typically arrives wrapped in a reflection invoke, and
+			// the outer type says "TargetInvocationException" while the inner one says which assembly.
+			foreach (var inner in ResidentStages.InnerExceptions(exception)) lines.Add(inner.Key + "=" + Sanitize(inner.Value));
 			if (ProbeStartup.RuntimeCleanupError != null) lines.Add("runtime_cleanup_error=" + Sanitize(ProbeStartup.RuntimeCleanupError));
 			if (ProbeStartup.EndpointTeardownError != null) lines.Add("endpoint_teardown_error=" + Sanitize(ProbeStartup.EndpointTeardownError));
 			if (ProbeStartup.EndpointListenerFailure != null) lines.Add("endpoint_listener_failure=" + Sanitize(ProbeStartup.EndpointListenerFailure));
