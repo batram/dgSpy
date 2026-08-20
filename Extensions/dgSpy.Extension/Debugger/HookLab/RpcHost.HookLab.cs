@@ -220,7 +220,11 @@ namespace dgSpy.Extension {
 						refuses_when_unprovable=precondition.RefusesWhenUnprovable,
 					}).ToArray(),
 					application_domains=gathered.Facts.ApplicationDomains.Select(domain=>new { id=domain.Id,name=domain.Name }).ToArray(),
-					exchange_area=gathered.Exchange?.Root,
+					// Named for what it is: where an area WOULD go. It does not exist, and it is not even
+					// stable - each call plans a fresh one - so calling it exchange_area invites a reader
+					// to believe the probe created something. Live on w3wp 6904 two consecutive calls
+					// returned two different non-existent paths.
+					planned_exchange_area=gathered.Exchange?.Root,
 					target_unmodified=true,
 				};
 			}

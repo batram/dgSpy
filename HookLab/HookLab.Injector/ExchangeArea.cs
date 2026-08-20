@@ -78,7 +78,10 @@ namespace HookLab.Injector {
 			// Windows installation.
 			var root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"dgSpy","exchange",leaf);
 			return new ExchangeAreaPlan(root,true,controller,target,CreationAuthority(root),
-				"Controller and target differ, so a machine-wide directory is created for this operation and removed with it.");
+				// Prospective tense on purpose. This detail is read out of a preflight that has created
+				// nothing, and a plan described in the present tense reads as an accomplished fact - which
+				// is the confusion this whole contract exists to remove.
+				"Controller and target differ, so a machine-wide directory would be created for this operation and removed with it.");
 		}
 
 		/// <summary>Whether creating the root would be authorized.
