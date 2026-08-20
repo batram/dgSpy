@@ -32,11 +32,16 @@ namespace HookLabCrossIdentityCoreTarget {
 				Write(facts, "WORKMVID " + method.Module.ModuleVersionId.ToString("D"));
 				Write(facts, "READY");
 
+				// 25 ms, matching CoreClrDebuggerTarget, which this path is known to work against. The
+				// first version ticked every 250 ms and initialization timed out with the resident's own
+				// report saying worker_queue_ms=20899 against a 20 s deadline - the work had been done and
+				// published, just too late. A fixture that idles ten times longer than the proven one is
+				// testing its own cadence as much as the product.
 				var value = 0;
 				while (true) {
 					value = Work.Tick(value % 1000);
 					Write(facts, "TICK " + value.ToString(CultureInfo.InvariantCulture));
-					Thread.Sleep(250);
+					Thread.Sleep(25);
 				}
 			}
 			catch (Exception ex) {

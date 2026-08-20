@@ -124,21 +124,33 @@ try {
 		# because a cross-identity gate that quietly runs as one identity is the gap it exists to close.
 		Invoke-Checked 'Cross-identity HookLab fixture (Release)' { dotnet build tests\TestTargets\HookLabCrossIdentityTarget\HookLabCrossIdentityTarget.csproj -c Release --nologo -v:minimal }
 		Invoke-Checked 'Cross-identity CoreCLR HookLab fixture (Release)' { dotnet build tests\TestTargets\HookLabCrossIdentityCoreTarget\HookLabCrossIdentityCoreTarget.csproj -c Release --nologo -v:minimal }
+		# Attaching across accounts needs SeDebugPrivilege, which a standard token lacks. Rather than
+		# require an interactive elevation prompt on every gate run, Start-CrossIdentitySmoke runs the leg
+		# directly when the gate is already elevated and otherwise triggers a scheduled task registered
+		# once by Register-CrossIdentitySmokeTasks.ps1. Either way this stage is non-interactive.
 		$crossIdentityElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 		$crossIdentityAccount = [bool](Get-LocalUser -Name 'dgspy-fixture' -ErrorAction SilentlyContinue)
-		if ($crossIdentityAccount -and $crossIdentityElevated) {
-			Invoke-Checked 'Cross-identity, cross-domain HookLab live smoke' { .\tests\run-hooklab-cross-identity-smoke.ps1 }
+		$crossIdentityTasks = [bool](Get-ScheduledTask -TaskPath '\dgSpy\' -TaskName 'cross-identity-net48' -ErrorAction SilentlyContinue)
+		if ($crossIdentityAccount -and ($crossIdentityElevated -or $crossIdentityTasks)) {
+			$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+			Invoke-Checked 'Cross-identity, cross-domain HookLab live smoke' {
+				$code = & .\tests\TestSupport\Start-CrossIdentitySmoke.ps1 -Which net48 -RepoRoot $repoRoot -RunDirectory (Join-Path $repoRoot ("tests\artifacts\cross-identity-$stamp"))
+				if ($code -ne 0) { throw "cross-identity net48 smoke failed with exit code $code" }
+			}
 			# CoreCLR has one application domain, so this leg covers the identity axis only. That is the
 			# runtime's shape, not a reduced test: there is no second domain to enter.
-			Invoke-Checked 'Cross-identity CoreCLR HookLab live smoke' { .\tests\run-hooklab-cross-identity-coreclr-smoke.ps1 }
+			Invoke-Checked 'Cross-identity CoreCLR HookLab live smoke' {
+				$code = & .\tests\TestSupport\Start-CrossIdentitySmoke.ps1 -Which coreclr -RepoRoot $repoRoot -RunDirectory (Join-Path $repoRoot ("tests\artifacts\cross-identity-coreclr-$stamp"))
+				if ($code -ne 0) { throw "cross-identity CoreCLR smoke failed with exit code $code" }
+			}
 		}
 		else {
 			# Both reasons are named, because "skipped" without one is how a gate quietly stops covering
 			# the case it was added for.
 			$why = @()
 			if (-not $crossIdentityAccount) { $why += 'the dgspy-fixture account does not exist' }
-			if (-not $crossIdentityElevated) { $why += 'this gate is not elevated, and attaching to another account needs SeDebugPrivilege' }
-			Write-Host ("SKIP  Cross-identity, cross-domain HookLab live smoke: " + ($why -join '; ') + ". See the header of tests\run-hooklab-cross-identity-smoke.ps1.") -ForegroundColor Yellow
+			if (-not ($crossIdentityElevated -or $crossIdentityTasks)) { $why += 'this gate is not elevated and the scheduled tasks are not registered, so it cannot obtain SeDebugPrivilege' }
+			Write-Host ("SKIP  Cross-identity HookLab live smokes: " + ($why -join '; ') + ". Run tests\TestSupport\Register-CrossIdentitySmokeTasks.ps1 once, elevated, to enable them without elevation afterwards.") -ForegroundColor Yellow
 		}
 	}
 	# Needs a listening uch-debug-target player, which this repo neither builds nor ships: it takes a
