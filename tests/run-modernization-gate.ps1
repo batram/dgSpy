@@ -114,6 +114,28 @@ try {
 		# fixture on whichever host framework the gate is exercising.
 		Invoke-Checked 'Atomic-action live smoke' { .\tests\run-atomic-action-smoke.ps1 }
 		Invoke-Checked 'HookLab install live smoke' { .\tests\run-hooklab-install-smoke.ps1 }
+		# Road 1 subslice 8. Every leg above runs the debugger and the target as one user in the default
+		# application domain - the arrangement that hid five defects until a live IIS worker found them,
+		# and three more on 2026-08-20. This one runs the target as a second local account and hooks code
+		# that exists only in a second application domain.
+		#
+		# It needs the dgspy-fixture account, which a hosted runner will not have, so it is skipped with a
+		# named reason rather than failing the gate - and it refuses to fall back to a same-user run,
+		# because a cross-identity gate that quietly runs as one identity is the gap it exists to close.
+		Invoke-Checked 'Cross-identity HookLab fixture (Release)' { dotnet build tests\TestTargets\HookLabCrossIdentityTarget\HookLabCrossIdentityTarget.csproj -c Release --nologo -v:minimal }
+		$crossIdentityElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+		$crossIdentityAccount = [bool](Get-LocalUser -Name 'dgspy-fixture' -ErrorAction SilentlyContinue)
+		if ($crossIdentityAccount -and $crossIdentityElevated) {
+			Invoke-Checked 'Cross-identity, cross-domain HookLab live smoke' { .\tests\run-hooklab-cross-identity-smoke.ps1 }
+		}
+		else {
+			# Both reasons are named, because "skipped" without one is how a gate quietly stops covering
+			# the case it was added for.
+			$why = @()
+			if (-not $crossIdentityAccount) { $why += 'the dgspy-fixture account does not exist' }
+			if (-not $crossIdentityElevated) { $why += 'this gate is not elevated, and attaching to another account needs SeDebugPrivilege' }
+			Write-Host ("SKIP  Cross-identity, cross-domain HookLab live smoke: " + ($why -join '; ') + ". See the header of tests\run-hooklab-cross-identity-smoke.ps1.") -ForegroundColor Yellow
+		}
 	}
 	# Needs a listening uch-debug-target player, which this repo neither builds nor ships: it takes a
 	# Unity editor and a licence, which hosted runners do not have. Launch it first with the target

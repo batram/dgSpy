@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <DebugType>portable</DebugType>
+    <!-- Unoptimized so the hooked method keeps a stable, guardable body: an optimized build is free to
+         reshape Tick, and the smoke asserts on its exact IL digest. -->
+    <Optimize>false</Optimize>
+    <AssemblyName>HookLabCrossIdentityWork</AssemblyName>
+    <RootNamespace>Fixture</RootNamespace>
+  </PropertyGroup>
+</Project>
