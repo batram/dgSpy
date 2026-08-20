@@ -45,6 +45,91 @@ namespace HookLab.Probe.CorDebug.Patching {
 			ProbeInstanceId = Guid.NewGuid().ToString("D");
 			buffer = new BoundedEventBuffer(initialization.EventCapacity, initialization.ByteCapacity);
 			harmony = new Harmony("dgspy.hooklab.probe." + ProbeInstanceId);
+			// Watch what else arrives in this domain. A hook patches one method in one assembly, and
+			// nothing stops a later assembly from defining the same type and taking over the work.
+			assemblyLoad = (sender, args) => NoteAssemblyLoaded(args.LoadedAssembly);
+			AppDomain.CurrentDomain.AssemblyLoad += assemblyLoad;
+		}
+
+		readonly AssemblyLoadEventHandler assemblyLoad;
+		/// <summary>patch id to the assembly that shadowed it. Ordinal, and first writer wins: the
+		/// interesting fact is that the hook stopped being reachable, not how many times since.</summary>
+		readonly Dictionary<string, ShadowedHookState> shadowed = new Dictionary<string, ShadowedHookState>(StringComparer.Ordinal);
+
+		/// <summary>Records any installed hook whose declaring type is also defined by an assembly that
+		/// has just loaded.
+		///
+		/// <para>The check is one <c>GetType</c> per installed hook rather than an enumeration of the new
+		/// assembly's types: enumeration is expensive on every load in a busy process and throws
+		/// <see cref="ReflectionTypeLoadException"/> on half-resolvable assemblies, which is a poor reason
+		/// to disturb a target. With no hooks installed this does nothing at all.</para>
+		///
+		/// <para>It reports rather than reacts. Re-patching the new assembly would install a hook the
+		/// caller never asked for, on code whose IL nobody guarded; unpatching would destroy a hook that
+		/// is still correct for anything holding the old type. Saying so is the useful part - the failure
+		/// this exists for is silence, not the shadowing itself.</para></summary>
+		void NoteAssemblyLoaded(Assembly loaded) {
+			if (loaded == null) return;
+			try {
+				lock (gate) {
+					if (disposed || (hooks.Count == 0 && compiledHooks.Count == 0)) return;
+					foreach (var entry in Targets()) NoteShadowing(entry, loaded);
+				}
+			}
+			// A load notification must never be the thing that breaks a target. Losing this observation
+			// degrades a diagnostic; throwing here would run inside the CLR's loader callback.
+			catch (Exception) { }
+		}
+
+		/// <summary>Records one hook as shadowed if the given assembly defines its declaring type from a
+		/// different module. Callers hold <see cref="gate"/>.</summary>
+		void NoteShadowing((string PatchId, string DeclaringType, Guid ModuleMvid) entry, Assembly candidateAssembly) {
+			if (shadowed.ContainsKey(entry.PatchId) || string.IsNullOrEmpty(entry.DeclaringType)) return;
+			Type? candidate;
+			// A half-resolvable assembly throws from GetType, and a dynamic one can be mid-definition.
+			// Neither is a reason to disturb the target.
+			try { candidate = candidateAssembly.GetType(entry.DeclaringType, false); } catch (Exception) { return; }
+			// Same declaring type from a different module: the new one is what fresh calls resolve to, so
+			// the patch is on code that is no longer being entered.
+			if (candidate == null || candidate.Module.ModuleVersionId == entry.ModuleMvid) return;
+			shadowed[entry.PatchId] = new ShadowedHookState(entry.PatchId, entry.DeclaringType,
+				SafeName(candidateAssembly));
+		}
+
+		static string SafeName(Assembly assembly) {
+			try { return assembly.FullName ?? assembly.GetName().Name ?? "an unnamed assembly"; }
+			catch (Exception) { return "an unnamed assembly"; }
+		}
+
+		/// <summary>Checks one freshly installed hook against everything already loaded.
+		///
+		/// <para>Waiting for a load notification would miss the commonest case entirely. Measured on
+		/// 2026-08-20: the IIS worker had <b>both</b> generations of the recompiled page assembly resident
+		/// before the hook was installed, so no assembly loaded afterwards and an event-only check would
+		/// have stayed silent about a hook that could never fire. Shadowing is a property of the domain,
+		/// not of an event.</para>
+		///
+		/// <para>Callers hold <see cref="gate"/>. One dictionary lookup per loaded assembly, once per
+		/// install.</para></summary>
+		void NoteShadowingAtInstall(string patchId, MethodBase method) {
+			try {
+				var entry = (PatchId: patchId, DeclaringType: method.DeclaringType?.FullName ?? "", ModuleMvid: method.Module.ModuleVersionId);
+				if (string.IsNullOrEmpty(entry.DeclaringType)) return;
+				foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies()) {
+					NoteShadowing(entry, assembly);
+					if (shadowed.ContainsKey(patchId)) return;
+				}
+			}
+			catch (Exception) { }
+		}
+
+		/// <summary>Every installed hook as (patch id, declaring type, the module it was patched in),
+		/// observation and compiled alike. Callers hold <see cref="gate"/>.</summary>
+		IEnumerable<(string PatchId, string DeclaringType, Guid ModuleMvid)> Targets() {
+			foreach (var hook in hooks.Values)
+				yield return (hook.PatchId, hook.Method.DeclaringType?.FullName ?? "", hook.Method.Module.ModuleVersionId);
+			foreach (var hook in compiledHooks.Values)
+				yield return (hook.PatchId, hook.Method.DeclaringType?.FullName ?? "", hook.Method.Module.ModuleVersionId);
 		}
 
 		internal static ProbeRuntime CreateAfterInventory(ProbeInitialization initialization, BackendInventoryResult inventory) => new ProbeRuntime(initialization, inventory);
@@ -84,6 +169,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 				try {
 					if (old != null) foreach (var patchMethod in old.PatchMethods) harmony.Unpatch(old.Method, patchMethod);
 					compiledHooks[patchId] = candidate;
+					NoteShadowingAtInstall(patchId, method);
 					hooksVersion++;
 					return new CompiledPatchOperationResult(patchId, hooksVersion, revision, true);
 				}
@@ -107,7 +193,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 				var context = new HookContext(this, method, patchId, document, hooksVersion + 1);
 				HookDispatch.Register(context);
 				try { if (!phaseAlreadyPatched) ApplyPatch(method, document.Kind); } catch { HookDispatch.Unregister(context); throw; }
-				hooks[patchId] = context; hooksVersion++;
+				hooks[patchId] = context; NoteShadowingAtInstall(patchId, method); hooksVersion++;
 				return new PatchOperationResult(patchId, hooksVersion, true);
 			}
 		}
@@ -141,7 +227,10 @@ namespace HookLab.Probe.CorDebug.Patching {
 		}
 
 		public ProbeState GetState() {
-			lock (gate) return new ProbeState(1, ProbeInstanceId, initialization.IdentityProvider.GetCurrentIdentity(), Inventory.SelectedIdentity, hooksVersion, hooks.Keys.Concat(compiledHooks.Keys).OrderBy(x => x).ToArray(),compiledHooks.Values.OrderBy(x=>x.PatchId).Select(x=>new CompiledHookState(x.PatchId,x.Method.Module.Assembly.GetName().Name??x.Method.Module.Name,x.Document.Kind,x.Document.Target,Sha256(x.Source),x.Revision,x.Enabled)).ToArray());
+			lock (gate) return new ProbeState(1, ProbeInstanceId, initialization.IdentityProvider.GetCurrentIdentity(), Inventory.SelectedIdentity, hooksVersion, hooks.Keys.Concat(compiledHooks.Keys).OrderBy(x => x).ToArray(),compiledHooks.Values.OrderBy(x=>x.PatchId).Select(x=>new CompiledHookState(x.PatchId,x.Method.Module.Assembly.GetName().Name??x.Method.Module.Name,x.Document.Kind,x.Document.Target,Sha256(x.Source),x.Revision,x.Enabled)).ToArray(),
+				// Only hooks that still exist: a removed hook's shadowing is not news, and reporting it
+				// would keep a resolved problem on the screen.
+				shadowed.Values.Where(x=>hooks.ContainsKey(x.PatchId)||compiledHooks.ContainsKey(x.PatchId)).OrderBy(x=>x.PatchId,StringComparer.Ordinal).ToArray());
 		}
 		static string Sha256(string value) { using(var sha=SHA256.Create()) return string.Concat(sha.ComputeHash(Encoding.UTF8.GetBytes(value)).Select(x=>x.ToString("x2")).ToArray()); }
 
@@ -222,7 +311,10 @@ namespace HookLab.Probe.CorDebug.Patching {
 		internal BoundedEventBuffer Buffer => buffer;
 
 		public void Dispose() {
-			lock (gate) { if (disposed) return; foreach (var item in hooks.Values.ToArray()) RemoveCore(item); foreach (var item in compiledHooks.Values.ToArray()) { foreach (var patchMethod in item.PatchMethods) harmony.Unpatch(item.Method, patchMethod); compiledHooks.Remove(item.PatchId); } disposed = true; }
+			// Before the lock: the handler runs inside the CLR's loader callback, and leaving it attached
+			// to a disposed runtime is a subscription on a dead object for the life of the AppDomain.
+			try { AppDomain.CurrentDomain.AssemblyLoad -= assemblyLoad; } catch (Exception) { }
+			lock (gate) { if (disposed) return; foreach (var item in hooks.Values.ToArray()) RemoveCore(item); foreach (var item in compiledHooks.Values.ToArray()) { foreach (var patchMethod in item.PatchMethods) harmony.Unpatch(item.Method, patchMethod); compiledHooks.Remove(item.PatchId); } shadowed.Clear(); disposed = true; }
 		}
 	}
 

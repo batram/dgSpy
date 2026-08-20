@@ -438,7 +438,14 @@ namespace dgSpy.Extension {
 			}
 
 			public object List(string sessionId,int? processId) {
-				lock(gate) { var selected=hooks.Values.Where(value=>value.Definition.SessionId==sessionId && (processId is null || value.Definition.ProcessId==processId.Value)).ToArray(); var known=new HashSet<string>(selected.Select(value=>value.PatchId),StringComparer.Ordinal); var local=selected.Select(value=>(object)View(value)); var resident=residentHooks.Values.Where(value=>value.SessionId==sessionId&&(processId is null||value.ProcessId==processId.Value)&&!known.Contains(value.PatchId)).Select(value=>(object)View(value)); return new { hooks=local.Concat(resident).ToArray() }; }
+				lock(gate) {
+					var selected=hooks.Values.Where(value=>value.Definition.SessionId==sessionId && (processId is null || value.Definition.ProcessId==processId.Value)).ToArray(); var known=new HashSet<string>(selected.Select(value=>value.PatchId),StringComparer.Ordinal); var local=selected.Select(value=>(object)View(value)); var resident=residentHooks.Values.Where(value=>value.SessionId==sessionId&&(processId is null||value.ProcessId==processId.Value)&&!known.Contains(value.PatchId)).Select(value=>(object)View(value));
+					// From the last status round trip rather than a fresh one: list_hooks is the cheap
+					// read, and get_hook_events refreshes this exactly when its emptiness raises the
+					// question. Reported here too because this is where someone looks next.
+					var shadowed=runtimes.Values.Where(value=>value.SessionId==sessionId&&(processId is null||value.ProcessId==processId.Value)).SelectMany(ShadowedView).ToArray();
+					return new { hooks=local.Concat(resident).ToArray(),shadowed_hooks=shadowed };
+				}
 			}
 
 			public object Export(RpcHost host,RpcRequest source) {
@@ -482,10 +489,38 @@ namespace dgSpy.Extension {
 				var runtime=ForOperation(source.Arguments);
 				var maximum=Math.Min(256,Math.Max(1,(int?)source.Arguments["max_events"] ?? 64));
 				var dropped=await DrainIntoHostAsync(runtime,maximum,token).ConfigureAwait(false);
+				object[] page; long next;
 				lock(gate) {
 					var after=(long?)source.Arguments["after_cursor"] ?? 0;
-					return new { events=events.Where(value=>value.Cursor>after).Take(maximum).Select(value=>new { cursor=value.Cursor,sequence=value.Sequence,patch_id=value.PatchId,payload_json=value.PayloadJson,dropped=value.Dropped }).ToArray(),next_cursor=cursor,dropped };
+					page=events.Where(value=>value.Cursor>after).Take(maximum).Select(value=>(object)new { cursor=value.Cursor,sequence=value.Sequence,patch_id=value.PatchId,payload_json=value.PayloadJson,dropped=value.Dropped }).ToArray();
+					next=cursor;
 				}
+				// An empty page is the symptom a shadowed hook produces, and it is indistinguishable from a
+				// method that is simply not being called - so this is the moment to ask the resident what it
+				// knows, and the one call where a round trip is worth its cost. Twice on 2026-08-20 an
+				// enabled hook with every guard valid observed nothing because ASP.NET had recompiled the
+				// page and loaded a second assembly beside the one it patched.
+				if(page.Length==0) {
+					try { var status=await SendRawAsync(runtime,"status","{}",token).ConfigureAwait(false); Inventory(runtime,status); }
+					// Best effort: a status round trip that fails must not turn a successful, empty drain
+					// into an error. The events are the answer; this is commentary on their absence.
+					catch(Exception) { }
+				}
+				return new { events=page,next_cursor=next,dropped,shadowed_hooks=ShadowedView(runtime) };
+			}
+
+			/// <summary>What the resident last reported about hooks whose target assembly has been
+			/// superseded. Names the hook, the type, and the assembly that took it over, because "no
+			/// events" plus a valid-looking hook is a dead end without all three.</summary>
+			static object[] ShadowedView(RuntimeRecord runtime) {
+				lock(runtime.Shadowed) return runtime.Shadowed.OrderBy(entry=>entry.Key,StringComparer.Ordinal).Select(entry=>(object)new {
+					patch_id=entry.Key,
+					declaring_type=entry.Value.DeclaringType,
+					shadowing_assembly=entry.Value.ShadowingAssembly,
+					detail="This hook is installed on a method in an assembly that has since been superseded: '"+entry.Value.DeclaringType+
+						"' is now also defined by "+entry.Value.ShadowingAssembly+", so calls reach that copy and this hook observes nothing. "+
+						"Its guards are still valid - it patches code nothing enters any more. Install against the newer module.",
+				}).ToArray();
 			}
 
 			async Task<long> DrainIntoHostAsync(RuntimeRecord runtime,int maximum,CancellationToken token) {
@@ -562,7 +597,14 @@ namespace dgSpy.Extension {
 				finally { runtime.OperationGate.Release(); }
 			}
 			void Inventory(RuntimeRecord runtime,string payload) {
-				using(var document=JsonDocument.Parse(payload)) { var root=document.RootElement; if(root.GetProperty("probe_instance_id").GetString()!=runtime.ProbeInstanceId) throw new RpcException("hooklab_resident_identity_mismatch","Authenticated resident reported a different probe identity."); runtime.HooksVersion=root.GetProperty("hooks_version").GetInt64(); var values=new List<ResidentHookRecord>(); foreach(var item in root.GetProperty("compiled_hooks").EnumerateArray()) { var patch=item.GetProperty("patch_id").GetString()!; HookOwnership.TryParse(runtime.ProbeInstanceId,patch,out var controller,out var hookId); values.Add(new ResidentHookRecord(runtime.SessionId,runtime.ProcessId,patch,controller,hookId,item.TryGetProperty("assembly_simple_name",out var assembly)?assembly.GetString()!:String.Empty,item.GetProperty("kind").GetString()!,item.GetProperty("module_mvid").GetString()!,item.GetProperty("metadata_token").GetInt32(),item.GetProperty("declaring_type").GetString()!,item.GetProperty("signature").GetString()!,item.GetProperty("il_sha256").GetString()!,item.GetProperty("source_sha256").GetString()!,item.GetProperty("revision").GetInt32(),item.GetProperty("enabled").GetBoolean())); } lock(gate) { foreach(var key in residentHooks.Where(value=>value.Value.SessionId==runtime.SessionId&&value.Value.ProcessId==runtime.ProcessId).Select(value=>value.Key).ToArray()) residentHooks.Remove(key); foreach(var value in values) residentHooks[value.Key]=value; } }
+				using(var document=JsonDocument.Parse(payload)) { var root=document.RootElement; if(root.GetProperty("probe_instance_id").GetString()!=runtime.ProbeInstanceId) throw new RpcException("hooklab_resident_identity_mismatch","Authenticated resident reported a different probe identity."); runtime.HooksVersion=root.GetProperty("hooks_version").GetInt64(); var values=new List<ResidentHookRecord>(); foreach(var item in root.GetProperty("compiled_hooks").EnumerateArray()) { var patch=item.GetProperty("patch_id").GetString()!; HookOwnership.TryParse(runtime.ProbeInstanceId,patch,out var controller,out var hookId); values.Add(new ResidentHookRecord(runtime.SessionId,runtime.ProcessId,patch,controller,hookId,item.TryGetProperty("assembly_simple_name",out var assembly)?assembly.GetString()!:String.Empty,item.GetProperty("kind").GetString()!,item.GetProperty("module_mvid").GetString()!,item.GetProperty("metadata_token").GetInt32(),item.GetProperty("declaring_type").GetString()!,item.GetProperty("signature").GetString()!,item.GetProperty("il_sha256").GetString()!,item.GetProperty("source_sha256").GetString()!,item.GetProperty("revision").GetInt32(),item.GetProperty("enabled").GetBoolean())); } lock(gate) { foreach(var key in residentHooks.Where(value=>value.Value.SessionId==runtime.SessionId&&value.Value.ProcessId==runtime.ProcessId).Select(value=>value.Key).ToArray()) residentHooks.Remove(key); foreach(var value in values) residentHooks[value.Key]=value; }
+					// TryGetProperty, not GetProperty: a resident from before this existed reports no such
+					// field, and an adopted one is exactly the case where the two builds can differ.
+					runtime.Shadowed.Clear();
+					if(root.TryGetProperty("shadowed_hooks",out var shadowedHooks) && shadowedHooks.ValueKind==JsonValueKind.Array)
+						foreach(var item in shadowedHooks.EnumerateArray())
+							runtime.Shadowed[item.GetProperty("patch_id").GetString()!]=(item.GetProperty("declaring_type").GetString()!,item.GetProperty("shadowing_assembly").GetString()!);
+				}
 			}
 
 			async Task DrainRemovalBacklogAsync(RuntimeRecord runtime,CancellationToken token) {
@@ -894,7 +936,11 @@ namespace dgSpy.Extension {
 			sealed class HookRecord { public HookRecord(HookDefinition definition,string patchId) { Definition=definition; PatchId=patchId; } public HookDefinition Definition { get; } public string PatchId { get; } public bool Enabled=true; public MethodDef? MethodDefinition; }
 			sealed class ResidentHookRecord { public ResidentHookRecord(string sessionId,int processId,string patchId,string controller,string hookId,string assemblySimpleName,string kind,string mvid,int metadataToken,string declaringType,string signature,string ilSha256,string sourceSha256,int revision,bool enabled) { SessionId=sessionId; ProcessId=processId; PatchId=patchId; Controller=controller; HookId=hookId; AssemblySimpleName=assemblySimpleName; Kind=kind; Mvid=mvid; MetadataToken=metadataToken; DeclaringType=declaringType; Signature=signature; IlSha256=ilSha256; SourceSha256=sourceSha256; Revision=revision; Enabled=enabled; } public string SessionId,PatchId,Controller,HookId,AssemblySimpleName,Kind,Mvid,DeclaringType,Signature,IlSha256,SourceSha256; public int ProcessId,MetadataToken,Revision; public bool Enabled; public string Key=>SessionId+"\n"+ProcessId.ToString(CultureInfo.InvariantCulture)+"\n"+PatchId; }
 			sealed class HookCarrier { public HookCarrier(string moduleId,int methodToken,int ilOffset,int[] nearbyOffsets,string appDomainId) { ModuleId=moduleId; MethodToken=methodToken; IlOffset=ilOffset; NearbyOffsets=nearbyOffsets; AppDomainId=appDomainId; } public string ModuleId { get; } public int MethodToken { get; } public int IlOffset { get; } public int[] NearbyOffsets { get; } public string AppDomainId { get; } }
-			sealed class RuntimeRecord : IDisposable { public RuntimeRecord(string sessionId,int processId,ProbeConnection connection,long hooksVersion,string probeInstanceId,bool adopted,string appDomainId=DefaultApplicationDomainId) { SessionId=sessionId; ProcessId=processId; Connection=connection; HooksVersion=hooksVersion; ProbeInstanceId=probeInstanceId; Adopted=adopted; AppDomainId=appDomainId; } public string SessionId { get; } public int ProcessId { get; } public string ProbeInstanceId { get; } public bool Adopted { get; } public string AppDomainId { get; } public ProbeConnection Connection { get; } public long HooksVersion; public SemaphoreSlim OperationGate { get; }=new SemaphoreSlim(1,1); public CancellationTokenSource Cancellation { get; }=new CancellationTokenSource(); public Task? Pump; public void Dispose() { Cancellation.Cancel(); Connection.Dispose(); OperationGate.Dispose(); Cancellation.Dispose(); } }
+			sealed class RuntimeRecord : IDisposable { public RuntimeRecord(string sessionId,int processId,ProbeConnection connection,long hooksVersion,string probeInstanceId,bool adopted,string appDomainId=DefaultApplicationDomainId) { SessionId=sessionId; ProcessId=processId; Connection=connection; HooksVersion=hooksVersion; ProbeInstanceId=probeInstanceId; Adopted=adopted; AppDomainId=appDomainId; } public string SessionId { get; } public int ProcessId { get; } public string ProbeInstanceId { get; } public bool Adopted { get; } public string AppDomainId { get; } public ProbeConnection Connection { get; } public long HooksVersion; public SemaphoreSlim OperationGate { get; }=new SemaphoreSlim(1,1); public CancellationTokenSource Cancellation { get; }=new CancellationTokenSource(); public Task? Pump;
+				/// <summary>Hooks the resident has seen shadowed, keyed by patch id, as of the last status
+				/// round trip. Empty is the normal answer.</summary>
+				public Dictionary<string,(string DeclaringType,string ShadowingAssembly)> Shadowed { get; }=new Dictionary<string,(string,string)>(StringComparer.Ordinal);
+				public void Dispose() { Cancellation.Cancel(); Connection.Dispose(); OperationGate.Dispose(); Cancellation.Dispose(); } }
 			sealed class HookEventRecord { public HookEventRecord(long cursor,string sequence,string patchId,string payloadJson,long dropped) { Cursor=cursor; Sequence=sequence; PatchId=patchId; PayloadJson=payloadJson; Dropped=dropped; } public long Cursor { get; } public string Sequence { get; } public string PatchId { get; } public string PayloadJson { get; } public long Dropped { get; } }
 
 			sealed class HookDefinition {

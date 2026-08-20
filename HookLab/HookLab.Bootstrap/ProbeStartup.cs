@@ -589,7 +589,12 @@ namespace HookLab.Bootstrap {
 			",\"image_path\":\"" + Escape(state.Target.ImagePath) +
 			"\",\"appdomain_id\":\"" + Escape(state.Target.AppDomainId) +
 			"\",\"patch_ids\":[" + string.Join(",", state.PatchIds.Select(id => "\"" + Escape(id) + "\"").ToArray()) + "]" +
-			",\"compiled_hooks\":[" + string.Join(",", state.CompiledHooks.Select(CompiledHookJson).ToArray()) + "]}";
+			",\"compiled_hooks\":[" + string.Join(",", state.CompiledHooks.Select(CompiledHookJson).ToArray()) + "]" +
+			",\"shadowed_hooks\":[" + string.Join(",", state.ShadowedHooks.Select(ShadowedHookJson).ToArray()) + "]}";
+
+		static string ShadowedHookJson(ShadowedHookState hook) =>
+			"{\"patch_id\":\"" + Escape(hook.PatchId) + "\",\"declaring_type\":\"" + Escape(hook.DeclaringType) +
+			"\",\"shadowing_assembly\":\"" + Escape(hook.ShadowingAssembly) + "\"}";
 
 		static string CompiledHookJson(CompiledHookState hook) => "{\"patch_id\":\"" + Escape(hook.PatchId) + "\",\"assembly_simple_name\":\"" + Escape(hook.AssemblySimpleName) + "\",\"kind\":\"" + hook.Kind.ToString() + "\",\"module_mvid\":\"" + hook.Target.ModuleMvid.ToString("D") + "\",\"metadata_token\":" + hook.Target.MetadataToken.ToString(CultureInfo.InvariantCulture) + ",\"declaring_type\":\"" + Escape(hook.Target.DeclaringType) + "\",\"signature\":\"" + Escape(hook.Target.MethodSignature) + "\",\"il_sha256\":\"" + Escape(hook.Target.IlSha256) + "\",\"source_sha256\":\"" + Escape(hook.SourceSha256) + "\",\"revision\":" + hook.Revision.ToString(CultureInfo.InvariantCulture) + ",\"enabled\":" + (hook.Enabled ? "true" : "false") + "}";
 

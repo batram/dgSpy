@@ -97,8 +97,26 @@ namespace HookLab.Contracts {
 		static string Required(string value, string name) => string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value is required.", name) : value;
 	}
 
+	/// <summary>One hook whose declaring type now also lives in an assembly loaded after it was
+	/// installed, so the code being executed is no longer the code the hook patched.
+	///
+	/// <para>ASP.NET recompiles a page and loads the new assembly beside the old one; the hook stays
+	/// enabled on the old one with every guard still valid, and simply observes nothing. Measured twice
+	/// on 2026-08-20, on two separate IIS workers, and it looks exactly like a method that is never
+	/// called - which is why the resident has to say it rather than leave it to be inferred from an
+	/// absence of events.</para></summary>
+	public sealed class ShadowedHookState {
+		public ShadowedHookState(string patchId, string declaringType, string shadowingAssembly) {
+			PatchId = Required(patchId, nameof(patchId)); DeclaringType = Required(declaringType, nameof(declaringType));
+			ShadowingAssembly = Required(shadowingAssembly, nameof(shadowingAssembly));
+		}
+		public string PatchId { get; } public string DeclaringType { get; } public string ShadowingAssembly { get; }
+		static string Required(string value, string name) => string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value is required.", name) : value;
+	}
+
 	public sealed class ProbeState {
-		public ProbeState(int protocolVersion, string probeInstanceId, TargetIdentity target, string backendIdentity, long hooksVersion, IReadOnlyList<string>? patchIds, IReadOnlyList<CompiledHookState>? compiledHooks = null) {
+		public ProbeState(int protocolVersion, string probeInstanceId, TargetIdentity target, string backendIdentity, long hooksVersion, IReadOnlyList<string>? patchIds, IReadOnlyList<CompiledHookState>? compiledHooks = null, IReadOnlyList<ShadowedHookState>? shadowedHooks = null) {
+			ShadowedHooks = new List<ShadowedHookState>(shadowedHooks ?? Array.Empty<ShadowedHookState>()).AsReadOnly();
 			if (protocolVersion <= 0) throw new ArgumentOutOfRangeException(nameof(protocolVersion)); ProtocolVersion = protocolVersion;
 			ProbeInstanceId = Required(probeInstanceId, nameof(probeInstanceId)); Target = target ?? throw new ArgumentNullException(nameof(target));
 			BackendIdentity = Required(backendIdentity, nameof(backendIdentity)); HooksVersion = hooksVersion;
@@ -106,6 +124,9 @@ namespace HookLab.Contracts {
 		}
 		public int ProtocolVersion { get; } public string ProbeInstanceId { get; } public TargetIdentity Target { get; } public string BackendIdentity { get; }
 		public long HooksVersion { get; } public IReadOnlyList<string> PatchIds { get; } public IReadOnlyList<CompiledHookState> CompiledHooks { get; }
+		/// <summary>Empty is the normal answer. A non-empty entry means the named hook is installed on
+		/// code nothing is calling any more.</summary>
+		public IReadOnlyList<ShadowedHookState> ShadowedHooks { get; }
 		static string Required(string value, string name) => string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value is required.", name) : value;
 	}
 

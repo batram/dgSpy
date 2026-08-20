@@ -15,6 +15,11 @@ using dgSpy.Extension;
 namespace HookLab.Probe.Tests {
 	public sealed class ProbeCoreTests {
 		static readonly MethodInfo TargetMethod = typeof(Fixture).GetMethod(nameof(Fixture.Add))!;
+		/// <summary>A top-level target, so an emitted assembly can genuinely redefine its type by name.</summary>
+		static readonly MethodInfo ShadowableMethod = typeof(ShadowableFixture).GetMethod(nameof(ShadowableFixture.Add))!;
+		static readonly MethodInfo PreexistingShadowMethod = typeof(PreexistingShadowFixture).GetMethod(nameof(PreexistingShadowFixture.Add))!;
+		static readonly MethodInfo UnrelatedLoadMethod = typeof(UnrelatedLoadFixture).GetMethod(nameof(UnrelatedLoadFixture.Add))!;
+		static readonly MethodInfo RemovedShadowMethod = typeof(RemovedShadowFixture).GetMethod(nameof(RemovedShadowFixture.Add))!;
 		static readonly MethodInfo InstanceTargetMethod = typeof(InstanceFixture).GetMethod(nameof(InstanceFixture.Calculate))!;
 		static readonly MethodInfo RefOutTargetMethod = typeof(Fixture).GetMethod(nameof(Fixture.RefOut))!;
 		static readonly MethodInfo PrivateTargetMethod = typeof(PrivateInstanceFixture).GetMethod(nameof(PrivateInstanceFixture.Calculate))!;
@@ -554,6 +559,100 @@ namespace HookLab.Probe.Tests {
 			}
 		}
 
+		/// <summary>A hook whose target assembly has been superseded keeps every guard valid and observes
+		/// nothing, which is indistinguishable from a method that is never called. Measured twice on
+		/// 2026-08-20 against two separate IIS workers: ASP.NET recompiled a page, loaded the new assembly
+		/// beside the old one, and a correct hook on the old one went silent.
+		///
+		/// The fixture emits a real assembly declaring a type with the hooked type's full name, because
+		/// the shadowing that matters is by name across modules - which is exactly what a recompiled page
+		/// produces.</summary>
+		[Fact]
+		public void AShadowedHookIsReportedWhenTheRedefiningAssemblyLoadsAfterInstall() {
+			var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "hooklab-shadow-" + Guid.NewGuid().ToString("N"));
+			System.IO.Directory.CreateDirectory(directory);
+			try {
+				using (var runtime = Runtime()) {
+					runtime.Install(ShadowableMethod, ShadowableDocument(ShadowableMethod), 0);
+					Assert.Empty(runtime.GetState().ShadowedHooks);
+
+					// From disk, not a dynamic assembly: DefineDynamicAssembly raises AssemblyLoad before
+					// any type is defined in it, so a probe checking types at load time correctly sees
+					// nothing. A recompiled page arrives as a real file with its types already in it.
+					LoadFromDisk(directory, ShadowableMethod.DeclaringType!.FullName!, "Shadowing.Generation2");
+
+					var shadowed = Assert.Single(runtime.GetState().ShadowedHooks);
+					Assert.Equal(ShadowableMethod.DeclaringType!.FullName, shadowed.DeclaringType);
+					Assert.Contains("Shadowing.Generation2", shadowed.ShadowingAssembly, StringComparison.Ordinal);
+					Assert.Contains(shadowed.PatchId, runtime.GetState().PatchIds);
+				}
+			}
+			finally { try { System.IO.Directory.Delete(directory, true); } catch (Exception) { } }
+		}
+
+		/// <summary>The commoner case, and the one an event-only check misses completely: the superseding
+		/// assembly was already resident when the hook went on. Measured on 2026-08-20 - the IIS worker
+		/// held both generations of the recompiled page before anything was installed, so nothing loaded
+		/// afterwards and there was no event to notice.</summary>
+		[Fact]
+		public void AHookInstalledIntoAnAlreadyShadowedDomainIsReportedImmediately() {
+			var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "hooklab-shadow-" + Guid.NewGuid().ToString("N"));
+			System.IO.Directory.CreateDirectory(directory);
+			try {
+				LoadFromDisk(directory, PreexistingShadowMethod.DeclaringType!.FullName!, "Shadowing.Preexisting");
+				using (var runtime = Runtime()) {
+					runtime.Install(PreexistingShadowMethod, ShadowableDocument(PreexistingShadowMethod), 0);
+					var shadowed = Assert.Single(runtime.GetState().ShadowedHooks);
+					Assert.Contains("Shadowing.Preexisting", shadowed.ShadowingAssembly, StringComparison.Ordinal);
+				}
+			}
+			finally { try { System.IO.Directory.Delete(directory, true); } catch (Exception) { } }
+		}
+
+		/// <summary>An assembly that redefines nothing the probe hooked is ordinary traffic - a busy
+		/// process loads assemblies constantly - and reporting it would make the real signal worthless.</summary>
+		[Fact]
+		public void AnUnrelatedAssemblyLoadIsNotReportedAsShadowing() {
+			var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "hooklab-shadow-" + Guid.NewGuid().ToString("N"));
+			System.IO.Directory.CreateDirectory(directory);
+			try {
+				using (var runtime = Runtime()) {
+					runtime.Install(UnrelatedLoadMethod, ShadowableDocument(UnrelatedLoadMethod), 0);
+					LoadFromDisk(directory, "Some.Other.Type", "Shadowing.Unrelated");
+					Assert.Empty(runtime.GetState().ShadowedHooks);
+				}
+			}
+			finally { try { System.IO.Directory.Delete(directory, true); } catch (Exception) { } }
+		}
+
+		/// <summary>Removing the hook removes the report with it: a resolved problem that stays on the
+		/// screen trains people to ignore the screen.</summary>
+		[Fact]
+		public void RemovingAShadowedHookRemovesItsReport() {
+			var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "hooklab-shadow-" + Guid.NewGuid().ToString("N"));
+			System.IO.Directory.CreateDirectory(directory);
+			try {
+				using (var runtime = Runtime()) {
+					var installed = runtime.Install(RemovedShadowMethod, ShadowableDocument(RemovedShadowMethod), 0);
+					LoadFromDisk(directory, RemovedShadowMethod.DeclaringType!.FullName!, "Shadowing.Generation3");
+					Assert.NotEmpty(runtime.GetState().ShadowedHooks);
+					runtime.Uninstall(installed.PatchId, runtime.HooksVersion);
+					Assert.Empty(runtime.GetState().ShadowedHooks);
+				}
+			}
+			finally { try { System.IO.Directory.Delete(directory, true); } catch (Exception) { } }
+		}
+
+		/// <summary>Emits an assembly declaring one type by full name, saves it, and loads it from disk so
+		/// the probe sees a real assembly with its types already present - the shape a recompiled ASP.NET
+		/// page arrives in.</summary>
+		static Assembly LoadFromDisk(string directory, string fullTypeName, string assemblyName) {
+			var builder = AppDomain.CurrentDomain.DefineDynamicAssembly(new AssemblyName(assemblyName), System.Reflection.Emit.AssemblyBuilderAccess.RunAndSave, directory);
+			builder.DefineDynamicModule(assemblyName, assemblyName + ".dll").DefineType(fullTypeName, System.Reflection.TypeAttributes.Public).CreateType();
+			builder.Save(assemblyName + ".dll");
+			return Assembly.LoadFrom(System.IO.Path.Combine(directory, assemblyName + ".dll"));
+		}
+
 		static ProbeRuntime Runtime(IHookEventConsumer? consumer = null) {
 			var identity = Identity();
 			return ProbeInitializer.Initialize(new ProbeInitialization(identity, new IdentityProvider(identity), consumer, eventCapacity: 16, byteCapacity: 65536));
@@ -562,6 +661,9 @@ namespace HookLab.Probe.Tests {
 			System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(), "x64", Environment.Version.ToString(), AppDomain.CurrentDomain.Id.ToString());
 		static HookDocument Document(string behavior = "{}") => Document(HookKind.Prefix, behavior);
 		static HookDocument Document(HookKind kind, string behavior = "{}") => new HookDocument(1, "add", kind, GuardFor(TargetMethod), behavior, Limits, true);
+		/// <summary>Guards have to match the method being installed, so each shadowing test builds its own
+		/// from its own fixture.</summary>
+		static HookDocument ShadowableDocument(MethodInfo method) => new HookDocument(1, "shadow-" + method.DeclaringType!.Name, HookKind.Prefix, GuardFor(method), "{}", Limits, true);
 		static string PrefixReturning(int value) => "public static class UserHook { public static bool Prefix(ref int __result) { __result = " + value + "; return false; } }";
 		static string PostfixReturning(int value) => "public static class UserHook { public static void Postfix(ref int __result) { __result = " + value + "; } }";
 		static string TranspilerReturning(int value) => "public static class UserHook { public static System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> Transpiler(System.Collections.Generic.IEnumerable<HarmonyLib.CodeInstruction> instructions) { return new[] { new HarmonyLib.CodeInstruction(System.Reflection.Emit.OpCodes.Ldc_I4, " + value + "), new HarmonyLib.CodeInstruction(System.Reflection.Emit.OpCodes.Ret) }; } }";
@@ -629,5 +731,27 @@ namespace HookLab.Probe.Tests {
 			[MethodImpl(MethodImplOptions.NoInlining)] public int Calculate(int value) => value + offset;
 		}
 		sealed class FixtureException : Exception { }
+	}
+
+	/// <summary>Top-level on purpose. The shadowing check asks an assembly for a type by full name, and a
+	/// nested type's full name carries a '+' that GetType reads as the nesting separator - so a nested
+	/// fixture cannot be impersonated by a separately emitted assembly, while the real targets this
+	/// exists for (a recompiled ASP.file_aspx) are top-level and can.
+	///
+	/// <para>One per test, and that is the product's property rather than test tidiness: an assembly
+	/// cannot be unloaded from a .NET Framework AppDomain, so the first test to shadow a type shadows it
+	/// for every test after it in the same process. Sharing one fixture made three later tests fail with
+	/// a report they had not caused.</para></summary>
+	public static class ShadowableFixture {
+		[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
+	}
+	public static class PreexistingShadowFixture {
+		[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
+	}
+	public static class UnrelatedLoadFixture {
+		[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
+	}
+	public static class RemovedShadowFixture {
+		[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
 	}
 }
