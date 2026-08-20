@@ -248,11 +248,25 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 		/// imported; <c>PayloadActionRequestTests</c> reads that source file and fails when they diverge.</summary>
 		public static readonly string[] KnownParameterKeys={
 			"host_id","image_path","process_id","process_creation_utc_ticks","architecture","runtime_id",
-			"appdomain_id","event_capacity","byte_capacity","endpoint","endpoint_secret_base64","controller_sid","completion_path",
+			"appdomain_id","appdomain_name","event_capacity","byte_capacity","endpoint","endpoint_secret_base64","controller_sid","completion_path",
 			"hook_id","hook_kind","hook_assembly","hook_type","hook_method","hook_module_mvid",
 			"hook_metadata_token","hook_declaring_type","hook_method_signature","hook_il_sha256",
 			"hook_source_base64","hook_revision","maximum_events_per_second","maximum_string_length",
 		};
+		/// <summary>Refuses a parameter block carrying a key the payload cannot parse, naming the key.
+		///
+		/// <para>Native initialization composes its own block rather than going through
+		/// <see cref="Parse"/>, so it had no check at all: a key the extension wrote and the bootstrap did
+		/// not know reached the target, loaded the resident, and then threw inside it - surfacing as a
+		/// twenty-second timeout with the cause visible only in the target's first-chance exceptions. That
+		/// is how <c>appdomain_name</c> shipped. This turns the same mistake into a refusal before
+		/// anything is staged or injected.</para></summary>
+		public static void EnsureKnownParameterKeys(IEnumerable<string> keys) {
+			foreach(var key in keys)
+				if(Array.IndexOf(KnownParameterKeys,key)<0)
+					throw new RpcException("hooklab_parameter_key_unsupported","The payload does not parse the initialization key '"+key+"'. Add it to HookLab.Bootstrap.BootstrapParameters.KnownKeys and to the mirrored list beside this check, or stop writing it.");
+		}
+
 		internal const int MaxParameterValueLength=2048;
 		const int MaxParameterBytes=8192;
 		const int MaxParameterLines=64;
@@ -347,6 +361,13 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 				throw new RpcException("invalid_arguments","payload_parameters endpoint_secret_base64 requires endpoint=pipe.");
 			if(Value(parsed,"controller_sid") is not null && endpoint!="pipe")
 				throw new RpcException("invalid_arguments","payload_parameters controller_sid requires endpoint=pipe.");
+			// appdomain_name is a native-bootstrap key: it tells injected native code which domain to enter
+			// before the CLR is asked to run anything. This route is a func-eval on a carrier that is
+			// already executing in a domain, so nothing here could honour it. Accepting and ignoring it
+			// would silently place the resident somewhere the caller did not ask for, which is the failure
+			// this whole contract exists to remove.
+			if(Value(parsed,"appdomain_name") is not null)
+				throw new RpcException("invalid_arguments","payload_parameters appdomain_name applies to native initialization only; on this route the carrier's own application domain decides where the resident lands.");
 			if(Value(parsed,"completion_path") is null) throw new RpcException("invalid_arguments","payload_parameters must set completion_path: commit publishes its result to that file.");
 			return parsed;
 		}

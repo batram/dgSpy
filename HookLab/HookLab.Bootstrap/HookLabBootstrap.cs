@@ -50,9 +50,11 @@ namespace HookLab.Bootstrap {
 					if (parsed.Endpoint != "none" && parsed.Endpoint != "pipe") throw new ArgumentException("Prepare requires endpoint=none or endpoint=pipe.", nameof(parameters));
 					installed = resolver ?? EmbeddedAssemblyResolver.FromEmbeddedManifest();
 					installed.Install(); resolver = installed;
+					// Before any payload code runs, not after: a binding is worth checking only while
+					// nothing has acted on it.
+					installed.VerifyPayloadBindings();
 					var outcome = ProbeStartup.Prepare(parsed);
 					ResidentLauncher.Prepare(parsed);
-					installed.VerifyNoDiskProvenance(AppDomain.CurrentDomain.GetAssemblies());
 					return Describe(outcome, installed) + "generation_identity=" + ResidentLauncher.GenerationIdentity + "\npayloads_resident=true\n";
 				}
 				catch (Exception ex) { return Error(ex.GetType().FullName ?? "Exception", ex.Message, installed != null && installed.LoadCount != 0); }
@@ -117,10 +119,12 @@ namespace HookLab.Bootstrap {
 					installed = resolver ?? EmbeddedAssemblyResolver.FromEmbeddedManifest();
 					installed.Install();
 					resolver = installed;
+					// Verify what every payload identity binds to while nothing has used one yet. This also
+					// has to sit after Install, for the same reason the ProbeStartup call below does.
+					installed.VerifyPayloadBindings();
 					// Everything past this line lives in ProbeStartup, whose jitting is what first resolves a
 					// probe type - which is why it must happen after Install and never be inlined into here.
 					var outcome = ProbeStartup.Run(parsed);
-					installed.VerifyNoDiskProvenance(AppDomain.CurrentDomain.GetAssemblies());
 					startedResult = Describe(outcome, installed);
 					return startedResult;
 				}

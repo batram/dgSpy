@@ -18,7 +18,13 @@ namespace HookLab.Bootstrap {
 
 		static readonly string[] KnownKeys = {
 			"host_id", "image_path", "process_id", "process_creation_utc_ticks", "architecture", "runtime_id",
-			"appdomain_id", "event_capacity", "byte_capacity", "endpoint", "endpoint_secret_base64", "controller_sid", "completion_path",
+			// appdomain_name is read by the native bootstrap, not by anything here: it selects which
+			// application domain to enter before this assembly is loaded at all. It is listed because the
+			// native selector and this parser read the same initialize.params file, so a key that is
+			// meaningful to one is still parsed by the other. Omitting it made every domain-targeted
+			// initialization die with "Unknown initialization key: appdomain_name" after the resident had
+			// already loaded - proven live on w3wp 5208, 2026-08-20.
+			"appdomain_id", "appdomain_name", "event_capacity", "byte_capacity", "endpoint", "endpoint_secret_base64", "controller_sid", "completion_path",
 			"hook_id", "hook_kind", "hook_assembly", "hook_type", "hook_method", "hook_module_mvid",
 			"hook_metadata_token", "hook_declaring_type", "hook_method_signature", "hook_il_sha256",
 			"hook_source_base64", "hook_revision", "maximum_events_per_second", "maximum_string_length",

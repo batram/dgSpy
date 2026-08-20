@@ -18,7 +18,10 @@ namespace HookLab.Bootstrap.Tests {
 				Assert.False(string.IsNullOrWhiteSpace(report["probe_instance_id"]));
 				Assert.Equal("1", report["protocol_version"]);
 				Assert.Equal("HookLab.Contracts,HookLab.Probe.CorDebug,Microsoft.CodeAnalysis,Microsoft.CodeAnalysis.CSharp,System.Collections.Immutable", report["payload_identities"]);
-				Assert.Equal("2", report["payload_load_count"]);
+				// Five, not the two the probe alone needs: verifying what each payload identity binds to means
+				// byte-loading each one before payload code runs. That is the price of checking a binding
+				// while nothing has acted on it, and it is paid once per initialization.
+				Assert.Equal("5", report["payload_load_count"]);
 				Assert.False(string.IsNullOrWhiteSpace(report["pipe_name"]));
 				Assert.DoesNotContain("secret_base64", report.Keys);
 				Assert.DoesNotContain("endpoint_nonce_base64", report.Keys);
@@ -57,7 +60,7 @@ namespace HookLab.Bootstrap.Tests {
 			using (var runner = BootstrapRunner.Create("bootstrap-byte-loaded")) {
 				var report = Report.Parse(runner.StartByteLoaded(Parameters(runner).WithHook("byte-loaded-hook").ToString()));
 				Assert.True(report["status"] == "ok", "Bootstrap refused: " + report.Get("error_type") + " " + report.Get("error_message"));
-				Assert.Equal("2", report["payload_load_count"]);
+				Assert.Equal("5", report["payload_load_count"]);
 				Assert.Contains("byte-loaded-hook", report["patch_id"], StringComparison.Ordinal);
 				Assert.Contains("HookLab.Probe.CorDebug|byte-loaded", runner.ResidentPayloads());
 			}
@@ -78,6 +81,21 @@ namespace HookLab.Bootstrap.Tests {
 				Assert.Equal("false", report["cleanup_retry_possible"]);
 				Assert.DoesNotContain("0Harmony|byte-loaded", runner.ResidentPayloads());
 				Assert.Null(HookLabBootstrapRuntimeOf(runner));
+			}
+		}
+
+		/// <summary>appdomain_name is consumed by the native bootstrap before this assembly exists, and this
+		/// parser must simply tolerate it - both read the same initialize.params file.
+		///
+		/// It was missing from KnownKeys, so every domain-targeted initialization loaded the resident and
+		/// then threw "Unknown initialization key: appdomain_name" inside the target. The MCP client saw a
+		/// twenty-second timeout; the cause was visible only as a first-chance exception in the target.
+		/// Proven live on w3wp 5208 (IIS, CRMAppPool) on 2026-08-20.</summary>
+		[Fact]
+		public void A_native_only_key_is_parsed_rather_than_refused() {
+			using (var runner = BootstrapRunner.Create("bootstrap-native-only-key")) {
+				var report = Report.Parse(runner.Start(Parameters(runner).With("appdomain_name", "/LM/W3SVC/1/ROOT-1-134316874119104946").ToString()));
+				Assert.True(report["status"] == "ok", "Bootstrap refused a key it only has to tolerate: " + report.Get("error_type") + " " + report.Get("error_message"));
 			}
 		}
 

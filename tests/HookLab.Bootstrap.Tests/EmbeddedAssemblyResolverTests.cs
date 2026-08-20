@@ -94,20 +94,105 @@ namespace HookLab.Bootstrap.Tests {
 			Assert.Contains("identity mismatch", error.Message, StringComparison.Ordinal);
 		}
 
+		/// <summary>The contract, stated as the binder sees it: ask for each payload's exact identity the way
+		/// payload code's own references do, and get back the digest-verified instance this resolver loaded.
+		/// An empty Location is reported as supporting evidence, but instance equality is the decision.</summary>
 		[Fact]
-		public void A_payload_that_came_from_disk_is_refused() {
-			// This assembly is on disk, so naming it in the manifest reproduces exactly the case the check
-			// exists for: the CLR probed the application directory before AssemblyResolve was ever raised.
-			var onDisk = typeof(EmbeddedAssemblyResolverTests).Assembly;
-			var resolver = Resolver(onDisk.GetName().Name!, RealDigest);
-			var error = Assert.Throws<BootstrapIntegrityException>(() => resolver.VerifyNoDiskProvenance(new[] { onDisk }));
-			Assert.Contains("resolved from disk", error.Message, StringComparison.Ordinal);
+		public void Every_payload_identity_binds_to_the_verified_embedded_instance() =>
+			Assert.Equal("ok", InChildDomain("bindings-clean", probe => probe.VerifyBindings(null)));
+
+		/// <summary>The case that broke the predicate this replaced, reproduced: a disk-backed assembly with a
+		/// payload's simple name and a different strong identity is loaded in the domain. That is ordinary in
+		/// an application domain - an IIS worker running Dynamics 365 carries its own
+		/// System.Collections.Immutable 1.2.1.0 - and it says nothing about what our references bound to,
+		/// because it cannot satisfy the exact identity they name.</summary>
+		[Fact]
+		public void A_foreign_assembly_sharing_a_payload_simple_name_is_not_a_refusal() {
+			var directory = Path.Combine(Path.GetTempPath(), "hooklab-foreign-" + Guid.NewGuid().ToString("N"));
+			Directory.CreateDirectory(directory);
+			// Left on disk deliberately: the child domain that loaded it is gone, but this process cannot
+			// always release the file, and a failed delete must not fail the test it is cleaning up after.
+			try { Assert.Equal("ok", InChildDomain("bindings-foreign", probe => probe.VerifyBindings(directory))); }
+			finally { try { Directory.Delete(directory, true); } catch (Exception) { } }
 		}
 
+		/// <summary>The genuine hijack, which must still refuse: a disk-backed assembly that can satisfy the
+		/// payload's exact identity wins ordinary probing before AssemblyResolve is ever raised, so the binder
+		/// answers with something other than the verified bytes. The test assembly plays the hijacker against a
+		/// manifest entry naming it, which is that shape exactly.</summary>
 		[Fact]
-		public void Disk_provenance_ignores_assemblies_the_bundle_never_claimed() {
-			var resolver = Resolver("HookLab.Contracts", RealDigest);
-			resolver.VerifyNoDiskProvenance(AppDomain.CurrentDomain.GetAssemblies());
+		public void An_exact_payload_identity_satisfied_from_disk_is_refused() {
+			var refusal = InChildDomain("bindings-hijack", probe => probe.VerifySelfAsPayload());
+			Assert.Contains("instead of the verified embedded payload", refusal, StringComparison.Ordinal);
+			// The file, not the full path: the child domain loads this assembly from the application base
+			// while the test host itself may be running a shadow copy from elsewhere.
+			Assert.Contains("HookLab.Bootstrap.Tests.dll", refusal, StringComparison.Ordinal);
+		}
+
+		/// <summary>Each binder case gets its own AppDomain, because the product's rule is one resolver per
+		/// domain: a second resolver byte-loading identities a first one already loaded is a situation the
+		/// product never creates, and only the test could.</summary>
+		static string InChildDomain(string name, Func<ResolverProbe, string> body) {
+			var setup = new AppDomainSetup { ApplicationBase = AppDomain.CurrentDomain.SetupInformation.ApplicationBase };
+			var domain = AppDomain.CreateDomain("hooklab-" + name, null, setup);
+			try {
+				var probe = (ResolverProbe)domain.CreateInstanceAndUnwrap(typeof(ResolverProbe).Assembly.FullName, typeof(ResolverProbe).FullName!);
+				return body(probe);
+			}
+			finally { AppDomain.Unload(domain); }
+		}
+	}
+
+	/// <summary>Runs one binder verification inside a fresh AppDomain and reports the outcome as a string,
+	/// because an exception would have to cross the domain boundary to be asserted on.</summary>
+	public sealed class ResolverProbe : MarshalByRefObject {
+		public override object? InitializeLifetimeService() => null;
+
+		/// <summary>Verifies every manifest binding, optionally after planting a disk-backed assembly that
+		/// shares a payload's simple name at a different version.</summary>
+		public string VerifyBindings(string? foreignDirectory) {
+			try {
+				if (foreignDirectory != null) {
+					var foreign = EmitDiskAssembly(foreignDirectory, "HookLab.Contracts", new Version(9, 9, 9, 9));
+					if (foreign.Location.Length == 0) return "the planted assembly was not disk-backed";
+					if (foreign.GetName().Name != "HookLab.Contracts") return "the planted assembly has the wrong name";
+				}
+				var resolver = EmbeddedAssemblyResolver.FromEmbeddedManifest();
+				resolver.Install();
+				var bindings = resolver.VerifyPayloadBindings();
+				if (bindings.Count != resolver.ManifestIdentities.Count) return "verified " + bindings.Count + " of " + resolver.ManifestIdentities.Count + " identities";
+				foreach (var binding in bindings) {
+					if (!binding.MatchedVerifiedInstance) return binding.Expected + " bound to " + binding.Actual;
+					if (binding.Location.Length != 0) return binding.Expected + " reports location " + binding.Location;
+				}
+				return "ok";
+			}
+			catch (Exception ex) { return ex.GetType().Name + ": " + ex.Message; }
+		}
+
+		/// <summary>Names this already-loaded, disk-backed test assembly as a payload, so the binder can
+		/// satisfy the expected identity from disk and must be caught doing it.</summary>
+		public string VerifySelfAsPayload() {
+			try {
+				var onDisk = typeof(ResolverProbe).Assembly;
+				var bytes = File.ReadAllBytes(onDisk.Location);
+				var resolver = new EmbeddedAssemblyResolver(
+					new[] { new EmbeddedAssemblyEntry(onDisk.GetName().Name!, "self", EmbeddedAssemblyResolver.Sha256Hex(bytes)) },
+					_ => bytes);
+				resolver.Install();
+				resolver.VerifyPayloadBindings();
+				return "the hijacked binding was accepted";
+			}
+			catch (BootstrapIntegrityException ex) { return ex.Message; }
+			catch (Exception ex) { return ex.GetType().Name + ": " + ex.Message; }
+		}
+
+		static Assembly EmitDiskAssembly(string directory, string name, Version version) {
+			var assemblyName = new AssemblyName(name) { Version = version };
+			var builder = AppDomain.CurrentDomain.DefineDynamicAssembly(assemblyName, System.Reflection.Emit.AssemblyBuilderAccess.RunAndSave, directory);
+			builder.DefineDynamicModule(name, name + ".dll").CreateGlobalFunctions();
+			builder.Save(name + ".dll");
+			return Assembly.LoadFrom(Path.Combine(directory, name + ".dll"));
 		}
 
 		[Fact]

@@ -78,6 +78,28 @@ public sealed class ExchangeAreaTests {
 		finally { area.Dispose(); }
 	}
 
+	/// <summary>The target's grant has to cover the protocol the target is asked to perform, and that
+	/// includes the rename in write-then-rename: the resident writes completion.txt.tmp and moves it over
+	/// completion.txt so no reader ever sees a partial report. A rename deletes the source name, and Write
+	/// does not grant Delete.
+	///
+	/// Proven live on 2026-08-20: an IIS worker initialized in its application domain, wrote
+	/// status=ok into completion.txt.tmp, failed the rename with Access denied, and the caller saw a bare
+	/// twenty-second timeout. This asserts the intended grant only - whether the token can use it stays
+	/// not provable, as everything else here does.</summary>
+	[Fact]
+	public void The_target_may_perform_the_write_then_rename_its_completion_report_needs() {
+		var plan=ExchangeAreaPlan.For(Me,Other,"dgspy-test");
+		using var area=plan.Materialize();
+		var granted=new DirectoryInfo(area.Path).GetAccessControl()
+			.GetAccessRules(true,false,typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>()
+			.Where(rule=>rule.AccessControlType==AccessControlType.Allow&&rule.IdentityReference.Equals(Other))
+			.Aggregate(default(FileSystemRights),(rights,rule)=>rights|rule.FileSystemRights);
+		Assert.True(granted.HasFlag(FileSystemRights.Write),"the target writes its completion report");
+		Assert.True(granted.HasFlag(FileSystemRights.ReadAndExecute),"the target reads and maps the payload");
+		Assert.True(granted.HasFlag(FileSystemRights.Delete),"a rename is a delete of the source name, so write-then-rename needs it");
+	}
+
 	/// <summary>The claim this type refuses to make. Everything above proves intent was recorded; none
 	/// of it proves the target can act, and saying otherwise is how a road full of named refusals grows
 	/// a silent pass.</summary>

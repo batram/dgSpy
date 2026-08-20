@@ -168,7 +168,10 @@ public sealed class PayloadActionRequestTests {
 	public void Host_parameter_key_copy_matches_bootstrap_authority() {
 		var source = File.ReadAllText(RepoFile("HookLab", "HookLab.Bootstrap", "BootstrapParameters.cs"));
 		var knownBlock = source.Substring(source.IndexOf("KnownKeys", StringComparison.Ordinal), source.IndexOf("HookKeys", StringComparison.Ordinal) - source.IndexOf("KnownKeys", StringComparison.Ordinal));
-		var bootstrapKeys=knownBlock.Split('"').Where((_,index)=>index%2==1).ToArray();
+		// Line comments first: the authority list carries prose explaining individual keys, and a quoted
+		// phrase in a comment would otherwise be read as a key and fail this test for no reason.
+		var declarations=String.Join("\n",knownBlock.Split('\n').Select(line=>{ var comment=line.IndexOf("//",StringComparison.Ordinal); return comment<0?line:line.Substring(0,comment); }));
+		var bootstrapKeys=declarations.Split('"').Where((_,index)=>index%2==1).ToArray();
 		var hostKeys=PayloadActionRequest.KnownParameterKeys;
 		var missingFromHost=bootstrapKeys.Except(hostKeys,StringComparer.Ordinal).ToArray();
 		var extraInHost=hostKeys.Except(bootstrapKeys,StringComparer.Ordinal).ToArray();
@@ -179,6 +182,26 @@ public sealed class PayloadActionRequestTests {
 			"Extra in host: ["+String.Join(", ",extraInHost)+"]. "+
 			(missingFromHost.Length==0 && extraInHost.Length==0 ? "The sets match but their order differs." : String.Empty));
 		Assert.Contains("MaximumValueLength = "+PayloadActionRequest.MaxParameterValueLength+";",source);
+	}
+
+	/// <summary>Native initialization composes its parameter block directly instead of going through
+	/// PayloadActionRequest.Parse, so nothing checked its keys against what the payload can read. A key the
+	/// extension wrote and the bootstrap did not know reached the target, loaded the resident and threw
+	/// there - seen by the caller only as a twenty-second timeout. This is the cheap refusal.</summary>
+	[Fact]
+	public void An_unparsable_initialization_key_is_refused_by_name() {
+		var error = Assert.Throws<RpcException>(() => PayloadActionRequest.EnsureKnownParameterKeys(new[] { "host_id", "appdomain_name", "appdomain_frendly_name" }));
+		Assert.Equal("hooklab_parameter_key_unsupported", error.Code);
+		Assert.Contains("appdomain_frendly_name", error.Message, StringComparison.Ordinal);
+		PayloadActionRequest.EnsureKnownParameterKeys(PayloadActionRequest.KnownParameterKeys);
+	}
+
+	/// <summary>The native selector's key is meaningful only where injected native code chooses a domain
+	/// before the CLR runs anything. On the func-eval route the carrier's own domain decides, so accepting
+	/// the key would place the resident somewhere other than where the caller asked.</summary>
+	[Fact]
+	public void The_payload_route_refuses_a_native_only_domain_selector() {
+		AssertInvalid(PrepareArgs("none", @"C:\done", ("appdomain_name", "/LM/W3SVC/1/ROOT-1")), "native initialization only");
 	}
 
 	static JsonObject PrepareArgs(string endpoint, string? completion, params (string Key, string Value)[] extra) {

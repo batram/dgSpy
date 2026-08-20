@@ -141,7 +141,15 @@ namespace HookLab.Injector {
 				InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow));
 			// The target reads the payload, which needs execute as well as read because a DLL is mapped,
 			// and writes its completion report back into the same directory.
-			security.AddAccessRule(new FileSystemAccessRule(plan.Target,FileSystemRights.ReadAndExecute|FileSystemRights.Write,
+			//
+			// Delete is part of writing that report, not an extra authority: the resident writes
+			// completion.txt.tmp and renames it over completion.txt, so that a reader never sees a partial
+			// report. A rename is a delete of the source name, and Write alone does not grant it. Without
+			// it the resident initializes perfectly and then cannot publish - proven live on 2026-08-20,
+			// where an IIS worker left completion.txt.tmp holding status=ok beside an Access-denied and the
+			// caller saw only a twenty-second timeout. The grant stays inside one per-operation directory
+			// whose DACL is protected and names only the identity pair.
+			security.AddAccessRule(new FileSystemAccessRule(plan.Target,FileSystemRights.ReadAndExecute|FileSystemRights.Write|FileSystemRights.Delete,
 				InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow));
 			new DirectoryInfo(plan.Root).SetAccessControl(security);
 

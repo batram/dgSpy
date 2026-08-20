@@ -188,6 +188,9 @@ namespace dgSpy.Extension {
 					// here, it is granted. Null when the accounts match, which the probe would ignore
 					// anyway, so the same-user DACL is exactly what it always was.
 					if(identities.ControllerSidForEndpoint is string controllerSid) identity["controller_sid"]=controllerSid;
+					// The block is complete here, and this is the last point before it is staged where a key
+					// the payload cannot parse is still cheap to refuse.
+					dgSpy.Extension.Debugger.AtomicActions.PayloadActionRequest.EnsureKnownParameterKeys(identity.Select(pair=>pair.Key));
 					try {
 						if(target.Backend==HookLabTargetEligibility.Backend.CoreClr) {
 							completionReport=await ExecuteInitializationOperationAsync(host,source,PayloadOperation.initialize,identity,token,true).ConfigureAwait(false);
@@ -564,10 +567,12 @@ namespace dgSpy.Extension {
 					// Absent means the default domain, which is what ExecuteInDefaultAppDomain already
 					// does, so a single-domain target produces byte-identical parameters to before.
 					//
-					// appdomain_id above is deliberately still "1". It is part of the recorded target
-					// identity that discovery and adoption compare, and changing it is Road 1 subslice 3
-					// of subslice 6 - keying residency by (process, application domain). Today's model is
-					// one resident per process, and that still holds; this only chooses where it lives.
+					// appdomain_id above carries the domain actually chosen, and keeps its historical "1"
+					// only when none was - see ResolveApplicationDomain. It has to be the real one: the
+					// resident measures its own domain with AppDomain.CurrentDomain.Id and MethodGuards
+					// compares the two, so a hardcoded "1" would refuse every hook installed from a
+					// secondary domain. The model is still one resident per process; this only chooses
+					// where it lives.
 					if(!String.IsNullOrEmpty(applicationDomainName)) identity["appdomain_name"]=applicationDomainName;
 					return identity;
 				}
