@@ -59,14 +59,16 @@ orchestration. See [Resident payload matrix](../product/HOOKLAB.md#resident-payl
 [Resident compatibility probe](../product/HOOKLAB.md#resident-compatibility-probe), and
 [HookLab runtime backends](../product/ARCHITECTURE.md#hooklab-runtime-backends).
 
-Travel the rest of this road in independently implemented, live-tested, retired, and committed
-subslices:
+CodeDom and Roslyn are now isolated behind a runtime-neutral compiler boundary, with a metadata test
+refusing either technology in a shared signature, field, or generic instantiation - see
+[Compilation boundary](../product/HOOKLAB.md#compilation-boundary).
 
-1. Isolate CodeDom and Roslyn behind a runtime-neutral compiler ABI.
-2. Standardize backend lifecycle states and bounded stage-aware resident errors.
+One subslice remains:
+
+1. Standardize backend lifecycle states and bounded stage-aware resident errors.
 
 This road exits only when the current CLR v4 and CoreCLR packaged live hook lifecycles remain green and
-the compiler boundary, lifecycle, and diagnostics are documented in their owning product documents. The implementation-grade task and acceptance evidence live in
+the lifecycle states and diagnostics are documented in their owning product documents. The implementation-grade task and acceptance evidence live in
 `docs/local/work/runtime-backend-architecture-mono-x86.md`.
 
 ## Road 2 - add a Mono HookLab resident

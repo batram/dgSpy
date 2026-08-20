@@ -55,6 +55,22 @@ Note what the matrix does not claim. It records that a payload is *valid* on a r
 every payload is *used* on it, and it is not a substitute for the packaged live hook lifecycle gates -
 it fails a wrong payload set earlier and by name, not instead.
 
+## Compilation boundary
+
+Compilation happens in the target, with the compiler the runtime has: CodeDom on CLR v4, Roslyn on
+CoreCLR. Only one of the two can ever work in a given target - CodeDom is a .NET Framework facility a
+CoreCLR process cannot find, and Roslyn travels in the payload precisely because CoreCLR has no CodeDom.
+
+They are separated by construction rather than by discipline. One runtime-neutral boundary carries an
+assembly name, source, reference paths and an optional patch-engine reference path - all strings - and
+returns a loaded assembly or bounded string diagnostics. Each compiler lives alone in its own type, and
+a metadata test refuses any runtime-specific compiler type appearing in a base type, interface, field,
+property, method or constructor signature on the shared side, including inside array element types and
+generic arguments. Selection reads the corlib name and builds one backend without preparing the other.
+
+Host-side compilation is deliberately not offered. It would need its own decision about exact target
+reference identities, compiler recipes, hashes, and trust.
+
 ## Supported runtimes
 
 CLR v4 has one version. CoreCLR does not, so the versions HookLab is supported on are stated rather

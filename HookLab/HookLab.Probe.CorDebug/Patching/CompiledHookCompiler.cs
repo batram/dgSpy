@@ -1,12 +1,8 @@
 using System;
-using System.CodeDom.Compiler;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Runtime.CompilerServices;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 
 namespace HookLab.Probe.CorDebug.Patching {
 	public sealed class HookCompilationException : InvalidOperationException {
@@ -24,10 +20,16 @@ namespace HookLab.Probe.CorDebug.Patching {
 		internal MethodInfo[] Methods => new[] { Prefix, Postfix, Finalizer, Transpiler }.Where(method => method != null).Cast<MethodInfo>().ToArray();
 	}
 
+	/// <summary>Compiles one hook source and finds the phase methods in the result.
+	///
+	/// <para>Everything here is runtime-neutral by construction. It gathers references, materialises the
+	/// patch-engine reference when the source needs one, asks
+	/// <see cref="HookSourceCompilerSelector"/> for this runtime's backend, and validates what came back
+	/// - and it names neither CodeDom nor Roslyn in any signature, field, or generic instantiation. That
+	/// is the property this type is required to keep: a CLR v4 resident must never be made to resolve
+	/// Roslyn, and a CoreCLR resident must never be made to find CodeDom, and both are reached through
+	/// this type.</para></summary>
 	internal static class CompiledHookCompiler {
-		const int MaximumDiagnostics = 20;
-		const int MaximumDiagnosticLength = 1000;
-
 		internal static CompiledHook Compile(string source, MethodBase target, HookLab.Contracts.HookKind kind) {
 			if (string.IsNullOrWhiteSpace(source)) throw new ArgumentException("Hook source is required.", nameof(source));
 			if (target == null) throw new ArgumentNullException(nameof(target));
@@ -47,49 +49,16 @@ namespace HookLab.Probe.CorDebug.Patching {
 		}
 
 		static Assembly CompileAssembly(string source,MethodBase target,HookLab.Contracts.HookKind kind) {
-			if(string.Equals(typeof(object).Assembly.GetName().Name,"mscorlib",StringComparison.Ordinal)) return CompileDesktop(source,target,kind);
-			return CompileCoreClr(source,target,kind);
-		}
-
-		[MethodImpl(MethodImplOptions.NoInlining)]
-		static Assembly CompileDesktop(string source,MethodBase target,HookLab.Contracts.HookKind kind) {
-			using (var provider = new Microsoft.CSharp.CSharpCodeProvider()) {
-				var parameters = new CompilerParameters { GenerateExecutable = false, GenerateInMemory = true, TreatWarningsAsErrors = false };
-				foreach (var reference in References(target)) parameters.ReferencedAssemblies.Add(reference);
-				// Transpiler source names HarmonyLib.CodeInstruction. Always compile it against the
-				// probe's pinned embedded backend: a target AppDomain can expose a stale, deleted, or
-				// otherwise unusable file-backed 0Harmony view after the first compiled revision.
-				// Prefix/Postfix/Finalizer source does not name Harmony types and needs no such reference.
-				var temporaryHarmonyReference = kind == HookLab.Contracts.HookKind.Transpiler ? MaterializeHarmonyReference() : null;
-				if (temporaryHarmonyReference != null) parameters.ReferencedAssemblies.Add(temporaryHarmonyReference);
-				CompilerResults result;
-				try { result = provider.CompileAssemblyFromSource(parameters, source); }
-				finally { if (temporaryHarmonyReference != null) try { File.Delete(temporaryHarmonyReference); } catch { } }
-				var errors = result.Errors.Cast<CompilerError>().Where(error => !error.IsWarning).Select(Format).Take(MaximumDiagnostics).ToArray();
-				if (errors.Length != 0) throw new HookCompilationException(errors);
-				return result.CompiledAssembly;
-			}
-		}
-
-		[MethodImpl(MethodImplOptions.NoInlining)]
-		static Assembly CompileCoreClr(string source,MethodBase target,HookLab.Contracts.HookKind kind) {
-			var temporaryHarmonyReference=kind==HookLab.Contracts.HookKind.Transpiler?MaterializeHarmonyReference():null;
+			// Transpiler source names HarmonyLib.CodeInstruction. Always compile it against the probe's
+			// pinned embedded backend: a target AppDomain can expose a stale, deleted, or otherwise
+			// unusable file-backed 0Harmony view after the first compiled revision. Prefix/Postfix/
+			// Finalizer source does not name Harmony types and needs no such reference.
+			var patchEngineReference = kind == HookLab.Contracts.HookKind.Transpiler ? MaterializeHarmonyReference() : null;
 			try {
-				var paths=References(target).Concat(temporaryHarmonyReference==null?Array.Empty<string>():new[]{temporaryHarmonyReference});
-				var references=paths.Select(path=>MetadataReference.CreateFromFile(path));
-				var compilation=CSharpCompilation.Create("HookLab.Dynamic."+Guid.NewGuid().ToString("N"),new[]{CSharpSyntaxTree.ParseText(source)},references,options:null);
-				compilation=compilation.WithOptions(compilation.Options.WithOutputKind(OutputKind.DynamicallyLinkedLibrary));
-				using(var stream=new MemoryStream()) {
-					var emitted=compilation.Emit(stream);
-					if(!emitted.Success) {
-						var values=(System.Collections.IEnumerable)emitted.GetType().GetProperty("Diagnostics").GetValue(emitted,null);
-						var diagnostics=values.Cast<object>().Select(value=>value.ToString()).Take(MaximumDiagnostics).ToArray();
-						throw new HookCompilationException(diagnostics);
-					}
-					return Assembly.Load(stream.ToArray());
-				}
+				var request=new HookCompileRequest("HookLab.Dynamic."+Guid.NewGuid().ToString("N"),source,References(target),patchEngineReference);
+				return HookSourceCompilerSelector.ForCurrentRuntime().Compile(request);
 			}
-			finally { if(temporaryHarmonyReference!=null) try { File.Delete(temporaryHarmonyReference); } catch { } }
+			finally { if(patchEngineReference!=null) try { File.Delete(patchEngineReference); } catch { } }
 		}
 
 		static string MaterializeHarmonyReference() {
@@ -99,7 +68,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 			return path;
 		}
 
-		static IEnumerable<string> References(MethodBase target) {
+		static string[] References(MethodBase target) {
 			var references = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 			foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies().Concat(new[] { target.Module.Assembly })) {
 				try {
@@ -107,12 +76,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 				}
 				catch (NotSupportedException) { }
 			}
-			return references.OrderBy(value => value, StringComparer.OrdinalIgnoreCase);
-		}
-
-		static string Format(CompilerError error) {
-			var text = error.ErrorNumber + " (" + error.Line + "," + error.Column + "): " + error.ErrorText.Replace("\r", " ").Replace("\n", " ");
-			return text.Length <= MaximumDiagnosticLength ? text : text.Substring(0, MaximumDiagnosticLength);
+			return references.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray();
 		}
 	}
 }
