@@ -317,6 +317,18 @@ namespace dgSpy.Extension {
 					try {
 						if(target.Backend==HookLabTargetEligibility.Backend.CoreClr) {
 							completionReport=await ExecuteInitializationOperationAsync(host,source,PayloadOperation.initialize,identity,token,true).ConfigureAwait(false);
+							// The report is written by a worker thread INSIDE the target, so the target has
+							// to be running to produce it. Waiting for it while the process is stopped is a
+							// deadlock that the deadline breaks rather than a slow operation.
+							//
+							// Measured on the cross-identity CoreCLR fixture, which failed roughly two runs
+							// in five: the target's own loop stopped for 22.73 s while passing runs paused
+							// 1.8 s, and the resident reported worker_queue_ms just over 20 s with
+							// status=ok - it was scheduled the moment the host gave up and resumed. The
+							// CLR v4 branch below has always resumed before its wait; this one did not.
+							//
+							// Idempotent: ResumeAsync returns immediately when the process is running.
+							await ResumeAsync(host,source,token).ConfigureAwait(false);
 							completionReport=await ReadCompletionAsync(completion,token).ConfigureAwait(false);
 						}
 						else { await ResumeAsync(host,source,token).ConfigureAwait(false); completionReport=await InitializeAutonomouslyAsync(processId,identity,exchange.Path,token).ConfigureAwait(false); }
@@ -907,6 +919,25 @@ namespace dgSpy.Extension {
 			static void EnsureCompleted(AtomicActionResult result,string operation) { if(result.Status.ActionOutcome!=HookLab.Contracts.ActionOutcome.completed) throw new RpcException("hook_operation_failed",HookLabInstallPresentation.Failure(operation,result.Status.ActionOutcome,result.Status.InterruptionReason,result.Error)); }
 			static Dictionary<string,string> Report(AtomicActionResult result) { var node=JsonNode.Parse(result.VerificationEvidence ?? "{}") as JsonObject; return ParseReport((string?)node?["report"] ?? ""); }
 			static Dictionary<string,string> ParseReport(string text) { var values=new Dictionary<string,string>(StringComparer.Ordinal); foreach(var line in text.Split(new[]{'\n'},StringSplitOptions.RemoveEmptyEntries)) { var separator=line.IndexOf('='); if(separator>0) values[line.Substring(0,separator)]=line.Substring(separator+1); } return values; }
+			/// <summary>What the report says after the deadline has passed, when it says anything.
+			///
+			/// <para>A resident that finished late leaves the whole answer on disk: its status, and how long
+			/// its worker waited to be scheduled. Quoting that turns "did not publish within 20 seconds"
+			/// into "published 0.9 seconds late", which are different problems with different fixes.</para></summary>
+			static string TryReadLateReport(string path) {
+				try {
+					if(!File.Exists(path)) return " No report was written at all, so the resident did not reach the point of publishing one.";
+					var report=ParseReport(File.ReadAllText(path));
+					var status=report.TryGetValue("status",out var value)?value:"absent";
+					var queued=report.TryGetValue("worker_queue_ms",out var queue)?queue:null;
+					return queued is null
+						?" A partial report exists with status="+status+"."
+						:" A report does exist, with status="+status+" and worker_queue_ms="+queued+
+							": the resident was scheduled that long after commit, so the work was done and published late rather than not at all.";
+				}
+				catch(Exception ex) { return " The report could not be read while diagnosing the timeout: "+ex.GetType().Name+"."; }
+			}
+
 			static async Task<Dictionary<string,string>> ReadCompletionAsync(string path,CancellationToken token) {
 				var deadline=DateTime.UtcNow.AddSeconds(20);
 				while(DateTime.UtcNow<deadline) {
@@ -919,7 +950,14 @@ namespace dgSpy.Extension {
 					}
 					await Task.Delay(50,token).ConfigureAwait(false);
 				}
-				throw new RpcException("hook_operation_timed_out","HookLab worker did not publish a complete ready record within 20 seconds.");
+				// The explanation is usually sitting in the file this just gave up on. Measured on the
+				// cross-identity CoreCLR fixture: two timeouts whose reports said status=ok with
+				// worker_queue_ms=20899 and 20928 - the resident had done and published the work, 0.9
+				// seconds past the deadline. Reporting a bare timeout there sends the reader looking for a
+				// failure that did not happen, which is precisely the diagnosability defect this road
+				// exists to remove.
+				var late=TryReadLateReport(path);
+				throw new RpcException("hook_operation_timed_out","HookLab worker did not publish a complete ready record within 20 seconds."+late);
 			}
 			// TryDelete and TryDeleteDirectory lived here. Both are gone: the exchange area owns the
 			// lifetime of everything staged for an initialization, including whether it survives a

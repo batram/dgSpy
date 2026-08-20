@@ -73,8 +73,15 @@ New-Item -ItemType Directory -Force -Path $exchange | Out-Null
 
 $principalUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 foreach ($leg in @(@{ Name = 'cross-identity-net48'; Which = 'net48' }, @{ Name = 'cross-identity-coreclr'; Which = 'coreclr' })) {
+	# -WindowStyle Hidden because the task runs in the interactive session: without it the console appears
+	# on the user's screen and takes focus once per trigger. The runner hides itself too, but only after
+	# PowerShell has started, which still shows a brief flash - the task action is the only place that
+	# prevents the window existing at all.
+	#
+	# The comment lives here rather than inside the call: a comment between a backtick continuation and
+	# the next parameter ends the statement, which turned -Argument into an unknown command.
 	$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
-		-Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $runner + '" -Which ' + $leg.Which) `
+		-Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $runner + '" -Which ' + $leg.Which) `
 		-WorkingDirectory $repoRoot
 	# Interactive so dnSpy gets a desktop; highest privileges so the smoke has SeDebugPrivilege.
 	$principal = New-ScheduledTaskPrincipal -UserId $principalUser -LogonType Interactive -RunLevel Highest

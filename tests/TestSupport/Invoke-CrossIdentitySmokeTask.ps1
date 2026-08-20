@@ -17,6 +17,21 @@ removes.
 param([Parameter(Mandatory = $true)][ValidateSet('net48', 'coreclr')][string]$Which)
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+
+# Hide our own console immediately. Task Scheduler starts this in the INTERACTIVE session, so the
+# window appears on the user's screen and takes focus once per trigger - measured, four flashes from
+# four runs. The hidden-desktop launcher below only covers what the smoke spawns, not the host the task
+# created for this script. Done here rather than only in the task's arguments so that tasks registered
+# before this fix are quiet too, without a second elevated registration.
+try {
+	Add-Type -Name Window -Namespace Native -MemberDefinition '
+		[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+		[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr handle, int command);' -ErrorAction Stop
+	$console = [Native.Window]::GetConsoleWindow()
+	if ($console -ne [IntPtr]::Zero) { [void][Native.Window]::ShowWindow($console, 0) }  # SW_HIDE
+}
+catch { }
+
 $exchange = Join-Path $env:ProgramData 'dgSpy\fixture'
 $requestPath = Join-Path $exchange ("request-$Which.json")
 
