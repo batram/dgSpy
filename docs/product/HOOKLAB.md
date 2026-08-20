@@ -91,8 +91,9 @@ eventually is equally deliberate, because nothing else did.
 ## Resident stages and refusal reports
 
 A resident refusal report names the stage it failed in, before it names anything else. The stages are
-stable strings: `parameters`, `payload_verify`, `dependency_resolution`, `residency_commit`,
-`behavior_commit`, `retirement`, and `precondition` for a refusal made before any work began.
+stable strings: `parameters`, `payload_verify`, `dependency_resolution`, `patch_engine_load`,
+`residency_commit`, `behavior_commit`, `retirement`, and `precondition` for a refusal made before any
+work began.
 
 The stage comes first because it is what makes the rest readable - "could not load file or assembly"
 means one thing while the payload closure is being resolved and another once the probe is committing
@@ -101,9 +102,13 @@ links, whether payloads are resident, endpoint teardown and command quiescence s
 retained cleanup can still be retried. The chain is bounded because the report travels through a file
 and a pipe, where an unbounded one is a denial of service rather than a diagnostic.
 
-Finer stages the resident cannot honestly distinguish - compiler creation, compile, patch-engine load,
-patch install - happen past the boundary where the bootstrap can still tell them apart, and are not
-claimed.
+`patch_engine_load` is a real stage rather than a label because the bootstrap loads the pinned patch
+engine itself, before any probe type is prepared. The target guard runs immediately before it, under
+`residency_commit`: the engine is the first thing a resident puts into a process, and it is not put
+into one that has not been proved to be the target.
+
+Finer stages the resident cannot honestly distinguish - compiler creation, compile, patch install -
+happen past the boundary where the bootstrap can still tell them apart, and are not claimed.
 
 ## Supported runtimes
 
@@ -115,6 +120,18 @@ than left implied by the word "CoreCLR":
 | CLR v4 (`v4.0.30319`), x64 | yes | packaged CLR v4 HookLab live gate, cross-identity gate, compatibility probe |
 | CoreCLR 10.0 up to but excluding 11.0, x64 | yes | packaged CoreCLR HookLab live gate, cross-identity gate, compatibility probe |
 | Any other CoreCLR major version | no | none - a version outside every supported range is refused by name |
+| Mono/Unity, x64 | no - ordinary debugging only | see below |
+
+Mono/Unity targets are fully supported for ordinary debugging and are refused for HookLab residency,
+by name, before residency is attempted. The reason is specific rather than general: Unity's Mono
+implements neither `WindowsIdentity.GetCurrent().User` nor `PipeSecurity.AddAccessRule`, so a resident
+there cannot build the control endpoint's access control - the protection that keeps another account
+off a channel able to patch the process. An endpoint whose protection cannot be stated is not a
+supported configuration, so the resident refuses instead of creating one.
+
+Everything else a Mono resident would need does work, which is why the refusal is drawn at exactly that
+point: the payload graph - contracts, resident, Roslyn, and the pinned CLR v4 Harmony - loads and goes
+resident on Unity's Mono unchanged. What that costs is a control endpoint, not a runtime port.
 
 A range is a claim that a packaged live hook lifecycle has actually run there. Adding one needs its own
 evidence, not an expectation that it should work.
@@ -146,6 +163,32 @@ authoritative:
 What it does prove is everything downstream of arrival, which is where the runtimes actually differ:
 payload selection from the matrix, the dependency closure, compiler creation and a real compilation,
 the pinned patch engine loading, live behavior change, event capture, removal, and clean retirement.
+
+### The Mono leg
+
+`--runtime mono` runs the same fixture on the Mono a Unity player runs, and asserts the refusal above
+rather than a lifecycle: it passes when residency is refused at `residency_commit` for the access
+control reason, and fails if a Mono target ever stops somewhere else or gets further. That makes the
+supported-runtimes statement testable instead of merely written down.
+
+It is opt-in and is not part of `--runtime all`, because it needs a Mono runtime this repository does
+not ship, and it is never discovered by scanning the machine - which game or editor happens to be
+installed must not decide what was measured:
+
+```powershell
+$env:DGSPY_MONO_EXE        = 'tests\TestTargets\MonoHost64\bin\Release\MonoHost64.exe'
+$env:DGSPY_MONO_RUNTIME    = '<Unity>\Editor\Data\MonoBleedingEdge\EmbedRuntime\mono-2.0-bdwgc.dll'
+$env:DGSPY_MONO_ASSEMBLIES = '<Unity>\Editor\Data\MonoBleedingEdge\lib\mono\unityjit-win32'
+dotnet run --project tests\HookLab.CompatibilityProbe -c Release -- --runtime mono
+```
+
+Both of the last two are load-bearing. Unity ships `mono.exe` as x86 only, so an x64 Mono target needs
+a small host that loads the player's x64 runtime and calls `mono_main` - `MonoHost64`, built from
+`tests\TestTargets\MonoHost64`. And that `mono.exe`'s own class libraries are not a player's: they are
+a CoreFX-derived set whose named-pipe servers P/Invoke a `System.Native` shim absent on Windows, so a
+leg run against them measures a runtime no player has. The editor's `unityjit-win32` profile is
+byte-identical to a shipped player's `Managed` directory, which is what makes the leg Unity-accurate
+without a game.
 
 ## Identity and the control channel
 

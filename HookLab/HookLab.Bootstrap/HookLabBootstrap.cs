@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
+// ProbeInitializer only. Naming any other probe type from this file would defeat the load ordering the
+// class comment below describes.
+using HookLab.Probe.CorDebug;
 
 namespace HookLab.Bootstrap {
 	/// <summary>The fixed entry point a host func-evals after byte-loading this assembly.
@@ -21,6 +24,28 @@ namespace HookLab.Bootstrap {
 		public static object? Runtime => ProbeStartup.Runtime;
 
 		public static bool IsStarted { get { lock (Gate) return startedResult != null; } }
+
+		/// <summary>Makes the pinned patch engine resolvable before any probe type has to be prepared.
+		///
+		/// <para>Its own method, and never inlined, for the same reason <see cref="ProbeStartup"/>'s entry
+		/// points are: Mono resolves the types a method names when it <em>prepares</em> that method, not
+		/// when execution reaches the line. Naming <c>ProbeInitializer</c> directly in
+		/// <see cref="Prepare"/> or <see cref="Start"/> therefore demanded HookLab.Probe.CorDebug before
+		/// either body had run - which is before the embedded resolver that serves it was installed.
+		/// Measured on Unity 2021.3's Mono 6.13, 2026-08-20. Isolating the call means this method is
+		/// prepared at the call site, after Install, where the assembly can actually be resolved.</para>
+		///
+		/// <para>The engine has to be loaded here rather than left to the probe because the probe's own
+		/// initialization entry point returns a <c>ProbeRuntime</c>, whose patch-engine-typed field Mono
+		/// demands before that method's first line - so no ordering inside the probe can come early
+		/// enough.</para></summary>
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		static void LoadPatchEngine() => ProbeInitializer.PreloadPatchEngine();
+
+		/// <summary>Runs the target guard before <see cref="LoadPatchEngine"/>. Separated and non-inlined
+		/// for the same preparation reason: it must be reachable without demanding the engine.</summary>
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		static void ValidateTarget(BootstrapParameters parameters) => ProbeStartup.ValidateTarget(parameters);
 
 		/// <summary>Non-null when the last endpoint teardown failed, which means a listener may still be
 		/// accepting connections. Also reported in the Start and Shutdown reports.</summary>
@@ -58,6 +83,13 @@ namespace HookLab.Bootstrap {
 					// nothing has acted on it.
 					stage = ResidentStages.DependencyResolution;
 					installed.VerifyPayloadBindings();
+					stage = ResidentStages.ResidencyCommit;
+					// The target guard before the patch engine, deliberately: the engine is the first thing
+					// this resident loads into the process, and it may not be loaded into one that has not
+					// been proved to be the target.
+					ValidateTarget(parsed);
+					stage = ResidentStages.PatchEngineLoad;
+					LoadPatchEngine();
 					stage = ResidentStages.ResidencyCommit;
 					var outcome = ProbeStartup.Prepare(parsed);
 					ResidentLauncher.Prepare(parsed);
@@ -133,6 +165,12 @@ namespace HookLab.Bootstrap {
 					installed.VerifyPayloadBindings();
 					// Everything past this line lives in ProbeStartup, whose jitting is what first resolves a
 					// probe type - which is why it must happen after Install and never be inlined into here.
+					// The patch engine therefore has to be resolvable before that jitting, not during it -
+					// and the target guard has to run before the engine is loaded into the process at all.
+					stage = ResidentStages.ResidencyCommit;
+					ValidateTarget(parsed);
+					stage = ResidentStages.PatchEngineLoad;
+					LoadPatchEngine();
 					stage = ResidentStages.ResidencyCommit;
 					var outcome = ProbeStartup.Run(parsed);
 					startedResult = Describe(outcome, installed);

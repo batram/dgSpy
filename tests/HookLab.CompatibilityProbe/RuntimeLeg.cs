@@ -61,7 +61,7 @@ sealed class RuntimeLeg {
 		catch (Exception ex) { throw new ProbeRefusal(stage, "The shipped payload does not match its own matrix: " + CompatibilityProbe.Flatten(ex.Message), identities, ex); }
 
 		Stage("backend_selection");
-		var selected = matrix.Entries.Where(entry => (entry.Runtimes & family.Flag) != 0).ToArray();
+		var selected = matrix.Entries.Where(entry => (entry.Runtimes & family.PayloadFlag) != 0).ToArray();
 		foreach (var entry in selected) identities.Add($"{entry.Id} -> {entry.AssemblyName}, Version={entry.AssemblyVersion}, PublicKeyToken={entry.PublicKeyToken} ({entry.TargetFramework}, {entry.Provenance})");
 		Require(PayloadRole.Resident, selected, 1);
 		Require(PayloadRole.Contracts, selected, 1);
@@ -71,6 +71,8 @@ sealed class RuntimeLeg {
 		var engine = selected.Single(entry => entry.Role == PayloadRole.PatchEngine);
 		report.Add($"patch_engine={engine.Id} {engine.AssemblyName} {engine.AssemblyVersion} ({engine.TargetFramework})");
 		report.Add($"payload_slots={selected.Length}");
+		if (family.BorrowsClrV4Payloads)
+			report.Add($"payload_family=clrv4 (the shipped matrix declares no {family.Id} row; this leg is what would justify one)");
 	}
 
 	void Require(PayloadRole role, PayloadMatrixEntry[] selected, int count) {
@@ -84,21 +86,46 @@ sealed class RuntimeLeg {
 		if (!File.Exists(executable))
 			throw new ProbeRefusal(stage, "The probe fixture is not built for " + family.Id + ": " + executable +
 				". Build it: dotnet build tests\\TestTargets\\HookLabProbeTarget\\HookLabProbeTarget.csproj -c Release", identities);
-		var info = new ProcessStartInfo(executable, "\"" + run + "\"") { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(executable)! };
-		var process = Process.Start(info) ?? throw new ProbeRefusal(stage, "Could not start " + executable, identities);
+		var runtimeArgument = family.Launched && options.MonoRuntime is not null ? "\"" + options.MonoRuntime + "\" " : "";
+		var info = family.Launched
+			? new ProcessStartInfo(RequireLauncher(), runtimeArgument + "\"" + executable + "\" \"" + run + "\"")
+			: new ProcessStartInfo(executable, "\"" + run + "\"");
+		info.UseShellExecute = false;
+		info.WorkingDirectory = Path.GetDirectoryName(executable)!;
+		if (family.Launched && options.MonoAssemblies is not null) {
+			if (!Directory.Exists(options.MonoAssemblies))
+				throw new ProbeRefusal(stage, "No Mono assembly directory at " + options.MonoAssemblies + ".", identities);
+			info.Environment["MONO_PATH"] = options.MonoAssemblies;
+			report.Add("mono_assemblies=" + options.MonoAssemblies);
+		}
+		var process = Process.Start(info) ?? throw new ProbeRefusal(stage, "Could not start " + info.FileName, identities);
 		if (!WaitFor(() => File.Exists(Path.Combine(run, "ready.txt")), process, TimeSpan.FromSeconds(30)))
 			throw new ProbeRefusal(stage, "The fixture did not report ready within 30 seconds.", identities);
 		report.Add("target_pid=" + process.Id.ToString(CultureInfo.InvariantCulture));
 		return process;
 	}
 
+	/// <summary>The Mono runtime the leg is allowed to run under. Never discovered: see
+	/// <see cref="ProbeOptions.Mono"/>.</summary>
+	string RequireLauncher() {
+		if (options.Mono is null)
+			throw new ProbeRefusal(stage, "The Mono leg needs a Mono runtime to run its fixture under. Pass --mono <mono.exe> or set DGSPY_MONO_EXE; dgSpy does not ship or discover one.", identities);
+		if (!File.Exists(options.Mono))
+			throw new ProbeRefusal(stage, "No Mono runtime at " + options.Mono + ".", identities);
+		if (options.MonoRuntime is not null && !File.Exists(options.MonoRuntime))
+			throw new ProbeRefusal(stage, "No Mono runtime library at " + options.MonoRuntime + ".", identities);
+		return options.Mono;
+	}
+
 	/// <summary>Reads the exact CoreCLR version the way the product does - from the loaded coreclr.dll's
 	/// own directory - and requires it to fall inside a declared proved range. CLR v4 has one version and
-	/// needs no range.</summary>
+	/// needs no range. Mono reports its own version, which is the only place it is available: its runtime
+	/// module is a game's embedded <c>mono-2.0-*.dll</c> and carries no version in its path.</summary>
 	void VerifyRuntimeRange(Process target, Facts facts) {
 		Stage("runtime_range");
 		if (facts["framework"] != family.Id)
 			throw new ProbeRefusal(stage, $"The {family.FixtureFramework} fixture reports framework={facts["framework"]}, not {family.Id}.", identities);
+		if (family == RuntimeFamily.Mono) { VerifyMonoRange(facts); return; }
 		if (family != RuntimeFamily.CoreClr) { report.Add("runtime=" + facts["runtime_id"] + " (CLR v4)"); return; }
 		var modules = target.Modules.Cast<ProcessModule>().Where(module => string.Equals(module.ModuleName, "coreclr.dll", StringComparison.OrdinalIgnoreCase)).ToArray();
 		if (modules.Length != 1) throw new ProbeRefusal(stage, $"Expected exactly one loaded coreclr.dll, found {modules.Length}.", identities);
@@ -108,6 +135,18 @@ sealed class RuntimeLeg {
 		if (!SupportedCoreClr.Ranges.Any(range => version >= range.MinimumInclusive && version < range.MaximumExclusive))
 			throw new ProbeRefusal(stage, $"CoreCLR {version} is outside every proved range. Proved: {SupportedCoreClr.Describe()}.", identities);
 		report.Add("runtime=CoreCLR " + version);
+	}
+
+	void VerifyMonoRange(Facts facts) {
+		var display = facts["runtime_display"];
+		// "6.13.0 (Visual Studio built mono)" and Unity's "(2021.3.45f1)" forms both start with the
+		// version, and only the version is asserted on: the rest is a build description, not identity.
+		var text = display.Split(' ')[0];
+		if (!Version.TryParse(text, out var version))
+			throw new ProbeRefusal(stage, "The Mono target reports no parseable runtime version: " + display, identities);
+		if (!SupportedMono.Ranges.Any(range => version >= range.MinimumInclusive && version < range.MaximumExclusive))
+			throw new ProbeRefusal(stage, $"Mono {version} is outside every proved range. Proved: {SupportedMono.Describe()}.", identities);
+		report.Add("runtime=Mono " + display);
 	}
 
 	Facts ReadFacts(string run) {

@@ -245,6 +245,25 @@ namespace HookLab.Bootstrap {
 			catch (Exception) { return null; }
 		}
 
+		/// <summary>Proves this process is the target the caller named, before anything is loaded into it.
+		///
+		/// <para>The guard used to run first simply by being the first line of
+		/// <c>ProbeInitializer.Initialize</c>. It has to be lifted out because the patch engine now loads
+		/// ahead of that call - see <c>HookLabBootstrap.LoadPatchEngine</c> - and loading a patch engine
+		/// into a process nobody has confirmed is the target would be a side effect on an unauthorised
+		/// process. Initialize still validates; this only moves the first check earlier, and re-measuring
+		/// the live identity is cheap beside the thing it is gating.</para>
+		///
+		/// <para>Its own non-inlined method, and it names no probe type that reaches the patch engine, so
+		/// that preparing it does not demand the engine it is supposed to run before.</para></summary>
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		internal static void ValidateTarget(BootstrapParameters parameters) {
+			var expected = new TargetIdentity(parameters.HostId, parameters.ImagePath, parameters.ProcessId,
+				new DateTime(parameters.ProcessCreationUtcTicks, DateTimeKind.Utc), parameters.Architecture,
+				parameters.RuntimeId, parameters.AppDomainId);
+			MethodGuards.ValidateTarget(expected, new LiveTargetIdentityProvider(parameters.HostId).GetCurrentIdentity());
+		}
+
 		[MethodImpl(MethodImplOptions.NoInlining)]
 		internal static BootstrapOutcome Run(BootstrapParameters parameters) {
 			var expected = new TargetIdentity(parameters.HostId, parameters.ImagePath, parameters.ProcessId,

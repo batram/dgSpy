@@ -201,11 +201,26 @@ namespace HookLab.Probe.CorDebug.Transport {
 		}
 
 		NamedPipeServerStream CreatePipe() {
-			var identity = WindowsIdentity.GetCurrent();
-			var sid = identity.User ?? throw new InvalidOperationException("The probe process has no Windows user SID.");
+			SecurityIdentifier sid;
 			var security = new PipeSecurity();
-			security.SetAccessRuleProtection(true, false);
-			security.AddAccessRule(new PipeAccessRule(sid, PipeAccessRights.FullControl, AccessControlType.Allow));
+			try {
+				var identity = WindowsIdentity.GetCurrent();
+				sid = identity.User ?? throw new InvalidOperationException("The probe process has no Windows user SID.");
+				security.SetAccessRuleProtection(true, false);
+				security.AddAccessRule(new PipeAccessRule(sid, PipeAccessRights.FullControl, AccessControlType.Allow));
+			}
+			// Unity's Mono implements neither WindowsIdentity.User nor PipeSecurity.AddAccessRule -
+			// measured on Mono 6.13 with a Unity 2021.3 player's own class libraries, 2026-08-20. The
+			// endpoint's access control is not decoration there is a fallback for: it is what keeps another
+			// account off a channel that can patch this process. So this refuses, by name, rather than
+			// creating an endpoint whose protection nobody stated. Until a Mono backend exists with its own
+			// evidence, an unprotected control endpoint is not a supported configuration.
+			catch (NotImplementedException ex) {
+				throw new PlatformNotSupportedException(
+					"This runtime does not implement the Windows access control the HookLab control endpoint requires " +
+					"(" + ex.Message.TrimEnd('.') + "). HookLab residents are supported on desktop CLR v4 and CoreCLR; " +
+					"Mono/Unity targets support ordinary debugging only.", ex);
+			}
 			// The controller is a second principal, never a replacement: the DACL stays protected and fully
 			// enumerated. Without this, a target running under a different account than the debugger - an IIS
 			// worker under a service account, say - creates a pipe its own controller cannot open, and the

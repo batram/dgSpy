@@ -33,11 +33,25 @@ static class CompatibilityProbe {
 			var watch = Stopwatch.StartNew();
 			try {
 				var report = new RuntimeLeg(options, family).Execute();
+				if (family.ExpectedRefusal is not null) {
+					failures++;
+					Console.Error.WriteLine($"FAIL  {family.Id}  a leg that is supposed to be refused completed instead.");
+					Console.Error.WriteLine($"      Expected: {family.ExpectedRefusal.Because}");
+					Console.Error.WriteLine("      If that boundary has genuinely moved, the family's ExpectedRefusal is what to update - and the product's Mono support statements with it.");
+					continue;
+				}
 				Console.WriteLine($"PASS  {family.Id}  {watch.ElapsedMilliseconds} ms");
 				foreach (var line in report) Console.WriteLine("      " + line);
 			}
+			catch (ProbeRefusal refusal) when (family.ExpectedRefusal is not null && family.ExpectedRefusal.Matches(refusal)) {
+				Console.WriteLine($"REFUSED  {family.Id}  {watch.ElapsedMilliseconds} ms  stage={refusal.Stage}  (expected)");
+				Console.WriteLine("      " + family.ExpectedRefusal.Because);
+				Console.WriteLine("      " + refusal.Message);
+			}
 			catch (ProbeRefusal refusal) {
 				failures++;
+				if (family.ExpectedRefusal is not null)
+					Console.Error.WriteLine($"      This leg is expected to be refused at stage={family.ExpectedRefusal.Stage}, and was not.");
 				Console.Error.WriteLine($"FAIL  {family.Id}  stage={refusal.Stage}");
 				Console.Error.WriteLine($"      {refusal.Message}");
 				foreach (var identity in refusal.Identities) Console.Error.WriteLine("      identity=" + identity);
@@ -80,8 +94,9 @@ static class CompatibilityProbe {
 	}
 
 	static int Usage() {
-		Console.Error.WriteLine("usage: HookLab.CompatibilityProbe [--payload <hooklab-bootstrap.net48.payload>] [--fixtures <directory>] [--runtime clrv4|coreclr|all] [--negative] [--keep]");
+		Console.Error.WriteLine("usage: HookLab.CompatibilityProbe [--payload <hooklab-bootstrap.net48.payload>] [--fixtures <directory>] [--runtime clrv4|coreclr|mono|all] [--mono <mono.exe>] [--mono-assemblies <dir>] [--negative] [--keep]");
 		Console.Error.WriteLine("       Defaults resolve the newest composed layout under artifacts\\layouts and the repository's built fixtures.");
+		Console.Error.WriteLine("       --runtime mono is opt-in and needs --mono or DGSPY_MONO_EXE; 'all' stays clrv4 and coreclr.");
 		return 2;
 	}
 
@@ -100,11 +115,51 @@ sealed class ProbeRefusal : Exception {
 	internal IReadOnlyList<string> Identities { get; }
 }
 
-/// <summary>One runtime family, and how this repository builds a target for it.</summary>
-sealed record RuntimeFamily(string Id, PayloadRuntimes Flag, string FixtureFramework) {
-	internal static readonly RuntimeFamily ClrV4 = new("clrv4", PayloadRuntimes.ClrV4, "net48");
-	internal static readonly RuntimeFamily CoreClr = new("coreclr", PayloadRuntimes.CoreClr, "net10.0");
+/// <summary>One runtime family, and how this repository builds and starts a target for it.
+///
+/// <para><paramref name="PayloadFlag"/> is deliberately separate from <paramref name="Id"/>. Mono is its
+/// own runtime family with its own leg, but the shipped matrix declares no Mono row yet: the point of
+/// the Mono leg is to find out whether the CLR v4 slots are loadable there, and a matrix row saying so
+/// in advance would be the claim rather than the evidence. When the answer is in, Mono gets rows of its
+/// own and this collapses back to one field.</para>
+///
+/// <para><paramref name="Launched"/> is false for a family whose fixture is its own executable. Mono is
+/// reached by handing the same net48 fixture to a <c>mono.exe</c>, which is what makes the leg a Mono
+/// leg rather than a second CLR v4 one - no Unity, no mod loader, no game.</para></summary>
+/// <param name="ExpectedRefusal">The refusal this family is currently supposed to produce, or null when
+/// it must complete a lifecycle. Mono has one: HookLab residency is refused there because Unity's Mono
+/// implements neither <c>WindowsIdentity.User</c> nor <c>PipeSecurity.AddAccessRule</c>, so the control
+/// endpoint's access control cannot be built. Asserting the boundary rather than merely failing is what
+/// makes the leg worth running: it fails if a Mono target ever stops at a <em>different</em> stage, which
+/// is how a regression on the way to that boundary - or progress past it - would be noticed.</param>
+sealed record RuntimeFamily(string Id, PayloadRuntimes PayloadFlag, string FixtureFramework, bool Launched,
+	bool BorrowsClrV4Payloads, ExpectedRefusal? ExpectedRefusal = null) {
+	internal static readonly RuntimeFamily ClrV4 = new("clrv4", PayloadRuntimes.ClrV4, "net48", false, false);
+	internal static readonly RuntimeFamily CoreClr = new("coreclr", PayloadRuntimes.CoreClr, "net10.0", false, false);
+	internal static readonly RuntimeFamily Mono = new("mono", PayloadRuntimes.ClrV4, "net48", true, true,
+		new ExpectedRefusal("residency_commit", "does not implement the Windows access control",
+			"Unity's Mono cannot build the control endpoint's DACL; HookLab residency is unsupported there."));
+
+	/// <summary>The legs <c>--runtime all</c> runs. Mono is not in it, and that is a statement rather
+	/// than an oversight: it needs a Mono runtime this repository does not ship, so including it would
+	/// turn "no Mono installed" into a gate failure on every machine without one. It is asked for by
+	/// name until a packaged Mono backend exists.</summary>
 	internal static readonly RuntimeFamily[] All = { ClrV4, CoreClr };
+}
+
+/// <summary>A refusal a leg is expected to reach, and the boundary it stands for.</summary>
+sealed record ExpectedRefusal(string Stage, string MessageContains, string Because) {
+	internal bool Matches(ProbeRefusal refusal) =>
+		refusal.Stage == Stage && refusal.Message.Contains(MessageContains, StringComparison.Ordinal);
+}
+
+/// <summary>The Mono runtimes HookLab has been driven against, stated the way <see cref="SupportedCoreClr"/>
+/// states CoreCLR's: as a range with the evidence beside it, not as the word "Mono".</summary>
+sealed record SupportedMono(Version MinimumInclusive, Version MaximumExclusive, string Evidence) {
+	internal static readonly SupportedMono[] Ranges = {
+		new(new Version(6, 12), new Version(6, 14), "Unity 2021.3 MonoBleedingEdge and this probe"),
+	};
+	internal static string Describe() => string.Join(", ", Ranges.Select(range => $"[{range.MinimumInclusive}, {range.MaximumExclusive}) - {range.Evidence}"));
 }
 
 /// <summary>The CoreCLR runtime versions HookLab is proved on, stated as data rather than left implied
@@ -125,17 +180,45 @@ sealed class ProbeOptions {
 	internal required string Payload { get; init; }
 	internal required string Fixtures { get; init; }
 	internal required RuntimeFamily[] Families { get; init; }
+	/// <summary>The <c>mono.exe</c> the Mono leg runs its fixture under, or null. Never guessed: a Mono
+	/// runtime found by scanning the machine would make the leg's result depend on which game or editor
+	/// happened to be installed, and the runtime identity is the first thing this leg has to be exact
+	/// about.</summary>
+	internal string? Mono { get; init; }
+	/// <summary>The assembly directory the Mono leg's fixture resolves its framework assemblies from, or
+	/// null for whatever <see cref="Mono"/> ships with.
+	///
+	/// <para>This is not a convenience. A standalone <c>mono.exe</c> and a Unity player do not have the
+	/// same class libraries: Unity 2021.3's <c>mono.exe</c> carries a CoreFX-derived
+	/// <c>System.IO.Pipes</c> that P/Invokes a <c>System.Native</c> shim absent on Windows, so every
+	/// named-pipe server fails there - while the player's own <c>System.Core.dll</c> is classic Mono and
+	/// its pipe servers work. Measured on 2026-08-20; the editor's <c>unityjit-win32</c> profile is
+	/// byte-identical to the shipped player's Managed directory, which is what makes a Unity-accurate
+	/// Mono fixture possible without a game.</para></summary>
+	internal string? MonoAssemblies { get; init; }
+	/// <summary>The Mono runtime library the launcher should load, passed to it as its first argument, or
+	/// null when the launcher is a complete <c>mono.exe</c>.
+	///
+	/// <para>Unity ships <c>mono.exe</c> as x86 only - measured on 2026-08-20 - so it cannot host an x64
+	/// Mono target at all, and dgSpy is x64. The x64 runtime exists only as the player's embedded
+	/// <c>MonoBleedingEdge\EmbedRuntime\mono-2.0-bdwgc.dll</c>, so an x64 Mono fixture has to be a small
+	/// host that loads it and calls <c>mono_main</c>. That host is <c>MonoHost64</c> in this
+	/// repository.</para></summary>
+	internal string? MonoRuntime { get; init; }
 	internal bool Negative { get; init; }
 	internal bool Keep { get; init; }
 
 	internal static ProbeOptions? Parse(string[] arguments) {
-		string? payload = null, fixtures = null, runtime = "all";
+		string? payload = null, fixtures = null, runtime = "all", mono = null, monoAssemblies = null, monoRuntime = null;
 		var negative = false; var keep = false;
 		for (var index = 0; index < arguments.Length; index++) {
 			switch (arguments[index]) {
 			case "--payload": if (++index == arguments.Length) return null; payload = arguments[index]; break;
 			case "--fixtures": if (++index == arguments.Length) return null; fixtures = arguments[index]; break;
 			case "--runtime": if (++index == arguments.Length) return null; runtime = arguments[index]; break;
+			case "--mono": if (++index == arguments.Length) return null; mono = arguments[index]; break;
+			case "--mono-assemblies": if (++index == arguments.Length) return null; monoAssemblies = arguments[index]; break;
+			case "--mono-runtime": if (++index == arguments.Length) return null; monoRuntime = arguments[index]; break;
 			case "--negative": negative = true; break;
 			case "--keep": keep = true; break;
 			default: return null;
@@ -145,14 +228,21 @@ sealed class ProbeOptions {
 			"all" => RuntimeFamily.All,
 			"clrv4" => new[] { RuntimeFamily.ClrV4 },
 			"coreclr" => new[] { RuntimeFamily.CoreClr },
+			"mono" => new[] { RuntimeFamily.Mono },
 			_ => null,
 		};
 		if (families is null) return null;
+		mono ??= Environment.GetEnvironmentVariable("DGSPY_MONO_EXE");
+		monoAssemblies ??= Environment.GetEnvironmentVariable("DGSPY_MONO_ASSEMBLIES");
+		monoRuntime ??= Environment.GetEnvironmentVariable("DGSPY_MONO_RUNTIME");
 		var repository = Repository();
 		return new ProbeOptions {
 			Payload = Path.GetFullPath(payload ?? DefaultPayload(repository)),
 			Fixtures = Path.GetFullPath(fixtures ?? Path.Combine(repository, "tests", "TestTargets", "HookLabProbeTarget", "bin", "Release")),
-			Families = families, Negative = negative, Keep = keep,
+			Families = families, Mono = string.IsNullOrWhiteSpace(mono) ? null : Path.GetFullPath(mono),
+			MonoAssemblies = string.IsNullOrWhiteSpace(monoAssemblies) ? null : Path.GetFullPath(monoAssemblies),
+			MonoRuntime = string.IsNullOrWhiteSpace(monoRuntime) ? null : Path.GetFullPath(monoRuntime),
+			Negative = negative, Keep = keep,
 		};
 	}
 

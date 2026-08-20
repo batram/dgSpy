@@ -68,7 +68,17 @@ namespace HookLabProbeTarget {
 				return 0;
 			}
 			catch (Exception ex) {
-				Write(report, "status=error\nerror_type=" + (ex.GetType().FullName ?? "Exception") + "\nerror_message=" + Flatten(ex.Message) + "\n");
+				// Inner exceptions included. A reflective call into the bootstrap reports
+				// TargetInvocationException, whose own message names nothing at all, and a failure that
+				// escapes before the bootstrap's own try block can report a stage has no other witness.
+				var text = new StringBuilder("status=error\nerror_type=" + (ex.GetType().FullName ?? "Exception") + "\nerror_message=" + Flatten(ex.Message) + "\n");
+				var index = 0;
+				for (var inner = ex.InnerException; inner != null && index < 3; inner = inner.InnerException) {
+					index++;
+					text.Append("inner_" + index + "_type=" + (inner.GetType().FullName ?? "Exception") + "\n");
+					text.Append("inner_" + index + "_message=" + Flatten(inner.Message) + "\n");
+				}
+				Write(report, text.ToString());
 				return 1;
 			}
 		}
@@ -99,7 +109,12 @@ namespace HookLabProbeTarget {
 				"signature=" + Signature(method),
 				"il_sha256=" + IlSha256(method),
 				"process_id=" + System.Diagnostics.Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture),
-				"framework=" + (typeof(object).Assembly.GetName().Name == "mscorlib" ? "clrv4" : "coreclr"),
+				// Mono's corlib is also called mscorlib, so a corlib-name test alone would report a Mono
+				// target as CLR v4. That is exactly the confusion the Mono leg exists to rule out, so the
+				// runtime type is asked first and the answer is reported as its own family.
+				"framework=" + (Type.GetType("Mono.Runtime") != null ? "mono"
+					: typeof(object).Assembly.GetName().Name == "mscorlib" ? "clrv4" : "coreclr"),
+				"runtime_display=" + RuntimeDisplay(),
 				// The resident guards runtime_id and appdomain_id against what it measures in this process,
 				// so they have to come from this process. Everything else about the target's identity - PID,
 				// creation time, image path - the probe reads independently from the outside, which is where
@@ -108,6 +123,16 @@ namespace HookLabProbeTarget {
 				"appdomain_id=" + AppDomain.CurrentDomain.Id.ToString(CultureInfo.InvariantCulture),
 			};
 			Write(path, string.Join("\n", lines) + "\n");
+		}
+
+		/// <summary>Mono's own version string when there is one. The probe pins a Mono leg to a proved
+		/// runtime range the way it does for CoreCLR, and "Mono" without a version would be the same
+		/// unevidenced claim that <see cref="Program"/>'s corlib test used to make.</summary>
+		static string RuntimeDisplay() {
+			var mono = Type.GetType("Mono.Runtime");
+			if (mono == null) return Environment.Version.ToString();
+			var display = mono.GetMethod("GetDisplayName", BindingFlags.NonPublic | BindingFlags.Static);
+			return Flatten((display?.Invoke(null, null) as string) ?? "Mono");
 		}
 
 		static string Signature(MethodInfo method) =>

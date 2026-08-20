@@ -46,27 +46,43 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Add a Mono HookLab resident on the proved runtime backend framework.
+1. Give the Mono resident a control endpoint whose protection can be stated, then complete the backend.
 2. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
 3. Revisit high-risk execution, editing, and scripting one workflow at a time.
 4. Keep the remaining compatibility expansions parked until product scope changes.
 5. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - add a Mono HookLab resident
+## Road 1 - give the Mono resident a control endpoint it can protect
 
-Ordinary Mono/Unity debugging already exists. This road adds HookLab residency without depending on
-UCH, BepInEx, or another mod loader and without implying IL2CPP or AOT support.
+The mechanism question is answered and the answer is narrow. On a Unity-accurate x64 Mono fixture, the
+whole payload graph - contracts, resident, Roslyn, and the pinned CLR v4 Harmony - loads and goes
+resident unchanged, and residency then stops at exactly one thing: Unity's Mono implements neither
+`WindowsIdentity.GetCurrent().User` nor `PipeSecurity.AddAccessRule`, so the control endpoint's access
+control cannot be built. That is a class-library boundary, upstream of every arrival question, and it
+is the same whether the payload arrives by debugger-driven managed loading or native embedding. The
+resident refuses there by name today, an opt-in probe leg asserts the refusal, and the supported-runtime
+statement says so. See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes) and
+[The Mono leg](../product/HOOKLAB.md#the-mono-leg).
 
-1. Prove one safe authenticated resident lifecycle on a disposable Mono/Unity fixture, including one
-   guarded prefix, event observation, removal, debugger detach, and healthy target survival.
+What remains is a decision with evidence behind it, then the rest of the road:
+
+1. Choose how a Mono resident gets an endpoint whose protection can be stated. The two candidates are
+   building the security descriptor through `advapi32`/`CreateNamedPipeW` and wrapping the handle,
+   which keeps the exact current guarantee at the cost of native interop in the resident; or a
+   different endpoint - loopback, say - carrying the existing challenge-response, which needs an
+   explicit argument about what defence in depth is lost. Refusing remains correct until one of them
+   has live evidence.
 2. Add an explicit Mono backend with exact runtime/module identity and a pinned, live-proven compiler
-   and Harmony dependency policy.
+   and Harmony dependency policy. The matrix probably needs new rows rather than new payload bytes -
+   the existing CLR v4 slots load on Unity's Mono - but that is a measurement to repeat once residency
+   completes, not a conclusion to carry forward.
 3. Extend the payload manifest, compatibility probe, package, disposable Unity fixture, and hidden-
-   desktop UCH live gates through retirement.
+   desktop UCH live gates through retirement. The probe's Mono leg becomes a lifecycle rather than a
+   boundary assertion at that point.
 
-Domain reloads, generics, inlining, finalizers, reconnect/adoption, and unsupported Mono variants need
-explicit supported or refused results. If safe residency requires native Mono embedding rather than
-debugger-driven managed loading, record that boundary before broadening implementation.
+Domain reloads, generics, inlining, finalizers, reconnect/adoption, and unsupported Mono variants still
+need explicit supported or refused results. No mod loader - UCH, BepInEx, or another - may become a
+dependency, and none of this implies IL2CPP or AOT support.
 
 ## Road 2 - add x86 debugging and HookLab
 
