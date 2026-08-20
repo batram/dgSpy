@@ -156,9 +156,14 @@ namespace dgSpy.Extension {
 				// "the debugger's" and saying nothing about the target. Against a target running as
 				// another account the debugger's temp directory is unreadable, which is defect 3 of the
 				// live incident: the staged payload was there, and the target could not see it.
-				var controllerSid=HookLab.Injector.ProcessIdentity.TryGetCurrentSid()
-					?? throw new RpcException("hooklab_identity_unavailable","This host could not read its own Windows identity, so the exchange area for initialization cannot be derived.");
-				var exchange=HookLab.Injector.ExchangeAreaPlan.For(controllerSid,HookLab.Injector.ProcessIdentity.TryGetUserSid(processId),"dgspy-hooklab-"+processId.ToString(CultureInfo.InvariantCulture)).Materialize();
+				//
+				// Read ONCE, here, and used for both the exchange area and the endpoint DACL below. Those
+				// two decisions used to compute "who is the controller" independently, from two different
+				// call sites, which is two chances to disagree about one fact.
+				HookLab.Injector.IdentityPair identities;
+				try { identities=HookLab.Injector.IdentityPair.For(processId); }
+				catch(InvalidOperationException ex) { throw new RpcException("hooklab_identity_unavailable",ex.Message); }
+				var exchange=HookLab.Injector.ExchangeAreaPlan.For(identities,"dgspy-hooklab-"+processId.ToString(CultureInfo.InvariantCulture)).Materialize();
 				var completion=Path.Combine(exchange.Path,"completion.txt");
 				var initializationSucceeded=false;
 				ProbeConnection? connection=null; byte[]? endpointSecret=null;
@@ -177,10 +182,12 @@ namespace dgSpy.Extension {
 						lock(gate) runtimes.Add(RuntimeKey(session,processId),adoptedRuntime); StartEventPump(adoptedRuntime); HookLabUiBridge.SetInitialized(); return Initialized(adoptedRuntime,true,adopted:true);
 					}
 					endpointSecret=ProbeAuthentication.CreateSecret(); identity["endpoint_secret_base64"]=Convert.ToBase64String(endpointSecret);
-					// Who will be opening the control pipe. The probe protects that pipe's DACL and names only
-					// its own SID, so a target running as another account builds an endpoint this host cannot
-					// open. Named here, it is granted; when the two accounts match the probe ignores it.
-					if(WindowsIdentity.GetCurrent().User is SecurityIdentifier controller) identity["controller_sid"]=controller.Value;
+					// Who will be opening the control pipe, from the same identity pair that placed the
+					// exchange area. The probe protects that pipe's DACL and names only its own SID, so a
+					// target running as another account builds an endpoint this host cannot open; named
+					// here, it is granted. Null when the accounts match, which the probe would ignore
+					// anyway, so the same-user DACL is exactly what it always was.
+					if(identities.ControllerSidForEndpoint is string controllerSid) identity["controller_sid"]=controllerSid;
 					try {
 						if(target.Backend==HookLabTargetEligibility.Backend.CoreClr) {
 							completionReport=await ExecuteInitializationOperationAsync(host,source,PayloadOperation.initialize,identity,token,true).ConfigureAwait(false);

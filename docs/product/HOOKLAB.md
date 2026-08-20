@@ -17,6 +17,36 @@ Every target method is guarded by exact module MVID, metadata token, signature, 
 The public `module_id` used to select the live module is opaque and session-scoped; rediscover it after
 every attach and fail on zero or ambiguous resolution.
 
+## Identity and the control channel
+
+The debugger and its target are not assumed to be the same Windows account. Two principals are read
+once per initialization - the controller, which is the process driving HookLab, and the target, read
+from its own process token - and every authority decision derives from that pair rather than from
+whichever process happens to be asking.
+
+Two things follow from it:
+
+- **The exchange area.** Staged payloads, `initialize.params` and the resident's completion report share
+  one directory. When the principals match it is the controller's temp directory. When they differ it is
+  a machine-wide directory created for that operation, with a protected DACL naming exactly those two
+  principals, and removed with the operation. A failed initialization keeps it and names its path in the
+  error rather than deleting the only record of what the target was offered.
+- **The resident's control endpoint.** The pipe DACL is protected and fully enumerated: the target's own
+  SID, plus the controller as a second named principal when the two differ. Nothing is relaxed and no
+  principal is replaced; when the accounts match, the DACL is what it always was.
+
+That DACL is defence in depth rather than the authentication boundary. The channel is already
+authenticated by a 32-byte secret injected with the payload, and whoever writes `initialize.params` has
+already chosen the bytes the target will execute - so they are strictly more privileged than anything
+the DACL could grant. It exists so that a target running as another account does not build an endpoint
+its own controller cannot open.
+
+Authoring a grant is not the same as holding one. SID equality does not establish effective access, and
+neither does reading back a DACL just written: restricted SIDs, deny-only groups, deny ACEs, integrity
+level and impersonation state all sit between an intended grant and a usable one. dgSpy reports such a
+precondition as not provable before the attempt rather than as satisfied. Connectivity is established by
+an authenticated round trip, and the target's access to the exchange area by the target reading it.
+
 ## Supported hooks
 
 HookLab supports:

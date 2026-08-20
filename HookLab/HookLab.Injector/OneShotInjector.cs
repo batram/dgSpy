@@ -35,7 +35,12 @@ public static class OneShotInjector {
 			var nativePath=Path.Combine(staging,"HookLab.NativeBootstrap.x64.dll");
 			File.Copy(payload.Native,nativePath,false);
 			File.Copy(payload.Managed,Path.Combine(staging,"HookLab.Bootstrap.dll"),false);
-			File.WriteAllText(Path.Combine(staging,"initialize.params"),Parameters(imagePath,processId,creationTicks,completion,definition,endpoint,endpointSecret,residentHookId),new UTF8Encoding(false));
+			// The endpoint principals come from the identity pair, not from whichever process happens to
+			// create the endpoint. A controller elevated against a service-account target is a different
+			// principal from the target, and the probe's protected DACL would otherwise name only the
+			// target - an endpoint its own controller cannot open.
+			var controllerSid=IdentityPairOrNull(processId)?.ControllerSidForEndpoint;
+			File.WriteAllText(Path.Combine(staging,"initialize.params"),Parameters(imagePath,processId,creationTicks,completion,definition,endpoint,endpointSecret,residentHookId,controllerSid),new UTF8Encoding(false));
 			RemoteLibraryLoader.Load(processId,nativePath);
 			var wait=Stopwatch.StartNew();
 			var report=WaitForCompletion(process,completion,TimeSpan.FromMilliseconds(initializationTimeoutMs));
@@ -55,7 +60,12 @@ public static class OneShotInjector {
 		}
 	}
 
-	public static string Parameters(string imagePath,int processId,long creationTicks,string completion,HookDefinition definition,string endpoint="none",byte[]? endpointSecret=null,string? residentHookId=null) {
+	/// <param name="controllerSid">Who will open the resident's control endpoint, when that is a
+	/// different principal from the target. The probe protects the pipe DACL and names only its own SID,
+	/// so a controller running as another account - ApplyOnce elevated against a service-account target,
+	/// for instance - would otherwise build an endpoint it cannot open, and initialization would succeed
+	/// right up to the first message. Null when the accounts match, which the probe ignores anyway.</param>
+	public static string Parameters(string imagePath,int processId,long creationTicks,string completion,HookDefinition definition,string endpoint="none",byte[]? endpointSecret=null,string? residentHookId=null,string? controllerSid=null) {
 		var target=definition.Target!; var hook=definition.Hook!;
 		var source=Convert.ToBase64String(Encoding.UTF8.GetBytes(hook.Source!));
 		var values=new[] {
@@ -65,8 +75,17 @@ public static class OneShotInjector {
 			Pair("hook_metadata_token",target.MetadataToken.ToString(CultureInfo.InvariantCulture)),Pair("hook_declaring_type",target.DeclaringType!),Pair("hook_method_signature",target.Signature!),Pair("hook_il_sha256",target.IlSha256!),
 			Pair("hook_source_base64",source),Pair("hook_revision",hook.Revision.ToString(CultureInfo.InvariantCulture)),Pair("maximum_events_per_second",hook.MaximumEventsPerSecond.ToString(CultureInfo.InvariantCulture)),Pair("maximum_string_length",hook.MaximumStringLength.ToString(CultureInfo.InvariantCulture))
 		};
-		return String.Join("\n",endpointSecret is null?values:values.Concat(new[]{Pair("endpoint_secret_base64",Convert.ToBase64String(endpointSecret))}))+"\n";
+		var all=endpointSecret is null?values:values.Concat(new[]{Pair("endpoint_secret_base64",Convert.ToBase64String(endpointSecret))});
+		// controller_sid requires endpoint=pipe; BootstrapParameters refuses the combination otherwise,
+		// so it is only emitted where it can mean anything.
+		if(!String.IsNullOrEmpty(controllerSid)&&endpoint=="pipe") all=all.Concat(new[]{Pair("controller_sid",controllerSid!)});
+		return String.Join("\n",all)+"\n";
 	}
+
+	/// <summary>The identity pair, or null when this process cannot identify itself. Null degrades to
+	/// today's behaviour - no controller_sid, so the probe names only its own SID - rather than failing
+	/// an injection that may well be same-user and perfectly fine.</summary>
+	static IdentityPair? IdentityPairOrNull(int processId) { try { return IdentityPair.For(processId); } catch(InvalidOperationException) { return null; } }
 
 	public static void WriteResult(int processId,string result) { try { File.WriteAllText(ResultPath(processId),result,new UTF8Encoding(false)); } catch { } }
 	public static string ResultPath(int processId)=>Path.Combine(Path.GetTempPath(),"HookLab.ApplyOnce-"+processId.ToString(CultureInfo.InvariantCulture)+".result.txt");

@@ -48,6 +48,11 @@ namespace HookLab.Injector {
 		public PreconditionResult CreationAuthorized { get; }
 		public string CreationDetail { get; }
 
+		/// <summary>Plans an exchange area from the contract's identity pair. Preferred over the two-SID
+		/// overload, so the same pair that decides the endpoint DACL decides this.</summary>
+		public static ExchangeAreaPlan For(IdentityPair identities,string purpose)=>
+			For((identities??throw new ArgumentNullException(nameof(identities))).Controller,identities.Target,purpose);
+
 		/// <summary>Plans an exchange area for one operation, without touching the filesystem.</summary>
 		public static ExchangeAreaPlan For(SecurityIdentifier controller,SecurityIdentifier? target,string purpose) {
 			if(controller is null) throw new ArgumentNullException(nameof(controller));
