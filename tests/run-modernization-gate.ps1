@@ -123,10 +123,14 @@ try {
 		# named reason rather than failing the gate - and it refuses to fall back to a same-user run,
 		# because a cross-identity gate that quietly runs as one identity is the gap it exists to close.
 		Invoke-Checked 'Cross-identity HookLab fixture (Release)' { dotnet build tests\TestTargets\HookLabCrossIdentityTarget\HookLabCrossIdentityTarget.csproj -c Release --nologo -v:minimal }
+		Invoke-Checked 'Cross-identity CoreCLR HookLab fixture (Release)' { dotnet build tests\TestTargets\HookLabCrossIdentityCoreTarget\HookLabCrossIdentityCoreTarget.csproj -c Release --nologo -v:minimal }
 		$crossIdentityElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 		$crossIdentityAccount = [bool](Get-LocalUser -Name 'dgspy-fixture' -ErrorAction SilentlyContinue)
 		if ($crossIdentityAccount -and $crossIdentityElevated) {
 			Invoke-Checked 'Cross-identity, cross-domain HookLab live smoke' { .\tests\run-hooklab-cross-identity-smoke.ps1 }
+			# CoreCLR has one application domain, so this leg covers the identity axis only. That is the
+			# runtime's shape, not a reduced test: there is no second domain to enter.
+			Invoke-Checked 'Cross-identity CoreCLR HookLab live smoke' { .\tests\run-hooklab-cross-identity-coreclr-smoke.ps1 }
 		}
 		else {
 			# Both reasons are named, because "skipped" without one is how a gate quietly stops covering
