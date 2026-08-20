@@ -139,6 +139,13 @@ $env:DGSPY_HIDDEN_DESKTOP_LAUNCHER = 'C:\path\to\Invoke-OnHiddenDesktop.ps1'
 With the variable unset the legs still pass; they are simply visible. The request file records
 `hidden_desktop_launcher: null`, which is the thing to check when a gate run flashes a dnSpy window.
 
+One dialog escapes a hidden desktop no matter what. `StartUpClass.AskReadSettings` - "Do you want to
+load the saved settings?", shown when Shift is held as dnSpy starts - uses
+`MessageBoxOptions.DefaultDesktopOnly`, which is `MB_DEFAULT_DESKTOP_ONLY` and puts the box on the
+interactive window station's default desktop. It is upstream dnSpyEx code and deliberate there. Seeing
+it therefore proves nothing about which desktop dnSpy is on, either button is safe, and it needs a held
+Shift, so it is rare.
+
 CI builds the net10 package once and passes the identical verified artifact to CorDebug and all three
 Mono/Unity jobs. The local Unity fixture is `C:\Users\mjb\develop\UCH-dev\uch-debug-target`.
 
