@@ -48,23 +48,24 @@ CoreCLR HookLab proved that runtime differences are real but currently too distr
 initialization, compiler dependencies, patch-engine assets, packaging, diagnostics, and live evidence
 cross several layers. Consolidate those differences without changing shipped CLR v4 or CoreCLR behavior.
 
-The authoritative payload matrix is done: the build now states every resident payload's role, carrier,
-runtime family, framework, architecture, identity, provenance, dependencies, and digest, and package
-verification proves it against the shipped bytes in both directions. See
-[Resident payload matrix](../product/HOOKLAB.md#resident-payload-matrix).
+Two pieces are done. The build states every resident payload's role, carrier, runtime family,
+framework, architecture, identity, provenance, dependencies, and digest, and package verification
+proves it against the shipped bytes in both directions. A compatibility probe then drives a complete
+resident lifecycle against real CLR v4 and CoreCLR targets in seconds, before any GUI gate, failing
+with a named stage and payload identity; supported CoreCLR versions are now declared rather than
+implied. See [Resident payload matrix](../product/HOOKLAB.md#resident-payload-matrix) and
+[Resident compatibility probe](../product/HOOKLAB.md#resident-compatibility-probe).
 
 Travel the rest of this road in independently implemented, live-tested, retired, and committed
 subslices:
 
-1. Add fast real-process resident compatibility probes for CLR v4 and each supported CoreCLR range;
-   keep packaged live gates authoritative.
-2. Introduce an immutable backend descriptor and narrow explicit CLR v4/CoreCLR backend contract.
-3. Isolate CodeDom and Roslyn behind a runtime-neutral compiler ABI.
-4. Standardize backend lifecycle states and bounded stage-aware resident errors.
+1. Introduce an immutable backend descriptor and narrow explicit CLR v4/CoreCLR backend contract.
+2. Isolate CodeDom and Roslyn behind a runtime-neutral compiler ABI.
+3. Standardize backend lifecycle states and bounded stage-aware resident errors.
 
 This road exits only when the current CLR v4 and CoreCLR packaged live hook lifecycles remain green and
-the probe, contract, compiler boundary, lifecycle, and diagnostics are documented in their owning
-product documents. The implementation-grade task and acceptance evidence live in
+the contract, compiler boundary, lifecycle, and diagnostics are documented in their owning product
+documents. The implementation-grade task and acceptance evidence live in
 `docs/local/work/runtime-backend-architecture-mono-x86.md`.
 
 ## Road 2 - add a Mono HookLab resident

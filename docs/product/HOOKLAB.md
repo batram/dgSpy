@@ -55,6 +55,48 @@ Note what the matrix does not claim. It records that a payload is *valid* on a r
 every payload is *used* on it, and it is not a substitute for the packaged live hook lifecycle gates -
 it fails a wrong payload set earlier and by name, not instead.
 
+## Supported runtimes
+
+CLR v4 has one version. CoreCLR does not, so the versions HookLab is supported on are stated rather
+than left implied by the word "CoreCLR":
+
+| Runtime family | Supported | Evidence |
+| --- | --- | --- |
+| CLR v4 (`v4.0.30319`), x64 | yes | packaged CLR v4 HookLab live gate, cross-identity gate, compatibility probe |
+| CoreCLR 10.0 up to but excluding 11.0, x64 | yes | packaged CoreCLR HookLab live gate, cross-identity gate, compatibility probe |
+| Any other CoreCLR major version | no | none - a version outside every supported range is refused by name |
+
+A range is a claim that a packaged live hook lifecycle has actually run there. Adding one needs its own
+evidence, not an expectation that it should work.
+
+## Resident compatibility probe
+
+The compatibility probe drives one complete resident lifecycle against a real CLR v4 target and a real
+CoreCLR target, in a couple of seconds each, with no dnSpy and no GUI:
+
+```powershell
+dotnet build tests\TestTargets\HookLabProbeTarget\HookLabProbeTarget.csproj -c Release
+dotnet run --project tests\HookLab.CompatibilityProbe -c Release -- --negative
+```
+
+Each leg runs named stages - `payload_verify`, `backend_selection`, `target_launch`, `runtime_range`,
+`residency_commit`, `listener_ready`, `authenticated`, `compile`, `behavior`, `event`, `remove`,
+`retire` - and a failure reports the stage plus every payload identity that stage had selected. That is
+the point of it: a wrong patch engine or an unresolvable compiler dependency used to appear only as a
+timeout inside a packaged live gate, long after everything else had run. `--negative` additionally
+requires a payload with one byte changed to be refused, so the verification stage cannot pass vacuously.
+
+Two things it deliberately does not prove, because the packaged live gates own them and remain
+authoritative:
+
+- **Arrival.** The target loads the payload into itself. That is the CoreCLR delivery path minus the
+  debugger, and it is not the CLR v4 path at all, which arrives through the native bootstrap.
+- **Anything about dnSpy** - the extension, the GUI, the MCP surface, or session handling.
+
+What it does prove is everything downstream of arrival, which is where the runtimes actually differ:
+payload selection from the matrix, the dependency closure, compiler creation and a real compilation,
+the pinned patch engine loading, live behavior change, event capture, removal, and clean retirement.
+
 ## Identity and the control channel
 
 The debugger and its target are not assumed to be the same Windows account. Two principals are read

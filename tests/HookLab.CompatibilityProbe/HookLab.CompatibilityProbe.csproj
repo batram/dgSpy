@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>HookLab.CompatibilityProbe</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\HookLab\HookLab.Host.Transport\HookLab.Host.Transport.csproj" />
+    <ProjectReference Include="..\..\HookLab\HookLab.Contracts\HookLab.Contracts.csproj" />
+  </ItemGroup>
+  <!-- Source-linked rather than referenced, for the same reason DgSpyTool links them: the resident's
+       matrix parser is a net48 assembly this process must not load, and a second hand-written copy of
+       the format would be free to disagree with the one that runs inside a target. -->
+  <ItemGroup>
+    <Compile Include="..\..\HookLab\HookLab.Bootstrap\PayloadMatrix.cs" Link="Shared\PayloadMatrix.cs" />
+    <Compile Include="..\..\Build\DgSpyTool\PayloadMatrixVerification.cs" Link="Shared\PayloadMatrixVerification.cs" />
+  </ItemGroup>
+</Project>

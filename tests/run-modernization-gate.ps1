@@ -63,6 +63,16 @@ try {
 	Invoke-Checked 'PowerShell host-launcher tests' { .\tests\TestSupport\Start-DgSpyHost.Tests.ps1 }
 	Invoke-Checked 'immutable pipeline tests' { dotnet test tests\DgSpyTool.Tests\DgSpyTool.Tests.csproj -c Release --nologo -v:minimal }
 
+	# Deliberately early, and deliberately before anything that needs a GUI. It drives the complete
+	# resident lifecycle - payload selection, residency, authentication, compile, patch engine, behavior,
+	# events, removal, retirement - against real CLR v4 and CoreCLR targets in a couple of seconds, with
+	# no dnSpy involved. A wrong Harmony asset or an unresolvable compiler dependency used to surface
+	# forty minutes later as a timeout inside a packaged live gate; this names the stage and the assembly
+	# instead. It complements those gates and does not replace them: arrival - native injection and
+	# debugger evaluation - is theirs alone.
+	Invoke-Checked 'HookLab compatibility probe fixture' { dotnet build tests\TestTargets\HookLabProbeTarget\HookLabProbeTarget.csproj -c Release --nologo -v:minimal }
+	Invoke-Checked 'HookLab resident compatibility probe' { dotnet run --project tests\HookLab.CompatibilityProbe -c Release --no-launch-profile -- --negative }
+
 	if ($UpdateSnapshots) {
 		$env:DGSPY_UPDATE_SNAPSHOTS = '1'
 		$env:DGSPY_SNAPSHOT_DIR = Join-Path $repoRoot 'tests\dgSpy.Gateway.Tests\Snapshots'

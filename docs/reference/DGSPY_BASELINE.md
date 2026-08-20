@@ -102,6 +102,19 @@ change before modifying the installation and preserves the CLI, Gateway, install
 .\tests\run-modernization-gate.ps1 -Stage CorDebug
 ```
 
+The gate's `Shared` stage runs the HookLab resident compatibility probe before anything that needs a
+GUI. It drives a full resident lifecycle against real CLR v4 and CoreCLR targets in seconds and fails
+with a named stage and payload identity, so a wrong runtime asset stops the gate early instead of
+surfacing as a timeout inside a live leg. Run it alone with:
+
+```powershell
+dotnet run --project tests\HookLab.CompatibilityProbe -c Release -- --negative
+```
+
+It reads the payload from `DGSPY_LAYOUT_ROOT` or the newest composed layout. See
+[Resident compatibility probe](../product/HOOKLAB.md#resident-compatibility-probe) for what it proves
+and, just as importantly, what it leaves to the packaged live gates.
+
 To consume a package exactly as CI does:
 
 ```powershell
