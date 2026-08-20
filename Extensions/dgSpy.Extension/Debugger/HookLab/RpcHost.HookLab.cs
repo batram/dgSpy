@@ -332,8 +332,8 @@ namespace dgSpy.Extension {
 							// status=ok - it was scheduled the moment the host gave up and resumed. The
 							// CLR v4 branch below has always resumed before its wait; this one did not.
 							//
-							// Idempotent: ResumeAsync returns immediately when the process is running.
-							await ResumeAsync(host,source,token).ConfigureAwait(false);
+							// Idempotent: the CorDebug engine continues only when its own state is paused.
+							await ReconcileCoreClrRunAsync(host,source,token).ConfigureAwait(false);
 							completionReport=await ReadCompletionAsync(completion,token).ConfigureAwait(false);
 						}
 						else { await ResumeAsync(host,source,token).ConfigureAwait(false); completionReport=await InitializeAutonomouslyAsync(processId,identity,exchange.Path,token).ConfigureAwait(false); }
@@ -916,6 +916,14 @@ namespace dgSpy.Extension {
 				if(await host.OnDebuggerAsync(()=>host.SelectProcess(source).IsRunning,token).ConfigureAwait(false)) return;
 				await host.ContinueProcessAsync(ControlRequest(source),token).ConfigureAwait(false);
 			}
+			static async Task ReconcileCoreClrRunAsync(RpcHost host,RpcRequest source,CancellationToken token) {
+				var runtime=await host.OnDebuggerAsync(()=>{
+					var candidates=host.SelectProcess(source).Runtimes.Where(host.ownedBreakpoints.IsSupported).ToArray();
+					if(candidates.Length!=1) throw new RpcException("hooklab_runtime_ambiguous","HookLab expected exactly one CorDebug runtime for state reconciliation, found "+candidates.Length.ToString(CultureInfo.InvariantCulture)+".");
+					return candidates[0];
+				},token).ConfigureAwait(false);
+				await host.ownedBreakpoints.ReconcileRunAsync(runtime,token).ConfigureAwait(false);
+			}
 			static RpcRequest ControlRequest(RpcRequest source)=>new RpcRequest { Operation=source.Operation,Arguments=new JsonObject { ["session_id"]=Required(source.Arguments,"session_id"),["process_id"]=RequiredInt(source.Arguments,"process_id") } };
 			static object Initialized(RuntimeRecord runtime,bool changed,bool? adopted=null)=>new { initialized=true,changed,adopted,process_id=runtime.ProcessId,state="ready",hooks_version=runtime.HooksVersion,probe_instance_id=runtime.ProbeInstanceId };
 			static object Installed(HookRecord record,bool changed) => new { hook=View(record),installed=changed };
@@ -955,15 +963,18 @@ namespace dgSpy.Extension {
 			/// 26024 - deadline plus grace plus ~1 s - and the failure rate did not move at all: two of six
 			/// runs, the same as before. The grace was reverted.</para>
 			///
-			/// <para>That pair of measurements is worth more than the fix that failed. The target's worker
-			/// is scheduled when this wait <em>ends</em>, whatever length it is given, and not when the
-			/// target is resumed - so something on the host side holds the target across the wait and
-			/// releases it as the operation unwinds. The wait is the block, and no amount of it is ever
-			/// enough. Every report said <c>status=ok</c> with <c>behavior_elapsed_ms=2</c>: once let run,
-			/// the resident finishes in two milliseconds.</para>
+			/// <para>The hold is a split between dnSpy's manager state and CorDebug's engine state after
+			/// func-eval. The manager can still say running and suppress <c>DbgProcess.Run</c> while
+			/// <c>DnDebugger</c> is paused. CoreCLR initialization therefore uses the narrow CorDebug bridge
+			/// to invoke the engine's existing idempotent <c>RunCore</c>, which decides from that authoritative
+			/// state and does not expose raw <c>ICorDebug</c> control.</para>
 			///
-			/// <para>Finding what holds it is open work. Until then the deadline keeps its original length,
-			/// and <see cref="TryReadLateReport"/> makes the refusal say what really happened.</para></summary>
+			/// <para>Verified against the produced package on 2026-08-20: 23 consecutive lifecycle runs
+			/// reached this path and passed 19/0. A separate twelfth launch in the first batch never opened
+			/// its RPC port and therefore did not reach readiness or this lifecycle.</para>
+			///
+			/// <para>The deadline keeps its original length, and <see cref="TryReadLateReport"/> still makes
+			/// any future refusal distinguish late successful work from work that never published.</para></summary>
 			static async Task<Dictionary<string,string>> ReadCompletionAsync(string path,CancellationToken token) {
 				var report=await PollCompletionAsync(path,TimeSpan.FromSeconds(CompletionDeadlineSeconds),token).ConfigureAwait(false);
 				if(report is not null) return report;

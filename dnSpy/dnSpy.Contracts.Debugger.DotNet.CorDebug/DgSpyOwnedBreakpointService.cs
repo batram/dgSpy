@@ -19,6 +19,9 @@ namespace dnSpy.Contracts.Debugger.DotNet.CorDebug {
 		/// <summary>Posts creation to the CorDebug thread and reports the binding verdict.</summary>
 		void Create(DbgRuntime runtime, ModuleId module, uint token, uint offset,
 			Func<DbgThread?, bool> condition, Action<IDgSpyOwnedBreakpointHandle?, string?> completed);
+		/// <summary>Runs the CorDebug engine's idempotent state reconciliation, bypassing a stale
+		/// manager-level running state that would otherwise suppress the engine call.</summary>
+		void ReconcileRun(DbgRuntime runtime, Action<string?> completed);
 	}
 
 	/// <summary>An opaque, owner-scoped engine breakpoint.</summary>

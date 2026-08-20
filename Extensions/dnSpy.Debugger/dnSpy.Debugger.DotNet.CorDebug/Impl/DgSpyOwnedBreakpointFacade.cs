@@ -13,6 +13,7 @@ using dnSpy.Contracts.Metadata;
 
 namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 	abstract partial class DbgEngineImpl {
+		internal void ReconcileDgSpyRun() => RunCore();
 		internal DnILCodeBreakpoint CreateDgSpyOwnedBreakpoint(ModuleId module, uint token, uint offset, Func<DbgThread?, bool> condition) {
 			VerifyCorDebugThread();
 			return dnDebugger.CreateBreakpoint(module.ToDnModuleId(), token, offset,
@@ -51,6 +52,17 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 					completed(new DgSpyOwnedBreakpointHandle(engine, breakpoint), null);
 				}
 				catch (Exception ex) { completed(null, ex.Message); }
+			});
+		}
+
+		void IDgSpyOwnedBreakpointService.ReconcileRun(DbgRuntime runtime, Action<string?> completed) {
+			if (runtime is null) throw new ArgumentNullException(nameof(runtime));
+			if (completed is null) throw new ArgumentNullException(nameof(completed));
+			var engine = DbgEngineImpl.TryGetEngine(runtime);
+			if (engine is null) { completed("The selected runtime is not controlled by the CorDebug engine."); return; }
+			engine.CorDebugThread(() => {
+				try { engine.ReconcileDgSpyRun(); completed(null); }
+				catch (Exception ex) { completed(ex.Message); }
 			});
 		}
 	}

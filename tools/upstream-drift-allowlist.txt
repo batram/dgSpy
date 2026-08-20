@@ -172,10 +172,12 @@ Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DbgEngineImpl.cs  
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/Impl/DbgEngineImpl.cs               honour the explicit redirect request on launch
 
 # Internal atomic actions need an engine breakpoint owner below dnSpy's public
-# duplicate-rejecting breakpoint collection. Keep this bridge narrow so dgSpy
+# duplicate-rejecting breakpoint collection. CoreCLR initialization also needs
+# one authoritative, idempotent engine-state reconciliation when the manager's
+# running state is stale after func-eval. Keep both operations narrow so dgSpy
 # does not use reflection or expose general CorDebug internals.
-Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DgSpyOwnedBreakpointFacade.cs  owned internal breakpoint facade
-dnSpy/dnSpy.Contracts.Debugger.DotNet.CorDebug/DgSpyOwnedBreakpointService.cs                narrow owned-breakpoint contract for dgSpy consumers
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DgSpyOwnedBreakpointFacade.cs  narrow owned-breakpoint and authoritative run-state facade
+dnSpy/dnSpy.Contracts.Debugger.DotNet.CorDebug/DgSpyOwnedBreakpointService.cs                narrow CorDebug services contract for dgSpy consumers
 
 # ICorDebugThread::GetUserState returning a failed HRESULT was converted to state 0,
 # which is indistinguishable from a thread with no flags set. Anything asking "is

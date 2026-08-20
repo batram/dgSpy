@@ -35,14 +35,14 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Find what holds a target across the initialization wait, and make timeout readback deterministic.
+1. Make HookLab mutation-timeout readback and partial-initialization cleanup deterministic.
 2. Add a Mono HookLab resident on that framework.
 3. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
 4. Revisit high-risk execution, editing, and scripting one workflow at a time.
 5. Keep the remaining compatibility expansions parked until product scope changes.
 6. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - find what holds a target across the initialization wait
+## Road 1 - make timeout recovery deterministic
 
 The compatibility framework this road set out to build is done. Runtime differences are now stated
 once each and proved against what ships:
@@ -60,16 +60,18 @@ once each and proved against what ships:
 - refusal reports name the stage they failed in and carry bounded exception chains -
   [Resident stages and refusal reports](../product/HOOKLAB.md#resident-stages-and-refusal-reports).
 
-What remains is one defect the road uncovered and did not close, and the road is now that defect. The
-cross-identity CoreCLR leg fails roughly two runs in six with `hook_operation_timed_out`, while its own
-report says the resident succeeded in two milliseconds. Measurement, not inference: the target's worker
-is scheduled when the host's wait **ends**, whatever length that wait is given, and not when the target
-is resumed. Waiting longer and resuming again were both tried and both refuted.
+The intermittent cross-identity CoreCLR initialization defect this road uncovered is closed. After
+func-eval, dnSpy's manager can still report running and suppress `DbgProcess.Run` while CorDebug's own
+debugger state is paused. CoreCLR initialization now invokes the engine's existing idempotent `RunCore`
+through a narrow CorDebug contract; that method decides from the authoritative engine state without
+exposing raw `ICorDebug` control. Waiting longer remains explicitly rejected: measurement showed that it
+only moved the failure by the added delay. The produced package then passed 23 consecutive lifecycle runs
+(19/0 each); one separate launch never opened its RPC port and is excluded because it did not reach
+readiness or exercise the lifecycle.
 
-So: find what holds the target across the initialization wait and releases it only as the operation
-unwinds, then make mutation timeout readback and partial-initialization cleanup deterministic. Until
-that is done, the packaged CLR v4 and CoreCLR live hook lifecycles are not reliably green, and this
-road does not exit. The implementation-grade task and acceptance evidence live in
+What remains is narrower: make mutation-timeout readback and partial-initialization cleanup
+deterministic, with an authoritative post-timeout state instead of an inference from the timed-out
+request. Until that is done this road does not exit. The implementation-grade task and acceptance evidence live in
 `docs/local/work/runtime-backend-architecture-mono-x86.md`.
 
 ## Road 2 - add a Mono HookLab resident

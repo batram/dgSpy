@@ -44,7 +44,9 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $runner = Join-Path $PSScriptRoot 'Invoke-CrossIdentitySmokeTask.ps1'
+$hiddenRunner = Join-Path $PSScriptRoot 'Invoke-CrossIdentitySmokeTaskHidden.vbs'
 if (-not (Test-Path $runner)) { throw "Missing $runner" }
+if (-not (Test-Path $hiddenRunner)) { throw "Missing $hiddenRunner" }
 
 # The account. Idempotent, because this script is the documented way to get a machine into shape and
 # will be run again on machines that are already half-configured.
@@ -73,15 +75,15 @@ New-Item -ItemType Directory -Force -Path $exchange | Out-Null
 
 $principalUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 foreach ($leg in @(@{ Name = 'cross-identity-net48'; Which = 'net48' }, @{ Name = 'cross-identity-coreclr'; Which = 'coreclr' })) {
-	# -WindowStyle Hidden because the task runs in the interactive session: without it the console appears
-	# on the user's screen and takes focus once per trigger. The runner hides itself too, but only after
-	# PowerShell has started, which still shows a brief flash - the task action is the only place that
-	# prevents the window existing at all.
+	# Task Scheduler starts console-subsystem executables on the interactive desktop. Even
+	# powershell.exe -WindowStyle Hidden can allocate a console briefly before hiding it. Start through
+	# wscript.exe instead: it is a GUI-subsystem process, and the VBS launcher creates PowerShell with
+	# window style 0, so no console is made visible at any point.
 	#
 	# The comment lives here rather than inside the call: a comment between a backtick continuation and
 	# the next parameter ends the statement, which turned -Argument into an unknown command.
-	$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
-		-Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $runner + '" -Which ' + $leg.Which) `
+	$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wscript.exe" `
+		-Argument ('//B //NoLogo "' + $hiddenRunner + '" "' + "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" + '" "' + $runner + '" ' + $leg.Which) `
 		-WorkingDirectory $repoRoot
 	# Interactive so dnSpy gets a desktop; highest privileges so the smoke has SeDebugPrivilege.
 	$principal = New-ScheduledTaskPrincipal -UserId $principalUser -LogonType Interactive -RunLevel Highest

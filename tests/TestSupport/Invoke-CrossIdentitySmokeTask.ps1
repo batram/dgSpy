@@ -18,11 +18,10 @@ param([Parameter(Mandatory = $true)][ValidateSet('net48', 'coreclr')][string]$Wh
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 
-# Hide our own console immediately. Task Scheduler starts this in the INTERACTIVE session, so the
-# window appears on the user's screen and takes focus once per trigger - measured, four flashes from
-# four runs. The hidden-desktop launcher below only covers what the smoke spawns, not the host the task
-# created for this script. Done here rather than only in the task's arguments so that tasks registered
-# before this fix are quiet too, without a second elevated registration.
+# Best-effort fallback for tasks registered before the no-console WScript launcher was added. Task
+# Scheduler starts those old PowerShell actions in the INTERACTIVE session, where their console can
+# flash before this code runs. Re-registering the tasks prevents the console from being created; this
+# block still hides an old task as soon as its script begins.
 try {
 	Add-Type -Name Window -Namespace Native -MemberDefinition '
 		[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
