@@ -26,6 +26,7 @@ namespace dgSpy.Extension {
 		readonly HookLabService hookLab=new HookLabService();
 
 		Task<object> InitializeHookLabAsync(RpcRequest req,CancellationToken token) => hookLab.InitializeAsync(this,req,token);
+		Task<object> GetHookLabReadinessAsync(RpcRequest req,CancellationToken token) => hookLab.ReadinessAsync(this,req,token);
 		object GetHookLabStatus(RpcRequest req) { CheckSession(req); return hookLab.Status(RequiredSession(req),(int?)req.Arguments["process_id"]); }
 		async Task<object> GetHookTemplateAsync(RpcRequest req,CancellationToken token) {
 			CheckSession(req);
@@ -125,6 +126,112 @@ namespace dgSpy.Extension {
 			readonly SemaphoreSlim initialization=new SemaphoreSlim(1,1);
 			long cursor;
 
+			/// <summary>Everything the contract needs, read from the target and the payload and deciding
+			/// nothing. Both the acting path and the read-only probe call this, which is what stops a
+			/// preflight from becoming a second implementation that drifts from the path it gates.
+			///
+			/// <para><b>Boundary.</b> This reads: debugger-published process facts, the target's SID, the
+			/// prospective exchange plan - which creates nothing, by construction - and the shipped payload,
+			/// which it opens and closes. It performs no remote allocation, starts no remote thread, stages
+			/// nothing, creates no endpoint, mutates no ACL, writes nothing into the target's address
+			/// space, and makes no filesystem change on this machine. <see cref="ReadinessAsync"/> depends
+			/// on that and asserts it in test.</para></summary>
+			async Task<(HookLabPreconditions.Facts Facts,HookLab.Injector.IdentityPair? Identities,HookLab.Injector.ExchangeAreaPlan? Exchange,(string? Name,string IdentityId) Domain)>
+				GatherFactsAsync(RpcHost host,RpcRequest source,CancellationToken token) {
+				var processId=RequiredInt(source.Arguments,"process_id");
+				var observed=await host.OnDebuggerAsync(()=>{
+					var process=host.SelectProcess(source);
+					var runtimes=process.Runtimes.Select(runtime=>new HookLabRuntimeIdentity(runtime.Guid,runtime.Name)).ToArray();
+					var domains=process.Runtimes.SelectMany(runtime=>runtime.AppDomains).Select(domain=>(domain.Id,domain.Name)).ToArray();
+					return (process.Bitness,Architecture:process.Architecture.ToString(),Runtimes:runtimes,Domains:domains);
+				},token).ConfigureAwait(false);
+
+				var facts=new HookLabPreconditions.Facts {
+					ProcessId=processId,
+					Bitness=observed.Bitness,
+					Architecture=observed.Architecture,
+					Runtimes=observed.Runtimes,
+					ApplicationDomains=observed.Domains,
+					RequestedApplicationDomain=RequestedApplicationDomain(source),
+				};
+
+				HookLab.Injector.IdentityPair? identities=null;
+				try {
+					identities=HookLab.Injector.IdentityPair.For(processId);
+					facts.TargetIdentityKnown=identities.Target is not null;
+					facts.CrossIdentity=identities.CrossIdentity;
+					if(identities.Target is null) facts.IdentityFailureDetail="The target process identity could not be read, so no authority relationship with it can be derived.";
+				}
+				catch(InvalidOperationException ex) { facts.IdentityFailureDetail=ex.Message; }
+
+				HookLab.Injector.ExchangeAreaPlan? exchange=null;
+				if(identities is not null && identities.Target is not null) {
+					// Planning only. ExchangeAreaTests asserts that this creates nothing, which is what lets
+					// the probe answer both exchange rows without a filesystem change.
+					exchange=HookLab.Injector.ExchangeAreaPlan.For(identities,"dgspy-hooklab-"+processId.ToString(CultureInfo.InvariantCulture));
+					facts.ExchangePlanned=true;
+					facts.ExchangeCreation=Outcome(exchange.CreationAuthorized);
+					facts.ExchangeCreationDetail=exchange.CreationDetail;
+				}
+
+				try { using var payload=dgSpy.Extension.PayloadDelivery.HookLabPayloadResolver.Open(); facts.PayloadVerified=true; }
+				catch(dgSpy.Extension.PayloadDelivery.HookLabPayloadRefusedException ex) { facts.PayloadFailureDetail=ex.Message; }
+				catch(Exception ex) { facts.PayloadFailureDetail=ex.GetType().Name+": "+ex.Message; }
+
+				var domain=facts.RequestedApplicationDomain is int requested && observed.Domains.Length>1 && observed.Domains.Any(value=>value.Id==requested)
+					?(Name:(string?)observed.Domains.First(value=>value.Id==requested).Name,IdentityId:requested.ToString(CultureInfo.InvariantCulture))
+					:(Name:(string?)null,IdentityId:DefaultApplicationDomainId);
+				return (facts,identities,exchange,domain);
+			}
+
+			/// <summary>The injector's verdict in the contract's vocabulary. One place, and it throws on a
+			/// value it does not recognize rather than mapping it to something plausible: the two enums
+			/// exist separately only because the injector's assembly cannot be referenced from where the
+			/// contract has to be testable.</summary>
+			static PreconditionOutcome Outcome(HookLab.Injector.PreconditionResult result) => result switch {
+				HookLab.Injector.PreconditionResult.Satisfied=>PreconditionOutcome.Satisfied,
+				HookLab.Injector.PreconditionResult.Failed=>PreconditionOutcome.Failed,
+				HookLab.Injector.PreconditionResult.NotProvablePreflight=>PreconditionOutcome.NotProvablePreflight,
+				_=>throw new RpcException("internal_error","Unrecognized precondition result from the exchange area: "+result+"."),
+			};
+
+			/// <summary>The same computation the acting path is gated on, exposed read-only.
+			///
+			/// <para>It never reports that the payload will load. At its strongest it reports
+			/// <c>no known incompatibility</c>, and every precondition it could not decide says so by
+			/// name instead of being counted as a pass.</para></summary>
+			public async Task<object> ReadinessAsync(RpcHost host,RpcRequest source,CancellationToken token) {
+				host.CheckSession(source);
+				var gathered=await GatherFactsAsync(host,source,token).ConfigureAwait(false);
+				var report=HookLabPreconditions.Evaluate(gathered.Facts);
+				return new {
+					process_id=gathered.Facts.ProcessId,
+					refuses=report.Refuses,
+					summary=report.Summary,
+					refusal=report.FirstFailure is null?null:new { precondition=report.FirstFailure.Name,code=report.FirstFailure.RefusalCode,detail=report.FirstFailure.Detail },
+					preconditions=report.Preconditions.Select(precondition=>new {
+						name=precondition.Name,
+						result=Wire(precondition.Result),
+						detail=precondition.Detail,
+						refusal_code=precondition.RefusalCode,
+						// Stated for every row, including the rows that say no: "we could not tell, so we
+						// continued" is a policy, and a policy nobody wrote down is how a refusal quietly
+						// becomes a pass.
+						refuses_when_unprovable=precondition.RefusesWhenUnprovable,
+					}).ToArray(),
+					application_domains=gathered.Facts.ApplicationDomains.Select(domain=>new { id=domain.Id,name=domain.Name }).ToArray(),
+					exchange_area=gathered.Exchange?.Root,
+					target_unmodified=true,
+				};
+			}
+
+			static string Wire(PreconditionOutcome outcome) => outcome switch {
+				PreconditionOutcome.Satisfied=>"satisfied",
+				PreconditionOutcome.Failed=>"failed",
+				PreconditionOutcome.NotProvablePreflight=>"not_provable_preflight",
+				_=>throw new RpcException("internal_error","Unrecognized precondition outcome: "+outcome+"."),
+			};
+
 			public async Task<object> InitializeAsync(RpcHost host,RpcRequest source,CancellationToken token) {
 				host.CheckSession(source);
 				BindUi(host);
@@ -140,16 +247,25 @@ namespace dgSpy.Extension {
 				try {
 					lock(gate) if(runtimes.TryGetValue(RuntimeKey(session,processId),out existing)) { RefuseDomainMismatch(source,existing); HookLabUiBridge.SetInitialized(); return Initialized(existing,false); }
 
+				// The contract, evaluated before anything is created, injected or paused, and the mutation
+				// below gated on its result. Same gathering and same evaluation as get_hooklab_readiness,
+				// deliberately: a preflight that is a second implementation drifts from the path it gates,
+				// which is a worse defect than the one it prevents.
+				await host.OnDebuggerAsync(()=>{ host.CheckVersion(source); return 0; },token).ConfigureAwait(false);
+				var gathered=await GatherFactsAsync(host,source,token).ConfigureAwait(false);
+				var contract=HookLabPreconditions.Evaluate(gathered.Facts);
+				if(contract.FirstFailure is HookLabPreconditions.Precondition refused)
+					throw new RpcException(refused.RefusalCode ?? "unsupported_hooklab_target",refused.Detail);
+
 				var target=await host.OnDebuggerAsync(()=>{
-					host.CheckVersion(source);
 					var process=host.SelectProcess(source);
-					var identities=process.Runtimes.Select(runtime=>new HookLabRuntimeIdentity(runtime.Guid,runtime.Name)).ToArray();
-					var unsupported=HookLabTargetEligibility.UnsupportedReason(process.Bitness,process.Architecture.ToString(),identities);
-					if(unsupported is not null) throw new RpcException("unsupported_hooklab_target",unsupported);
-					var backend=HookLabTargetEligibility.SelectBackend(process.Bitness,process.Architecture.ToString(),identities)!.Value;
+					// Guaranteed by the architecture and runtime preconditions above; a null here would mean
+					// the contract and this path disagree about the same facts.
+					var backend=HookLabTargetEligibility.SelectBackend(process.Bitness,process.Architecture.ToString(),gathered.Facts.Runtimes)
+						?? throw new RpcException("unsupported_hooklab_target",HookLabTargetEligibility.UnsupportedReason(process.Bitness,process.Architecture.ToString(),gathered.Facts.Runtimes) ?? "The target became unsupported after its preconditions were evaluated.");
 					var runtimeId=backend==HookLabTargetEligibility.Backend.CoreClr?CoreClrRuntimeId(process.Id):"v4.0.30319";
 					if(String.IsNullOrWhiteSpace(runtimeId)) throw new RpcException("hooklab_runtime_identity_unavailable","The debugger did not publish the exact CoreCLR runtime version.");
-					return (WasRunning:process.IsRunning,Backend:backend,RuntimeId:runtimeId,Domain:ResolveApplicationDomain(source,process));
+					return (WasRunning:process.IsRunning,Backend:backend,RuntimeId:runtimeId,Domain:gathered.Domain);
 				},token).ConfigureAwait(false);
 				var wasRunning=target.WasRunning;
 				// One location derived from BOTH identities, rather than Path.GetTempPath() answering
@@ -160,10 +276,13 @@ namespace dgSpy.Extension {
 				// Read ONCE, here, and used for both the exchange area and the endpoint DACL below. Those
 				// two decisions used to compute "who is the controller" independently, from two different
 				// call sites, which is two chances to disagree about one fact.
-				HookLab.Injector.IdentityPair identities;
-				try { identities=HookLab.Injector.IdentityPair.For(processId); }
-				catch(InvalidOperationException ex) { throw new RpcException("hooklab_identity_unavailable",ex.Message); }
-				var exchange=HookLab.Injector.ExchangeAreaPlan.For(identities,"dgspy-hooklab-"+processId.ToString(CultureInfo.InvariantCulture)).Materialize();
+				// Both come from the gathering the contract was evaluated over. Reading the identity again
+				// here, or planning a second area, would be the same fact computed twice from two call
+				// sites - which is the defect 8402ead17 removed from this very method. Non-null is
+				// guaranteed: identity.target_readable failed above if the target's SID was unreadable, and
+				// an area is planned whenever it was readable.
+				var identities=gathered.Identities!;
+				var exchange=gathered.Exchange!.Materialize();
 				var completion=Path.Combine(exchange.Path,"completion.txt");
 				var initializationSucceeded=false;
 				ProbeConnection? connection=null; byte[]? endpointSecret=null;

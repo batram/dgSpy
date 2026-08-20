@@ -612,6 +612,38 @@
       }
     },
     {
+      "name": "get_hooklab_readiness",
+      "description": "Evaluate every precondition initialize_hooklab requires, without modifying the target. Each precondition reports satisfied, failed, or not_provable_preflight, and a failure names the exact precondition initialize_hooklab would refuse with. It never reports that the payload will load: at its strongest it reports no known incompatibility, because the target-side loader is what decides. The target process is not touched - nothing is injected, staged, allocated or paused - and no file on this machine is created or changed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Registered debugger host. Optional only when exactly one host is configured."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "integer"
+          },
+          "app_domain_id": {
+            "type": "integer",
+            "description": "Evaluate the application-domain precondition as if this domain were named, exactly as initialize_hooklab would. Omit to see what a call naming no domain would be told."
+          }
+        },
+        "required": [
+          "session_id",
+          "process_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false
+      }
+    },
+    {
       "name": "get_hook_template",
       "description": "Generate editable no-op Prefix, Postfix, paired Prefix/Postfix, exception-preserving Finalizer, or identity Transpiler C# source for one exactly selected non-generic method. Read-only: resolves metadata only and does not initialize HookLab or modify the target.",
       "inputSchema": {

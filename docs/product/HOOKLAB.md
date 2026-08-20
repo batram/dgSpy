@@ -73,6 +73,12 @@ Harmony ownership.
 The MCP surface includes:
 
 - `initialize_hooklab` and `get_hooklab_status`;
+- `get_hooklab_readiness`, which evaluates every precondition `initialize_hooklab` requires without
+  touching the target. Each precondition answers `satisfied`, `failed`, or `not_provable_preflight`,
+  and a failure names the exact precondition initialization would refuse with. It never reports that
+  the payload will load: at its strongest it reports **no known incompatibility**, because the
+  target-side loader is what decides. It is the same computation initialization is gated on, so it
+  cannot drift from the path it describes;
 - `get_hook_template`;
 - `install_hook`, `create_hook`, and `update_hook`;
 - `list_hooks`, `enable_hook`, and `disable_hook`;

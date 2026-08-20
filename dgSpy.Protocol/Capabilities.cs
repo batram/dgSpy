@@ -229,6 +229,9 @@ namespace dgSpy.Protocol {
 			Op("run_atomic_action",65000,mutates:true,version:1),
 			Op("initialize_hooklab",130000,mutates:true,version:1),
 			Op("get_hooklab_status",5000,version:1),
+			// Read-only, and bounded by one debugger round trip plus opening the shipped payload. It never
+			// pauses, injects or stages, so it needs none of initialize_hooklab's 130 s.
+			Op("get_hooklab_readiness",10000,version:1),
 			Op("get_hook_template",5000,version:1),
 			Op("install_hook",65000,mutates:true,version:1),
 			Op("create_hook",65000,mutates:true,version:1),

@@ -59,21 +59,50 @@ public sealed class HookLabUiBoundaryTests {
 		Assert.Contains("report.ContainsKey(\"pipe_name\")",source,StringComparison.Ordinal);
 	}
 
+	/// <summary>The property is unchanged and the anchors moved, because Road 1 subslice 7 replaced the
+	/// inline eligibility check with the whole precondition contract. What used to be asserted - an
+	/// unsupported target is refused before anything is staged, resumed or injected - is now the weaker
+	/// half of what holds: <em>every</em> precondition is evaluated and refused before the first mutation,
+	/// not only architecture and runtime.
+	///
+	/// <para>Staging is anchored on the point the planned area is materialized, since planning it moved
+	/// into the gathering that happens before the contract is evaluated. Planning creates nothing;
+	/// materializing is the first filesystem change and therefore the line that matters.</para></summary>
 	[Fact]
-	public void HookLab_rejects_an_unsupported_attached_target_before_resuming_or_injecting() {
+	public void HookLab_refuses_a_target_that_fails_its_contract_before_resuming_or_injecting() {
 		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
 		var initialize=source.IndexOf("publicasyncTask<object>InitializeAsync",StringComparison.Ordinal);
-		var eligibility=source.IndexOf("HookLabTargetEligibility.UnsupportedReason",initialize,StringComparison.Ordinal);
-		var refusal=source.IndexOf("thrownewRpcException(\"unsupported_hooklab_target\"",eligibility,StringComparison.Ordinal);
-		// Where staging begins. This used to anchor on the "dgspy-hooklab-init-" temp file name; the
-		// completion report now lives in the exchange area, so the anchor is the point that area is
-		// planned. The property being asserted is unchanged: nothing is staged for a target that policy
-		// has not accepted yet.
-		var completion=source.IndexOf("ExchangeAreaPlan.For(",initialize,StringComparison.Ordinal);
+		var contract=source.IndexOf("HookLabPreconditions.Evaluate(gathered.Facts)",initialize,StringComparison.Ordinal);
+		var refusal=source.IndexOf("thrownewRpcException(refused.RefusalCode",contract,StringComparison.Ordinal);
+		var materialize=source.IndexOf("gathered.Exchange!.Materialize()",initialize,StringComparison.Ordinal);
 		var resume=source.IndexOf("awaitResumeAsync(host,source,token)",initialize,StringComparison.Ordinal);
 		var inject=source.IndexOf("awaitInitializeAutonomouslyAsync",initialize,StringComparison.Ordinal);
-		Assert.True(initialize>=0 && eligibility>initialize && refusal>eligibility,"Initialization must apply the explicit target policy.");
-		Assert.True(completion>refusal && resume>refusal && inject>refusal,"Unsupported targets must be refused before staging, resume, or injection.");
+		Assert.True(initialize>=0 && contract>initialize && refusal>contract,"Initialization must evaluate the precondition contract and refuse on its first failure.");
+		Assert.True(materialize>refusal && resume>refusal && inject>refusal,"A target that fails a precondition must be refused before staging, resume, or injection.");
+	}
+
+	/// <summary>The preflight and the acting path must be one computation. A second implementation drifts
+	/// from the path it is supposed to gate, which is a worse defect than the one it prevents - so both
+	/// entry points gather through the same method and evaluate the same function.</summary>
+	[Fact]
+	public void The_readiness_probe_and_initialization_evaluate_one_contract() {
+		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
+		Assert.Equal(2,Occurrences(source,"awaitGatherFactsAsync(host,source,token)"));
+		Assert.Equal(2,Occurrences(source,"HookLabPreconditions.Evaluate("));
+		// The probe's boundary, asserted rather than documented: the words that mutate a target or this
+		// machine must not appear between the probe's signature and its return.
+		var probe=source.IndexOf("publicasyncTask<object>ReadinessAsync",StringComparison.Ordinal);
+		var probeEnd=source.IndexOf("staticstringWire(",probe,StringComparison.Ordinal);
+		Assert.True(probe>=0 && probeEnd>probe,"The readiness probe was not found where its boundary can be checked.");
+		var body=source.Substring(probe,probeEnd-probe);
+		foreach(var mutation in new[]{"Materialize(","ResumeAsync(","InitializeAutonomouslyAsync(","PauseAsync(","CreateSecret(","File.WriteAllText(","Directory.CreateDirectory("})
+			Assert.DoesNotContain(mutation,body,StringComparison.Ordinal);
+	}
+
+	static int Occurrences(string source,string value) {
+		var count=0;
+		for(var index=source.IndexOf(value,StringComparison.Ordinal);index>=0;index=source.IndexOf(value,index+value.Length,StringComparison.Ordinal)) count++;
+		return count;
 	}
 
 	[Fact]

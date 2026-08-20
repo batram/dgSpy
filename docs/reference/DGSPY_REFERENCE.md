@@ -92,7 +92,7 @@ registry contains exactly one host. `list_hosts` is Gateway-local and needs no h
 - Composed workflows: `step_and_inspect`, `trace_calls`, `run_to_method`, `run_to_location`.
 - Atomic actions: `run_atomic_action`, `start_atomic_action`, `get_atomic_action_status`,
   `cancel_atomic_action`.
-- HookLab: `initialize_hooklab`, `get_hooklab_status`, `get_hook_template`, `create_hook`,
+- HookLab: `initialize_hooklab`, `get_hooklab_readiness`, `get_hooklab_status`, `get_hook_template`, `create_hook`,
   `install_hook`, `update_hook`, `export_hook_package`, `list_hooks`, `enable_hook`, `disable_hook`, `get_hook_events`,
   `remove_hook`, `remove_all_hooks`.
 
