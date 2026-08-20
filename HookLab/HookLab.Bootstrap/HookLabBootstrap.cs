@@ -233,6 +233,7 @@ namespace HookLab.Bootstrap {
 					// Beside the teardown line, never instead of it: "unreachable" and "no longer working"
 					// are different facts and a rollback needs both to answer cleanup_outcome.
 					"command_quiescence=" + ProbeStartup.CommandQuiescenceState,
+					"listener_teardown=" + ProbeStartup.ListenerTeardownState,
 					"endpoint_live=" + (ProbeStartup.EndpointMayBeLive ? "true" : "false"),
 					// Read from the retention state rather than from this attempt's report, so that this line
 					// and the identical one on every refusal report can never disagree.
@@ -311,6 +312,7 @@ namespace HookLab.Bootstrap {
 				// A refused start whose rollback left a command running is the same hazard as a shutdown
 				// that did, and a caller who only ever sees this report has to be able to learn it.
 				"command_quiescence=" + ProbeStartup.CommandQuiescenceState,
+				"listener_teardown=" + ProbeStartup.ListenerTeardownState,
 				"endpoint_live=" + (ProbeStartup.EndpointMayBeLive ? "true" : "false"),
 				"cleanup_retry_possible=" + (ProbeStartup.HasRetainedCleanup ? "true" : "false"),
 				"residency_commit=" + (payloadsResident ? "completed" : "not_started"),

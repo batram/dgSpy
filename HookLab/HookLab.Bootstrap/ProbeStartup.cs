@@ -70,10 +70,15 @@ namespace HookLab.Bootstrap {
 			internal string? ListenerFailure;
 			/// <summary>not_required, quiesced or in_flight. See <see cref="CommandQuiescenceState"/>.</summary>
 			internal string CommandQuiescence = "not_required";
+			/// <summary>not_required (this runtime tolerates an unwinding listener), stopped, or running.
+			/// See <see cref="AwaitListenerOf"/>: on Mono, running means the target may not survive its own
+			/// exit, which is not a clean stop however complete the rest of the teardown was.</summary>
+			internal string ListenerTeardown = "not_required";
 			/// <summary>A command still inside the handler is not a clean stop: the endpoint is unreachable
 			/// but the probe may still be mutating the target, which is exactly the state a rollback used to
 			/// report as completed.</summary>
-			internal bool Clean => RuntimeError == null && EndpointError == null && !EndpointMayBeLive && CommandQuiescence != "in_flight";
+			internal bool Clean => RuntimeError == null && EndpointError == null && !EndpointMayBeLive
+				&& CommandQuiescence != "in_flight" && ListenerTeardown != "running";
 		}
 
 		/// <summary>How long one cleanup attempt waits for an in-flight command to leave the handler. Short
@@ -106,6 +111,11 @@ namespace HookLab.Bootstrap {
 		/// outside", never "quiesced" - and D5's rollback-on-verification-failure has to tell those apart to
 		/// answer cleanup_outcome honestly.</summary>
 		internal static string CommandQuiescenceState { get; private set; } = "not_required";
+
+		/// <summary>Whether the last teardown left the endpoint's listener thread still unwinding:
+		/// not_required on runtimes that tolerate it, otherwise stopped or running. See
+		/// <see cref="AwaitListenerOf"/>.</summary>
+		internal static string ListenerTeardownState { get; private set; } = "not_required";
 
 		/// <summary>The endpoint's listener thread died on an exception rather than on shutdown, if it did.
 		/// Reported so that "the endpoint stopped" and "the endpoint was stopped" are distinguishable.</summary>
@@ -191,6 +201,7 @@ namespace HookLab.Bootstrap {
 					lock (Gate) { server = server ?? serverHandle; serverRetained = true; }
 				}
 				report.ListenerFailure = ListenerFailureOf(serverHandle);
+				report.ListenerTeardown = AwaitListenerOf(serverHandle, ListenerTeardownTimeoutMilliseconds);
 			}
 			return report;
 		}
@@ -203,6 +214,7 @@ namespace HookLab.Bootstrap {
 			if (report.RuntimeAttempted) RuntimeCleanupError = report.RuntimeError;
 			if (report.EndpointAttempted) {
 				CommandQuiescenceState = report.CommandQuiescence;
+				ListenerTeardownState = report.ListenerTeardown;
 				EndpointListenerFailure = report.ListenerFailure;
 				EndpointTeardownError = report.EndpointError;
 				EndpointMayBeLive = report.EndpointMayBeLive;
@@ -236,6 +248,44 @@ namespace HookLab.Bootstrap {
 			// no command was running.
 			catch (Exception) { return "in_flight"; }
 		}
+
+		/// <summary>Waits, where the runtime requires it, for the listener thread to be gone before this
+		/// returns - and reports whether it went.
+		///
+		/// <para>Mono crashes at process exit if a thread is still unwinding out of a disposed
+		/// <c>NamedPipeServerStream</c>: measured 5 times in 5 on Unity's Mono 6.13 with a fifteen-line
+		/// reproduction containing no HookLab in it, and 0 in 5 on CLR v4.
+		/// <c>ProbePipeServer.Dispose</c> deliberately does not wait - the caller can be the target's own
+		/// thread inside a func-eval, where a two-second wait outran the evaluation timeout and destroyed a
+		/// correct guard report on its way out - so the wait belongs here, at retirement, and only where it
+		/// buys something.</para>
+		///
+		/// <para>Restricted to the runtimes that need it rather than applied to all three, because CLR v4
+		/// and CoreCLR tolerate the unwinding thread and this teardown path is shared with them. Reported
+		/// rather than assumed: a listener that did not stop in time is exactly the state that would crash
+		/// the target afterwards, and no report may claim a clean stop over it.</para></summary>
+		static string AwaitListenerOf(IDisposable serverHandle, int timeoutMilliseconds) {
+			if (!ListenerTeardownMustBeAwaited) return "not_required";
+			try {
+				var method = serverHandle.GetType().GetMethod("WaitForShutdown", BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(int) }, null);
+				if (method == null) return "not_required";
+				return true.Equals(method.Invoke(serverHandle, new object[] { timeoutMilliseconds })) ? "stopped" : "running";
+			}
+			// An endpoint that cannot be asked has not been shown to have stopped.
+			catch (Exception) { return "running"; }
+		}
+
+		/// <summary>True on runtimes whose process teardown does not survive a listener thread that is still
+		/// unwinding. Mono is the one, and it is asked by runtime type rather than by corlib name: Mono's
+		/// corlib is also <c>mscorlib</c>, so a corlib test would answer this for CLR v4 as well and make
+		/// every desktop retirement pay a wait it does not need.</summary>
+		static bool ListenerTeardownMustBeAwaited => Type.GetType("Mono.Runtime") != null;
+
+		/// <summary>Long enough for a listener released by its own endpoint's disposal, short enough that a
+		/// wedged one is reported rather than waited on. Deliberately not the func-eval budget
+		/// <see cref="QuiescenceTimeoutMilliseconds"/> answers to: the runtimes that take this wait do not
+		/// reach retirement through a CorDebug evaluation.</summary>
+		internal const int ListenerTeardownTimeoutMilliseconds = 2000;
 
 		static string? ListenerFailureOf(IDisposable serverHandle) {
 			try {

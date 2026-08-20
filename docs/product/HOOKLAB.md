@@ -2,8 +2,8 @@
 
 HookLab adds exactly guarded Harmony hooks to an attached x64 CLR v4 or CoreCLR process, through two
 separate explicit backends. It supports direct authoring through dgSpy and automatic application
-through the separately installed HookLab watcher. x86 and Mono/Unity residents are outside the current
-HookLab boundary.
+through the separately installed HookLab watcher. x86 residents are outside the current HookLab
+boundary, and Mono/Unity residents are not advertised - see [Supported runtimes](#supported-runtimes).
 
 ## Resident model
 
@@ -120,21 +120,29 @@ than left implied by the word "CoreCLR":
 | CLR v4 (`v4.0.30319`), x64 | yes | packaged CLR v4 HookLab live gate, cross-identity gate, compatibility probe |
 | CoreCLR 10.0 up to but excluding 11.0, x64 | yes | packaged CoreCLR HookLab live gate, cross-identity gate, compatibility probe |
 | Any other CoreCLR major version | no | none - a version outside every supported range is refused by name |
-| Mono/Unity, x64 | no - ordinary debugging only | see below |
+| Mono/Unity, x64 | not advertised - resident lifecycle proved, arrival and gates not | see below |
 
-Mono/Unity targets are fully supported for ordinary debugging and are refused for HookLab residency,
-by name, before residency is attempted. The reason is specific rather than general: Unity's Mono
-implements neither `WindowsIdentity.GetCurrent().User` nor `PipeSecurity.AddAccessRule`, so a resident
-there cannot build the control endpoint's access control - the protection that keeps another account
-off a channel able to patch the process. An endpoint whose protection cannot be stated is not a
-supported configuration, so the resident refuses instead of creating one.
+Mono/Unity targets are fully supported for ordinary debugging. HookLab residency there is **not
+advertised**: `HookLabBackends` has no Mono row, so the extension refuses Mono targets before residency
+is attempted.
 
-Much of what a Mono resident would need does already work - the payload graph loads and goes resident
-on Unity's Mono unchanged, and with the endpoint check lifted experimentally a complete hook lifecycle
-runs on the existing CLR v4 payload slots. But the target does not then survive: Mono crashes at
-process exit if a listener thread is still unwinding out of a disposed pipe, which is what HookLab's
-deliberately non-blocking endpoint teardown leaves behind. Residency on Mono therefore needs both a
-bounded teardown and an endpoint whose protection can be stated; neither is available today.
+That refusal is now about what has not been proved rather than about what cannot work. The two reasons
+a Mono resident was thought impossible are both gone, and the resident-side support for them ships:
+
+- Unity's Mono implements neither `WindowsIdentity.GetCurrent().User` nor
+  `PipeSecurity.AddAccessRule`, so the control endpoint's access control cannot be built the managed
+  way. It is now built through the Win32 API instead, producing a descriptor byte-identical to the one
+  CLR v4 produces - verified by reading it back off the kernel object, not by trusting the request.
+  CLR v4 and CoreCLR keep their managed construction untouched.
+- Mono crashes at process exit if a listener thread is still unwinding out of a disposed pipe, which
+  HookLab's deliberately non-blocking endpoint teardown used to leave behind. Retirement now waits for
+  the listener on the runtimes that need it and reports `listener_teardown`; CLR v4 and CoreCLR take
+  the `not_required` path and are unchanged.
+
+A complete authenticated lifecycle - compile, install, observe, remove, retire, target still alive -
+runs on Unity's Mono on the unchanged CLR v4 payload slots, eight runs out of eight. What remains
+before Mono could be advertised is everything the compatibility probe deliberately does not prove:
+**arrival**, a backend row with exact runtime and module identity, packaging, and live gates.
 
 A range is a claim that a packaged live hook lifecycle has actually run there. Adding one needs its own
 evidence, not an expectation that it should work.
@@ -169,10 +177,11 @@ the pinned patch engine loading, live behavior change, event capture, removal, a
 
 ### The Mono leg
 
-`--runtime mono` runs the same fixture on the Mono a Unity player runs, and asserts the refusal above
-rather than a lifecycle: it passes when residency is refused at `residency_commit` for the access
-control reason, and fails if a Mono target ever stops somewhere else or gets further. That makes the
-supported-runtimes statement testable instead of merely written down.
+`--runtime mono` runs the same fixture on the Mono a Unity player runs, and drives the same complete
+lifecycle the other two legs do - compile, install, observe, remove, retire, target still alive - on
+the unchanged CLR v4 payload slots. Like them, it proves everything downstream of arrival and nothing
+about arrival itself, which is why a green Mono leg does not by itself make Mono a supported HookLab
+runtime.
 
 It is opt-in and is not part of `--runtime all`, because it needs a Mono runtime this repository does
 not ship, and it is never discovered by scanning the machine - which game or editor happens to be

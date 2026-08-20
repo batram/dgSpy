@@ -46,14 +46,13 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Bound the Mono endpoint teardown so the target survives, give the endpoint protection it can state,
-   then finish the backend.
+1. Decide and prove how a Mono resident arrives, then declare the backend and gate it.
 2. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
 3. Revisit high-risk execution, editing, and scripting one workflow at a time.
 4. Keep the remaining compatibility expansions parked until product scope changes.
 5. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - make a Mono resident survivable, then give it an endpoint it can protect
+## Road 1 - prove how a Mono resident arrives, then declare and gate the backend
 
 The mechanism question is answered, and the payload work is largely already done. On a Unity-accurate
 x64 Mono fixture the whole payload graph - contracts, resident, Roslyn, and the pinned CLR v4 Harmony -
@@ -62,36 +61,35 @@ lifecycle runs on the existing CLR v4 payload slots**: compile, install, live be
 removal, and a clean resident retirement. So the matrix needs rows rather than assets, and Road 1.2's
 dependency questions are answered.
 
-Two independent things block it, and the second was found only by measuring past the first:
+Two things blocked it and both are now fixed in the resident, with the opt-in `--runtime mono` probe
+leg green eight runs out of eight. Neither was about Mono being unable to host a resident:
 
-1. **The target does not survive retirement**, root-caused: Mono crashes at process exit if a listener
-   thread is still unwinding out of a disposed `NamedPipeServerStream`. `ProbePipeServer.Dispose`
-   deliberately does not wait for its listener, because the caller can be the target's own thread
-   inside a func-eval where waiting outran the evaluation timeout. Right on CLR v4 and CoreCLR, wrong
-   on Mono. Waiting on the existing `WaitForShutdown` during cleanup turns the packaged Mono leg from
-   five crashes in five runs into `retired=clean` five times out of five - so what remains is deciding
-   the bound and where it applies, most likely at retirement only rather than in `Dispose`, with CLR v4
-   and CoreCLR evidence of its own because the teardown path is shared.
-2. **The control endpoint has no statable protection.** Unity's Mono implements neither
-   `WindowsIdentity.GetCurrent().User` nor `PipeSecurity.AddAccessRule`, so the endpoint's access
-   control cannot be built. A class-library boundary, upstream of every arrival question and identical
-   whether the payload arrives by debugger-driven managed loading or native embedding. The candidates
-   are a descriptor built through `advapi32`/`CreateNamedPipeW` and wrapped, which keeps the current
-   guarantee at the cost of native interop in the resident; or a different endpoint carrying the
-   existing challenge-response, which needs an explicit account of what defence in depth is lost.
+- **The control endpoint had no statable protection.** Unity's Mono implements neither
+  `WindowsIdentity.GetCurrent().User` nor `PipeSecurity.AddAccessRule`. The descriptor is now built
+  through `advapi32`/`CreateNamedPipeW` instead and is byte-identical to the managed one, verified by
+  reading it back off the kernel object. CLR v4 and CoreCLR keep their managed construction.
+- **The target did not survive retirement.** Mono crashes at process exit if a listener thread is still
+  unwinding out of a disposed `NamedPipeServerStream`. Retirement now waits for the listener where the
+  runtime requires it and reports `listener_teardown`; `Dispose` still does not wait, so the func-eval
+  bound that made it non-blocking is untouched, and CLR v4 and CoreCLR take the `not_required` path.
 
-The resident refuses at (2) today, an opt-in probe leg asserts that refusal, and the supported-runtime
-statement says so. See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes) and
+See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes) and
 [The Mono leg](../product/HOOKLAB.md#the-mono-leg).
 
-Then the rest of the road:
+What remains is everything the probe deliberately does not prove:
 
-3. Add an explicit Mono backend with exact runtime/module identity and a pinned, live-proven compiler
-   and Harmony dependency policy, promoting the payload findings above from measurement to declared
-   matrix rows.
-4. Extend the payload manifest, compatibility probe, package, disposable Unity fixture, and hidden-
-   desktop UCH live gates through retirement. The probe's Mono leg becomes a lifecycle rather than a
-   boundary assertion at that point.
+1. **Decide and prove arrival on Mono.** The probe's fixture loads the payload into itself; nothing yet
+   says how a resident gets into a Unity player. This is where the debugger-driven-managed-loading
+   versus native-Mono-embedding question actually lives, and it must not require UCH, BepInEx, or any
+   other mod loader.
+2. Add an explicit Mono backend row with exact runtime and module identity, promoting the payload
+   findings from measurement to declared matrix rows - the existing CLR v4 slots work unchanged, so
+   this is expected to be rows rather than new assets. Settle the compiler question with it: the
+   selector keys on corlib name, so Mono currently takes the CodeDom path, and Mono's CodeDom shells
+   out to an `mcs` no Unity player ships.
+3. Extend the payload manifest, package, disposable Unity fixture, and hidden-desktop UCH live gates
+   through retirement, and prove a real Unity player rather than a console host on the player's
+   runtime.
 
 Domain reloads, generics, inlining, finalizers, reconnect/adoption, and unsupported Mono variants still
 need explicit supported or refused results. No mod loader - UCH, BepInEx, or another - may become a

@@ -139,9 +139,11 @@ sealed record RuntimeFamily(string Id, PayloadRuntimes PayloadFlag, string Fixtu
 	bool BorrowsClrV4Payloads, ExpectedRefusal? ExpectedRefusal = null) {
 	internal static readonly RuntimeFamily ClrV4 = new("clrv4", PayloadRuntimes.ClrV4, "net48", false, false);
 	internal static readonly RuntimeFamily CoreClr = new("coreclr", PayloadRuntimes.CoreClr, "net10.0", false, false);
-	internal static readonly RuntimeFamily Mono = new("mono", PayloadRuntimes.ClrV4, "net48", true, true,
-		new ExpectedRefusal("residency_commit", "does not implement the Windows access control",
-			"Unity's Mono cannot build the control endpoint's DACL; HookLab residency is unsupported there."));
+	/// <summary>A full lifecycle, not a boundary assertion. It was the latter while Unity's Mono could not
+	/// build the control endpoint's access control; the endpoint is now created through the Win32 API and
+	/// the leg runs every stage the other two do. What it still does not prove is arrival, exactly as for
+	/// the other families - which is why a Mono row in <c>HookLabBackends</c> does not follow from it.</summary>
+	internal static readonly RuntimeFamily Mono = new("mono", PayloadRuntimes.ClrV4, "net48", true, true);
 
 	/// <summary>The legs <c>--runtime all</c> runs. Mono is not in it, and that is a statement rather
 	/// than an oversight: it needs a Mono runtime this repository does not ship, so including it would

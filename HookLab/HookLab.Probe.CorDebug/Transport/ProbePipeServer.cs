@@ -40,6 +40,12 @@ namespace HookLab.Probe.CorDebug.Transport {
 	public delegate ProbeCommandResult ProbeCommandHandler(string operation, string payloadJson, long? expectedHooksVersion, CancellationToken cancellationToken);
 
 	public sealed class ProbePipeServer : IDisposable, IHookEventConsumer {
+		/// <summary>Shared by all three creation paths - the CoreCLR ACL helper, the .NET Framework
+		/// constructor, and the native one Mono needs - because an endpoint that differed in shape
+		/// depending on which runtime built it would be three endpoints wearing one name.</summary>
+		const int MaximumInstances = 254;
+		const int BufferSize = 4096;
+
 		readonly object secretGate = new object();
 		readonly object sendGate = new object();
 		/// <summary>Serializes publication of listening and connected pipes against <see cref="Dispose"/>. See
@@ -212,14 +218,12 @@ namespace HookLab.Probe.CorDebug.Transport {
 			// Unity's Mono implements neither WindowsIdentity.User nor PipeSecurity.AddAccessRule -
 			// measured on Mono 6.13 with a Unity 2021.3 player's own class libraries, 2026-08-20. The
 			// endpoint's access control is not decoration there is a fallback for: it is what keeps another
-			// account off a channel that can patch this process. So this refuses, by name, rather than
-			// creating an endpoint whose protection nobody stated. Until a Mono backend exists with its own
-			// evidence, an unprotected control endpoint is not a supported configuration.
-			catch (NotImplementedException ex) {
-				throw new PlatformNotSupportedException(
-					"This runtime does not implement the Windows access control the HookLab control endpoint requires " +
-					"(" + ex.Message.TrimEnd('.') + "). HookLab residents are supported on desktop CLR v4 and CoreCLR; " +
-					"Mono/Unity targets support ordinary debugging only.", ex);
+			// account off a channel that can patch this process. So rather than create an endpoint whose
+			// protection nobody stated, build the identical descriptor through the Win32 API, which that
+			// runtime does implement. An endpoint that cannot be protected is still refused - by
+			// NativePipeEndpoint, naming the call that failed.
+			catch (NotImplementedException) {
+				return NativePipeEndpoint.Create(pipeName, controllerSid, MaximumInstances, BufferSize);
 			}
 			// The controller is a second principal, never a replacement: the DACL stays protected and fully
 			// enumerated. Without this, a target running under a different account than the debugger - an IIS
@@ -240,8 +244,8 @@ namespace HookLab.Probe.CorDebug.Transport {
 				foreach (var method in create) {
 					var parameters = method.GetParameters();
 					if (method.Name != "Create" || parameters.Length != 10) continue;
-					return (NamedPipeServerStream)method.Invoke(null, new object[] { pipeName, PipeDirection.InOut, 254,
-						PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 4096, 4096, security,
+					return (NamedPipeServerStream)method.Invoke(null, new object[] { pipeName, PipeDirection.InOut, MaximumInstances,
+						PipeTransmissionMode.Byte, PipeOptions.Asynchronous, BufferSize, BufferSize, security,
 						HandleInheritability.None, (PipeAccessRights)0 })!;
 				}
 				throw new MissingMethodException(aclType.FullName, "Create");
@@ -251,8 +255,8 @@ namespace HookLab.Probe.CorDebug.Transport {
 
 		[MethodImpl(MethodImplOptions.NoInlining)]
 		static NamedPipeServerStream CreateFrameworkPipe(string name, PipeSecurity security) =>
-			new NamedPipeServerStream(name, PipeDirection.InOut, 254, PipeTransmissionMode.Byte,
-				PipeOptions.Asynchronous, 4096, 4096, security, HandleInheritability.None);
+			new NamedPipeServerStream(name, PipeDirection.InOut, MaximumInstances, PipeTransmissionMode.Byte,
+				PipeOptions.Asynchronous, BufferSize, BufferSize, security, HandleInheritability.None);
 
 		void Serve(Stream pipe) {
 			if (authenticationEnabled) Authenticate(pipe); else NegotiateVersion(pipe);
