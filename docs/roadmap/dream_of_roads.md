@@ -46,8 +46,8 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Stop a Mono resident crashing its target on retirement, give it a protectable endpoint, then finish
-   the backend.
+1. Bound the Mono endpoint teardown so the target survives, give the endpoint protection it can state,
+   then finish the backend.
 2. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
 3. Revisit high-risk execution, editing, and scripting one workflow at a time.
 4. Keep the remaining compatibility expansions parked until product scope changes.
@@ -64,13 +64,14 @@ dependency questions are answered.
 
 Two independent things block it, and the second was found only by measuring past the first:
 
-1. **The target does not survive retirement.** The resident retires cleanly - endpoint down, hooks
-   removed, `behavior_commit=stopped` - and the process then crashes inside Mono's own shutdown with an
-   access violation, preceded by an eglib `assertion 'filename != NULL' failed`. Reproducible eight
-   runs out of nine. Not the fixture host, not byte-loading as such, and not the parked listener
-   thread; each was tested separately. Root-cause it before anything else on this road: a resident that
-   kills the target on detach is the one outcome the invariants forbid outright, and no endpoint design
-   changes it.
+1. **The target does not survive retirement**, root-caused: Mono crashes at process exit if a listener
+   thread is still unwinding out of a disposed `NamedPipeServerStream`. `ProbePipeServer.Dispose`
+   deliberately does not wait for its listener, because the caller can be the target's own thread
+   inside a func-eval where waiting outran the evaluation timeout. Right on CLR v4 and CoreCLR, wrong
+   on Mono. Waiting on the existing `WaitForShutdown` during cleanup turns the packaged Mono leg from
+   five crashes in five runs into `retired=clean` five times out of five - so what remains is deciding
+   the bound and where it applies, most likely at retirement only rather than in `Dispose`, with CLR v4
+   and CoreCLR evidence of its own because the teardown path is shared.
 2. **The control endpoint has no statable protection.** Unity's Mono implements neither
    `WindowsIdentity.GetCurrent().User` nor `PipeSecurity.AddAccessRule`, so the endpoint's access
    control cannot be built. A class-library boundary, upstream of every arrival question and identical

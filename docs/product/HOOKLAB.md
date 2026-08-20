@@ -131,10 +131,10 @@ supported configuration, so the resident refuses instead of creating one.
 
 Much of what a Mono resident would need does already work - the payload graph loads and goes resident
 on Unity's Mono unchanged, and with the endpoint check lifted experimentally a complete hook lifecycle
-runs on the existing CLR v4 payload slots. But the target does not then survive: the resident retires
-cleanly and the process reliably crashes inside Mono's own shutdown. Residency on Mono needs both an
-endpoint whose protection can be stated and a target that is still alive afterwards; neither is
-available today, and the second is why the first is not merely a formality.
+runs on the existing CLR v4 payload slots. But the target does not then survive: Mono crashes at
+process exit if a listener thread is still unwinding out of a disposed pipe, which is what HookLab's
+deliberately non-blocking endpoint teardown leaves behind. Residency on Mono therefore needs both a
+bounded teardown and an endpoint whose protection can be stated; neither is available today.
 
 A range is a claim that a packaged live hook lifecycle has actually run there. Adding one needs its own
 evidence, not an expectation that it should work.
