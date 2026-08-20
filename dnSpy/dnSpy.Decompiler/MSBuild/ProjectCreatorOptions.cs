@@ -1,4 +1,4 @@
-/*
+﻿/*
     Copyright (C) 2014-2019 de4dot@gmail.com
 
     This file is part of dnSpy
@@ -83,6 +83,11 @@ namespace dnSpy.Decompiler.MSBuild {
 		public bool GenerateSDKStyleProjects { get; set; }
 
 		/// <summary>
+		/// Max lengths of generated project, file and directory names. Never null.
+		/// </summary>
+		public FilenameLimits FilenameLimits { get; set; }
+
+		/// <summary>
 		/// Constructor
 		/// </summary>
 		/// <param name="directory">Base directory</param>
@@ -93,6 +98,7 @@ namespace dnSpy.Decompiler.MSBuild {
 			ProjectModules = new List<ProjectModuleOptions>();
 			UserGACPaths = new List<string>();
 			CreateDecompilerOutput = textWriter => new TextWriterDecompilerOutput(textWriter);
+			FilenameLimits = new FilenameLimits();
 		}
 	}
 }

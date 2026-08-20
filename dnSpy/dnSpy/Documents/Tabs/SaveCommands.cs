@@ -1,4 +1,4 @@
-/*
+﻿/*
     Copyright (C) 2014-2019 de4dot@gmail.com
 
     This file is part of dnSpy
@@ -238,6 +238,8 @@ namespace dnSpy.Documents.Tabs {
 					dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(EmtpyErrorList));
 
 			}
+			public void Warning(string message) => Error(message);
+
 			readonly List<string> errorList = new List<string>();
 
 			void EmtpyErrorList() {

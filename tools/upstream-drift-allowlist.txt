@@ -195,3 +195,38 @@ dnSpy/dnSpy.Contracts.Debugger.DotNet.CorDebug/CorThreadUserStates.cs           
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/ThreadProperties.cs            carry probe-failed through the thread property snapshot
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DnThreadUtils.cs               map an unavailable user state rather than dropping it
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DbgEngineImpl.Threads.cs       report the unavailable state to the debugger layer
+
+# Project export truncated names to 60 characters silently, and separate runs
+# sharing one output directory then merged. FilenameCreator capped a project or
+# file name at 60 and a namespace directory part at 40, cutting with no hash, no
+# suffix and no message. Its usedNames set does de-duplicate, but it is in-memory
+# and never seeded from disk, and MSBuildProjectCreator builds a fresh one per
+# run -- so the guard holds within one invocation and not across two.
+#
+# Measured, not inferred: two assemblies whose names share a 60-character prefix,
+# decompiled in two dnSpy.Console runs into one -o directory, both exit 0 and
+# both print nothing. The result is a single folder holding the union of the
+# source files and exactly one .csproj -- the second run's -- whose Compile list
+# names only its own files. The first assembly's project file and AssemblyInfo.cs
+# are gone; its source sits there orphaned. That is silent partial data loss, and
+# it read as "assembly absent from the tree" in an audit here.
+#
+# Two changes, both additive. The limits move to FilenameLimits so a caller can
+# raise them or pass 0 for none, defaults unchanged at 60 and 40. And truncation
+# now says so: IMSBuildProjectWriterLogger gains Warning, deliberately separate
+# from Error because a truncated name must not fail the run or flip the console
+# exit code -- long assembly names are ordinary, and every existing caller kept
+# its behaviour. Offer both to dnSpyEx; nothing here is dgSpy-specific.
+dnSpy/dnSpy.Decompiler/MSBuild/FilenameLimits.cs                          the two limits, defaulting to upstream 60 and 40
+dnSpy/dnSpy.Decompiler/MSBuild/FilenameCreator.cs                         read the limits per instance and warn once per truncated name
+dnSpy/dnSpy.Decompiler/MSBuild/ProjectCreatorOptions.cs                   carry the limits to both creators
+dnSpy/dnSpy.Decompiler/MSBuild/MSBuildProjectCreator.cs                   pass limits and logger to the project-directory creator
+dnSpy/dnSpy.Decompiler/MSBuild/Project.cs                                 pass limits and logger to the per-project file creator
+dnSpy/dnSpy.Decompiler/MSBuild/IMSBuildProjectWriterLogger.cs             Warning, so a non-fatal report cannot fail the run
+dnSpy/dnSpy.Decompiler/MSBuild/NoMSBuildProjectWriterLogger.cs            Warning no-op
+dnSpy/dnSpy.Decompiler/Properties/dnSpy.Decompiler.Resources.resx         MSBuild_NameTruncated3, neutral culture only
+dnSpy/dnSpy.Decompiler/Properties/dnSpy.Decompiler.Resources.Designer.cs  MSBuild_NameTruncated3 accessor
+dnSpy/dnSpy/Documents/Tabs/SaveCommands.cs                                route Warning into the export dialog message list
+dnSpy/dnSpy.Console/Program.cs                                            --max-name-len and --max-dir-name-len, and Warning to stderr without incrementing the error count
+dnSpy/dnSpy.Console/Properties/dnSpy.Console.Resources.resx               Warning1 and the two option descriptions
+dnSpy/dnSpy.Console/Properties/dnSpy.Console.Resources.Designer.cs        Warning1 and option-description accessors

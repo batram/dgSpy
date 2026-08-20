@@ -1,4 +1,4 @@
-﻿/*
+/*
     Copyright (C) 2014-2019 de4dot@gmail.com
 
     This file is part of dnSpy
@@ -19,20 +19,25 @@
 
 namespace dnSpy.Decompiler.MSBuild {
 	/// <summary>
-	/// Logs errors
+	/// Max lengths used when generating project, file and directory names. The defaults keep
+	/// generated paths well inside the classic Windows MAX_PATH limit, at the cost of truncating
+	/// long assembly and namespace names. Use 0 (or a negative value) to disable a limit.
 	/// </summary>
-	interface IMSBuildProjectWriterLogger {
+	sealed class FilenameLimits {
 		/// <summary>
-		/// Logs an error. This method can be called from any thread
+		/// Default limits (<see cref="MaxNameLength"/> = 60, <see cref="MaxDirNameLength"/> = 40)
 		/// </summary>
-		/// <param name="message">Message</param>
-		void Error(string message);
+		public static readonly FilenameLimits Default = new FilenameLimits();
 
 		/// <summary>
-		/// Logs a warning. Unlike <see cref="Error(string)"/> this doesn't make the operation
-		/// fail. This method can be called from any thread
+		/// Max length of a filename, excluding extension. This is also the max length of a
+		/// generated project directory name. 0 or less means no limit.
 		/// </summary>
-		/// <param name="message">Message</param>
-		void Warning(string message);
+		public int MaxNameLength { get; set; } = 60;
+
+		/// <summary>
+		/// Max length of a directory name part. 0 or less means no limit.
+		/// </summary>
+		public int MaxDirNameLength { get; set; } = 40;
 	}
 }

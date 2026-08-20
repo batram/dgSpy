@@ -171,6 +171,18 @@ namespace dnSpy.Console.Properties {
         /// <summary>
         ///   Looks up a localized string similar to number of worker threads. Default is to use one thread per CPU core.
         /// </summary>
+        internal static string CmdLineDescription_MaxNameLength {
+            get {
+                return ResourceManager.GetString("CmdLineDescription_MaxNameLength", resourceCulture);
+            }
+        }
+        
+        internal static string CmdLineDescription_MaxDirNameLength {
+            get {
+                return ResourceManager.GetString("CmdLineDescription_MaxDirNameLength", resourceCulture);
+            }
+        }
+        
         internal static string CmdLineDescription_NumberOfThreads {
             get {
                 return ResourceManager.GetString("CmdLineDescription_NumberOfThreads", resourceCulture);
@@ -324,6 +336,12 @@ namespace dnSpy.Console.Properties {
         /// <summary>
         ///   Looks up a localized string similar to ERROR: {0}.
         /// </summary>
+        internal static string Warning1 {
+            get {
+                return ResourceManager.GetString("Warning1", resourceCulture);
+            }
+        }
+        
         internal static string Error1 {
             get {
                 return ResourceManager.GetString("Error1", resourceCulture);
@@ -567,6 +585,18 @@ namespace dnSpy.Console.Properties {
         /// <summary>
         ///   Looks up a localized string similar to Missing number of threads.
         /// </summary>
+        internal static string MissingMaxNameLength {
+            get {
+                return ResourceManager.GetString("MissingMaxNameLength", resourceCulture);
+            }
+        }
+        
+        internal static string MissingMaxDirNameLength {
+            get {
+                return ResourceManager.GetString("MissingMaxDirNameLength", resourceCulture);
+            }
+        }
+        
         internal static string MissingNumberOfThreads {
             get {
                 return ResourceManager.GetString("MissingNumberOfThreads", resourceCulture);

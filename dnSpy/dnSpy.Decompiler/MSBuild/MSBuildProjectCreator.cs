@@ -1,4 +1,4 @@
-/*
+﻿/*
     Copyright (C) 2014-2019 de4dot@gmail.com
 
     This file is part of dnSpy
@@ -57,6 +57,8 @@ namespace dnSpy.Decompiler.MSBuild {
 				Interlocked.Increment(ref owner.errors);
 				logger.Error(message);
 			}
+
+			public void Warning(string message) => logger.Warning(message);
 		}
 
 		public MSBuildProjectCreator(ProjectCreatorOptions options) {
@@ -73,7 +75,8 @@ namespace dnSpy.Decompiler.MSBuild {
 					CancellationToken = options.CancellationToken,
 					MaxDegreeOfParallelism = options.NumberOfThreads <= 0 ? Environment.ProcessorCount : options.NumberOfThreads,
 				};
-				var filenameCreator = new FilenameCreator(options.Directory);
+				var filenameLimits = options.FilenameLimits ?? FilenameLimits.Default;
+				var filenameCreator = new FilenameCreator(options.Directory, filenameLimits, logger);
 				var ctx = new DecompileContext(options.CancellationToken, logger);
 				satelliteAssemblyFinder = new SatelliteAssemblyFinder();
 				Parallel.ForEach(options.ProjectModules, opts, modOpts => {
@@ -81,7 +84,7 @@ namespace dnSpy.Decompiler.MSBuild {
 					string name;
 					lock (filenameCreator)
 						name = filenameCreator.Create(modOpts.Module);
-					var p = new Project(modOpts, name, satelliteAssemblyFinder, options.CreateDecompilerOutput);
+					var p = new Project(modOpts, name, satelliteAssemblyFinder, options.CreateDecompilerOutput, filenameLimits);
 					lock (projects)
 						projects.Add(p);
 					p.CreateProjectFiles(ctx);

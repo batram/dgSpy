@@ -120,6 +120,9 @@
   <data name="Error1" xml:space="preserve">
     <value>ERROR: {0}</value>
   </data>
+  <data name="Warning1" xml:space="preserve">
+    <value>WARNING: {0}</value>
+  </data>
   <data name="FileOrDirDoesNotExist" xml:space="preserve">
     <value>File/directory '{0}' doesn't exist</value>
   </data>
@@ -155,6 +158,12 @@
   </data>
   <data name="MissingMDToken" xml:space="preserve">
     <value>Missing metadata token</value>
+  </data>
+  <data name="MissingMaxNameLength" xml:space="preserve">
+    <value>Missing max name length</value>
+  </data>
+  <data name="MissingMaxDirNameLength" xml:space="preserve">
+    <value>Missing max directory name length</value>
   </data>
   <data name="MissingNumberOfThreads" xml:space="preserve">
     <value>Missing number of threads</value>
@@ -245,6 +254,12 @@
   </data>
   <data name="CmdLineDescription_NoStdLib" xml:space="preserve">
     <value>projects don't reference mscorlib</value>
+  </data>
+  <data name="CmdLineDescription_MaxNameLength" xml:space="preserve">
+    <value>max length of generated project and file names, excluding extension. Default is 60. Use 0 for no limit</value>
+  </data>
+  <data name="CmdLineDescription_MaxDirNameLength" xml:space="preserve">
+    <value>max length of a generated directory name part. Default is 40. Use 0 for no limit</value>
   </data>
   <data name="CmdLineDescription_NumberOfThreads" xml:space="preserve">
     <value>number of worker threads. Default is to use one thread per CPU core</value>

@@ -120,6 +120,9 @@
   <data name="MSBuild_CopyAppConfig" xml:space="preserve">
     <value>Copy app.config ({0})</value>
   </data>
+  <data name="MSBuild_NameTruncated3" xml:space="preserve">
+    <value>The name '{0}' is longer than {1} chars and was truncated to '{2}'. Other names sharing that prefix will use the same file or directory and can overwrite each other.</value>
+  </data>
   <data name="MSBuild_CouldNotCreateDirectory2" xml:space="preserve">
     <value>Couldn't create directory {0}, Error: {1}</value>
   </data>

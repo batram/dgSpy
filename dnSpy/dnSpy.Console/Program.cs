@@ -1,4 +1,4 @@
-/*
+﻿/*
     Copyright (C) 2014-2019 de4dot@gmail.com
 
     This file is part of dnSpy
@@ -173,6 +173,8 @@ namespace dnSpy_Console {
 		bool decompileBaml = true;
 		bool colorizeOutput;
 		bool sdkProject;
+		int maxNameLength = FilenameLimits.Default.MaxNameLength;
+		int maxDirNameLength = FilenameLimits.Default.MaxDirNameLength;
 		Guid projectGuid = Guid.NewGuid();
 		int numThreads;
 		int mdToken;
@@ -340,6 +342,8 @@ namespace dnSpy_Console {
 			new UsageInfo("--no-sln", null, dnSpy_Console_Resources.CmdLineDescription_NoSLN),
 			new UsageInfo("--sln-name", dnSpy_Console_Resources.CmdLineName, dnSpy_Console_Resources.CmdLineDescription_SlnName),
 			new UsageInfo("--threads", "N", dnSpy_Console_Resources.CmdLineDescription_NumberOfThreads),
+			new UsageInfo("--max-name-len", "N", dnSpy_Console_Resources.CmdLineDescription_MaxNameLength),
+			new UsageInfo("--max-dir-name-len", "N", dnSpy_Console_Resources.CmdLineDescription_MaxDirNameLength),
 			new UsageInfo("--no-resources", null, dnSpy_Console_Resources.CmdLineDescription_NoResources),
 			new UsageInfo("--no-resx", null, dnSpy_Console_Resources.CmdLineDescription_NoResX),
 			new UsageInfo("--no-baml", null, dnSpy_Console_Resources.CmdLineDescription_NoBAML),
@@ -437,6 +441,8 @@ namespace dnSpy_Console {
 			"sln",
 			"sln-name",
 			"threads",
+			"max-name-len",
+			"max-dir-name-len",
 			"vs",
 			"resources",
 			"resx",
@@ -482,6 +488,24 @@ namespace dnSpy_Console {
 						isRecursive = true;
 						break;
 					
+					case "--max-name-len":
+						if (next is null)
+							throw new ErrorException(dnSpy_Console_Resources.MissingMaxNameLength);
+						i++;
+						maxNameLength = SimpleTypeConverter.ParseInt32(next, 0, int.MaxValue, out error);
+						if (!string2.IsNullOrEmpty(error))
+							throw new ErrorException(error);
+						break;
+
+					case "--max-dir-name-len":
+						if (next is null)
+							throw new ErrorException(dnSpy_Console_Resources.MissingMaxDirNameLength);
+						i++;
+						maxDirNameLength = SimpleTypeConverter.ParseInt32(next, 0, int.MaxValue, out error);
+						if (!string2.IsNullOrEmpty(error))
+							throw new ErrorException(error);
+						break;
+
 					case "--sdk-project":
 						sdkProject = true;
 						break;
@@ -758,6 +782,8 @@ namespace dnSpy_Console {
 				if (createSlnFile && !string.IsNullOrEmpty(slnName))
 					options.SolutionFilename = slnName;
 				options.GenerateSDKStyleProjects = sdkProject;
+				options.FilenameLimits.MaxNameLength = maxNameLength;
+				options.FilenameLimits.MaxDirNameLength = maxDirNameLength;
 				var creator = new MSBuildProjectCreator(options);
 				creator.Create();
 			}
@@ -997,6 +1023,9 @@ namespace dnSpy_Console {
 			errors++;
 			Console.Error.WriteLine(string.Format(dnSpy_Console_Resources.Error1, message));
 		}
+
+		public void Warning(string message) =>
+			Console.Error.WriteLine(string.Format(dnSpy_Console_Resources.Warning1, message));
 		int errors;
 
 		ColorProvider CreateColorProvider() {

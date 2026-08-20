@@ -1,4 +1,4 @@
-/*
+﻿/*
     Copyright (C) 2014-2019 de4dot@gmail.com
 
     This file is part of dnSpy
@@ -22,5 +22,6 @@ namespace dnSpy.Decompiler.MSBuild {
 		public static readonly NoMSBuildProjectWriterLogger Instance = new NoMSBuildProjectWriterLogger();
 
 		public void Error(string message) { }
+		public void Warning(string message) { }
 	}
 }

@@ -1,4 +1,4 @@
-/*
+﻿/*
     Copyright (C) 2014-2019 de4dot@gmail.com
 
     This file is part of dnSpy
@@ -22,32 +22,44 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using dnlib.DotNet;
+using dnSpy.Decompiler.Properties;
 
 namespace dnSpy.Decompiler.MSBuild {
 	sealed class FilenameCreator {
 		// Max length of a filename, excluding extension
-		const int MaxNameLength = 60;
+		int MaxNameLength => limits.MaxNameLength;
 		// Max length of a directory name part
-		const int MaxDirNameLength = 40;
+		int MaxDirNameLength => limits.MaxDirNameLength;
 
 		public string DefaultNamespace => defaultNamespace;
 		readonly string defaultNamespace;
 
 		readonly HashSet<string> usedNames;
 		readonly string baseDir;
+		readonly FilenameLimits limits;
+		readonly IMSBuildProjectWriterLogger logger;
+		readonly HashSet<string> warnedNames;
 
-		public FilenameCreator(string baseDir) {
-			Debug.Assert(Path.IsPathRooted(baseDir));
-			this.baseDir = baseDir;
-			defaultNamespace = string.Empty;
-			usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		public FilenameCreator(string baseDir)
+			: this(baseDir, string.Empty, FilenameLimits.Default, null) {
 		}
 
-		public FilenameCreator(string baseDir, string defaultNamespace) {
+		public FilenameCreator(string baseDir, FilenameLimits limits, IMSBuildProjectWriterLogger? logger = null)
+			: this(baseDir, string.Empty, limits, logger) {
+		}
+
+		public FilenameCreator(string baseDir, string defaultNamespace)
+			: this(baseDir, defaultNamespace, FilenameLimits.Default, null) {
+		}
+
+		public FilenameCreator(string baseDir, string defaultNamespace, FilenameLimits limits, IMSBuildProjectWriterLogger? logger = null) {
 			Debug.Assert(Path.IsPathRooted(baseDir));
 			this.baseDir = baseDir;
 			this.defaultNamespace = defaultNamespace;
+			this.limits = limits ?? FilenameLimits.Default;
+			this.logger = logger ?? NoMSBuildProjectWriterLogger.Instance;
 			usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			warnedNames = new HashSet<string>(StringComparer.Ordinal);
 		}
 
 		public string Create(string fileExt, string fullName) {
@@ -131,10 +143,14 @@ namespace dnSpy.Decompiler.MSBuild {
 			return name;
 		}
 
-		static string FixLongName(string name, int maxLen) {
-			if (name.Length <= maxLen)
+		string FixLongName(string name, int maxLen) {
+			if (maxLen <= 0 || name.Length <= maxLen)
 				return name;
-			return name.Substring(0, maxLen);
+			var newName = name.Substring(0, maxLen);
+			// Only warn once per name, it's used for every file in a namespace
+			if (warnedNames.Add(name))
+				logger.Warning(string.Format(dnSpy_Decompiler_Resources.MSBuild_NameTruncated3, name, maxLen, newName));
+			return newName;
 		}
 
 		public string CreateFromNamespaceFilename(string @namespace, string filename) {

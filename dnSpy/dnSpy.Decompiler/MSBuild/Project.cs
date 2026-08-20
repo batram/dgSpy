@@ -1,4 +1,4 @@
-/*
+﻿/*
     Copyright (C) 2014-2019 de4dot@gmail.com
 
     This file is part of dnSpy
@@ -54,9 +54,15 @@ namespace dnSpy.Decompiler.MSBuild {
 
 		readonly SatelliteAssemblyFinder satelliteAssemblyFinder;
 		readonly Func<TextWriter, IDecompilerOutput> createDecompilerOutput;
+		readonly FilenameLimits filenameLimits;
 
-		public Project(ProjectModuleOptions options, string projDir, SatelliteAssemblyFinder satelliteAssemblyFinder, Func<TextWriter, IDecompilerOutput> createDecompilerOutput) {
+		public Project(ProjectModuleOptions options, string projDir, SatelliteAssemblyFinder satelliteAssemblyFinder, Func<TextWriter, IDecompilerOutput> createDecompilerOutput)
+			: this(options, projDir, satelliteAssemblyFinder, createDecompilerOutput, FilenameLimits.Default) {
+		}
+
+		public Project(ProjectModuleOptions options, string projDir, SatelliteAssemblyFinder satelliteAssemblyFinder, Func<TextWriter, IDecompilerOutput> createDecompilerOutput, FilenameLimits filenameLimits) {
 			Options = options ?? throw new ArgumentNullException(nameof(options));
+			this.filenameLimits = filenameLimits ?? FilenameLimits.Default;
 			Directory = projDir;
 			this.satelliteAssemblyFinder = satelliteAssemblyFinder;
 			this.createDecompilerOutput = createDecompilerOutput;
@@ -85,7 +91,7 @@ namespace dnSpy.Decompiler.MSBuild {
 		}
 
 		public void CreateProjectFiles(DecompileContext ctx) {
-			var filenameCreator = new FilenameCreator(Directory, DefaultNamespace);
+			var filenameCreator = new FilenameCreator(Directory, DefaultNamespace, filenameLimits, ctx.Logger);
 			var resourceNameCreator = new ResourceNameCreator(Options.Module, filenameCreator);
 
 			AllowUnsafeBlocks = DotNetUtils.IsUnsafe(Options.Module);
