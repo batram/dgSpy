@@ -49,6 +49,21 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl {
 
 		bool SendCodeBreakpointHitMessage_MonoDebug(BreakpointEventRequest breakpoint, DbgThread? thread) {
 			debuggerThread.VerifyAccess();
+			// A breakpoint hit *while a func-eval is in flight* must not stop the VM.
+			//
+			// The evaluation needs the target running to finish, and it is the caller's thread that would
+			// have to resume it - so a stop here is a deadlock, not a stop. This is also what every other
+			// debugger does: breakpoints do not fire while an expression is being evaluated.
+			//
+			// It is reachable in ordinary use rather than in theory. An atomic action places an owned
+			// breakpoint, waits for the hit, and then evaluates with the other threads running; the
+			// target's own loop re-enters that same method and hits the breakpoint again, mid-evaluation.
+			// Measured on Mono: suspendCount climbed 1, 2, 3, 4 across four such hits while
+			// evaluating=True, nothing could resume, and the evaluation died on its 10-second deadline
+			// with the whole VM left suspended. Returning false here resumes instead, which is the same
+			// answer the AssemblyLoad, ThreadStart and UserLog cases give for the same reason.
+			if (IsEvaluating)
+				return false;
 			if (breakpoint.Tag is BoundBreakpointData bpData) {
 				if (bpData is not null)
 					SendMessage(new DbgMessageBreakpoint(bpData.EngineBoundCodeBreakpoint!.BoundCodeBreakpoint, thread, GetMessageFlags()));

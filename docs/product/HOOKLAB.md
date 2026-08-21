@@ -240,10 +240,14 @@ for the three events a resident arrival necessarily raises:
 | `AssemblyLoad` | loading the payload | `Assembly.Load(byte[])` timed out at the evaluation deadline; the same call takes 6 ms when the target runs it itself |
 | `ThreadStart` | the resident's listener and worker | arrival got past the payload and stopped at residency commit |
 | `UserLog` | an ordinary `Debug.WriteLine` under residency commit | the VM ran for about a second, then froze for the whole deadline |
+| `Breakpoint` | the target re-entering a method an atomic action still has an owned breakpoint on | `suspendCount` climbed 1, 2, 3, 4 across four hits and the evaluation died on its deadline |
 
 Each now declines to suspend while an evaluation is in flight, and raises its message without waiting
 for a Run. `TypeLoad`, which arrives in a flood behind every assembly load, never suspended in the first
-place.
+place. The breakpoint case is also what every other debugger does: breakpoints do not fire while an
+expression is being evaluated. It is reached in ordinary use, because an atomic action places an owned
+breakpoint, waits for the hit, and then evaluates with the other threads running - so the target's own
+loop can re-enter that same method mid-evaluation.
 
 Two smaller differences were real and are stated where every other runtime difference lives, in the
 backend table:
@@ -268,16 +272,21 @@ Mono builds - a stress loop that installs, updates and removes a compiled hook a
 every two to seven cycles on mono-project 6.12 and on Unity's 6.13 alike - and roughly one live gate run
 in six.
 
-The mechanism is measured, not inferred. A compiled hook is compiled **inside** the target, so
-installing or updating one loads an assembly; the Mono engine suspends the whole VM on an assembly load
-and waits for a Run, which dnSpy issues as it handles the module-load message. Sometimes it does not.
-The target then sits at `state=paused` with even its own unrelated threads frozen, and the resident
-cannot answer because it is not running.
+The mechanism is measured, not inferred, and it is **not** a bug in the engine's pending-message pump.
+The pump does exactly what it should: it raises a message that requires a Run and waits for one. What
+happens is that dnSpy deliberately *stops* instead - the target sits at `state=paused` with even its own
+unrelated threads frozen, and the resident cannot answer because it is not running.
+
+What it stops on is an **exception reported as uncaught**, on which breaking is correct behaviour.
+Instrumenting the pump found three or four exception events per sixty-cycle run and a stall after
+nearly every one; the one that wedges it is a `System.IO.IOException` that Mono reports as uncaught, on
+a thread dnSpy cannot name. dgSpy's own pipe threads all catch `IOException`, and the target survives,
+so the exception is very likely catchable and mis-classified - the open question is where. Until that is
+answered this is not fixed, only bounded.
 
 **Do not try to resume it from outside.** Both obvious repairs - the engine's own run reconciliation,
 and an ordinary manager-level continue - killed the target outright within 80 ms, in separate 40-cycle
-runs. A VM suspended mid-module-load with a control command in flight has to be left alone; the repair
-belongs in the engine's pending-message pump.
+runs. A VM suspended with a control command in flight has to be left alone.
 
 What dgSpy does instead is refuse to hang. Every control-channel round trip is bounded at 30 seconds -
 far above the measured 8-90 ms steady state and the ~4 s first compile - and a resident that does not

@@ -143,14 +143,24 @@ See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes),
 
 What remains, in this order:
 
-1. **The missing Run after a module load.** Chased, characterised, and not yet fixed. A compiled hook is
-   compiled inside the target, so installing one loads an assembly; the Mono engine suspends the VM on
-   assembly load and waits for a Run that dnSpy usually - not always - issues. The target then sits at
-   `state=paused` with its own unrelated threads frozen and the resident unable to answer. Both builds,
-   every two to seven cycles under stress. Resuming from the host is not the repair: the engine's run
-   reconciliation *and* an ordinary continue each killed the target within 80 ms. The fix belongs in
-   `DbgEngineImpl.OnDebuggerEventsCore`'s pending-message pump. Meanwhile the host no longer hangs -
-   round trips are bounded and report `hooklab_resident_unresponsive` with the target left alive.
+1. **The exception that stops the target under a control command.** Chased to the event, and not a pump
+   bug: the pump correctly raises a message that requires a Run and waits: dnSpy deliberately *stops*
+   instead, on an exception Mono reports as **uncaught**, which is correct behaviour for an unhandled
+   exception. Instrumenting the pump showed three or four exception events per sixty-cycle run and a
+   stall after nearly every one; the culprit is a `System.IO.IOException` reported uncaught on a thread
+   dnSpy cannot name. dgSpy's own pipe threads all catch `IOException` and the target survives, so it is
+   very likely catchable and mis-classified - one hypothesis worth testing first is that Mono cannot
+   evaluate the `catch (Exception) when (disposed)` filters in `ProbePipeServer` and so reports a
+   filtered-catchable exception as uncaught. Resuming from the host is not the repair: the engine's run
+   reconciliation *and* an ordinary continue each killed the target within 80 ms. Meanwhile the host no
+   longer hangs - round trips are bounded and report `hooklab_resident_unresponsive` with the target
+   left alive.
+
+   One member of this family *was* fixed: a breakpoint hit during a func-eval. An atomic action places
+   an owned breakpoint, waits for the hit, then evaluates with the other threads running, and the
+   target's own loop re-enters that method - `suspendCount` climbed 1, 2, 3, 4 and the evaluation died
+   on its deadline. Breakpoints now do not fire during an evaluation, which is what every other debugger
+   does.
 2. Extend the packaged and hidden-desktop UCH live gates through retirement against a real player rather
    than a console host on its runtime.
 
