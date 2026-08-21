@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace MonoHookLabTarget {
@@ -24,7 +25,24 @@ namespace MonoHookLabTarget {
 		/// <summary>The carrier. Arrival on Mono needs a suspended thread with managed frames, so the gate
 		/// stops here; a method that only the loop calls gives it a stable, always-reachable place to do
 		/// that without depending on where the target happens to be.</summary>
-		public static int Tick(int iteration) => Work();
+		public static int Tick(int iteration) => Work() + GenericWork(iteration) + Holder<int>.Work() + Inlineable();
+
+		/// <summary>A generic method, present so the boundary gate can ask what happens when a hook names
+		/// one. Its value is deliberately zero so it cannot move the observed total unless a hook moves
+		/// it.</summary>
+		public static int GenericWork<T>(T value) => 0;
+
+		/// <summary>A generic declaring type, which is a different question from a generic method: the
+		/// method here is not generic, but it has no single runtime method to patch until the type is
+		/// closed over something.</summary>
+		public static class Holder<T> {
+			public static int Work() => 0;
+		}
+
+		/// <summary>Asks to be inlined, so that a hook on it is the case where patching the method changes
+		/// nothing at call sites the JIT has already compiled. Zero for the same reason as above.</summary>
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static int Inlineable() => 0;
 
 		static int Main(string[] args) {
 			if (args.Length < 1) {

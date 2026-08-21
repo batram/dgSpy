@@ -152,6 +152,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 			if (document == null) throw new ArgumentNullException(nameof(document));
 			if (document.Kind != HookKind.Prefix && document.Kind != HookKind.Postfix && document.Kind != HookKind.Finalizer && document.Kind != HookKind.Transpiler) throw new NotSupportedException("Compiled hooks currently support Prefix, Postfix, Finalizer, and Transpiler only.");
 			if (revision <= 0) throw new ArgumentOutOfRangeException(nameof(revision));
+			RejectGenericCarrier(method);
 			// Compilation deliberately happens before taking the mutation lock. A failed candidate cannot
 			// alter the resident hook set or advance hooks_version.
 			var compiled = CompiledHookCompiler.Compile(source, method, document.Kind);
@@ -186,9 +187,33 @@ namespace HookLab.Probe.CorDebug.Patching {
 			}
 		}
 
+		/// <summary>Refuses a carrier that still has unbound generic parameters, by name and before anything
+		/// is compiled or patched.
+		///
+		/// <para>A generic method definition, or any method on an open generic type, is not one runtime
+		/// method: the runtime compiles one per set of type arguments, and the metadata token, signature
+		/// and IL digest the guards check all describe the definition rather than any of them. There is
+		/// therefore nothing here that patching could intercept.</para>
+		///
+		/// <para>It was already impossible, and that is the point of stating it. Measured 2026-08-21 on
+		/// Mono 6.12: offering a generic method to <c>create_hook</c> reached Harmony and came back
+		/// <c>NotSupportedException: Specified method is not supported.</c> - a refusal, but one that names
+		/// neither the method nor the reason, and reads like a defect in HookLab rather than a property of
+		/// the target. <c>get_hook_template</c> already refused the same shape by name, but a template is
+		/// an authoring convenience: an exported hook package or a hand-written request reaches this path
+		/// without ever asking for one.</para></summary>
+		static void RejectGenericCarrier(MethodBase method) {
+			if (!method.ContainsGenericParameters) return;
+			throw new NotSupportedException("HookLab cannot patch a generic carrier: '" +
+				(method.DeclaringType?.FullName ?? "") + "." + method.Name + "' still has unbound generic parameters, so the runtime " +
+				"compiles one method per set of type arguments and there is no single method to intercept. " +
+				"Choose a non-generic carrier.");
+		}
+
 		public PatchOperationResult Install(MethodBase method, HookDocument document, long expectedHooksVersion) {
 			if (method == null) throw new ArgumentNullException(nameof(method));
 			if (document == null) throw new ArgumentNullException(nameof(document));
+			RejectGenericCarrier(method);
 			lock (gate) {
 				ThrowIfDisposed(); CheckVersion(expectedHooksVersion);
 				MethodGuards.ValidateTarget(initialization.ExpectedTarget, initialization.IdentityProvider.GetCurrentIdentity());

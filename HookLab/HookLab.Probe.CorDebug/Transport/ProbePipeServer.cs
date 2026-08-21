@@ -228,7 +228,33 @@ namespace HookLab.Probe.CorDebug.Transport {
 			}
 		}
 
+		/// <summary>Turns "a native library is missing" into a statement about the runtime, by name.
+		///
+		/// <para>A Mono build whose class libraries are CoreFX-derived - Unity 2021.3's own
+		/// <c>mono.exe</c> is the measured example - carries a <c>System.IO.Pipes</c> whose server streams
+		/// P/Invoke a <c>System.Native</c> shim that does not exist on Windows. Every named-pipe server
+		/// fails there, including the one built through <c>CreateNamedPipeW</c>, because the handle is
+		/// still wrapped in a <see cref="NamedPipeServerStream"/>.</para>
+		///
+		/// <para>Unclassified, that surfaces as a bare <c>DllNotFoundException</c> naming a library nobody
+		/// asked for, which reads as a broken dgSpy rather than as an unsupported runtime. HookLab's
+		/// control channel is a named pipe by design, so a runtime that cannot open one cannot host a
+		/// resident, and saying exactly that is the supported-or-refused answer.</para></summary>
+		internal static Exception DescribeUnsupportedRuntime(Exception cause) =>
+			new PlatformNotSupportedException("This runtime's class libraries cannot open a named pipe server, so it cannot host a HookLab " +
+				"resident: HookLab's control channel is a named pipe. A Mono build with CoreFX-derived class libraries - Unity's own " +
+				"mono.exe, rather than the Mono a player embeds - fails this way, because its System.IO.Pipes P/Invokes a System.Native " +
+				"shim that does not exist on Windows. Underlying failure: " + cause.GetType().Name + ": " + cause.Message, cause);
+
 		NamedPipeServerStream CreatePipe() {
+			// Both the managed path and the CreateNamedPipeW fallback end in a NamedPipeServerStream, so
+			// one place catches it for both.
+			try { return CreatePipeCore(); }
+			catch (DllNotFoundException ex) { throw DescribeUnsupportedRuntime(ex); }
+			catch (EntryPointNotFoundException ex) { throw DescribeUnsupportedRuntime(ex); }
+		}
+
+		NamedPipeServerStream CreatePipeCore() {
 			SecurityIdentifier sid;
 			var security = new PipeSecurity();
 			try {

@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using HookLab.Contracts;
 using HookLab.Probe.CorDebug;
 using HookLab.Probe.CorDebug.Patching;
+using HookLab.Probe.CorDebug.Transport;
 using Xunit;
 using dgSpy.Extension;
 
@@ -133,6 +134,64 @@ namespace HookLab.Probe.Tests {
 				Assert.True(enabled.Changed); Assert.True(runtime.IsEnabled(installed.PatchId));
 				Fixture.Add(2, 3); Assert.Single(runtime.Events.Drain(10));
 			}
+		}
+
+		/// <summary>A generic carrier is refused by name, before anything is compiled or patched.
+		///
+		/// <para>It was already impossible - Harmony answers a generic method with
+		/// <c>NotSupportedException: Specified method is not supported.</c>, measured live on Mono 6.12 -
+		/// but that refusal names neither the method nor the reason, and reads like a HookLab defect rather
+		/// than a property of the shape. <c>get_hook_template</c> refuses the same shape, but a template is
+		/// an authoring convenience that an exported package or a hand-written request never asks for.</para></summary>
+		[Fact]
+		public void AGenericCarrierIsRefusedByNameRatherThanByHarmony() {
+			var genericMethod = typeof(Fixture).GetMethod(nameof(Fixture.Generic))!;
+			var methodOnGenericType = typeof(Fixture.Holder<>).GetMethod(nameof(Fixture.Holder<int>.Work))!;
+			foreach (var carrier in new[] { genericMethod, methodOnGenericType }) {
+				using (var runtime = Runtime()) {
+					var compiled = Assert.Throws<NotSupportedException>(() =>
+						runtime.InstallCompiledHook(carrier, Document(), PrefixReturning(41), 1, 0));
+					Assert.Contains("generic carrier", compiled.Message, StringComparison.Ordinal);
+					Assert.Contains(carrier.Name, compiled.Message, StringComparison.Ordinal);
+					var observed = Assert.Throws<NotSupportedException>(() =>
+						runtime.Install(carrier, Document(), 0));
+					Assert.Contains("generic carrier", observed.Message, StringComparison.Ordinal);
+				}
+			}
+		}
+
+		/// <summary>The refusal is about unbound generic parameters, not about the word "generic": a closed
+		/// instantiation is a real runtime method and must still be patchable. Without this the fix above
+		/// could be a blanket ban that nothing noticed.</summary>
+		[Fact]
+		public void AClosedGenericInstantiationIsStillPatchable() {
+			var closed = typeof(Fixture.Holder<int>).GetMethod(nameof(Fixture.Holder<int>.Work))!;
+			Assert.False(closed.ContainsGenericParameters);
+			using (var runtime = Runtime()) {
+				var document = new HookDocument(1, "closed", HookKind.Postfix, GuardFor(closed), "{}", Limits, true);
+				var installed = runtime.InstallCompiledHook(closed, document, PostfixReturning(7), 1, 0);
+				Assert.Equal(1, installed.Revision);
+				Assert.Equal(7, Fixture.Holder<int>.Work());
+			}
+		}
+
+		/// <summary>A runtime whose class libraries cannot open a named pipe is refused as unsupported,
+		/// rather than surfacing a bare DllNotFoundException for a library nobody asked for.
+		///
+		/// <para>Unit-level on purpose. The measured example is Unity 2021.3's own <c>mono.exe</c>, whose
+		/// CoreFX-derived <c>System.IO.Pipes</c> P/Invokes a <c>System.Native</c> shim absent on Windows -
+		/// and that build is x86-only, so the resident's architecture guard refuses it before the endpoint
+		/// is ever reached. There is no x64 combination of that runtime to drive live, so the classification
+		/// is asserted where it is decided.</para></summary>
+		[Fact]
+		public void ARuntimeThatCannotOpenANamedPipeIsRefusedAsUnsupported() {
+			var cause = new DllNotFoundException("Unable to load DLL 'System.Native'");
+			var refusal = ProbePipeServer.DescribeUnsupportedRuntime(cause);
+			Assert.IsType<PlatformNotSupportedException>(refusal);
+			Assert.Contains("cannot open a named pipe server", refusal.Message, StringComparison.Ordinal);
+			Assert.Contains("System.Native", refusal.Message, StringComparison.Ordinal);
+			// The cause is kept, not swallowed: an operator on some other runtime needs the original name.
+			Assert.Same(cause, refusal.InnerException);
 		}
 
 		[Fact]
@@ -765,6 +824,13 @@ namespace HookLab.Probe.Tests {
 			public IEnumerator GetEnumerator() { Fixture.Add(10, 20); return Array.Empty<object>().GetEnumerator(); }
 		}
 		static class Fixture {
+			/// <summary>A generic method definition and a method on an open generic type: both are shapes the
+			/// runtime compiles one copy of per set of type arguments, so neither is a single method to
+			/// patch. Present so the refusal can be asserted rather than described.</summary>
+			[MethodImpl(MethodImplOptions.NoInlining)] public static int Generic<T>(T value) => 0;
+			internal static class Holder<T> {
+				[MethodImpl(MethodImplOptions.NoInlining)] public static int Work() => 0;
+			}
 			[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
 			[MethodImpl(MethodImplOptions.NoInlining)] public static object Echo(object value) => value;
 			[MethodImpl(MethodImplOptions.NoInlining)] public static int Caller() => Add(1, 2);

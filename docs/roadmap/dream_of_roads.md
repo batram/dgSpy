@@ -47,51 +47,55 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Give Mono's remaining unknowns - domain reloads, generics, inlining, finalizers, adoption - explicit
-   supported or refused results.
+1. Answer Mono's last two unknowns - domain reloads and finalizers during retirement - with live
+   evidence, or a fixture that shows why they cannot yet be measured.
 2. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
 3. Revisit high-risk execution, editing, and scripting one workflow at a time.
 4. Keep the remaining compatibility expansions parked until product scope changes.
 5. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - name Mono's remaining unknowns, supported or refused
+## Road 1 - domain reloads and finalizers, the last two Mono unknowns
 
-Mono is a supported HookLab runtime, standalone and embedded alike, and the outcome the previous Road 1
-existed for is met: one payload set across both Mono builds, arrival, and a compiled hook installed by
-the pinned Harmony **inside an unmodified shipped Unity player**. `tests\run-unity-hooklab-smoke.ps1`
-drives that whole lifecycle in 20 checks against a player with nothing added to its `Managed` directory,
-and `tests\run-mono-hooklab-smoke.ps1` drives the general case on a fixture this repository builds.
-Owned internal breakpoints are engine-neutral and each engine exports a provider. All of that is product
-behaviour now, described in
-[Supported runtimes](../product/HOOKLAB.md#supported-runtimes),
-[Arrival on Mono](../product/HOOKLAB.md#arrival-on-mono),
-[Resident payload matrix](../product/HOOKLAB.md#resident-payload-matrix) and
-[No payload may need the netstandard facade](../product/HOOKLAB.md#no-payload-may-need-the-netstandard-facade).
+Mono is a supported HookLab runtime, standalone and embedded alike. One payload set across both Mono
+builds, arrival, and a compiled hook installed by the pinned Harmony **inside an unmodified shipped
+Unity player** are all product behaviour now, gated by `tests\run-unity-hooklab-smoke.ps1` (20 checks
+against a player with nothing added to its `Managed` directory) and `tests\run-mono-hooklab-smoke.ps1`
+(22 checks on a fixture this repository builds).
 
-What remains is not a defect list. It is a set of questions a Mono target can ask that this product has
-never answered on the record, and each needs an explicit **supported** or **refused** result rather than
-an untested assumption:
+Four of the six questions this road carried are answered, each with a supported-or-refused result and a
+gate behind it - `tests\run-mono-hooklab-boundaries.ps1`, 19 checks, plus unit coverage:
 
-1. **Domain reloads.** A resident lives in an application domain. Unity reloads domains, and nothing has
-   been measured about what a reload does to a resident, its endpoint, or installed hooks. Refusing
-   loudly across a reload is an acceptable answer; not knowing is not.
-2. **Generic methods and generic declaring types.** The hook identity guards - token, signature, MVID,
-   IL digest - are stated for closed methods. Whether a generic carrier is supported, and what a refusal
-   says if not, is unmeasured.
-3. **Inlining.** Mono may inline a small method, and a patch on an inlined callee changes nothing at
-   already-jitted call sites. The observable rule and its refusal need to be stated.
-4. **Finalizers and the retirement path.** Retirement waits for its listener on Mono. What a finalizer
-   thread that is mid-hook does at that moment is untested.
-5. **Reconnect and adoption.** An existing resident is adopted rather than replaced. Adoption across a
-   dropped Mono soft-debugger connection has not been driven end to end.
-6. **Unsupported Mono variants.** Unity's own standalone `mono.exe` carries a CoreFX-derived
-   `System.IO.Pipes` whose servers cannot open on Windows. That is known and refused in a comment; it
-   should be refused by name, at readiness, with a test.
+- **Generic carriers are refused, by name.** A generic method definition or a method on an open generic
+  type is not one runtime method, so there is nothing to intercept. It was already impossible; the
+  refusal now names the carrier and the reason instead of surfacing Harmony's
+  `NotSupportedException: Specified method is not supported.` A closed instantiation stays patchable.
+- **Inlinable carriers are supported**, measured with an `AggressiveInlining` carrier on Mono 6.12.
+  Interception of call sites already compiled is not claimed, and the gate keeps measuring rather than
+  asserting a guarantee.
+- **Reconnect and adoption work end to end.** A hook survives with no debugger attached, the soft
+  debugger accepts a second session after a detach, `initialize_hooklab` adopts the existing resident
+  rather than byte-loading a second generation, and the new session can remove the old session's hook.
+- **A runtime that cannot open a named pipe is refused as unsupported**, naming the reason. Unity's own
+  `mono.exe` is the measured example; it is x86-only, so the architecture guard refuses it before the
+  endpoint is reached and the classification is asserted where it is decided rather than live.
 
-Each of these is one bounded slice: a fixture that shows the question, a measurement, and then either a
-supported result with a gate or a refusal with the reason in its message.
-`tests\run-mono-hooklab-stress.ps1` is the instrument for anything intermittent, and is kept for exactly
-that.
+See [Hook shapes, and what is refused](../product/HOOKLAB.md#hook-shapes-and-what-is-refused).
+
+Two remain, and both need something this repository cannot currently produce:
+
+1. **Domain reloads.** The *stated* behaviour already exists and is unit-tested: the resident's target
+   identity includes the application domain, so an operation after a reload is refused by an
+   `appdomain_id` guard mismatch - the resident does not follow a reload. What is missing is live
+   evidence, and it needs a target that actually reloads its scripting domain. The `uch-debug-target`
+   player does not, so this needs either a fixture built to reload one or a player that does. Until
+   then the claim is "guarded", not "measured".
+2. **Finalizers during retirement.** Retirement waits for its listener on Mono. What a CLR finalizer
+   thread that is mid-hook does at that moment is untested, and constructing that race deterministically
+   is the whole difficulty. `tests\run-mono-hooklab-stress.ps1` is the instrument if it turns out to be
+   intermittent rather than constructible.
+
+Neither blocks the supported claims above; both are cases where "we do not know" is the honest current
+answer, and each needs a fixture before it needs a fix.
 
 Two boundaries stay fixed while this proceeds. No mod loader - UCH, BepInEx, or another - may become a
 dependency. And none of this implies IL2CPP or AOT support.

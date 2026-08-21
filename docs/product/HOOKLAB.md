@@ -509,6 +509,66 @@ The gate asserts the target is on Mono from the runtime's own answer rather than
 ends by stopping the target and requiring a clean exit, because a process that has hosted a resident and
 cannot exit is a defect this runtime actually had.
 
+## Hook shapes, and what is refused
+
+A hook names a carrier method. Not every method is one, and the difference is a property of the runtime
+rather than of HookLab, so each answer below is either **supported** with a gate behind it or **refused**
+with a reason that names the shape. `tests\run-mono-hooklab-boundaries.ps1` measures all of them against
+the same fixture and Mono the lifecycle gate uses, so a difference is about the shape and nothing else.
+
+| shape | result |
+| --- | --- |
+| a plain static method | supported |
+| a generic method definition | **refused**, by name |
+| a method on an open generic type | **refused**, by name |
+| a method marked `AggressiveInlining` | supported, measured |
+| a closed generic instantiation | supported |
+
+**A generic carrier is refused.** A generic method definition, or any method on an open generic type,
+is not one runtime method: the runtime compiles one per set of type arguments, and the metadata token,
+signature and IL digest the guards check all describe the definition rather than any of them. There is
+nothing there that patching could intercept.
+
+It was already impossible; what changed is that it now says so. `get_hook_template` refused the shape by
+name, but a template is an authoring convenience - an exported hook package or a hand-written request
+reaches `create_hook` without ever asking for one, and Harmony answered that with
+`NotSupportedException: Specified method is not supported.`, which names neither the method nor the
+reason and reads like a defect in HookLab. The resident now refuses it before anything is compiled or
+patched, naming the carrier and why. A **closed** instantiation is a real runtime method and stays
+patchable - the rule is about unbound generic parameters, not about the word "generic".
+
+**An inlinable carrier is supported, and that is a measurement rather than a guarantee.** A hook on a
+method the JIT may inline cannot affect call sites that were already compiled; HookLab does not re-JIT
+callers and does not claim to. Measured on Mono 6.12 with a carrier marked `AggressiveInlining`:
+interception was complete and the observed value moved. The gate keeps asking, because the honest
+statement is "measured on the runtimes we measure", not "guaranteed everywhere".
+
+### Across a dropped connection
+
+A resident outlives the debugger session that installed it, so the interesting case is the second
+session rather than the first. Measured end to end on Mono, and gated:
+
+- a hook installed by one session keeps working with **no debugger attached at all**;
+- the Mono soft debugger accepts a second session after a detach;
+- `initialize_hooklab` on that second session **adopts** the existing resident rather than installing a
+  new one - `adopted: true`. Byte-loading a second generation into the same application domain is the
+  one thing arrival must never do, because it cannot be undone;
+- the hook installed by the previous session is still in the inventory, and the new session can remove
+  it, restoring the original behaviour.
+
+### A runtime that cannot host a resident
+
+HookLab's control channel is a named pipe by design. A Mono build whose class libraries are
+CoreFX-derived - Unity's own `mono.exe`, as distinct from the Mono a player embeds - carries a
+`System.IO.Pipes` whose server streams P/Invoke a `System.Native` shim that does not exist on Windows,
+so every named-pipe server fails there, including one built through `CreateNamedPipeW`, because the
+handle is still wrapped in a `NamedPipeServerStream`.
+
+That is now refused as an unsupported runtime, naming the reason and keeping the underlying failure,
+rather than surfacing a bare `DllNotFoundException` for a library nobody asked for. The classification
+is asserted where it is decided rather than live: that build is x86-only, so the resident's architecture
+guard refuses it before the endpoint is ever reached, and there is no x64 combination of it to drive.
+
 ## Identity and the control channel
 
 The debugger and its target are not assumed to be the same Windows account. Two principals are read
