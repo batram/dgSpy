@@ -14,6 +14,14 @@
   <ItemGroup>
     <PackageReference Include="Lib.Harmony" Version="2.4.2" GeneratePathProperty="true" ExcludeAssets="runtime" />
 	<PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />
+    <!-- Restored here, embedded by HookLab.Bootstrap, referenced by neither: ExcludeAssets="all" keeps
+         them out of the compile and the output. They are the two Roslyn dependencies a Unity target has to
+         be handed - CoreCLR has them in its shared framework and CLR v4 never loads Roslyn - and they are
+         pinned by hand so a fresh clone cannot resolve a version the payload matrix does not describe.
+         The bootstrap cannot declare them itself: it takes no package dependency at all, by design and by
+         test, so the restore has to happen on this side of the project reference. -->
+    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" ExcludeAssets="all" PrivateAssets="all" />
+    <PackageReference Include="System.Reflection.Metadata" Version="10.0.1" ExcludeAssets="all" PrivateAssets="all" />
     <ProjectReference Include="..\HookLab.Contracts\HookLab.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>

@@ -17,11 +17,11 @@ namespace HookLab.Bootstrap.Tests {
 				Assert.True(report["status"] == "ok", "Bootstrap refused: " + report.Get("error_type") + " " + report.Get("error_message"));
 				Assert.False(string.IsNullOrWhiteSpace(report["probe_instance_id"]));
 				Assert.Equal("1", report["protocol_version"]);
-				Assert.Equal("HookLab.Contracts,HookLab.Probe.CorDebug,Microsoft.CodeAnalysis,Microsoft.CodeAnalysis.CSharp,System.Collections.Immutable", report["payload_identities"]);
+				Assert.Equal("HookLab.Contracts,HookLab.Probe.CorDebug,Microsoft.CodeAnalysis,Microsoft.CodeAnalysis.CSharp,System.Collections.Immutable,System.Reflection.Metadata,System.Runtime.CompilerServices.Unsafe", report["payload_identities"]);
 				// Five, not the two the probe alone needs: verifying what each payload identity binds to means
 				// byte-loading each one before payload code runs. That is the price of checking a binding
 				// while nothing has acted on it, and it is paid once per initialization.
-				Assert.Equal("5", report["payload_load_count"]);
+				Assert.Equal("7", report["payload_load_count"]);
 				Assert.False(string.IsNullOrWhiteSpace(report["pipe_name"]));
 				Assert.DoesNotContain("secret_base64", report.Keys);
 				Assert.DoesNotContain("endpoint_nonce_base64", report.Keys);
@@ -60,7 +60,7 @@ namespace HookLab.Bootstrap.Tests {
 			using (var runner = BootstrapRunner.Create("bootstrap-byte-loaded")) {
 				var report = Report.Parse(runner.StartByteLoaded(Parameters(runner).WithHook("byte-loaded-hook").ToString()));
 				Assert.True(report["status"] == "ok", "Bootstrap refused: " + report.Get("error_type") + " " + report.Get("error_message"));
-				Assert.Equal("5", report["payload_load_count"]);
+				Assert.Equal("7", report["payload_load_count"]);
 				Assert.Contains("byte-loaded-hook", report["patch_id"], StringComparison.Ordinal);
 				Assert.Contains("HookLab.Probe.CorDebug|byte-loaded", runner.ResidentPayloads());
 			}

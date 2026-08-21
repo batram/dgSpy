@@ -25,6 +25,27 @@ namespace HookLab.Probe.Tests {
 			"Microsoft.CodeAnalysis", "System.CodeDom", "Microsoft.CSharp",
 		};
 
+		/// <summary>Serves the pinned Harmony from the probe's own embedded resource, the way the resident
+		/// does.
+		///
+		/// <para>Without it these tests are order-dependent and say so only sometimes. Reading a field type
+		/// on <c>ProbeRuntime</c> makes the CLR resolve <c>0Harmony</c>, which is not beside the test host -
+		/// it travels inside the probe - so the reflection below throws unless some earlier test in the same
+		/// run happened to load it first. That passed for as long as the assembly's test order put one
+		/// there, and failed the moment the order changed for an unrelated reason.</para></summary>
+		static CompilerBoundaryTests() {
+			AppDomain.CurrentDomain.AssemblyResolve += (_, args) => {
+				if (!new AssemblyName(args.Name).Name!.Equals("0Harmony", StringComparison.Ordinal)) return null;
+				var resource = Probe.GetManifestResourceNames().Single(name => name.EndsWith("Backends.Desktop.0Harmony.dll", StringComparison.Ordinal));
+				using (var stream = Probe.GetManifestResourceStream(resource)!) {
+					var bytes = new byte[stream.Length];
+					var offset = 0;
+					while (offset != bytes.Length) offset += stream.Read(bytes, offset, bytes.Length - offset);
+					return Assembly.Load(bytes);
+				}
+			};
+		}
+
 		// Reached through the one public type on this path. The compiler internals are deliberately
 		// internal, and widening them with InternalsVisibleTo just to inspect their shape would enlarge
 		// the surface this test exists to keep narrow.
@@ -60,7 +81,7 @@ namespace HookLab.Probe.Tests {
 			Assert.True(leaks.Length == 0,
 				"A runtime-specific compiler type is reachable from the shared compiler boundary:" + Environment.NewLine +
 				string.Join(Environment.NewLine, leaks) + Environment.NewLine +
-				"Move it into DesktopCodeDomHookCompiler or CoreClrRoslynHookCompiler. The CLR resolves the types in a " +
+				"Move it into DesktopCodeDomHookCompiler or RoslynHookCompiler. The CLR resolves the types in a " +
 				"member's signature when it prepares that member, so a mention here makes the runtime that lacks that " +
 				"compiler load it anyway.");
 		}
@@ -70,13 +91,13 @@ namespace HookLab.Probe.Tests {
 		[Fact]
 		public void Each_compiler_technology_lives_in_exactly_one_type() {
 			Assert.Equal(new[] { "DesktopCodeDomHookCompiler" }, TypesMentioning("System.CodeDom", "Microsoft.CSharp"));
-			Assert.Equal(new[] { "CoreClrRoslynHookCompiler" }, TypesMentioning("Microsoft.CodeAnalysis"));
+			Assert.Equal(new[] { "RoslynHookCompiler" }, TypesMentioning("Microsoft.CodeAnalysis"));
 		}
 
 		[Fact]
 		public void Both_backends_implement_the_runtime_neutral_boundary() {
 			var contract = Type("IHookSourceCompiler");
-			foreach (var name in new[] { "DesktopCodeDomHookCompiler", "CoreClrRoslynHookCompiler" }) {
+			foreach (var name in new[] { "DesktopCodeDomHookCompiler", "RoslynHookCompiler" }) {
 				var backend = Type(name);
 				Assert.True(contract.IsAssignableFrom(backend), name + " does not implement IHookSourceCompiler.");
 				// One method, and it hands back a BCL Assembly. A backend that returned its own result type
@@ -92,7 +113,7 @@ namespace HookLab.Probe.Tests {
 		/// about which runtime this is had been made.</summary>
 		[Fact]
 		public void The_shared_boundary_holds_no_static_state_that_could_pull_a_backend_in() {
-			var backends = new[] { "DesktopCodeDomHookCompiler", "CoreClrRoslynHookCompiler" };
+			var backends = new[] { "DesktopCodeDomHookCompiler", "RoslynHookCompiler" };
 			foreach (var type in SharedTypes)
 				foreach (var field in type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
 					Assert.False(backends.Contains(field.FieldType.Name),

@@ -27,15 +27,17 @@ enters a target. Each entry records:
 - the slot id and its role - contracts, resident, compiler, compiler-support, or patch engine;
 - the carrier that holds the bytes: the bootstrap, or the resident probe nested inside it;
 - the embedded resource name, target framework, and architecture;
-- the runtime families the payload is valid on, `clrv4`, `coreclr`, or both;
+- the runtime families the payload is valid on - `clrv4`, `coreclr`, `unity`, or any combination;
 - the exact assembly name, version, and public key token;
 - provenance - the project or the pinned NuGet package and version it came from;
 - the other slots it needs at run time, and its SHA-256.
 
-The runtime axis is real, not decorative: the patch engine is `net48` Harmony on CLR v4 and `net6.0`
-Harmony on CoreCLR, and compilation is CodeDom on CLR v4 and Roslyn on CoreCLR. The matrix is where
-those differences are stated once, instead of being recoverable only by reading the loaders that branch
-on them.
+The runtime axis is real, not decorative: the patch engine is `net48` Harmony on CLR v4 and Unity and
+`net6.0` Harmony on CoreCLR, compilation is CodeDom on CLR v4 and Roslyn on CoreCLR and Unity, and two
+Roslyn support slots are valid on CLR v4 and Unity but not on CoreCLR, which supplies them itself. The
+matrix is where those differences are stated once, instead of being recoverable only by reading the
+loaders that branch on them - and the resident honours them, serving only the slots declared valid on
+the runtime it is living in.
 
 Three things verify it, at different times and against different evidence:
 
@@ -58,15 +60,18 @@ it fails a wrong payload set earlier and by name, not instead.
 ## Compilation boundary
 
 Compilation happens in the target, with the compiler the runtime has: CodeDom on CLR v4, Roslyn on
-CoreCLR. Only one of the two can ever work in a given target - CodeDom is a .NET Framework facility a
-CoreCLR process cannot find, and Roslyn travels in the payload precisely because CoreCLR has no CodeDom.
+CoreCLR and on Unity - whose Mono has a CodeDom, but one that shells out to an `mcs` no player ships.
+CodeDom is a .NET Framework facility a CoreCLR process cannot find, and Roslyn travels in the payload
+precisely because CoreCLR has no CodeDom.
 
 They are separated by construction rather than by discipline. One runtime-neutral boundary carries an
 assembly name, source, reference paths and an optional patch-engine reference path - all strings - and
 returns a loaded assembly or bounded string diagnostics. Each compiler lives alone in its own type, and
 a metadata test refuses any runtime-specific compiler type appearing in a base type, interface, field,
 property, method or constructor signature on the shared side, including inside array element types and
-generic arguments. Selection reads the corlib name and builds one backend without preparing the other.
+generic arguments. Selection reads the corlib name and whether `Mono.Runtime` exists - the corlib name alone cannot tell
+Unity from CLR v4, because Mono calls its corlib `mscorlib` too - and builds one backend without
+preparing the other.
 
 Host-side compilation is deliberately not offered. It would need its own decision about exact target
 reference identities, compiler recipes, hashes, and trust.
@@ -120,14 +125,18 @@ than left implied by the word "CoreCLR":
 | CLR v4 (`v4.0.30319`), x64 | yes | packaged CLR v4 HookLab live gate, cross-identity gate, compatibility probe |
 | CoreCLR 10.0 up to but excluding 11.0, x64 | yes | packaged CoreCLR HookLab live gate, cross-identity gate, compatibility probe |
 | Any other CoreCLR major version | no | none - a version outside every supported range is refused by name |
-| Mono/Unity, x64 | not advertised - resident lifecycle proved, arrival and gates not | see below |
+| Mono/Unity, x64 | not yet - everything but arrival is proved | see below |
 
 Mono/Unity targets are fully supported for ordinary debugging. HookLab residency there is **not
-advertised**: `HookLabBackends` has no Mono row, so the extension refuses Mono targets before residency
-is attempted.
+available yet**, and the refusal names the one missing piece rather than calling the runtime
+unsupported: the resident arrives through a single debugger evaluation, and placing that evaluation
+needs an owned internal breakpoint, which only the CorDebug engine implements. Adding the Mono
+counterpart is engine work with its own evidence to earn.
 
-That refusal is now about what has not been proved rather than about what cannot work. The two reasons
-a Mono resident was thought impossible are both gone, and the resident-side support for them ships:
+Everything downstream of arrival is proved on Unity's Mono, and ships: the compatibility probe's
+`unity` leg runs a complete lifecycle - Roslyn compiles, the pinned desktop Harmony patches, behavior
+changes, events arrive, removal restores, the resident retires, and the player survives. Three earlier
+reasons a Mono resident was thought impossible are gone:
 
 - Unity's Mono implements neither `WindowsIdentity.GetCurrent().User` nor
   `PipeSecurity.AddAccessRule`, so the control endpoint's access control cannot be built the managed
@@ -138,11 +147,16 @@ a Mono resident was thought impossible are both gone, and the resident-side supp
   HookLab's deliberately non-blocking endpoint teardown used to leave behind. Retirement now waits for
   the listener on the runtimes that need it and reports `listener_teardown`; CLR v4 and CoreCLR take
   the `not_required` path and are unchanged.
+- Compilation on Mono took the CodeDom path, because the selector keys on the corlib name and Mono's is
+  also `mscorlib` - and Mono's CodeDom shells out to an `mcs` no player ships. Unity now selects the
+  payload's own Roslyn, which needed two more declared slots: `System.Reflection.Metadata` and
+  `System.Runtime.CompilerServices.Unsafe`, which CoreCLR has in its shared framework and CLR v4 never
+  asked for because it never loads Roslyn.
 
-A complete authenticated lifecycle - compile, install, observe, remove, retire, target still alive -
-runs on Unity's Mono on the unchanged CLR v4 payload slots, eight runs out of eight. What remains
-before Mono could be advertised is everything the compatibility probe deliberately does not prove:
-**arrival**, a backend row with exact runtime and module identity, packaging, and live gates.
+`unity` is a real family in the payload matrix, and the resident now serves only the slots declared
+valid on the runtime it is living in - so a slot added for one runtime can no longer break the bind on
+another. What remains before Unity can be advertised is **arrival**, and the backend row is written and
+verified against the shipped matrix, waiting on it.
 
 A range is a claim that a packaged live hook lifecycle has actually run there. Adding one needs its own
 evidence, not an expectation that it should work.
@@ -175,9 +189,9 @@ What it does prove is everything downstream of arrival, which is where the runti
 payload selection from the matrix, the dependency closure, compiler creation and a real compilation,
 the pinned patch engine loading, live behavior change, event capture, removal, and clean retirement.
 
-### The Mono leg
+### The Unity leg
 
-`--runtime mono` runs the same fixture on the Mono a Unity player runs, and drives the same complete
+`--runtime unity` runs the same fixture on the Mono a Unity player runs, and drives the same complete
 lifecycle the other two legs do - compile, install, observe, remove, retire, target still alive - on
 the unchanged CLR v4 payload slots. Like them, it proves everything downstream of arrival and nothing
 about arrival itself, which is why a green Mono leg does not by itself make Mono a supported HookLab
@@ -191,7 +205,7 @@ installed must not decide what was measured:
 $env:DGSPY_MONO_EXE        = 'tests\TestTargets\MonoHost64\bin\Release\MonoHost64.exe'
 $env:DGSPY_MONO_RUNTIME    = '<Unity>\Editor\Data\MonoBleedingEdge\EmbedRuntime\mono-2.0-bdwgc.dll'
 $env:DGSPY_MONO_ASSEMBLIES = '<Unity>\Editor\Data\MonoBleedingEdge\lib\mono\unityjit-win32'
-dotnet run --project tests\HookLab.CompatibilityProbe -c Release -- --runtime mono
+dotnet run --project tests\HookLab.CompatibilityProbe -c Release -- --runtime unity
 ```
 
 Both of the last two are load-bearing. Unity ships `mono.exe` as x86 only, so an x64 Mono target needs

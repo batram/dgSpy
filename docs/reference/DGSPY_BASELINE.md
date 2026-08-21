@@ -7,8 +7,9 @@
 - CLR v4 and CoreCLR CorDebug targets, plus Mono/Unity debug targets.
 - HookLab supports CLR v4 and CoreCLR residents through separate explicit backends; its shared payload
   remains `net48` internally and carries runtime-specific compiler and patch-engine assets. Mono/Unity
-  targets are ordinary debug targets only; HookLab residency is refused there because Unity's Mono
-  cannot build the control endpoint's access control.
+  targets are ordinary debug targets only: everything a Unity resident needs after arrival is proved and
+  ships, but placing the arrival evaluation needs an owned internal breakpoint the Mono engine does not
+  implement, so HookLab refuses there and says so.
 - x86 targets and the old net48 dnSpy host are out of scope.
 
 ## Prerequisites
@@ -113,10 +114,9 @@ surfacing as a timeout inside a live leg. Run it alone with:
 dotnet run --project tests\HookLab.CompatibilityProbe -c Release -- --negative
 ```
 
-It reads the payload from `DGSPY_LAYOUT_ROOT` or the newest composed layout. `--runtime mono` adds an
-opt-in leg that asserts, against a real Unity Mono runtime, that HookLab residency is refused there for
-the stated reason; it needs a Mono runtime this repository does not ship and is not part of
-`--runtime all`. See
+It reads the payload from `DGSPY_LAYOUT_ROOT` or the newest composed layout. `--runtime unity` adds an
+opt-in leg that drives the same complete lifecycle against a real Unity Mono runtime; it needs a Mono
+runtime this repository does not ship and is not part of `--runtime all`. See
 [Resident compatibility probe](../product/HOOKLAB.md#resident-compatibility-probe) for what it proves
 and, just as importantly, what it leaves to the packaged live gates.
 

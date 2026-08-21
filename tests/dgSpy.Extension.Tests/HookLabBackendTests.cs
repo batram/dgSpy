@@ -61,6 +61,18 @@ public sealed class HookLabBackendTests {
 		Assert.Contains("the attached process exposes Mono.",reason,StringComparison.Ordinal);
 	}
 
+	/// <summary>A Unity target is refused, and the refusal says which piece is missing rather than calling
+	/// the runtime unsupported. Everything except arrival is proved there - the compatibility probe's unity
+	/// leg runs a whole lifecycle - so "unsupported" would be false and "not yet" needs a reason.</summary>
+	[Fact]
+	public void A_unity_target_is_refused_with_the_reason_arrival_is_missing() {
+		var unity=new[]{ new HookLabRuntimeIdentity(new Guid("CE8A11EE-73EF-4A51-B5D0-BDA2E665A2B4"),"Unity") };
+		Assert.Null(HookLabBackends.Select(64,"X64",unity));
+		var reason=HookLabBackends.UnsupportedReason(64,"X64",unity);
+		Assert.Contains("owned internal breakpoint",reason,StringComparison.Ordinal);
+		Assert.Contains("CorDebug engine",reason,StringComparison.Ordinal);
+	}
+
 	/// <summary>CLR v2 shares the .NET Framework runtime GUID, so the GUID alone is not the identity.</summary>
 	[Fact]
 	public void The_desktop_runtime_guid_alone_does_not_select_a_backend() {
@@ -78,7 +90,7 @@ public sealed class HookLabBackendTests {
 	}
 
 	[Fact]
-	public void The_table_is_the_two_proved_backends_and_nothing_else() {
+	public void The_table_is_the_two_reachable_backends_and_nothing_else() {
 		Assert.Equal(new[]{"clrv4-x64","coreclr-x64"},HookLabBackends.All.Select(backend=>backend.Id).ToArray());
 		Assert.All(HookLabBackends.All,backend=>{ Assert.Equal(64,backend.Bitness); Assert.Equal("X64",backend.Architecture); });
 		Assert.Equal(HookLabBackends.All.Length,HookLabBackends.All.Select(backend=>backend.Priority).Distinct().Count());
@@ -93,8 +105,10 @@ public sealed class HookLabBackendTests {
 		var payload=ShippedPayload();
 		Skip.If(payload is null,"No composed layout to read the payload matrix from. Run the pipeline first.");
 		var matrix=PayloadMatrixVerification.VerifyPayloadFile(payload!);
-		foreach(var backend in HookLabBackends.All) {
-			var expected=backend.Family=="clrv4"?PayloadRuntimes.ClrV4:PayloadRuntimes.CoreClr;
+		// Pending backends are checked too: their payload claims are the part that is already proved, and
+		// leaving them unverified until arrival lands is how a row rots while nobody is looking.
+		foreach(var backend in HookLabBackends.All.Concat(HookLabBackends.Pending.Select(pending=>pending.Backend))) {
+			var expected=backend.Family switch{"clrv4"=>PayloadRuntimes.ClrV4,"coreclr"=>PayloadRuntimes.CoreClr,"unity"=>PayloadRuntimes.Unity,_=>throw new Xunit.Sdk.XunitException("Unknown backend family "+backend.Family+"; the matrix has no flag for it.")};
 			foreach(var id in new[]{backend.PatchEnginePayloadId}.Concat(backend.CompilerPayloadIds)) {
 				var entry=matrix.Entries.SingleOrDefault(value=>value.Id==id);
 				Assert.True(entry is not null,backend.Id+" names payload '"+id+"', which the shipped matrix does not carry.");
@@ -102,9 +116,12 @@ public sealed class HookLabBackendTests {
 			}
 			Assert.Equal(PayloadRole.PatchEngine,matrix[backend.PatchEnginePayloadId].Role);
 		}
-		// And the two backends must not share a patch engine: that they need different ones is the whole
-		// reason the runtime axis exists.
-		Assert.Equal(HookLabBackends.All.Length,HookLabBackends.All.Select(backend=>backend.PatchEnginePayloadId).Distinct().Count());
+		// Sharing a patch engine is allowed, and CLR v4 and Unity deliberately do: Unity's Mono is a
+		// net48-era runtime and the matrix declares that asset valid on both, which the loop above already
+		// required. What must never collapse is CoreCLR onto a net4x engine - that they need different ones
+		// is the reason the runtime axis exists at all.
+		foreach(var netFramework in new[]{HookLabBackends.DesktopClrV4,HookLabBackends.Unity})
+			Assert.NotEqual(HookLabBackends.CoreClr.PatchEnginePayloadId,netFramework.PatchEnginePayloadId);
 	}
 
 	static string? ShippedPayload() {

@@ -17,10 +17,10 @@ public sealed class PayloadMatrixTests {
 	// thing changed is unambiguously what the rejection is about.
 	const string Digest="0000000000000000000000000000000000000000000000000000000000000000";
 	static readonly string[] Rows={
-		"Contracts|contracts|bootstrap|P.Contracts.dll|netstandard2.0|any|clrv4,coreclr|Contracts|1.0.0.0|none|project:a||"+Digest,
-		"Resident|resident|bootstrap|P.Resident.dll|net48|x64|clrv4,coreclr|Resident|1.0.0.0|none|project:b|Contracts,Compiler|"+Digest,
-		"Compiler|compiler|bootstrap|P.Compiler.dll|netstandard2.0|any|clrv4,coreclr|Compiler|5.6.0.0|31bf3856ad364e35|nuget:c/5.6.0||"+Digest,
-		"Engine.Desktop|patch-engine|probe|Q.Desktop.dll|net48|any|clrv4|0Harmony|2.4.2.0|none|nuget:d/2.4.2||"+Digest,
+		"Contracts|contracts|bootstrap|P.Contracts.dll|netstandard2.0|any|clrv4,coreclr,unity|Contracts|1.0.0.0|none|project:a||"+Digest,
+		"Resident|resident|bootstrap|P.Resident.dll|net48|x64|clrv4,coreclr,unity|Resident|1.0.0.0|none|project:b|Contracts,Compiler|"+Digest,
+		"Compiler|compiler|bootstrap|P.Compiler.dll|netstandard2.0|any|clrv4,coreclr,unity|Compiler|5.6.0.0|31bf3856ad364e35|nuget:c/5.6.0||"+Digest,
+		"Engine.Desktop|patch-engine|probe|Q.Desktop.dll|net48|any|clrv4,unity|0Harmony|2.4.2.0|none|nuget:d/2.4.2||"+Digest,
 		"Engine.CoreClr|patch-engine|probe|Q.CoreClr.dll|net6.0|any|coreclr|0Harmony|2.4.2.0|none|nuget:d/2.4.2||"+Digest,
 	};
 
@@ -74,12 +74,12 @@ public sealed class PayloadMatrixTests {
 	[Fact]
 	public void The_shipped_payload_declares_exactly_what_it_carries() {
 		var matrix=PayloadMatrixVerification.VerifyPayloadFile(Payload());
-		Assert.Equal(new[]{"HookLab.Contracts","HookLab.Probe.CorDebug","Microsoft.CodeAnalysis","Microsoft.CodeAnalysis.CSharp","System.Collections.Immutable","Harmony.Desktop","Harmony.CoreClr"},
+		Assert.Equal(new[]{"HookLab.Contracts","HookLab.Probe.CorDebug","Microsoft.CodeAnalysis","Microsoft.CodeAnalysis.CSharp","System.Collections.Immutable","System.Runtime.CompilerServices.Unsafe","System.Reflection.Metadata","Harmony.Desktop","Harmony.CoreClr"},
 			matrix.Entries.Select(entry=>entry.Id).ToArray());
 		// The runtime axis the matrix exists to make explicit: one pinned patch engine per family, and
 		// neither of them visible anywhere before this manifest described them.
 		Assert.Equal("net48",matrix["Harmony.Desktop"].TargetFramework);
-		Assert.Equal(PayloadRuntimes.ClrV4,matrix["Harmony.Desktop"].Runtimes);
+		Assert.Equal(PayloadRuntimes.ClrV4|PayloadRuntimes.Unity,matrix["Harmony.Desktop"].Runtimes);
 		Assert.Equal("net6.0",matrix["Harmony.CoreClr"].TargetFramework);
 		Assert.Equal(PayloadRuntimes.CoreClr,matrix["Harmony.CoreClr"].Runtimes);
 		Assert.All(matrix.Entries,entry=>Assert.Equal(64,entry.Sha256.Length));

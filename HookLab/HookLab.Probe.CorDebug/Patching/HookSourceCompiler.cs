@@ -37,9 +37,10 @@ namespace HookLab.Probe.CorDebug.Patching {
 
 	/// <summary>Picks the compiler for the runtime this resident is living in.
 	///
-	/// <para>The corlib name is the test because it is the one fact available before anything
-	/// runtime-specific has been touched: <c>mscorlib</c> means CLR v4 and CodeDom, anything else means
-	/// CoreCLR and Roslyn.</para>
+	/// <para>Two facts available before anything runtime-specific has been touched: the corlib name, and
+	/// whether <c>Mono.Runtime</c> exists. <c>mscorlib</c> alone is not enough, because Mono's corlib is
+	/// called that too - and answering "CLR v4, so CodeDom" for a Unity target sends compilation to an
+	/// external <c>mcs</c> that is not there.</para>
 	///
 	/// <para><see cref="MethodImplOptions.NoInlining"/> on the two constructors is load-bearing rather
 	/// than decorative. Inlined into this method, the JIT would prepare both backends' types when it
@@ -49,12 +50,21 @@ namespace HookLab.Probe.CorDebug.Patching {
 	static class HookSourceCompilerSelector {
 		internal static bool IsDesktopClr => string.Equals(typeof(object).Assembly.GetName().Name,"mscorlib",StringComparison.Ordinal);
 
-		internal static IHookSourceCompiler ForCurrentRuntime()=>IsDesktopClr?Desktop():CoreClr();
+		/// <summary>Unity's Mono, which the corlib name cannot distinguish from CLR v4 because Mono's corlib
+		/// is also called <c>mscorlib</c>. That is not a detail: CodeDom on Mono does not compile in-process,
+		/// it shells out to <c>mcs</c> through the current executable, and no Unity player ships one. So a
+		/// Mono target takes the Roslyn path CLR v4 carries but does not use - the payload is already there,
+		/// it was simply never selected.</summary>
+		internal static bool IsMono => Type.GetType("Mono.Runtime")!=null;
+
+		/// <summary>CodeDom is the .NET Framework answer only. Every other runtime here compiles with the
+		/// payload's own Roslyn, which is why the backend is no longer named after CoreCLR.</summary>
+		internal static IHookSourceCompiler ForCurrentRuntime()=>IsDesktopClr && !IsMono?CodeDom():Roslyn();
 
 		[MethodImpl(MethodImplOptions.NoInlining)]
-		static IHookSourceCompiler Desktop()=>new DesktopCodeDomHookCompiler();
+		static IHookSourceCompiler CodeDom()=>new DesktopCodeDomHookCompiler();
 
 		[MethodImpl(MethodImplOptions.NoInlining)]
-		static IHookSourceCompiler CoreClr()=>new CoreClrRoslynHookCompiler();
+		static IHookSourceCompiler Roslyn()=>new RoslynHookCompiler();
 	}
 }

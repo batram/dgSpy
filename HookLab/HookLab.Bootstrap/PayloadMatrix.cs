@@ -12,6 +12,12 @@ namespace HookLab.Bootstrap {
 		None = 0,
 		ClrV4 = 1,
 		CoreClr = 2,
+		/// <summary>Unity's Mono. Its own family rather than a synonym for <see cref="ClrV4"/>, even though
+		/// it loads the same net48 assets: the payloads are shared, the compiler is not - Mono's CodeDom
+		/// shells out to an <c>mcs</c> no Unity player ships, so Unity uses the Roslyn slots CLR v4 carries
+		/// but does not use. Deliberately not "mono": a standalone Mono's class libraries are measurably
+		/// not a Unity player's, and only the latter has evidence.</summary>
+		Unity = 4,
 	}
 
 	/// <summary>What a payload is for. The role is declared rather than inferred from a file name so that
@@ -152,7 +158,7 @@ namespace HookLab.Bootstrap {
 				throw new BootstrapIntegrityException("The matrix must declare exactly one resident payload, found " + residents.Length + ".");
 			if (!Entries.Any(entry => entry.Role == PayloadRole.Contracts))
 				throw new BootstrapIntegrityException("The matrix declares no contracts payload.");
-			foreach (var runtime in new[] { PayloadRuntimes.ClrV4, PayloadRuntimes.CoreClr }) {
+			foreach (var runtime in new[] { PayloadRuntimes.ClrV4, PayloadRuntimes.CoreClr, PayloadRuntimes.Unity }) {
 				if (!Entries.Any(entry => entry.Role == PayloadRole.PatchEngine && (entry.Runtimes & runtime) != 0))
 					throw new BootstrapIntegrityException("The matrix declares no patch engine payload for " + Describe(runtime) + ".");
 				if (!Entries.Any(entry => entry.Role == PayloadRole.Compiler && (entry.Runtimes & runtime) != 0))
@@ -163,13 +169,16 @@ namespace HookLab.Bootstrap {
 		}
 
 		/// <summary>The one framework rule that is a fact rather than a judgement: a modern .NET target
-		/// framework (net5.0 and later) cannot be loaded by CLR v4, so no such asset may claim it. The
-		/// reverse is deliberately not asserted - net462 System.Collections.Immutable really does load in a
-		/// CoreCLR target, and inventing a symmetric rule here would refuse a payload that ships and works.</summary>
+		/// framework (net5.0 and later) cannot be loaded by CLR v4 or by Unity's Mono, so no such asset may
+		/// claim either. The reverse is deliberately not asserted - net462 System.Collections.Immutable
+		/// really does load in a CoreCLR target, and inventing a symmetric rule here would refuse a payload
+		/// that ships and works.</summary>
 		static void RejectFrameworkIncompatibility(string targetFramework, PayloadRuntimes runtimes, string line) {
-			if ((runtimes & PayloadRuntimes.ClrV4) == 0) return;
 			if (!IsModernDotNet(targetFramework)) return;
-			throw new BootstrapIntegrityException("Framework-incompatible payload: '" + targetFramework + "' cannot load on CLR v4: " + line);
+			if ((runtimes & PayloadRuntimes.ClrV4) != 0)
+				throw new BootstrapIntegrityException("Framework-incompatible payload: '" + targetFramework + "' cannot load on CLR v4: " + line);
+			if ((runtimes & PayloadRuntimes.Unity) != 0)
+				throw new BootstrapIntegrityException("Framework-incompatible payload: '" + targetFramework + "' cannot load on Unity's Mono: " + line);
 		}
 
 		internal static bool IsModernDotNet(string targetFramework) {
@@ -184,7 +193,8 @@ namespace HookLab.Bootstrap {
 			return int.Parse(digits, CultureInfo.InvariantCulture) >= 5;
 		}
 
-		static string Describe(PayloadRuntimes runtime) => runtime == PayloadRuntimes.ClrV4 ? "CLR v4" : "CoreCLR";
+		static string Describe(PayloadRuntimes runtime) =>
+			runtime == PayloadRuntimes.ClrV4 ? "CLR v4" : runtime == PayloadRuntimes.CoreClr ? "CoreCLR" : "Unity";
 
 		static PayloadRole ParseRole(string value, string line) {
 			switch (value.Trim()) {
@@ -211,6 +221,7 @@ namespace HookLab.Bootstrap {
 				switch (token.Trim()) {
 				case "clrv4": runtimes |= PayloadRuntimes.ClrV4; break;
 				case "coreclr": runtimes |= PayloadRuntimes.CoreClr; break;
+				case "unity": runtimes |= PayloadRuntimes.Unity; break;
 				default: throw new BootstrapIntegrityException("Unknown runtime family '" + token + "': " + line);
 				}
 			}

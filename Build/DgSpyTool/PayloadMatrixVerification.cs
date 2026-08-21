@@ -160,10 +160,14 @@ static class PayloadMatrixVerification {
 		_ => "patch-engine",
 	};
 
+	/// <summary>Every family the flags can carry. A family missing here does not fail anything - it simply
+	/// vanishes from the published projection, which is how the layout's matrix JSON came to describe a
+	/// payload set the shipped payload did not have.</summary>
 	static string[] Spell(PayloadRuntimes runtimes) {
 		var names = new List<string>();
 		if ((runtimes & PayloadRuntimes.ClrV4) != 0) names.Add("clrv4");
 		if ((runtimes & PayloadRuntimes.CoreClr) != 0) names.Add("coreclr");
+		if ((runtimes & PayloadRuntimes.Unity) != 0) names.Add("unity");
 		return names.ToArray();
 	}
 }

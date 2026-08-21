@@ -157,10 +157,12 @@ namespace dgSpy.Extension {
 			// rebuild the serial hunt this contract exists to replace.
 			var backend=HookLabBackends.Select(64,"X64",facts.Runtimes);
 			if(backend is not null) return new Precondition(RuntimeSupported,PreconditionOutcome.Satisfied,"The target has loaded "+backend.Name+".");
-			var names=facts.Runtimes.Select(runtime=>String.IsNullOrWhiteSpace(runtime.Name)?runtime.Guid.ToString("D"):runtime.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+			// One statement of why, shared with the refusal initialize_hooklab would raise. Composing a
+			// second sentence here is how readiness came to say "unsupported runtime" about a runtime whose
+			// only missing piece is arrival.
 			return new Precondition(RuntimeSupported,PreconditionOutcome.Failed,
-				"HookLab supports desktop CLR v4 and CoreCLR; the target exposes "+
-				(names.Length==0?"no managed runtime":String.Join(", ",names))+".","unsupported_hooklab_target");
+				HookLabBackends.UnsupportedReason(64,"X64",facts.Runtimes) ?? "HookLab does not support this target.",
+				"unsupported_hooklab_target");
 		}
 
 		static Precondition ApplicationDomainOf(Facts facts) {

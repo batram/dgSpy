@@ -38,7 +38,7 @@ namespace HookLab.Bootstrap.Tests {
 		[Fact]
 		public void Manifest_carries_exactly_the_probe_contracts_and_compiler_runtime() {
 			var resolver = EmbeddedAssemblyResolver.FromEmbeddedManifest();
-			Assert.Equal(new[] { "HookLab.Contracts", "HookLab.Probe.CorDebug", "Microsoft.CodeAnalysis", "Microsoft.CodeAnalysis.CSharp", "System.Collections.Immutable" }, resolver.ManifestIdentities.ToArray());
+			Assert.Equal(new[] { "HookLab.Contracts", "HookLab.Probe.CorDebug", "Microsoft.CodeAnalysis", "Microsoft.CodeAnalysis.CSharp", "System.Collections.Immutable", "System.Reflection.Metadata", "System.Runtime.CompilerServices.Unsafe" }, resolver.ManifestIdentities.ToArray());
 			// 0Harmony is deliberately absent: the probe carries and resolves its own pinned backend, and a
 			// second embedded copy served by this resolver would win the bind and leave two 0Harmony
 			// assemblies resident - the duplicate patching backend the plan forbids.
@@ -80,11 +80,25 @@ namespace HookLab.Bootstrap.Tests {
 			Assert.Equal(1, resolver.LoadCount);
 		}
 
+		/// <summary>A reference to something newer than the bundle carries is still refused. Handing back the
+		/// older assembly is how a missing method becomes a crash in the target instead of a refusal here.</summary>
 		[Fact]
-		public void A_version_the_bundle_does_not_carry_refuses() {
+		public void A_version_newer_than_the_bundle_carries_refuses() {
 			var resolver = Resolver("HookLab.Contracts", RealDigest);
 			var error = Assert.Throws<BootstrapIntegrityException>(() => resolver.Resolve("HookLab.Contracts, Version=9.9.9.9, Culture=neutral, PublicKeyToken=null"));
-			Assert.Contains("version mismatch", error.Message, StringComparison.Ordinal);
+			Assert.Contains("older than the reference", error.Message, StringComparison.Ordinal);
+		}
+
+		/// <summary>What a binding redirect would do, and the case Unity's Mono is the first runtime to
+		/// reach: the pinned Roslyn references System.Collections.Immutable 10.0.0.0 while the payload
+		/// carries 10.0.0.1. CLR v4 never loads Roslyn and CoreCLR has that assembly in its shared
+		/// framework, so an exact-match rule looked correct until a third runtime bound a payload's payload.</summary>
+		[Fact]
+		public void A_reference_older_than_the_bundle_carries_is_unified() {
+			var resolver = Resolver("HookLab.Contracts", RealDigest);
+			var resolved = resolver.Resolve("HookLab.Contracts, Version=0.9.0.0, Culture=neutral, PublicKeyToken=null");
+			Assert.NotNull(resolved);
+			Assert.Equal(new Version(1, 0, 0, 0), resolved!.GetName().Version);
 		}
 
 		[Fact]
@@ -205,14 +219,14 @@ namespace HookLab.Bootstrap.Tests {
 		/// parsed there is a target that cannot be initialized. This proves the shipped one parses and that
 		/// it describes the runtime axis the two backends actually differ on.</summary>
 		[Fact]
-		public void The_embedded_matrix_describes_both_runtime_families() {
+		public void The_embedded_matrix_describes_every_runtime_family() {
 			var matrix = EmbeddedAssemblyResolver.EmbeddedMatrix();
-			Assert.Equal(PayloadRuntimes.ClrV4, matrix["Harmony.Desktop"].Runtimes);
+			Assert.Equal(PayloadRuntimes.ClrV4 | PayloadRuntimes.Unity, matrix["Harmony.Desktop"].Runtimes);
 			Assert.Equal(PayloadRuntimes.CoreClr, matrix["Harmony.CoreClr"].Runtimes);
 			// Carried by the probe, so deliberately not served by this resolver - but described, which is
 			// the whole difference between a payload that ships and a payload that is accounted for.
 			Assert.All(matrix.Carried(PayloadCarrier.Probe), entry => Assert.Equal(PayloadRole.PatchEngine, entry.Role));
-			Assert.Equal(5, matrix.Carried(PayloadCarrier.Bootstrap).Count());
+			Assert.Equal(7, matrix.Carried(PayloadCarrier.Bootstrap).Count());
 			Assert.Equal("nuget:lib.harmony/2.4.2", matrix["Harmony.Desktop"].Provenance);
 			Assert.Equal("project:HookLab/HookLab.Probe.CorDebug", matrix["HookLab.Probe.CorDebug"].Provenance);
 		}
@@ -225,7 +239,7 @@ namespace HookLab.Bootstrap.Tests {
 				Assert.NotNull(assembly);
 				Assert.Equal("", assembly!.Location);
 			}
-			Assert.Equal(5, resolver.LoadCount);
+			Assert.Equal(7, resolver.LoadCount);
 		}
 	}
 }

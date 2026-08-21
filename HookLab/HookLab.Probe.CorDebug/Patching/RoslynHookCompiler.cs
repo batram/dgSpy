@@ -12,7 +12,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 	/// and its dependency closure is the thing that failed loudest during CoreCLR bring-up, so a CLR v4
 	/// resident that never compiles on this path should never be made to resolve any of it - which is
 	/// what keeping every mention inside this one type buys.</para></summary>
-	sealed class CoreClrRoslynHookCompiler : IHookSourceCompiler {
+	sealed class RoslynHookCompiler : IHookSourceCompiler {
 		const int MaximumDiagnostics = 20;
 
 		public Assembly Compile(HookCompileRequest request) {

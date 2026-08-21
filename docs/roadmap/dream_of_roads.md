@@ -46,23 +46,20 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Decide and prove how a Mono resident arrives, then declare the backend and gate it.
+1. Implement owned internal breakpoints for the Mono engine, the one thing between Unity and HookLab.
 2. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
 3. Revisit high-risk execution, editing, and scripting one workflow at a time.
 4. Keep the remaining compatibility expansions parked until product scope changes.
 5. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - prove how a Mono resident arrives, then declare and gate the backend
+## Road 1 - give the Mono engine the one facility HookLab arrival needs
 
-The mechanism question is answered, and the payload work is largely already done. On a Unity-accurate
-x64 Mono fixture the whole payload graph - contracts, resident, Roslyn, and the pinned CLR v4 Harmony -
-loads and goes resident unchanged, and with the endpoint check lifted experimentally a **complete hook
-lifecycle runs on the existing CLR v4 payload slots**: compile, install, live behavior change, events,
-removal, and a clean resident retirement. So the matrix needs rows rather than assets, and Road 1.2's
-dependency questions are answered.
-
-Two things blocked it and both are now fixed in the resident, with the opt-in `--runtime mono` probe
-leg green eight runs out of eight. Neither was about Mono being unable to host a resident:
+Everything except arrival now works on Unity's Mono, and ships. The opt-in `--runtime unity` probe leg
+drives a complete lifecycle - Roslyn compiles, the pinned desktop Harmony patches, behaviour changes,
+events arrive, removal restores, the resident retires, the target survives - on a Unity-accurate x64
+fixture. `unity` is a real family in the payload matrix; the resident serves only the slots declared
+valid on the runtime it is in; and the Unity backend row exists and is verified against the shipped
+matrix. Three things blocked it and all three are fixed:
 
 - **The control endpoint had no statable protection.** Unity's Mono implements neither
   `WindowsIdentity.GetCurrent().User` nor `PipeSecurity.AddAccessRule`. The descriptor is now built
@@ -72,23 +69,28 @@ leg green eight runs out of eight. Neither was about Mono being unable to host a
   unwinding out of a disposed `NamedPipeServerStream`. Retirement now waits for the listener where the
   runtime requires it and reports `listener_teardown`; `Dispose` still does not wait, so the func-eval
   bound that made it non-blocking is untouched, and CLR v4 and CoreCLR take the `not_required` path.
+- **Compilation chose CodeDom.** The selector keyed on the corlib name, and Mono's is also `mscorlib`,
+  so a Unity target took the .NET Framework path - and Mono's CodeDom shells out to an `mcs` no player
+  ships. Unity now selects the payload's own Roslyn, which needed two more declared slots and exposed a
+  missing binding unification in the resident's resolver.
 
 See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes) and
-[The Mono leg](../product/HOOKLAB.md#the-mono-leg).
+[The Unity leg](../product/HOOKLAB.md#the-unity-leg).
 
-What remains is everything the probe deliberately does not prove:
+What remains is **arrival**, and it is one specific thing rather than an open question:
 
-1. **Decide and prove arrival on Mono.** The probe's fixture loads the payload into itself; nothing yet
-   says how a resident gets into a Unity player. This is where the debugger-driven-managed-loading
-   versus native-Mono-embedding question actually lives, and it must not require UCH, BepInEx, or any
-   other mod loader.
-2. Add an explicit Mono backend row with exact runtime and module identity, promoting the payload
-   findings from measurement to declared matrix rows - the existing CLR v4 slots work unchanged, so
-   this is expected to be rows rather than new assets. Settle the compiler question with it: the
-   selector keys on corlib name, so Mono currently takes the CodeDom path, and Mono's CodeDom shells
-   out to an `mcs` no Unity player ships.
-3. Extend the payload manifest, package, disposable Unity fixture, and hidden-desktop UCH live gates
-   through retirement, and prove a real Unity player rather than a console host on the player's
+1. **Implement owned internal breakpoints for the Mono engine.** A resident arrives through one
+   debugger evaluation, and placing that evaluation uses `OwnedBreakpointService`, whose only
+   implementation - `DgSpyOwnedBreakpointFacade` - lives in `dnSpy.Debugger.DotNet.CorDebug` and reports
+   `IsSupported` false for anything else. Measured against a live Unity player: attach, readiness and
+   every other precondition pass, then `initialize_hooklab` refuses with "Owned internal breakpoints are
+   unavailable for this debugger engine". Nothing about Mono blocks the evaluation itself - the soft
+   debugger invokes methods routinely - so this is engine work, not a runtime boundary.
+   `tests\run-unity-hooklab-smoke.ps1` asserts that refusal today and becomes the lifecycle proof when
+   it lifts. Note also that Mono can only invoke on a suspended thread with managed frames, so arrival
+   needs a real stopping point; CorDebug hides that difference by hijacking a thread.
+2. Move the Unity row from `HookLabBackends.Pending` to `All`, and extend the package and hidden-desktop
+   UCH live gates through retirement against a real player rather than a console host on the player's
    runtime.
 
 Domain reloads, generics, inlining, finalizers, reconnect/adoption, and unsupported Mono variants still

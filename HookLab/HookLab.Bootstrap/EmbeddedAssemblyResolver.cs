@@ -62,17 +62,37 @@ namespace HookLab.Bootstrap {
 		}
 
 		/// <summary>Builds the resolver from the build-generated payload matrix, serving exactly the entries
-		/// the matrix says this assembly carries. Payloads carried by the probe - the pinned Harmony assets -
-		/// are described by the same matrix but deliberately not served here: a second embedded copy would
-		/// win the bind and leave two patch engines resident.</summary>
+		/// the matrix says this assembly carries <em>and declares valid on the runtime this resident is
+		/// living in</em>. Payloads carried by the probe - the pinned Harmony assets - are described by the
+		/// same matrix but deliberately not served here: a second embedded copy would win the bind and
+		/// leave two patch engines resident.
+		///
+		/// <para>The runtime filter is not an optimisation. Serving every payload regardless of family made
+		/// the matrix's runtime axis decorative, and adding a slot for one runtime then broke another: the
+		/// Roslyn dependencies Unity has to be handed are supplied by CoreCLR's own shared framework, so on
+		/// CoreCLR the runtime's copy wins the bind and <see cref="VerifyPayloadBindings"/> correctly
+		/// refuses a payload it was never supposed to be verifying there. Honouring the declared family is
+		/// what makes "valid on" mean something to the resident and not only to the packaging tool.</para></summary>
 		internal static EmbeddedAssemblyResolver FromEmbeddedManifest() {
 			var assembly = typeof(EmbeddedAssemblyResolver).Assembly;
 			var matrix = PayloadMatrix.Parse(ReadText(assembly, PayloadMatrix.ResourceName));
+			var current = CurrentRuntime;
 			var entries = matrix.Carried(PayloadCarrier.Bootstrap)
+				.Where(entry => (entry.Runtimes & current) != 0)
 				.Select(entry => new EmbeddedAssemblyEntry(entry.AssemblyName, entry.ResourceName, entry.Sha256, entry.AssemblyVersion))
 				.ToArray();
 			return new EmbeddedAssemblyResolver(entries, name => ReadResource(assembly, name));
 		}
+
+		/// <summary>Which family the matrix means by the runtime this code is executing on.
+		///
+		/// <para>Mono is asked for first and by runtime type, because its corlib is also called
+		/// <c>mscorlib</c> - a corlib-name test alone answers "CLR v4" for a Unity target and hands it the
+		/// wrong payload set.</para></summary>
+		internal static PayloadRuntimes CurrentRuntime =>
+			Type.GetType("Mono.Runtime") != null ? PayloadRuntimes.Unity
+			: string.Equals(typeof(object).Assembly.GetName().Name, "mscorlib", StringComparison.Ordinal) ? PayloadRuntimes.ClrV4
+			: PayloadRuntimes.CoreClr;
 
 		/// <summary>The matrix this assembly was built with, for diagnostics and for tests that need to
 		/// compare what the build declared against what the bytes actually are.</summary>
@@ -145,9 +165,29 @@ namespace HookLab.Bootstrap {
 			return assembly;
 		}
 
+		/// <summary>Satisfies a reference to the same payload at or below the version this bundle carries,
+		/// and refuses anything else.
+		///
+		/// <para>This is unification, spelled out rather than inherited from a configuration file the
+		/// resident does not have. A binding redirect is exactly what a .NET Framework application would
+		/// write for the same situation: the pinned Roslyn references
+		/// <c>System.Collections.Immutable, Version=10.0.0.0</c> and the payload carries <c>10.0.0.1</c>,
+		/// which is one build of one package, not two different libraries.</para>
+		///
+		/// <para>Only Unity's Mono ever reaches it. CLR v4 compiles with CodeDom and never loads Roslyn at
+		/// all, and CoreCLR gets <c>System.Collections.Immutable</c> from its shared framework, so the first
+		/// runtime to actually bind a payload's payload was the third one - which is why an exact-match rule
+		/// survived this long looking correct.</para>
+		///
+		/// <para>A <em>higher</em> request is still refused. Being asked for a version newer than the bundle
+		/// carries means the caller wants something these bytes are not, and silently handing back an older
+		/// assembly is how a missing method becomes a crash inside the target rather than a refusal
+		/// here.</para></summary>
 		static void ValidateVersion(AssemblyName requested, AssemblyName loaded, string entryName) {
-			if (requested.Version != null && loaded.Version != requested.Version)
-				throw new BootstrapIntegrityException("Embedded payload version mismatch for " + entryName + ": requested " + requested.Version + ", embedded " + loaded.Version + ".");
+			if (requested.Version == null || loaded.Version == null) return;
+			if (loaded.Version < requested.Version)
+				throw new BootstrapIntegrityException("Embedded payload is older than the reference for " + entryName +
+					": requested " + requested.Version + ", embedded " + loaded.Version + ".");
 		}
 
 		/// <summary>What one expected payload identity bound to, for diagnostics. Never the decision itself:

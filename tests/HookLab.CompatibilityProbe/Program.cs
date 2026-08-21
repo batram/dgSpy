@@ -33,28 +33,11 @@ static class CompatibilityProbe {
 			var watch = Stopwatch.StartNew();
 			try {
 				var report = new RuntimeLeg(options, family).Execute();
-				if (family.ExpectedRefusal is not null) {
-					failures++;
-					Console.Error.WriteLine($"FAIL  {family.Id}  a leg that is supposed to be refused completed instead.");
-					// The lifecycle it managed, not just the fact that it managed one: a boundary that moves
-					// is a question about what is now possible, and the stages it reached are the answer.
-					foreach (var line in report) Console.Error.WriteLine("      " + line);
-					Console.Error.WriteLine($"      Expected: {family.ExpectedRefusal.Because}");
-					Console.Error.WriteLine("      If that boundary has genuinely moved, the family's ExpectedRefusal is what to update - and the product's Mono support statements with it.");
-					continue;
-				}
 				Console.WriteLine($"PASS  {family.Id}  {watch.ElapsedMilliseconds} ms");
 				foreach (var line in report) Console.WriteLine("      " + line);
 			}
-			catch (ProbeRefusal refusal) when (family.ExpectedRefusal is not null && family.ExpectedRefusal.Matches(refusal)) {
-				Console.WriteLine($"REFUSED  {family.Id}  {watch.ElapsedMilliseconds} ms  stage={refusal.Stage}  (expected)");
-				Console.WriteLine("      " + family.ExpectedRefusal.Because);
-				Console.WriteLine("      " + refusal.Message);
-			}
 			catch (ProbeRefusal refusal) {
 				failures++;
-				if (family.ExpectedRefusal is not null)
-					Console.Error.WriteLine($"      This leg is expected to be refused at stage={family.ExpectedRefusal.Stage}, and was not.");
 				Console.Error.WriteLine($"FAIL  {family.Id}  stage={refusal.Stage}");
 				Console.Error.WriteLine($"      {refusal.Message}");
 				foreach (var identity in refusal.Identities) Console.Error.WriteLine("      identity=" + identity);
@@ -97,9 +80,9 @@ static class CompatibilityProbe {
 	}
 
 	static int Usage() {
-		Console.Error.WriteLine("usage: HookLab.CompatibilityProbe [--payload <hooklab-bootstrap.net48.payload>] [--fixtures <directory>] [--runtime clrv4|coreclr|mono|all] [--mono <mono.exe>] [--mono-assemblies <dir>] [--negative] [--keep]");
+		Console.Error.WriteLine("usage: HookLab.CompatibilityProbe [--payload <hooklab-bootstrap.net48.payload>] [--fixtures <directory>] [--runtime clrv4|coreclr|unity|all] [--mono <mono.exe>] [--mono-assemblies <dir>] [--negative] [--keep]");
 		Console.Error.WriteLine("       Defaults resolve the newest composed layout under artifacts\\layouts and the repository's built fixtures.");
-		Console.Error.WriteLine("       --runtime mono is opt-in and needs --mono or DGSPY_MONO_EXE; 'all' stays clrv4 and coreclr.");
+		Console.Error.WriteLine("       --runtime unity is opt-in and needs --mono or DGSPY_MONO_EXE; 'all' stays clrv4 and coreclr.");
 		return 2;
 	}
 
@@ -120,42 +103,23 @@ sealed class ProbeRefusal : Exception {
 
 /// <summary>One runtime family, and how this repository builds and starts a target for it.
 ///
-/// <para><paramref name="PayloadFlag"/> is deliberately separate from <paramref name="Id"/>. Mono is its
-/// own runtime family with its own leg, but the shipped matrix declares no Mono row yet: the point of
-/// the Mono leg is to find out whether the CLR v4 slots are loadable there, and a matrix row saying so
-/// in advance would be the claim rather than the evidence. When the answer is in, Mono gets rows of its
-/// own and this collapses back to one field.</para>
-///
-/// <para><paramref name="Launched"/> is false for a family whose fixture is its own executable. Mono is
-/// reached by handing the same net48 fixture to a <c>mono.exe</c>, which is what makes the leg a Mono
-/// leg rather than a second CLR v4 one - no Unity, no mod loader, no game.</para></summary>
-/// <param name="ExpectedRefusal">The refusal this family is currently supposed to produce, or null when
-/// it must complete a lifecycle. Mono has one: HookLab residency is refused there because Unity's Mono
-/// implements neither <c>WindowsIdentity.User</c> nor <c>PipeSecurity.AddAccessRule</c>, so the control
-/// endpoint's access control cannot be built. Asserting the boundary rather than merely failing is what
-/// makes the leg worth running: it fails if a Mono target ever stops at a <em>different</em> stage, which
-/// is how a regression on the way to that boundary - or progress past it - would be noticed.</param>
-sealed record RuntimeFamily(string Id, PayloadRuntimes PayloadFlag, string FixtureFramework, bool Launched,
-	bool BorrowsClrV4Payloads, ExpectedRefusal? ExpectedRefusal = null) {
-	internal static readonly RuntimeFamily ClrV4 = new("clrv4", PayloadRuntimes.ClrV4, "net48", false, false);
-	internal static readonly RuntimeFamily CoreClr = new("coreclr", PayloadRuntimes.CoreClr, "net10.0", false, false);
-	/// <summary>A full lifecycle, not a boundary assertion. It was the latter while Unity's Mono could not
-	/// build the control endpoint's access control; the endpoint is now created through the Win32 API and
-	/// the leg runs every stage the other two do. What it still does not prove is arrival, exactly as for
-	/// the other families - which is why a Mono row in <c>HookLabBackends</c> does not follow from it.</summary>
-	internal static readonly RuntimeFamily Mono = new("mono", PayloadRuntimes.ClrV4, "net48", true, true);
+/// <para><paramref name="Launched"/> is false for a family whose fixture is its own executable. Unity is
+/// reached by handing the same net48 fixture to a Mono runtime, which is what makes the leg a Unity leg
+/// rather than a second CLR v4 one - and it needs no game, editor project, or mod loader to be one.</para></summary>
+/// <param name="FrameworkFact">What the fixture reports itself running on, which is not always the family
+/// name. A target can tell that it is on Mono; it cannot tell that it is on <em>Unity's</em> Mono, because
+/// that is a property of the class libraries it was pointed at rather than of the runtime it can
+/// interrogate. The leg establishes the second by construction - see <c>--mono-assemblies</c> - and this
+/// keeps the fixture from having to claim something it cannot know.</param>
+sealed record RuntimeFamily(string Id, PayloadRuntimes PayloadFlag, string FixtureFramework, bool Launched, string FrameworkFact) {
+	internal static readonly RuntimeFamily ClrV4 = new("clrv4", PayloadRuntimes.ClrV4, "net48", false, "clrv4");
+	internal static readonly RuntimeFamily CoreClr = new("coreclr", PayloadRuntimes.CoreClr, "net10.0", false, "coreclr");
+	internal static readonly RuntimeFamily Unity = new("unity", PayloadRuntimes.Unity, "net48", true, "mono");
 
-	/// <summary>The legs <c>--runtime all</c> runs. Mono is not in it, and that is a statement rather
+	/// <summary>The legs <c>--runtime all</c> runs. Unity is not in it, and that is a statement rather
 	/// than an oversight: it needs a Mono runtime this repository does not ship, so including it would
-	/// turn "no Mono installed" into a gate failure on every machine without one. It is asked for by
-	/// name until a packaged Mono backend exists.</summary>
+	/// turn "no Unity installed" into a gate failure on every machine without one.</summary>
 	internal static readonly RuntimeFamily[] All = { ClrV4, CoreClr };
-}
-
-/// <summary>A refusal a leg is expected to reach, and the boundary it stands for.</summary>
-sealed record ExpectedRefusal(string Stage, string MessageContains, string Because) {
-	internal bool Matches(ProbeRefusal refusal) =>
-		refusal.Stage == Stage && refusal.Message.Contains(MessageContains, StringComparison.Ordinal);
 }
 
 /// <summary>The Mono runtimes HookLab has been driven against, stated the way <see cref="SupportedCoreClr"/>
@@ -233,7 +197,7 @@ sealed class ProbeOptions {
 			"all" => RuntimeFamily.All,
 			"clrv4" => new[] { RuntimeFamily.ClrV4 },
 			"coreclr" => new[] { RuntimeFamily.CoreClr },
-			"mono" => new[] { RuntimeFamily.Mono },
+			"unity" => new[] { RuntimeFamily.Unity },
 			_ => null,
 		};
 		if (families is null) return null;
