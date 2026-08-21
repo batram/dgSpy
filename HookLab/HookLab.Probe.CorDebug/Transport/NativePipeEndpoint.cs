@@ -35,7 +35,6 @@ namespace HookLab.Probe.CorDebug.Transport {
 		const string ControllerMask = "0x12019b";
 
 		const uint PIPE_ACCESS_DUPLEX = 0x00000003;
-		const uint FILE_FLAG_OVERLAPPED = 0x40000000;
 		/// <summary>PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT - all zero, and the same byte-mode
 		/// blocking pipe the managed constructor creates.</summary>
 		const uint PIPE_MODE_BYTE_WAIT = 0x00000000;
@@ -82,13 +81,22 @@ namespace HookLab.Probe.CorDebug.Transport {
 					lpSecurityDescriptor = descriptor,
 					bInheritHandle = 0,
 				};
-				// FILE_FLAG_OVERLAPPED is what makes the wrapped stream asynchronous; without it the
-				// NamedPipeServerStream below would be a synchronous pipe wearing an async flag.
+				// Synchronous, deliberately - no FILE_FLAG_OVERLAPPED, and isAsync false to match. The
+				// managed paths this stands in for ask for PipeOptions.Asynchronous, but Mono is where this
+				// one runs, and Mono 6.12's overlapped completion callback faults: a synchronous read on an
+				// async pipe reaches ThreadPoolBoundHandle.OnNativeIOCompleted, which throws a
+				// NullReferenceException out of a native-to-managed wrapper and takes the target with it.
+				// Measured on mono-project 6.12 x64; Unity's 6.13 happens to survive the same code, which is
+				// exactly why this is pinned to what the resident actually needs rather than to what one
+				// build tolerates.
+				//
+				// Nothing here wants overlapped I/O: the endpoint is served by one dedicated listener thread
+				// doing blocking reads and writes, and a synchronous handle is what that already is.
 				var handle = CreateNamedPipeW("\\\\.\\pipe\\" + pipeName,
-					PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED, PIPE_MODE_BYTE_WAIT,
+					PIPE_ACCESS_DUPLEX, PIPE_MODE_BYTE_WAIT,
 					(uint)maxInstances, (uint)bufferSize, (uint)bufferSize, 0, ref attributes);
 				if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not create the control endpoint.");
-				try { return new NamedPipeServerStream(PipeDirection.InOut, true, false, handle); }
+				try { return new NamedPipeServerStream(PipeDirection.InOut, false, false, handle); }
 				catch { handle.Dispose(); throw; }
 			}
 			finally { LocalFree(descriptor); }

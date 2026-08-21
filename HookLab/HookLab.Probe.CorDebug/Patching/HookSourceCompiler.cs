@@ -39,7 +39,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 	///
 	/// <para>Two facts available before anything runtime-specific has been touched: the corlib name, and
 	/// whether <c>Mono.Runtime</c> exists. <c>mscorlib</c> alone is not enough, because Mono's corlib is
-	/// called that too - and answering "CLR v4, so CodeDom" for a Unity target sends compilation to an
+	/// called that too - and answering "CLR v4, so CodeDom" for a Mono target sends compilation to an
 	/// external <c>mcs</c> that is not there.</para>
 	///
 	/// <para><see cref="MethodImplOptions.NoInlining"/> on the two constructors is load-bearing rather
@@ -50,11 +50,11 @@ namespace HookLab.Probe.CorDebug.Patching {
 	static class HookSourceCompilerSelector {
 		internal static bool IsDesktopClr => string.Equals(typeof(object).Assembly.GetName().Name,"mscorlib",StringComparison.Ordinal);
 
-		/// <summary>Unity's Mono, which the corlib name cannot distinguish from CLR v4 because Mono's corlib
-		/// is also called <c>mscorlib</c>. That is not a detail: CodeDom on Mono does not compile in-process,
-		/// it shells out to <c>mcs</c> through the current executable, and no Unity player ships one. So a
-		/// Mono target takes the Roslyn path CLR v4 carries but does not use - the payload is already there,
-		/// it was simply never selected.</summary>
+		/// <summary>Mono, which the corlib name cannot distinguish from CLR v4 because Mono's corlib is also
+		/// called <c>mscorlib</c>. That is not a detail: CodeDom on Mono does not compile in-process, it
+		/// shells out to <c>mcs</c> through the current executable, and that is not something a target can be
+		/// assumed to have - no Unity player ships one. So a Mono target takes the Roslyn path CLR v4 carries
+		/// but does not use: the payload is already there, it was simply never selected.</summary>
 		internal static bool IsMono => Type.GetType("Mono.Runtime")!=null;
 
 		/// <summary>CodeDom is the .NET Framework answer only. Every other runtime here compiles with the

@@ -121,9 +121,9 @@ sealed class RuntimeLeg {
 	/// module is a game's embedded <c>mono-2.0-*.dll</c> and carries no version in its path.</summary>
 	void VerifyRuntimeRange(Process target, Facts facts) {
 		Stage("runtime_range");
-		if (facts["framework"] != family.FrameworkFact)
-			throw new ProbeRefusal(stage, $"The {family.FixtureFramework} fixture reports framework={facts["framework"]}, not {family.FrameworkFact}.", identities);
-		if (family == RuntimeFamily.Unity) { VerifyMonoRange(facts); return; }
+		if (facts["framework"] != family.Id)
+			throw new ProbeRefusal(stage, $"The {family.FixtureFramework} fixture reports framework={facts["framework"]}, not {family.Id}.", identities);
+		if (family == RuntimeFamily.Mono) { VerifyMonoRange(facts); return; }
 		if (family != RuntimeFamily.CoreClr) { report.Add("runtime=" + facts["runtime_id"] + " (CLR v4)"); return; }
 		var modules = target.Modules.Cast<ProcessModule>().Where(module => string.Equals(module.ModuleName, "coreclr.dll", StringComparison.OrdinalIgnoreCase)).ToArray();
 		if (modules.Length != 1) throw new ProbeRefusal(stage, $"Expected exactly one loaded coreclr.dll, found {modules.Length}.", identities);

@@ -46,22 +46,22 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Implement owned internal breakpoints for the Mono engine, the one thing between Unity and HookLab.
+1. Settle the Mono payload set across BCL variants, then give the Mono engine owned internal breakpoints.
 2. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
 3. Revisit high-risk execution, editing, and scripting one workflow at a time.
 4. Keep the remaining compatibility expansions parked until product scope changes.
 5. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - give the Mono engine the one facility HookLab arrival needs
+## Road 1 - finish Mono: one payload set across its builds, then arrival
 
-Everything except arrival now works on Unity's Mono, and ships. The opt-in `--runtime unity` probe leg
-drives a complete lifecycle - Roslyn compiles, the pinned desktop Harmony patches, behaviour changes,
-events arrive, removal restores, the resident retires, the target survives - on a Unity-accurate x64
-fixture. `unity` is a real family in the payload matrix; the resident serves only the slots declared
-valid on the runtime it is in; and the Unity backend row exists and is verified against the shipped
-matrix. Three things blocked it and all three are fixed:
+Everything except arrival now works on Mono, and ships. The opt-in `--runtime mono` probe leg drives a
+complete lifecycle against mono-project 6.12 x64 - Roslyn compiles, the pinned desktop Harmony patches,
+behaviour changes, events arrive, removal restores, the resident retires, the target survives - five
+runs out of five. `mono` is a real family in the payload matrix; the resident serves only the slots
+declared valid on the runtime it is in; and the Mono backend row exists and is verified against the
+shipped matrix. Five things blocked it and all five are fixed:
 
-- **The control endpoint had no statable protection.** Unity's Mono implements neither
+- **The control endpoint had no statable protection.** Mono implements neither
   `WindowsIdentity.GetCurrent().User` nor `PipeSecurity.AddAccessRule`. The descriptor is now built
   through `advapi32`/`CreateNamedPipeW` instead and is byte-identical to the managed one, verified by
   reading it back off the kernel object. CLR v4 and CoreCLR keep their managed construction.
@@ -69,15 +69,32 @@ matrix. Three things blocked it and all three are fixed:
   unwinding out of a disposed `NamedPipeServerStream`. Retirement now waits for the listener where the
   runtime requires it and reports `listener_teardown`; `Dispose` still does not wait, so the func-eval
   bound that made it non-blocking is untouched, and CLR v4 and CoreCLR take the `not_required` path.
+- **Asynchronous pipes fault on Mono 6.12**, in the overlapped completion callback, taking the target
+  with them. The endpoint is created synchronously now, which is all a single blocking listener thread
+  ever needed. Unity 6.13 tolerated the async version, which is why it survived this long.
+- **Disposing a synchronous pipe does not release a parked listener on Mono**, so retirement hung rather
+  than crashed. `Dispose` wakes the listener with one connect to its own endpoint first.
 - **Compilation chose CodeDom.** The selector keyed on the corlib name, and Mono's is also `mscorlib`,
-  so a Unity target took the .NET Framework path - and Mono's CodeDom shells out to an `mcs` no player
-  ships. Unity now selects the payload's own Roslyn, which needed two more declared slots and exposed a
-  missing binding unification in the resident's resolver.
+  so a Mono target took the .NET Framework path - and Mono's CodeDom shells out to an `mcs` that is not
+  there to shell to. Mono now selects the payload's own Roslyn, which needed four more declared slots and
+  exposed a missing binding unification in the resident's resolver.
 
 See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes) and
-[The Unity leg](../product/HOOKLAB.md#the-unity-leg).
+[The Mono leg](../product/HOOKLAB.md#the-mono-leg).
 
-What remains is **arrival**, and it is one specific thing rather than an open question:
+The family is `mono`, not `unity`: the runtime is Mono, a player merely embeds it, and the resident's
+own test (`Type.GetType("Mono.Runtime")`) cannot tell the two apart anyway. The backend row matches both
+runtime GUIDs, because dnSpy reports one soft-debugger engine under two names.
+
+Two things remain, in this order:
+
+0. **The Unity BCL variant regressed and needs the payload-set question answered.** `System.Memory`
+   4.0.5.0 is a payload because mono-project's Mono ships 4.0.1.1, too old for Roslyn. Unity's BCL
+   supplies its own, so forcing ours to bind splits `ReadOnlySpan<T>` identity and compilation fails with
+   `MissingMethodException: ImmutableArray.Create<T>(ReadOnlySpan<T>)`. The general problem: a payload set
+   is a fallback for what a runtime lacks, and that is not constant across builds of one runtime. Letting
+   a compiler-support slot defer to a runtime-provided assembly - and report that it did - is the likely
+   answer, and it needs its own security argument rather than a quiet relaxation.
 
 1. **Implement owned internal breakpoints for the Mono engine.** A resident arrives through one
    debugger evaluation, and placing that evaluation uses `OwnedBreakpointService`, whose only
@@ -89,9 +106,8 @@ What remains is **arrival**, and it is one specific thing rather than an open qu
    `tests\run-unity-hooklab-smoke.ps1` asserts that refusal today and becomes the lifecycle proof when
    it lifts. Note also that Mono can only invoke on a suspended thread with managed frames, so arrival
    needs a real stopping point; CorDebug hides that difference by hijacking a thread.
-2. Move the Unity row from `HookLabBackends.Pending` to `All`, and extend the package and hidden-desktop
-   UCH live gates through retirement against a real player rather than a console host on the player's
-   runtime.
+2. Move the Mono row from `HookLabBackends.Pending` to `All`, and extend the package and hidden-desktop
+   UCH live gates through retirement against a real player rather than a console host on its runtime.
 
 Domain reloads, generics, inlining, finalizers, reconnect/adoption, and unsupported Mono variants still
 need explicit supported or refused results. No mod loader - UCH, BepInEx, or another - may become a

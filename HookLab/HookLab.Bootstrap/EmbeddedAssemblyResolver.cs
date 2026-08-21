@@ -69,7 +69,7 @@ namespace HookLab.Bootstrap {
 		///
 		/// <para>The runtime filter is not an optimisation. Serving every payload regardless of family made
 		/// the matrix's runtime axis decorative, and adding a slot for one runtime then broke another: the
-		/// Roslyn dependencies Unity has to be handed are supplied by CoreCLR's own shared framework, so on
+		/// Roslyn dependencies Mono has to be handed are supplied by CoreCLR's own shared framework, so on
 		/// CoreCLR the runtime's copy wins the bind and <see cref="VerifyPayloadBindings"/> correctly
 		/// refuses a payload it was never supposed to be verifying there. Honouring the declared family is
 		/// what makes "valid on" mean something to the resident and not only to the packaging tool.</para></summary>
@@ -87,10 +87,11 @@ namespace HookLab.Bootstrap {
 		/// <summary>Which family the matrix means by the runtime this code is executing on.
 		///
 		/// <para>Mono is asked for first and by runtime type, because its corlib is also called
-		/// <c>mscorlib</c> - a corlib-name test alone answers "CLR v4" for a Unity target and hands it the
-		/// wrong payload set.</para></summary>
+		/// <c>mscorlib</c> - a corlib-name test alone answers "CLR v4" for a Mono target and hands it the
+		/// wrong payload set. It cannot tell a standalone Mono from the one a Unity player embeds, and does
+		/// not need to: they take the same slots.</para></summary>
 		internal static PayloadRuntimes CurrentRuntime =>
-			Type.GetType("Mono.Runtime") != null ? PayloadRuntimes.Unity
+			Type.GetType("Mono.Runtime") != null ? PayloadRuntimes.Mono
 			: string.Equals(typeof(object).Assembly.GetName().Name, "mscorlib", StringComparison.Ordinal) ? PayloadRuntimes.ClrV4
 			: PayloadRuntimes.CoreClr;
 
@@ -174,7 +175,7 @@ namespace HookLab.Bootstrap {
 		/// <c>System.Collections.Immutable, Version=10.0.0.0</c> and the payload carries <c>10.0.0.1</c>,
 		/// which is one build of one package, not two different libraries.</para>
 		///
-		/// <para>Only Unity's Mono ever reaches it. CLR v4 compiles with CodeDom and never loads Roslyn at
+		/// <para>Only Mono ever reaches it. CLR v4 compiles with CodeDom and never loads Roslyn at
 		/// all, and CoreCLR gets <c>System.Collections.Immutable</c> from its shared framework, so the first
 		/// runtime to actually bind a payload's payload was the third one - which is why an exact-match rule
 		/// survived this long looking correct.</para>

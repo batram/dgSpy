@@ -22,6 +22,8 @@
          test, so the restore has to happen on this side of the project reference. -->
     <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" ExcludeAssets="all" PrivateAssets="all" />
     <PackageReference Include="System.Reflection.Metadata" Version="10.0.1" ExcludeAssets="all" PrivateAssets="all" />
+    <PackageReference Include="System.Memory" Version="4.6.3" ExcludeAssets="all" PrivateAssets="all" />
+    <PackageReference Include="System.Buffers" Version="4.6.1" ExcludeAssets="all" PrivateAssets="all" />
     <ProjectReference Include="..\HookLab.Contracts\HookLab.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>

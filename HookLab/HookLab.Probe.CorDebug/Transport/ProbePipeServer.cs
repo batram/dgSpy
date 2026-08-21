@@ -141,6 +141,28 @@ namespace HookLab.Probe.CorDebug.Transport {
 			return (byte[])injectedSecret.Clone();
 		}
 
+		/// <summary>True where closing the endpoint does not release a listener parked in
+		/// <c>WaitForConnection</c>. Mono, and asked by runtime type rather than by corlib name, which it
+		/// shares with CLR v4.</summary>
+		static bool ListenerNeedsWakeup => Type.GetType("Mono.Runtime") is not null;
+
+		/// <summary>Connects to this endpoint once, so a parked listener returns and can see that the server
+		/// is disposed. Best-effort and bounded: if the connect fails the listener was not parked, or is
+		/// already gone, and either way there is nothing here worth failing a teardown over.
+		///
+		/// <para>It reaches the resident's own listener rather than a client's, so it proves nothing and
+		/// authenticates nothing - the connection is dropped immediately and the listener discards it
+		/// because <c>disposed</c> is already set before this runs.</para></summary>
+		void WakeListener() {
+			try {
+				using (var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut))
+					client.Connect(WakeupTimeoutMilliseconds);
+			}
+			catch (Exception) { }
+		}
+
+		const int WakeupTimeoutMilliseconds = 250;
+
 		void Listen() {
 			try {
 				while (!disposed) {
@@ -509,6 +531,15 @@ namespace HookLab.Probe.CorDebug.Transport {
 				disposed = true;
 				commandGateClosed = true;
 			}
+			// Wake the listener before disposing anything, on the runtimes where disposal alone does not.
+			// On .NET Framework, disposing the server stream releases a thread parked in WaitForConnection
+			// in 0 ms - see Listen. Mono does not: its endpoint is a synchronous pipe (an asynchronous one
+			// faults in the overlapped completion callback there), and a thread blocked in a synchronous
+			// WaitForConnection cannot be released by closing the handle underneath it, so the listener
+			// stays parked and the process will not exit. Measured on mono-project 6.12 x64: the target hung
+			// for the full retirement timeout rather than crashing, which is a quieter failure and a worse
+			// one. One connect from here ends the wait, the listener observes disposed, and it returns.
+			if (ListenerNeedsWakeup) WakeListener();
 			NamedPipeServerStream[] current;
 			lock (pipeGate) current = new List<NamedPipeServerStream>(activePipes).ToArray();
 			// Disposing the server stream both closes the endpoint and releases a listener already parked in

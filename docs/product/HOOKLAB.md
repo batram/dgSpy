@@ -125,7 +125,7 @@ than left implied by the word "CoreCLR":
 | CLR v4 (`v4.0.30319`), x64 | yes | packaged CLR v4 HookLab live gate, cross-identity gate, compatibility probe |
 | CoreCLR 10.0 up to but excluding 11.0, x64 | yes | packaged CoreCLR HookLab live gate, cross-identity gate, compatibility probe |
 | Any other CoreCLR major version | no | none - a version outside every supported range is refused by name |
-| Mono/Unity, x64 | not yet - everything but arrival is proved | see below |
+| Mono 6.12 up to but excluding 6.14, x64 | not yet - everything but arrival is proved | compatibility probe's mono leg; see below |
 
 Mono/Unity targets are fully supported for ordinary debugging. HookLab residency there is **not
 available yet**, and the refusal names the one missing piece rather than calling the runtime
@@ -189,32 +189,37 @@ What it does prove is everything downstream of arrival, which is where the runti
 payload selection from the matrix, the dependency closure, compiler creation and a real compilation,
 the pinned patch engine loading, live behavior change, event capture, removal, and clean retirement.
 
-### The Unity leg
+### The Mono leg
 
-`--runtime unity` runs the same fixture on the Mono a Unity player runs, and drives the same complete
-lifecycle the other two legs do - compile, install, observe, remove, retire, target still alive - on
-the unchanged CLR v4 payload slots. Like them, it proves everything downstream of arrival and nothing
-about arrival itself, which is why a green Mono leg does not by itself make Mono a supported HookLab
-runtime.
+`--runtime mono` runs the same fixture on a real Mono and drives the same complete lifecycle the other
+two legs do - compile, install, observe, remove, retire, target still alive. Like them, it proves
+everything downstream of arrival and nothing about arrival itself, which is why a green Mono leg does
+not by itself make Mono a supported HookLab runtime.
 
 It is opt-in and is not part of `--runtime all`, because it needs a Mono runtime this repository does
-not ship, and it is never discovered by scanning the machine - which game or editor happens to be
-installed must not decide what was measured:
+not ship, and it is never discovered by scanning the machine - which Mono happens to be installed must
+not decide what was measured. With mono-project's x64 Mono installed it needs nothing else:
 
 ```powershell
-$env:DGSPY_MONO_EXE        = 'tests\TestTargets\MonoHost64\bin\Release\MonoHost64.exe'
-$env:DGSPY_MONO_RUNTIME    = '<Unity>\Editor\Data\MonoBleedingEdge\EmbedRuntime\mono-2.0-bdwgc.dll'
-$env:DGSPY_MONO_ASSEMBLIES = '<Unity>\Editor\Data\MonoBleedingEdge\lib\mono\unityjit-win32'
-dotnet run --project tests\HookLab.CompatibilityProbe -c Release -- --runtime unity
+$env:DGSPY_MONO_EXE = 'C:\Program Files\Mono\bin\mono.exe'
+dotnet run --project tests\HookLab.CompatibilityProbe -c Release -- --runtime mono
 ```
 
-Both of the last two are load-bearing. Unity ships `mono.exe` as x86 only, so an x64 Mono target needs
-a small host that loads the player's x64 runtime and calls `mono_main` - `MonoHost64`, built from
-`tests\TestTargets\MonoHost64`. And that `mono.exe`'s own class libraries are not a player's: they are
-a CoreFX-derived set whose named-pipe servers P/Invoke a `System.Native` shim absent on Windows, so a
-leg run against them measures a runtime no player has. The editor's `unityjit-win32` profile is
-byte-identical to a shipped player's `Managed` directory, which is what makes the leg Unity-accurate
-without a game.
+x64 matters: the resident's architecture guard refuses an x86 target, so a 32-bit Mono is rejected
+rather than silently measured.
+
+`--mono-runtime` and `--mono-assemblies` exist for the Mono a Unity player embeds, which cannot be run
+the simple way. Unity ships `mono.exe` as x86 only, so an x64 Unity-Mono target needs a small host that
+loads the player's x64 runtime and calls `mono_main` - `MonoHost64`, in `tests\TestTargets\MonoHost64` -
+and Unity's own `mono.exe` class libraries are not a player's either: they are a CoreFX-derived set
+whose named-pipe servers P/Invoke a `System.Native` shim absent on Windows. The editor's
+`unityjit-win32` profile is byte-identical to a shipped player's `Managed` directory, which is what
+makes that variant accurate without a game.
+
+**That variant does not currently pass.** Its class libraries supply their own `System.Memory`, and the
+payload carries one because mono-project's Mono ships a version too old for Roslyn; two of them in one
+domain split `ReadOnlySpan<T>` identity and compilation fails. What a runtime lacks is not constant
+across builds of that runtime, and the payload matrix cannot yet say so.
 
 ## Identity and the control channel
 

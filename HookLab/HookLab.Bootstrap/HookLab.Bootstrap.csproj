@@ -45,14 +45,14 @@
       <PayloadMatrixEntry Include="@(ReferencePath)" Condition="'%(Filename)' == 'HookLab.Contracts'">
         <PayloadId>HookLab.Contracts</PayloadId><Role>contracts</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.HookLab.Contracts.dll</ResourceName>
-        <Tfm>netstandard2.0</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,unity</Runtimes>
+        <Tfm>netstandard2.0</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
         <AsmName>HookLab.Contracts</AsmName><AsmVersion>1.0.0.0</AsmVersion><AsmToken>none</AsmToken>
         <Provenance>project:HookLab/HookLab.Contracts</Provenance><Requires></Requires>
       </PayloadMatrixEntry>
       <PayloadMatrixEntry Include="@(ReferencePath)" Condition="'%(Filename)' == 'HookLab.Probe.CorDebug'">
         <PayloadId>HookLab.Probe.CorDebug</PayloadId><Role>resident</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.HookLab.Probe.CorDebug.dll</ResourceName>
-        <Tfm>net48</Tfm><Arch>x64</Arch><Runtimes>clrv4,coreclr,unity</Runtimes>
+        <Tfm>net48</Tfm><Arch>x64</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
         <AsmName>HookLab.Probe.CorDebug</AsmName><AsmVersion>1.0.0.0</AsmVersion><AsmToken>none</AsmToken>
         <Provenance>project:HookLab/HookLab.Probe.CorDebug</Provenance>
         <Requires>HookLab.Contracts,Microsoft.CodeAnalysis.CSharp,Harmony.Desktop,Harmony.CoreClr</Requires>
@@ -60,7 +60,7 @@
       <PayloadMatrixEntry Include="$(NuGetPackageRoot)microsoft.codeanalysis.common\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.dll">
         <PayloadId>Microsoft.CodeAnalysis</PayloadId><Role>compiler</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.Microsoft.CodeAnalysis.dll</ResourceName>
-        <Tfm>netstandard2.0</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,unity</Runtimes>
+        <Tfm>netstandard2.0</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
         <AsmName>Microsoft.CodeAnalysis</AsmName><AsmVersion>5.6.0.0</AsmVersion><AsmToken>31bf3856ad364e35</AsmToken>
         <Provenance>nuget:microsoft.codeanalysis.common/5.6.0</Provenance>
         <Requires>System.Collections.Immutable,System.Runtime.CompilerServices.Unsafe</Requires>
@@ -68,7 +68,7 @@
       <PayloadMatrixEntry Include="$(NuGetPackageRoot)microsoft.codeanalysis.csharp\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.CSharp.dll">
         <PayloadId>Microsoft.CodeAnalysis.CSharp</PayloadId><Role>compiler</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.Microsoft.CodeAnalysis.CSharp.dll</ResourceName>
-        <Tfm>netstandard2.0</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,unity</Runtimes>
+        <Tfm>netstandard2.0</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
         <AsmName>Microsoft.CodeAnalysis.CSharp</AsmName><AsmVersion>5.6.0.0</AsmVersion><AsmToken>31bf3856ad364e35</AsmToken>
         <Provenance>nuget:microsoft.codeanalysis.csharp/5.6.0</Provenance>
         <Requires>Microsoft.CodeAnalysis,System.Collections.Immutable,System.Runtime.CompilerServices.Unsafe</Requires>
@@ -76,7 +76,7 @@
       <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.collections.immutable\10.0.1\lib\net462\System.Collections.Immutable.dll">
         <PayloadId>System.Collections.Immutable</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.System.Collections.Immutable.dll</ResourceName>
-        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,unity</Runtimes>
+        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
         <AsmName>System.Collections.Immutable</AsmName><AsmVersion>10.0.0.1</AsmVersion><AsmToken>b03f5f7f11d50a3a</AsmToken>
         <Provenance>nuget:system.collections.immutable/10.0.1</Provenance>
         <Requires>System.Runtime.CompilerServices.Unsafe</Requires>
@@ -96,17 +96,38 @@
       <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.runtime.compilerservices.unsafe\6.1.2\lib\net462\System.Runtime.CompilerServices.Unsafe.dll">
         <PayloadId>System.Runtime.CompilerServices.Unsafe</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.System.Runtime.CompilerServices.Unsafe.dll</ResourceName>
-        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,unity</Runtimes>
+        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,mono</Runtimes>
         <AsmName>System.Runtime.CompilerServices.Unsafe</AsmName><AsmVersion>6.0.3.0</AsmVersion><AsmToken>b03f5f7f11d50a3a</AsmToken>
         <Provenance>nuget:system.runtime.compilerservices.unsafe/6.1.2</Provenance><Requires></Requires>
+      </PayloadMatrixEntry>
+      <!-- Roslyn needs System.Memory 4.0.5.0. mono-project's Mono 6.12 ships 4.0.1.1 in its own profile,
+           which is older and does not satisfy the reference, so this one is carried; System.Buffers it has
+           not at all. Unity's 6.13 supplies both and never reaches these rows. That difference between two
+           Mono builds is why "which facades does the runtime have" cannot be a static answer - the rows
+           are declared, and dependency_resolution refuses by name on any target where the runtime's own
+           copy wins the bind instead. -->
+      <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.memory\4.6.3\lib\net462\System.Memory.dll">
+        <PayloadId>System.Memory</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
+        <ResourceName>HookLab.Bootstrap.Payloads.System.Memory.dll</ResourceName>
+        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,mono</Runtimes>
+        <AsmName>System.Memory</AsmName><AsmVersion>4.0.5.0</AsmVersion><AsmToken>cc7b13ffcd2ddd51</AsmToken>
+        <Provenance>nuget:system.memory/4.6.3</Provenance>
+        <Requires>System.Buffers,System.Runtime.CompilerServices.Unsafe</Requires>
+      </PayloadMatrixEntry>
+      <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.buffers\4.6.1\lib\net462\System.Buffers.dll">
+        <PayloadId>System.Buffers</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
+        <ResourceName>HookLab.Bootstrap.Payloads.System.Buffers.dll</ResourceName>
+        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,mono</Runtimes>
+        <AsmName>System.Buffers</AsmName><AsmVersion>4.0.5.0</AsmVersion><AsmToken>cc7b13ffcd2ddd51</AsmToken>
+        <Provenance>nuget:system.buffers/4.6.1</Provenance><Requires></Requires>
       </PayloadMatrixEntry>
       <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.reflection.metadata\10.0.1\lib\net462\System.Reflection.Metadata.dll">
         <PayloadId>System.Reflection.Metadata</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.System.Reflection.Metadata.dll</ResourceName>
-        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,unity</Runtimes>
+        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,mono</Runtimes>
         <AsmName>System.Reflection.Metadata</AsmName><AsmVersion>10.0.0.1</AsmVersion><AsmToken>b03f5f7f11d50a3a</AsmToken>
         <Provenance>nuget:system.reflection.metadata/10.0.1</Provenance>
-        <Requires>System.Collections.Immutable</Requires>
+        <Requires>System.Collections.Immutable,System.Memory</Requires>
       </PayloadMatrixEntry>
       <!-- Carried by the probe, not by this assembly: the probe extracts exactly one of these by corlib
            name. They are hashed and described here so that the shipped set of resident bytes is complete
@@ -114,7 +135,7 @@
       <PayloadMatrixEntry Include="$(NuGetPackageRoot)lib.harmony\2.4.2\lib\net48\0Harmony.dll">
         <PayloadId>Harmony.Desktop</PayloadId><Role>patch-engine</Role><Carrier>probe</Carrier>
         <ResourceName>HookLab.Probe.CorDebug.Backends.Desktop.0Harmony.dll</ResourceName>
-        <Tfm>net48</Tfm><Arch>any</Arch><Runtimes>clrv4,unity</Runtimes>
+        <Tfm>net48</Tfm><Arch>any</Arch><Runtimes>clrv4,mono</Runtimes>
         <AsmName>0Harmony</AsmName><AsmVersion>2.4.2.0</AsmVersion><AsmToken>none</AsmToken>
         <Provenance>nuget:lib.harmony/2.4.2</Provenance><Requires></Requires>
       </PayloadMatrixEntry>

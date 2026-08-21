@@ -61,14 +61,20 @@ public sealed class HookLabBackendTests {
 		Assert.Contains("the attached process exposes Mono.",reason,StringComparison.Ordinal);
 	}
 
-	/// <summary>A Unity target is refused, and the refusal says which piece is missing rather than calling
-	/// the runtime unsupported. Everything except arrival is proved there - the compatibility probe's unity
-	/// leg runs a whole lifecycle - so "unsupported" would be false and "not yet" needs a reason.</summary>
-	[Fact]
-	public void A_unity_target_is_refused_with_the_reason_arrival_is_missing() {
-		var unity=new[]{ new HookLabRuntimeIdentity(new Guid("CE8A11EE-73EF-4A51-B5D0-BDA2E665A2B4"),"Unity") };
-		Assert.Null(HookLabBackends.Select(64,"X64",unity));
-		var reason=HookLabBackends.UnsupportedReason(64,"X64",unity);
+	/// <summary>A Mono target is refused, and the refusal says which piece is missing rather than calling
+	/// the runtime unsupported. Everything except arrival is proved there - the compatibility probe's mono
+	/// leg runs a whole lifecycle - so "unsupported" would be false and "not yet" needs a reason.
+	///
+	/// <para>Both names dnSpy gives the one soft-debugger engine answer the same way. A row that covered
+	/// only Unity would leave a standalone Mono target being told its runtime is unsupported, which is not
+	/// what is wrong with it.</para></summary>
+	[Theory]
+	[InlineData("7A99738E-9A75-4268-9B74-BBA174764FC7","MonoCLR")]
+	[InlineData("CE8A11EE-73EF-4A51-B5D0-BDA2E665A2B4","Unity")]
+	public void A_mono_target_is_refused_with_the_reason_arrival_is_missing(string guid,string name) {
+		var mono=new[]{ new HookLabRuntimeIdentity(new Guid(guid),name) };
+		Assert.Null(HookLabBackends.Select(64,"X64",mono));
+		var reason=HookLabBackends.UnsupportedReason(64,"X64",mono);
 		Assert.Contains("owned internal breakpoint",reason,StringComparison.Ordinal);
 		Assert.Contains("CorDebug engine",reason,StringComparison.Ordinal);
 	}
@@ -108,7 +114,7 @@ public sealed class HookLabBackendTests {
 		// Pending backends are checked too: their payload claims are the part that is already proved, and
 		// leaving them unverified until arrival lands is how a row rots while nobody is looking.
 		foreach(var backend in HookLabBackends.All.Concat(HookLabBackends.Pending.Select(pending=>pending.Backend))) {
-			var expected=backend.Family switch{"clrv4"=>PayloadRuntimes.ClrV4,"coreclr"=>PayloadRuntimes.CoreClr,"unity"=>PayloadRuntimes.Unity,_=>throw new Xunit.Sdk.XunitException("Unknown backend family "+backend.Family+"; the matrix has no flag for it.")};
+			var expected=backend.Family switch{"clrv4"=>PayloadRuntimes.ClrV4,"coreclr"=>PayloadRuntimes.CoreClr,"mono"=>PayloadRuntimes.Mono,_=>throw new Xunit.Sdk.XunitException("Unknown backend family "+backend.Family+"; the matrix has no flag for it.")};
 			foreach(var id in new[]{backend.PatchEnginePayloadId}.Concat(backend.CompilerPayloadIds)) {
 				var entry=matrix.Entries.SingleOrDefault(value=>value.Id==id);
 				Assert.True(entry is not null,backend.Id+" names payload '"+id+"', which the shipped matrix does not carry.");
@@ -116,11 +122,11 @@ public sealed class HookLabBackendTests {
 			}
 			Assert.Equal(PayloadRole.PatchEngine,matrix[backend.PatchEnginePayloadId].Role);
 		}
-		// Sharing a patch engine is allowed, and CLR v4 and Unity deliberately do: Unity's Mono is a
-		// net48-era runtime and the matrix declares that asset valid on both, which the loop above already
-		// required. What must never collapse is CoreCLR onto a net4x engine - that they need different ones
-		// is the reason the runtime axis exists at all.
-		foreach(var netFramework in new[]{HookLabBackends.DesktopClrV4,HookLabBackends.Unity})
+		// Sharing a patch engine is allowed, and CLR v4 and Mono deliberately do: Mono is a net48-era
+		// runtime and the matrix declares that asset valid on both, which the loop above already required.
+		// What must never collapse is CoreCLR onto a net4x engine - that they need different ones is the
+		// reason the runtime axis exists at all.
+		foreach(var netFramework in new[]{HookLabBackends.DesktopClrV4,HookLabBackends.Mono})
 			Assert.NotEqual(HookLabBackends.CoreClr.PatchEnginePayloadId,netFramework.PatchEnginePayloadId);
 	}
 

@@ -80,9 +80,9 @@ static class CompatibilityProbe {
 	}
 
 	static int Usage() {
-		Console.Error.WriteLine("usage: HookLab.CompatibilityProbe [--payload <hooklab-bootstrap.net48.payload>] [--fixtures <directory>] [--runtime clrv4|coreclr|unity|all] [--mono <mono.exe>] [--mono-assemblies <dir>] [--negative] [--keep]");
+		Console.Error.WriteLine("usage: HookLab.CompatibilityProbe [--payload <hooklab-bootstrap.net48.payload>] [--fixtures <directory>] [--runtime clrv4|coreclr|mono|all] [--mono <mono.exe>] [--mono-assemblies <dir>] [--negative] [--keep]");
 		Console.Error.WriteLine("       Defaults resolve the newest composed layout under artifacts\\layouts and the repository's built fixtures.");
-		Console.Error.WriteLine("       --runtime unity is opt-in and needs --mono or DGSPY_MONO_EXE; 'all' stays clrv4 and coreclr.");
+		Console.Error.WriteLine("       --runtime mono is opt-in and needs --mono or DGSPY_MONO_EXE; 'all' stays clrv4 and coreclr.");
 		return 2;
 	}
 
@@ -103,22 +103,17 @@ sealed class ProbeRefusal : Exception {
 
 /// <summary>One runtime family, and how this repository builds and starts a target for it.
 ///
-/// <para><paramref name="Launched"/> is false for a family whose fixture is its own executable. Unity is
-/// reached by handing the same net48 fixture to a Mono runtime, which is what makes the leg a Unity leg
+/// <para><paramref name="Launched"/> is false for a family whose fixture is its own executable. Mono is
+/// reached by handing the same net48 fixture to a <c>mono.exe</c>, which is what makes the leg a Mono leg
 /// rather than a second CLR v4 one - and it needs no game, editor project, or mod loader to be one.</para></summary>
-/// <param name="FrameworkFact">What the fixture reports itself running on, which is not always the family
-/// name. A target can tell that it is on Mono; it cannot tell that it is on <em>Unity's</em> Mono, because
-/// that is a property of the class libraries it was pointed at rather than of the runtime it can
-/// interrogate. The leg establishes the second by construction - see <c>--mono-assemblies</c> - and this
-/// keeps the fixture from having to claim something it cannot know.</param>
-sealed record RuntimeFamily(string Id, PayloadRuntimes PayloadFlag, string FixtureFramework, bool Launched, string FrameworkFact) {
-	internal static readonly RuntimeFamily ClrV4 = new("clrv4", PayloadRuntimes.ClrV4, "net48", false, "clrv4");
-	internal static readonly RuntimeFamily CoreClr = new("coreclr", PayloadRuntimes.CoreClr, "net10.0", false, "coreclr");
-	internal static readonly RuntimeFamily Unity = new("unity", PayloadRuntimes.Unity, "net48", true, "mono");
+sealed record RuntimeFamily(string Id, PayloadRuntimes PayloadFlag, string FixtureFramework, bool Launched) {
+	internal static readonly RuntimeFamily ClrV4 = new("clrv4", PayloadRuntimes.ClrV4, "net48", false);
+	internal static readonly RuntimeFamily CoreClr = new("coreclr", PayloadRuntimes.CoreClr, "net10.0", false);
+	internal static readonly RuntimeFamily Mono = new("mono", PayloadRuntimes.Mono, "net48", true);
 
-	/// <summary>The legs <c>--runtime all</c> runs. Unity is not in it, and that is a statement rather
+	/// <summary>The legs <c>--runtime all</c> runs. Mono is not in it, and that is a statement rather
 	/// than an oversight: it needs a Mono runtime this repository does not ship, so including it would
-	/// turn "no Unity installed" into a gate failure on every machine without one.</summary>
+	/// turn "no Mono installed" into a gate failure on every machine without one.</summary>
 	internal static readonly RuntimeFamily[] All = { ClrV4, CoreClr };
 }
 
@@ -126,7 +121,7 @@ sealed record RuntimeFamily(string Id, PayloadRuntimes PayloadFlag, string Fixtu
 /// states CoreCLR's: as a range with the evidence beside it, not as the word "Mono".</summary>
 sealed record SupportedMono(Version MinimumInclusive, Version MaximumExclusive, string Evidence) {
 	internal static readonly SupportedMono[] Ranges = {
-		new(new Version(6, 12), new Version(6, 14), "Unity 2021.3 MonoBleedingEdge and this probe"),
+		new(new Version(6, 12), new Version(6, 14), "mono-project 6.12 x64 and Unity 2021.3 MonoBleedingEdge 6.13, both through this probe"),
 	};
 	internal static string Describe() => string.Join(", ", Ranges.Select(range => $"[{range.MinimumInclusive}, {range.MaximumExclusive}) - {range.Evidence}"));
 }
@@ -197,7 +192,7 @@ sealed class ProbeOptions {
 			"all" => RuntimeFamily.All,
 			"clrv4" => new[] { RuntimeFamily.ClrV4 },
 			"coreclr" => new[] { RuntimeFamily.CoreClr },
-			"unity" => new[] { RuntimeFamily.Unity },
+			"mono" => new[] { RuntimeFamily.Mono },
 			_ => null,
 		};
 		if (families is null) return null;

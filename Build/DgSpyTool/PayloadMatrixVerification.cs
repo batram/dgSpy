@@ -167,7 +167,7 @@ static class PayloadMatrixVerification {
 		var names = new List<string>();
 		if ((runtimes & PayloadRuntimes.ClrV4) != 0) names.Add("clrv4");
 		if ((runtimes & PayloadRuntimes.CoreClr) != 0) names.Add("coreclr");
-		if ((runtimes & PayloadRuntimes.Unity) != 0) names.Add("unity");
+		if ((runtimes & PayloadRuntimes.Mono) != 0) names.Add("mono");
 		return names.ToArray();
 	}
 }

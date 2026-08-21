@@ -38,7 +38,7 @@ namespace HookLab.Bootstrap.Tests {
 		[Fact]
 		public void Manifest_carries_exactly_the_probe_contracts_and_compiler_runtime() {
 			var resolver = EmbeddedAssemblyResolver.FromEmbeddedManifest();
-			Assert.Equal(new[] { "HookLab.Contracts", "HookLab.Probe.CorDebug", "Microsoft.CodeAnalysis", "Microsoft.CodeAnalysis.CSharp", "System.Collections.Immutable", "System.Reflection.Metadata", "System.Runtime.CompilerServices.Unsafe" }, resolver.ManifestIdentities.ToArray());
+			Assert.Equal(new[] { "HookLab.Contracts", "HookLab.Probe.CorDebug", "Microsoft.CodeAnalysis", "Microsoft.CodeAnalysis.CSharp", "System.Buffers", "System.Collections.Immutable", "System.Memory", "System.Reflection.Metadata", "System.Runtime.CompilerServices.Unsafe" }, resolver.ManifestIdentities.ToArray());
 			// 0Harmony is deliberately absent: the probe carries and resolves its own pinned backend, and a
 			// second embedded copy served by this resolver would win the bind and leave two 0Harmony
 			// assemblies resident - the duplicate patching backend the plan forbids.
@@ -221,12 +221,12 @@ namespace HookLab.Bootstrap.Tests {
 		[Fact]
 		public void The_embedded_matrix_describes_every_runtime_family() {
 			var matrix = EmbeddedAssemblyResolver.EmbeddedMatrix();
-			Assert.Equal(PayloadRuntimes.ClrV4 | PayloadRuntimes.Unity, matrix["Harmony.Desktop"].Runtimes);
+			Assert.Equal(PayloadRuntimes.ClrV4 | PayloadRuntimes.Mono, matrix["Harmony.Desktop"].Runtimes);
 			Assert.Equal(PayloadRuntimes.CoreClr, matrix["Harmony.CoreClr"].Runtimes);
 			// Carried by the probe, so deliberately not served by this resolver - but described, which is
 			// the whole difference between a payload that ships and a payload that is accounted for.
 			Assert.All(matrix.Carried(PayloadCarrier.Probe), entry => Assert.Equal(PayloadRole.PatchEngine, entry.Role));
-			Assert.Equal(7, matrix.Carried(PayloadCarrier.Bootstrap).Count());
+			Assert.Equal(9, matrix.Carried(PayloadCarrier.Bootstrap).Count());
 			Assert.Equal("nuget:lib.harmony/2.4.2", matrix["Harmony.Desktop"].Provenance);
 			Assert.Equal("project:HookLab/HookLab.Probe.CorDebug", matrix["HookLab.Probe.CorDebug"].Provenance);
 		}
@@ -239,7 +239,7 @@ namespace HookLab.Bootstrap.Tests {
 				Assert.NotNull(assembly);
 				Assert.Equal("", assembly!.Location);
 			}
-			Assert.Equal(7, resolver.LoadCount);
+			Assert.Equal(9, resolver.LoadCount);
 		}
 	}
 }
