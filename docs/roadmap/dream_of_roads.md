@@ -154,16 +154,24 @@ What remains:
    `System.Text.Encoding.CodePages`), and on a player all twelve payloads are carried with
    `payload_deferrals` empty - the fallback axis behaving exactly as designed.
 
-   With those, and with `netstandard` supplied to the player by hand, **the resident arrives: `status=ok`
-   in 2.9 seconds**, patch engine loaded, control pipe published. Two things remain before this leg can
-   be a gate:
+   With those, and with `netstandard` supplied to the player by hand,
+   **`tests\run-unity-hooklab-smoke.ps1` passes all 10 checks against a live player** - attach,
+   readiness, breakpoint, arrival in 2.9 s, the resident answering over its own control channel, and the
+   player still running after detach. That script had existed asserting a refusal and had never been
+   run green.
 
-   - `netstandard` cannot be shipped - see the dream below, which removes the requirement rather than
-     satisfying it.
-   - `initialize_hooklab` still returns `deadline_exceeded` against its 130 s bound **even though the
-     resident finished in 4.3 s and wrote a healthy completion report**. So the remaining problem is on
-     the host side, after a successful arrival, and it is a fresh, well-scoped bug rather than anything
-     to do with Mono payloads.
+   The `deadline_exceeded` that stood in the way was two bugs, both now fixed. The host's pipe
+   **handshake was unbounded** - `ProbeConnection`'s constructor read with no timeout, the same gap that
+   was closed for `Send` but missed here - so a resident that could not answer hung the whole call past
+   its 130 s deadline with nothing to say which read had blocked. And the smoke left its own breakpoint
+   armed through arrival: arrival resumes the target so the resident's worker can publish, a player's
+   loop re-enters `TickLoop` within milliseconds, and the target stopped again where it could not
+   answer. Fixing the bound turned 130 s of silence into a five-second `TimeoutException` naming the
+   cause, which is what made the second half obvious.
+
+   **One thing remains:** `netstandard` cannot be shipped - see the dream below, which removes the
+   requirement rather than satisfying it. Until then the player leg needs that facade placed by hand,
+   so it is evidence rather than a gate.
 
 The intermittent that stood here is closed, and the answer was humbling: an unhandled `IOException`
 thrown by **dgSpy's own test fixture**, whose `File.Delete`/`File.Move` swap collided with the gate

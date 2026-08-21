@@ -112,6 +112,15 @@ try {
 	}
 	Assert-That 'the harness loop reaches the breakpoint' (-not $stop.timed_out -and @($stop.events).Count -gt 0)
 
+	# Cleared here, while the target is still stopped at it, and NOT left until the teardown below.
+	#
+	# Arrival resumes the target so the resident's worker can publish its completion report. A player's
+	# loop re-enters TickLoop within milliseconds, so a breakpoint left armed stops the target again
+	# immediately - and a stopped target cannot answer the control channel the host is about to open.
+	# Measured: initialize_hooklab died on its 130-second deadline with the resident already reporting
+	# status=ok, because the host was blocked in a pipe handshake the target could not answer.
+	$null = Invoke-MutatingTool -Name 'clear_breakpoints' -Arguments @{ session_id = $script:activeSessionId }
+
 	Write-Section 'initialize the resident (arrival by debugger evaluation)'
 	# Arrival on a real player is the longest call in the suite: it stages a 16 MB payload, byte-loads it
 	# and Roslyn inside the target, and then waits out its own 20 s completion deadline. The client's

@@ -297,10 +297,20 @@ the engine's own run reconciliation, and an ordinary manager-level continue - ki
 within 80 ms, in separate 40-cycle runs. A VM suspended with a control command in flight has to be left
 alone.
 
-The 30-second bound is what keeps this legible. Before it existed the host waited past every deadline it
-had, because `Task.Run(..., token)` cancels only a call's scheduling and `PipeStream` cannot time out a
-read: one such wait took a 900-second harness timeout to end and said nothing about which call caused
-it. `tests\run-mono-hooklab-stress.ps1` is the instrument for anything in this area - it cycles a hook
+Bounds are what keep this legible, and there are two because there are two ways to wait on a resident.
+A command round trip is bounded at 30 seconds. **Opening the control channel is bounded too** - the
+handshake reads used to block indefinitely, which is how one `initialize_hooklab` on a live Unity player
+died on its 130-second deadline as `deadline_exceeded` while the resident had already reported
+`status=ok`: the target had stopped again at a breakpoint the caller left armed, so it could not answer,
+and nothing said which read had hung. It now says exactly that, in five seconds.
+
+Before either bound existed the host waited past every deadline it had, because
+`Task.Run(..., token)` cancels only a call's scheduling and `PipeStream` cannot be given a read timeout.
+One such wait took a 900-second harness timeout to end and said nothing about which call caused it.
+
+The practical consequence for callers: **clear breakpoints that the target will re-enter before
+initializing.** Arrival resumes the target so the resident's worker can publish its report, and a game
+loop re-enters a hot method within milliseconds. `tests\run-mono-hooklab-stress.ps1` is the instrument for anything in this area - it cycles a hook
 through install, update and remove dozens of times and, on a stall, reports whether the target is alive,
 whether its own unrelated threads are still advancing, and what the session state is. Those three
 answers separate a wedged resident from a suspended VM from a dead target, and getting them confused
