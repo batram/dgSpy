@@ -71,6 +71,7 @@ static class PayloadMatrixVerification {
 			var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 			if (digest != entry.Sha256)
 				throw new InvalidOperationException("Payload '" + entry.Id + "' differs from the matrix: declared " + entry.Sha256 + ", embedded " + digest + ".");
+			RejectNetstandardReference(entry, bytes);
 			var identity = ReadIdentity(bytes, entry.Id);
 			if (identity.Name != entry.AssemblyName || identity.Version != entry.AssemblyVersion || identity.PublicKeyToken != entry.PublicKeyToken)
 				throw new InvalidOperationException("Payload '" + entry.Id + "' has the wrong identity: the matrix declares " +
@@ -108,6 +109,34 @@ static class PayloadMatrixVerification {
 		return resources;
 	}
 
+	/// <summary>Refuses a payload that a supported target could not load at all.
+	///
+	/// <para>A shipped Unity player's <c>Managed</c> directory holds nine non-Unity assemblies and no
+	/// <c>Facades</c> directory, so <c>netstandard, Version=2.0.0.0</c> is simply not there - and it cannot
+	/// be put there, because it is strong-named to Microsoft's key and no assembly dgSpy builds can satisfy
+	/// the reference. .NET Framework 4.8 has the facade only from 4.7.2 and only in the GAC. So a payload
+	/// that names netstandard is a payload some supported target will refuse to load, and the build removes
+	/// the reference rather than shipping the hope - see RetargetPayloadNetstandardReferences.</para>
+	///
+	/// <para>Scoped to payloads declared valid on CLR v4 or Mono. A CoreCLR-only asset may name netstandard
+	/// honestly: the shared framework has it.</para></summary>
+	static void RejectNetstandardReference(PayloadMatrixEntry entry, byte[] bytes) {
+		if ((entry.Runtimes & (PayloadRuntimes.ClrV4 | PayloadRuntimes.Mono)) == 0) return;
+		if (!ReadAssemblyReferences(bytes).Contains("netstandard", StringComparer.Ordinal)) return;
+		throw new InvalidOperationException("Payload '" + entry.Id + "' references the netstandard facade, which a stripped " +
+			"Unity player does not ship and dgSpy may not supply. It is declared valid on " + string.Join(", ", Spell(entry.Runtimes)) + ".");
+	}
+
+	/// <summary>The simple names of every assembly a managed image references, read from its bytes.</summary>
+	internal static IReadOnlyList<string> ReadAssemblyReferences(byte[] image) {
+		using var pe = new PEReader(ImmutableArray.Create(image));
+		if (!pe.HasMetadata) return Array.Empty<string>();
+		var metadata = pe.GetMetadataReader();
+		return metadata.AssemblyReferences
+			.Select(handle => metadata.GetString(metadata.GetAssemblyReference(handle).Name))
+			.OrderBy(name => name, StringComparer.Ordinal).ToArray();
+	}
+
 	internal static PayloadIdentity ReadIdentity(byte[] image, string describe) {
 		using var pe = new PEReader(ImmutableArray.Create(image));
 		if (!pe.HasMetadata) throw new InvalidOperationException("Not a managed assembly: " + describe);
@@ -134,7 +163,7 @@ static class PayloadMatrixVerification {
 	/// authoritative; this exists so the layout states its resident payload inventory without anyone
 	/// having to open a PE file.</summary>
 	internal static object Publishable(PayloadMatrix matrix) => new {
-		format_version = 3,
+		format_version = 4,
 		payloads = matrix.Entries.Select(entry => new {
 			id = entry.Id,
 			role = Spell(entry.Role),

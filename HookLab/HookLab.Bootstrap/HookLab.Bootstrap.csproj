@@ -24,6 +24,80 @@
     <InternalsVisibleTo Include="HookLab.Bootstrap.Tests" />
   </ItemGroup>
 
+  <!-- Reference assemblies only: never compiled against, never shipped. They are the pinned, hashed
+       source of "which .NET Framework assembly really defines this type", which is what the netstandard
+       retarget below needs and what it must not read off the machine. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" GeneratePathProperty="true" ExcludeAssets="all" PrivateAssets="all" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RetargetTool>$(MSBuildThisFileDirectory)..\..\Build\RetargetNetstandardReferences\RetargetNetstandardReferences.csproj</RetargetTool>
+    <NetFxReferenceAssemblies>$(PkgMicrosoft_NETFramework_ReferenceAssemblies_net48)\build\.NETFramework\v4.8</NetFxReferenceAssemblies>
+    <!-- The assemblies a rewritten reference may point at, most-preferred first, and the whole safety
+         argument in one line. The first five are in every target this product supports, including a
+         stripped Unity player's nine-assembly Managed directory. The last two are not in a player - and
+         are reached only by Roslyn's XML documentation and serialization paths, which a compile of a hook
+         body never enters. That is not a hope: those same types resolve through netstandard today, to the
+         same absent assemblies, on the player leg that already passes. Making them explicit turns an
+         unresolvable facade for every type into an unresolvable assembly for the handful nothing calls. -->
+    <NetFxRetargetAllowed>mscorlib,System,System.Core,System.Xml,System.Numerics,System.Xml.Linq,System.Runtime.Serialization</NetFxRetargetAllowed>
+    <RoslynCommonSource>$(NuGetPackageRoot)microsoft.codeanalysis.common\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.dll</RoslynCommonSource>
+    <RoslynCSharpSource>$(NuGetPackageRoot)microsoft.codeanalysis.csharp\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.CSharp.dll</RoslynCSharpSource>
+  </PropertyGroup>
+
+  <!-- Removes the one payload requirement that cannot be shipped.
+
+       A payload compiled for netstandard2.0 references netstandard, Version=2.0.0.0, PublicKeyToken=
+       cc7b13ffcd2ddd51 and cannot load without it. A shipped Unity player has no Facades directory and
+       therefore no netstandard, and the reference cannot be satisfied by anything dgSpy builds: it is
+       strong-named to Microsoft's key, so a generated type-forward facade is useless, and taking a copy
+       off a machine is exactly the disk provenance the resolver exists to forbid. Roslyn 5.6.0 offers no
+       way out either - everything that is not .NET Core is netstandard2.0, and the last net45 build was
+       Roslyn 1.0, which is C# 6 from 2015.
+
+       So the reference is deleted rather than satisfied: every [netstandard]Type typeref is rewritten to
+       the .NET Framework assembly that really defines the type, read out of the pinned reference-assembly
+       package above. Assembly identity - including Microsoft's public key on Roslyn - is untouched, so
+       nothing that binds to these payloads had to learn anything; only the digest and the provenance
+       change, and DgSpyTool proves both against the shipped bytes and refuses any bootstrap payload that
+       still names netstandard.
+
+       All three payloads that need it, not only Roslyn: HookLab.Contracts is dgSpy's own netstandard2.0
+       assembly and referenced the facade for exactly the same reason. The probe is net48 and needs
+       nothing. The compiler-support facades are net462 builds and never referenced it.
+
+       The tool is built here rather than assumed: HookLab.Bootstrap must build on its own, and a
+       checked-in binary would be a payload input nobody could review. RemoveProperties keeps this net48
+       build's TargetFramework out of the net10 tool's. -->
+  <Target Name="RetargetPayloadNetstandardReferences" DependsOnTargets="ResolveReferences" BeforeTargets="EmbedBootstrapPayloads">
+    <Error Condition="!Exists('$(NetFxReferenceAssemblies)')" Text="The pinned .NET Framework 4.8 reference assemblies are missing at '$(NetFxReferenceAssemblies)'. Restore Microsoft.NETFramework.ReferenceAssemblies.net48." />
+    <!-- Set here rather than in a project-level PropertyGroup: IntermediateOutputPath is computed by the
+         common targets, which run after this project's body is evaluated, so up there it is empty and the
+         retargeted payloads land in the source tree. A target PropertyGroup persists for the rest of the
+         build, so EmbedBootstrapPayloads - which this runs before - sees the same value. -->
+    <PropertyGroup>
+      <RetargetDirectory>$(IntermediateOutputPath)retargeted\</RetargetDirectory>
+    </PropertyGroup>
+    <ItemGroup>
+      <RetargetPayload Include="@(ReferencePath)" Condition="'%(Filename)' == 'HookLab.Contracts'" />
+      <RetargetPayload Include="$(RoslynCommonSource)" />
+      <RetargetPayload Include="$(RoslynCSharpSource)" />
+      <RetargetPayload>
+        <Retargeted>$(RetargetDirectory)%(Filename)%(Extension)</Retargeted>
+      </RetargetPayload>
+    </ItemGroup>
+    <Error Condition="'@(RetargetPayload->Count())' != '3'" Text="Expected three payloads to retarget, resolved: @(RetargetPayload->'%(Filename)')" />
+    <MSBuild Projects="$(RetargetTool)" Targets="Restore;Build" Properties="Configuration=Release"
+             RemoveProperties="TargetFramework;TargetFrameworks;Platform;PlatformTarget;RuntimeIdentifier;OutputPath;IntermediateOutputPath">
+      <Output TaskParameter="TargetOutputs" ItemName="_RetargetTool" />
+    </MSBuild>
+    <Exec Command="dotnet &quot;@(_RetargetTool->'%(FullPath)')&quot; --reference-assemblies &quot;$(NetFxReferenceAssemblies)&quot; --allow $(NetFxRetargetAllowed) --input &quot;%(RetargetPayload.FullPath)&quot; --output &quot;%(RetargetPayload.Retargeted)&quot;" />
+    <ItemGroup>
+      <FileWrites Include="$(RetargetDirectory)*.dll" />
+    </ItemGroup>
+  </Target>
+
   <!-- Copies T04's proven embedding shape: the payload never exists as a loose file, and its digest is
        pinned at build time rather than computed from whatever happens to be on disk at load time.
        This has to land before AssignTargetPaths, not before PrepareResources: a target's DependsOnTargets
@@ -42,12 +116,12 @@
          else. Carrier says which assembly holds the bytes - the two Harmony assets live inside the probe,
          which is why they were previously described nowhere at all. -->
     <ItemGroup>
-      <PayloadMatrixEntry Include="@(ReferencePath)" Condition="'%(Filename)' == 'HookLab.Contracts'">
+      <PayloadMatrixEntry Include="$(RetargetDirectory)HookLab.Contracts.dll">
         <PayloadId>HookLab.Contracts</PayloadId><Role>contracts</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.HookLab.Contracts.dll</ResourceName>
-        <Tfm>netstandard2.0</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
+        <Tfm>net48</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
         <AsmName>HookLab.Contracts</AsmName><AsmVersion>1.0.0.0</AsmVersion><AsmToken>none</AsmToken>
-        <Provenance>project:HookLab/HookLab.Contracts</Provenance><Requires></Requires>
+        <Provenance>build:RetargetNetstandardReferences(project:HookLab/HookLab.Contracts)</Provenance><Requires></Requires>
       </PayloadMatrixEntry>
       <PayloadMatrixEntry Include="@(ReferencePath)" Condition="'%(Filename)' == 'HookLab.Probe.CorDebug'">
         <PayloadId>HookLab.Probe.CorDebug</PayloadId><Role>resident</Role><Carrier>bootstrap</Carrier>
@@ -57,20 +131,24 @@
         <Provenance>project:HookLab/HookLab.Probe.CorDebug</Provenance>
         <Requires>HookLab.Contracts,Microsoft.CodeAnalysis.CSharp,Harmony.Desktop,Harmony.CoreClr</Requires>
       </PayloadMatrixEntry>
-      <PayloadMatrixEntry Include="$(NuGetPackageRoot)microsoft.codeanalysis.common\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.dll">
+      <!-- The retargeted Roslyn, not the package's own bytes - see RetargetRoslynPayloads above. The
+           target framework is stated as net48 because that is what these bytes now are: netstandard2.0 is
+           a compile-time contract, and an assembly that no longer references netstandard is not one.
+           Identity is unchanged, so nothing that binds to Roslyn had to learn anything. -->
+      <PayloadMatrixEntry Include="$(RetargetDirectory)Microsoft.CodeAnalysis.dll">
         <PayloadId>Microsoft.CodeAnalysis</PayloadId><Role>compiler</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.Microsoft.CodeAnalysis.dll</ResourceName>
-        <Tfm>netstandard2.0</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
+        <Tfm>net48</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
         <AsmName>Microsoft.CodeAnalysis</AsmName><AsmVersion>5.6.0.0</AsmVersion><AsmToken>31bf3856ad364e35</AsmToken>
-        <Provenance>nuget:microsoft.codeanalysis.common/5.6.0</Provenance>
+        <Provenance>build:RetargetNetstandardReferences(nuget:microsoft.codeanalysis.common/5.6.0)</Provenance>
         <Requires>System.Collections.Immutable,System.Runtime.CompilerServices.Unsafe</Requires>
       </PayloadMatrixEntry>
-      <PayloadMatrixEntry Include="$(NuGetPackageRoot)microsoft.codeanalysis.csharp\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.CSharp.dll">
+      <PayloadMatrixEntry Include="$(RetargetDirectory)Microsoft.CodeAnalysis.CSharp.dll">
         <PayloadId>Microsoft.CodeAnalysis.CSharp</PayloadId><Role>compiler</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.Microsoft.CodeAnalysis.CSharp.dll</ResourceName>
-        <Tfm>netstandard2.0</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
+        <Tfm>net48</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
         <AsmName>Microsoft.CodeAnalysis.CSharp</AsmName><AsmVersion>5.6.0.0</AsmVersion><AsmToken>31bf3856ad364e35</AsmToken>
-        <Provenance>nuget:microsoft.codeanalysis.csharp/5.6.0</Provenance>
+        <Provenance>build:RetargetNetstandardReferences(nuget:microsoft.codeanalysis.csharp/5.6.0)</Provenance>
         <Requires>Microsoft.CodeAnalysis,System.Collections.Immutable,System.Runtime.CompilerServices.Unsafe</Requires>
       </PayloadMatrixEntry>
       <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.collections.immutable\10.0.1\lib\net462\System.Collections.Immutable.dll">
@@ -206,7 +284,7 @@
       <Output TaskParameter="Items" ItemName="PayloadMatrixHashed" />
     </GetFileHash>
     <ItemGroup>
-      <PayloadMatrixLine Include="hooklab-payload-matrix|3" />
+      <PayloadMatrixLine Include="hooklab-payload-matrix|4" />
       <PayloadMatrixLine Include="@(PayloadMatrixHashed->'%(PayloadId)|%(Role)|%(Carrier)|%(ResourceName)|%(Tfm)|%(Arch)|%(Runtimes)|%(Fallback)|%(AsmName)|%(AsmVersion)|%(AsmToken)|%(Provenance)|%(Requires)|%(FileHash)')" />
     </ItemGroup>
     <WriteLinesToFile File="$(IntermediateOutputPath)hooklab-payload-matrix.txt"

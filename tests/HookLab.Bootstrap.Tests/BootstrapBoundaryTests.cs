@@ -31,9 +31,22 @@ namespace HookLab.Bootstrap.Tests {
 			}
 		}
 
+		/// <summary>The bootstrap ships as one file, so no package may put an asset anywhere near it: a
+		/// payload DLL on disk beside the bootstrap is bound by the CLR before AssemblyResolve is ever
+		/// raised, and the resolver silently stops being the thing under test.
+		///
+		/// <para>What the invariant is about is assets, not the word "PackageReference". The build needs
+		/// one package that contributes nothing at all - the pinned .NET Framework 4.8 reference
+		/// assemblies, which are the hashed source of "which assembly really defines this type" for the
+		/// netstandard retarget, and which must not be read off the machine instead. So the assertion is
+		/// the stronger, exact one: every package reference here carries ExcludeAssets="all" and
+		/// PrivateAssets="all", which is a package that can flow neither into this output nor through it.</para></summary>
 		[Fact]
-		public void The_bootstrap_takes_no_package_dependency() {
-			Assert.DoesNotContain("<PackageReference", BootstrapProject, StringComparison.Ordinal);
+		public void The_bootstrap_takes_no_package_dependency_that_contributes_an_asset() {
+			foreach (var line in BootstrapProject.Split('\n').Where(l => l.Contains("<PackageReference"))) {
+				Assert.Contains("ExcludeAssets=\"all\"", line, StringComparison.Ordinal);
+				Assert.Contains("PrivateAssets=\"all\"", line, StringComparison.Ordinal);
+			}
 		}
 
 		[Fact]

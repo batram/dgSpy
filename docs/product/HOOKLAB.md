@@ -30,7 +30,8 @@ enters a target. Each entry records:
 - the runtime families the payload is valid on - `clrv4`, `coreclr`, `mono`, or any combination;
 - the families on which the payload is a **fallback** rather than an insistence - see below;
 - the exact assembly name, version, and public key token;
-- provenance - the project or the pinned NuGet package and version it came from;
+- provenance - the project or the pinned NuGet package and version it came from, or, for a payload the
+  build derives, the transform that produced it and the pinned inputs it consumed;
 - the other slots it needs at run time, and its SHA-256.
 
 The runtime axis is real, not decorative: the patch engine is `net48` Harmony on CLR v4 and Mono and
@@ -39,6 +40,63 @@ several Roslyn support slots are valid on CLR v4 and Mono but not on CoreCLR, wh
 itself. The matrix is where those differences are stated once, instead of being recoverable only by
 reading the loaders that branch on them - and the resident honours them, serving only the slots
 declared valid on the runtime it is living in.
+
+### No payload may need the netstandard facade
+
+A shipped Unity player's `<Game>_Data\Managed` directory holds nine non-Unity assemblies - `mscorlib`,
+`System`, `System.Core`, `System.Xml`, `System.Numerics`, `System.Configuration`, `System.Security`,
+`Mono.Security`, `Assembly-CSharp` - and **no `Facades` directory at all**. Unity ships only what the
+game references. So `netstandard, Version=2.0.0.0, PublicKeyToken=cc7b13ffcd2ddd51` is not there, and
+an assembly compiled for `netstandard2.0` cannot load in a player: the first method that touches any
+type through the facade fails with `FileNotFoundException`, and on Mono, which demands field types at
+method prepare, that is immediately.
+
+**The facade cannot be shipped, only removed.** It is strong-named to Microsoft's key, so no assembly
+dgSpy builds can satisfy the reference - a generated `TypeForwardedTo` facade is useless, because it
+cannot carry that public key token. `NETStandard.Library` 2.0.3 contains a *reference* assembly, not a
+runtime facade. And copying Mono's or the .NET Framework's own copy off a machine is exactly the disk
+provenance the resident's resolver exists to forbid: every payload byte comes from a pinned package or
+dgSpy's own build, and is hashed into the matrix.
+
+Nor is there an escape by pinning an older compiler. Roslyn 4.9.2 and 5.6.0 both ship `netstandard2.0`
+for everything that is not .NET Core; the last `net45` build was Roslyn 1.0, which is C# 6 from 2015.
+
+So the build deletes the requirement. Every `[netstandard]Type` reference in an affected payload is
+rewritten to the .NET Framework assembly that really defines the type, and the `netstandard` reference
+itself disappears with the last use of it. Three payloads need this - `Microsoft.CodeAnalysis`,
+`Microsoft.CodeAnalysis.CSharp`, and dgSpy's own `HookLab.Contracts`, which was a `netstandard2.0`
+assembly for the same ordinary reason. The probe is `net48`; the compiler-support facades are `net462`
+builds; neither ever referenced it.
+
+Three properties make the rewrite a provenance statement rather than a liberty taken with someone
+else's bytes:
+
+- **The mapping is pinned, not guessed and not read off the machine.** It comes from the
+  `Microsoft.NETFramework.ReferenceAssemblies.net48` package: whichever reference assembly defines the
+  type is where the rewritten reference points. That package is referenced with `ExcludeAssets="all"`,
+  so it contributes no byte to anything - only the answer.
+- **Assembly identity is untouched**, including Microsoft's public key on the two Roslyn payloads. The
+  identity every reference to them names is the identity they still have, so nothing that binds to a
+  payload had to learn anything, and the matrix's declared name/version/token still hold against the
+  bytes.
+- **The bytes are then dgSpy's**, and the matrix says so. Their provenance is
+  `build:RetargetNetstandardReferences(nuget:microsoft.codeanalysis.csharp/5.6.0)` and the like - the
+  transform named, with the pinned input it consumed. Calling them `nuget:` would be a claim the digest
+  does not support. A `build:` provenance that names no pinned input is refused at parse time, in the
+  resident and in the packaging tool alike, so the third kind cannot become a way to describe bytes of
+  no stated origin.
+
+Only two groups of types have no home a player ships: `System.Xml.Linq` and two
+`System.Runtime.Serialization` attributes, both reached from Roslyn's XML-documentation and
+serialization paths, which compiling a hook body never enters. That is measurement, not hope: those
+same types resolved through `netstandard` to the same absent assemblies before the rewrite, on a player
+leg that reached arrival. What changed is that an unresolvable facade for *every* type became an
+unresolvable assembly for a handful nothing calls. Any type outside the permitted set fails the build
+by name rather than failing inside a target.
+
+Package verification enforces the outcome, not just the intent: any payload declared valid on `clrv4`
+or `mono` whose shipped bytes still name `netstandard` fails the package. A CoreCLR-only asset may name
+it honestly, because the shared framework has it.
 
 ### Carried, or a fallback for what the runtime lacks
 
@@ -371,8 +429,11 @@ the simple way. Unity ships `mono.exe` as x86 only, so an x64 Unity-Mono target 
 loads the player's x64 runtime and calls `mono_main` - `MonoHost64`, in `tests\TestTargets\MonoHost64` -
 and Unity's own `mono.exe` class libraries are not a player's either: they are a CoreFX-derived set
 whose named-pipe servers P/Invoke a `System.Native` shim absent on Windows. The editor's
-`unityjit-win32` profile is byte-identical to a shipped player's `Managed` directory, which is what
-makes that variant accurate without a game.
+`unityjit-win32` profile stands in for a player, which is what makes that variant possible without a
+game - but it is **richer than any player**, not byte-identical, whatever older notes say. It has a
+`Facades` directory and a player has none, so a result taken through it is an upper bound: it can show
+that something works on Unity's Mono, and it cannot show that a shipped player supplies what the run
+needed. Only `tests\run-unity-hooklab-smoke.ps1` against a real player answers that.
 
 Both variants pass, and the leg reports what distinguishes them. `payload_deferrals` is `none` on
 mono-project's Mono, which supplies neither facade usably and gets both from the payload
@@ -402,7 +463,9 @@ That ordering is deliberate. Mono is the runtime; a Unity player merely embeds i
 identical in both. Making the general case the gate - and Unity a variant of it - is what stops "does
 HookLab work on Mono" from being answerable only on a machine with a Unity editor and a licence.
 `tests\run-unity-hooklab-smoke.ps1` remains, and adds the one thing a fixture cannot: a real player,
-with a game loop, a mod loader and a graphics thread.
+with a game loop, a mod loader and a graphics thread. It runs against the player **as shipped** -
+nothing placed in its `Managed` directory by hand - which is what
+[No payload may need the netstandard facade](#no-payload-may-need-the-netstandard-facade) bought.
 
 The gate asserts the target is on Mono from the runtime's own answer rather than from having launched
 `mono.exe`, so a launch that silently fell through to the CLR fails rather than passing quietly. It

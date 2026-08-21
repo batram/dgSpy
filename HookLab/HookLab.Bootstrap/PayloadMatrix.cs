@@ -90,7 +90,13 @@ namespace HookLab.Bootstrap {
 		internal Version AssemblyVersion { get; }
 		/// <summary>Lower-case hex, or "none" for an unsigned assembly.</summary>
 		internal string PublicKeyToken { get; }
-		/// <summary>Where the bytes came from: "project:&lt;path&gt;" or "nuget:&lt;package&gt;/&lt;version&gt;".</summary>
+		/// <summary>Where the bytes came from: "project:&lt;path&gt;", "nuget:&lt;package&gt;/&lt;version&gt;", or
+		/// "build:&lt;transform&gt;(&lt;inputs&gt;)" for bytes dgSpy's own build derived from pinned inputs it
+		/// names. The third kind exists because the pinned Roslyn ships as <c>netstandard2.0</c> and a
+		/// stripped Unity player has no <c>netstandard</c> facade to satisfy that with, so the build
+		/// rewrites those references to the .NET Framework assemblies that really define the types. The
+		/// bytes are then ours, and saying "nuget:" about them would be a claim the digest does not
+		/// support - the transform is named here instead, with the package it consumed.</summary>
 		internal string Provenance { get; }
 		/// <summary>Ids of the other matrix entries this payload needs at run time. A name that is not an
 		/// id in the same matrix is an incomplete dependency closure and fails the parse.</summary>
@@ -109,7 +115,7 @@ namespace HookLab.Bootstrap {
 	/// no dependency of its own - the resident is loaded before its own payload dependencies exist.</para></summary>
 	sealed class PayloadMatrix {
 		internal const string ResourceName = "HookLab.Bootstrap.Payloads.matrix.txt";
-		internal const string Header = "hooklab-payload-matrix|3";
+		internal const string Header = "hooklab-payload-matrix|4";
 		const int FieldCount = 14;
 
 		readonly Dictionary<string, PayloadMatrixEntry> byId;
@@ -165,8 +171,14 @@ namespace HookLab.Bootstrap {
 					throw new BootstrapIntegrityException("Malformed payload assembly version '" + field[9] + "': " + line);
 				var token = ParseToken(field[10], line);
 				var provenance = Required(field[11], "provenance", line);
-				if (!provenance.StartsWith("project:", StringComparison.Ordinal) && !provenance.StartsWith("nuget:", StringComparison.Ordinal))
-					throw new BootstrapIntegrityException("Payload provenance must name a project or a package: " + line);
+				if (!provenance.StartsWith("project:", StringComparison.Ordinal) && !provenance.StartsWith("nuget:", StringComparison.Ordinal) &&
+					!provenance.StartsWith("build:", StringComparison.Ordinal))
+					throw new BootstrapIntegrityException("Payload provenance must name a project, a package, or a build transform: " + line);
+				// A derived payload has to say what it was derived from, or "build:" would be a way to
+				// describe bytes of no stated origin at all - which is the one thing provenance is for.
+				if (provenance.StartsWith("build:", StringComparison.Ordinal) &&
+					provenance.IndexOf("nuget:", StringComparison.Ordinal) < 0 && provenance.IndexOf("project:", StringComparison.Ordinal) < 0)
+					throw new BootstrapIntegrityException("A build-derived payload must name its pinned inputs: " + line);
 				var requires = field[12].Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(value => value.Trim()).ToArray();
 				var digest = NormalizeDigest(field[13]);
 				if (digest.Length != 64 || !digest.All(IsHex))

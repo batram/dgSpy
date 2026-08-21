@@ -141,37 +141,45 @@ See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes),
 [Arrival on Mono](../product/HOOKLAB.md#arrival-on-mono) and
 [2026-08-21](../local/evidence/2026-08-21-road1-mono-arrival.md).
 
-What remains:
+**Arrival on a real player is done, and `tests\run-unity-hooklab-smoke.ps1` is a gate rather than
+evidence.** It passes all 10 checks against an **unmodified** shipped player - nothing placed in its
+`Managed` directory by hand - covering attach, readiness, breakpoint, arrival, the resident answering
+over its own control channel, and the player still running after detach.
 
-1. **Finish arrival on a real player.** Measured 2026-08-21 against a live `uch-debug-target` player,
-   which is the first time any of this ran outside a console fixture, and it moved the boundary twice.
+Measured 2026-08-21 against a live `uch-debug-target` player, the first time any of this ran outside a
+console fixture, and it moved the boundary three times.
 
-   A shipped player's `Managed` directory holds nine non-Unity assemblies and **no `Facades` directory
-   at all** - Unity ships only what the game references. The editor's `unityjit-win32` profile *does*
-   have Facades, so every earlier "Unity" measurement was taken against a richer runtime than any player
-   has, and the claim that the two are byte-identical is wrong in exactly that way. Three more fallback
-   rows followed (`System.Numerics.Vectors`, `System.Threading.Tasks.Extensions`,
-   `System.Text.Encoding.CodePages`), and on a player all twelve payloads are carried with
-   `payload_deferrals` empty - the fallback axis behaving exactly as designed.
+A shipped player's `Managed` directory holds nine non-Unity assemblies and **no `Facades` directory at
+all** - Unity ships only what the game references. The editor's `unityjit-win32` profile *does* have
+Facades, so every earlier "Unity" measurement was taken against a richer runtime than any player has,
+and the claim that the two are byte-identical is wrong in exactly that way. Three more fallback rows
+followed (`System.Numerics.Vectors`, `System.Threading.Tasks.Extensions`,
+`System.Text.Encoding.CodePages`), and on a player all twelve payloads are carried with
+`payload_deferrals` empty - the fallback axis behaving exactly as designed.
 
-   With those, and with `netstandard` supplied to the player by hand,
-   **`tests\run-unity-hooklab-smoke.ps1` passes all 10 checks against a live player** - attach,
-   readiness, breakpoint, arrival in 2.9 s, the resident answering over its own control channel, and the
-   player still running after detach. That script had existed asserting a refusal and had never been
-   run green.
+The `deadline_exceeded` that stood in the way was two bugs, both fixed. The host's pipe **handshake was
+unbounded** - `ProbeConnection`'s constructor read with no timeout, the same gap that was closed for
+`Send` but missed here - so a resident that could not answer hung the whole call past its 130 s deadline
+with nothing to say which read had blocked. And the smoke left its own breakpoint armed through arrival:
+arrival resumes the target so the resident's worker can publish, a player's loop re-enters `TickLoop`
+within milliseconds, and the target stopped again where it could not answer. Fixing the bound turned
+130 s of silence into a five-second `TimeoutException` naming the cause, which made the second half
+obvious.
 
-   The `deadline_exceeded` that stood in the way was two bugs, both now fixed. The host's pipe
-   **handshake was unbounded** - `ProbeConnection`'s constructor read with no timeout, the same gap that
-   was closed for `Send` but missed here - so a resident that could not answer hung the whole call past
-   its 130 s deadline with nothing to say which read had blocked. And the smoke left its own breakpoint
-   armed through arrival: arrival resumes the target so the resident's worker can publish, a player's
-   loop re-enters `TickLoop` within milliseconds, and the target stopped again where it could not
-   answer. Fixing the bound turned 130 s of silence into a five-second `TimeoutException` naming the
-   cause, which is what made the second half obvious.
+**The last blocker was `netstandard`, and it is now deleted rather than satisfied.** A payload compiled
+for `netstandard2.0` cannot load where the facade does not exist, and the facade cannot be shipped: it
+is strong-named to Microsoft's key, so nothing dgSpy builds can satisfy the reference, and taking a copy
+off a machine is exactly the disk provenance the resolver forbids. The build now rewrites every
+`[netstandard]Type` reference to the .NET Framework assembly that really defines the type, using the
+pinned `Microsoft.NETFramework.ReferenceAssemblies.net48` package as the mapping, and the reference
+disappears with its last use. Three payloads needed it - the two Roslyn assemblies and dgSpy's own
+`HookLab.Contracts`, which was `netstandard2.0` for the same ordinary reason. Identity is untouched;
+the bytes become dgSpy's, and the matrix says so through a third provenance kind that must name its
+pinned inputs. Package verification now fails any payload declared valid on `clrv4` or `mono` whose
+shipped bytes still name `netstandard`, so the property is enforced rather than intended.
 
-   **One thing remains:** `netstandard` cannot be shipped - see the dream below, which removes the
-   requirement rather than satisfying it. Until then the player leg needs that facade placed by hand,
-   so it is evidence rather than a gate.
+See [No payload may need the netstandard facade](../product/HOOKLAB.md#no-payload-may-need-the-netstandard-facade)
+and [2026-08-21](../local/evidence/2026-08-21-road1-netstandard-retarget.md).
 
 The intermittent that stood here is closed, and the answer was humbling: an unhandled `IOException`
 thrown by **dgSpy's own test fixture**, whose `File.Delete`/`File.Move` swap collided with the gate
@@ -194,50 +202,45 @@ dependency, and none of this implies IL2CPP or AOT support.
 ## Dream - stop carrying a compiler into the target
 
 Not a road: nothing here is required, and the current arrangement works on every runtime measured,
-including a stripped Unity player. It is written down because the *reason* the payload is 16 MB and
-needs a fallback axis at all is one decision - **Roslyn runs inside the target** - and there are two
-credible ways to unmake it.
+including an unmodified stripped Unity player. It is written down because the *reason* the payload is
+16 MB and needs a fallback axis at all is one decision - **Roslyn runs inside the target**.
 
-Roslyn's external surface is exactly two problems. Seven implementation assemblies
-(`System.Collections.Immutable`, `System.Reflection.Metadata`, `System.Memory`, `System.Buffers`,
+**The blocking half of this dream is spent.** It used to carry two items: remove the `netstandard`
+reference, which no target could be made to satisfy, and shrink the payload. The first is done and
+lives in the product now - see
+[No payload may need the netstandard facade](../product/HOOKLAB.md#no-payload-may-need-the-netstandard-facade).
+What is left is size, which is an optimisation rather than a requirement, and one alternative
+architecture.
+
+**Merge the compiler group.** Roslyn's remaining external surface is seven implementation assemblies -
+`System.Collections.Immutable`, `System.Reflection.Metadata`, `System.Memory`, `System.Buffers`,
 `System.Runtime.CompilerServices.Unsafe`, `System.Threading.Tasks.Extensions`,
-`System.Text.Encoding.CodePages`) - real code, mergeable. And `netstandard, Version=2.0.0.0` - a pure
-type-forward facade, which merging cannot remove because merging keeps the *reference*. There is no
-escape by picking an older Roslyn: 4.9.2 and 5.6.0 ship `netstandard2.0` for everything that is not
-.NET Core, and the last `net45` build was Roslyn 1.0, which is C# 6 from 2015.
+`System.Text.Encoding.CodePages` - real code, and mergeable with ILRepack or a pass over dnlib, which
+dgSpy already depends on. One `HookLab.Compiler.dll` would take twelve bootstrap payloads to about four
+and roughly 16 MB to roughly 5, and the fallback axis for the compiler group would stop being
+necessary. It was deliberately not done with the facade fix: merging 11.3 MB of Roslyn brings
+type-identity collisions, strong-name loss on the merged identity, resource and `InternalsVisibleTo`
+handling, and a probe that must compile against the merged assembly - all risk in exchange for bytes,
+none of it removing a requirement. Do it when payload size is the problem someone actually has.
 
-**Dream A - one self-contained compiler assembly.** Merge Roslyn and its seven dependencies (ILRepack,
-or a pass over dnlib, which dgSpy already depends on), then eliminate the `netstandard` reference by
-rewriting each `[netstandard]Type` typeref to its real net4x home - the forward table is in the NuGet
-reference assembly, so the transform's inputs are pinned and its output is ours to hash into the matrix
-like any other payload. Result: one `HookLab.Compiler.dll` referencing only `mscorlib`, `System` and
-`System.Core`, which every Mono target and every stripped player has. Twelve bootstrap payloads become
-four, roughly 16 MB becomes roughly 5, and the entire fallback axis for the compiler group stops being
-necessary.
-
-Worth knowing before starting: a generated `netstandard` facade is *not* a substitute for the rewrite.
-The reference is strong-named to Microsoft's key, so no assembly we build can satisfy it, and taking
-Mono's or the framework's copy off a machine breaks the rule that every payload byte comes from a
-pinned package or our own build. The rewrite avoids the question entirely by never asking for
-`netstandard`.
-
-**Dream B - compile on the host.** dgSpy compiles the hook in its own process, which already has
+**Compile on the host instead.** dgSpy compiles the hook in its own process, which already has
 everything, and injects only the finished assembly. Removes the compiler group outright rather than
 shrinking it, collapses the CodeDom-versus-Roslyn selector, and makes the payload byte-identical on
 CLR v4, CoreCLR and Mono. The work is references: the host must compile against the *target's* own
 assemblies, which for a player are the DLLs in `Managed\` - exact, on disk, and already enumerated by
 `list_modules`. The existing guards (module MVID, IL SHA-256, signature) keep a stale compile from being
 installed. The real cost is evidence: the compatibility probe's compile stage and every "compiled hook"
-proof on all three runtimes would have to be re-earned.
+proof on all three runtimes would have to be re-earned. That cost is why it was not the way to land a
+facade fix, and it is unchanged - this is a separate product decision, on its own schedule.
 
-A footnote, not a third dream: `Mono.CSharp` - the mcs compiler as a single net4x library - would
+A footnote, not a third option: `Mono.CSharp` - the mcs compiler as a single net4x library - would
 sidestep both, at the price of a C# 6/7-era language version and a compiler nobody maintains. For
 Prefix/Postfix snippets that may well be enough; it is a product-quality decision rather than a
 technical one.
 
 **Neither is urgent.** In-target Roslyn was measured arriving in a real stripped Unity player in 2.9
-seconds of resident work, carrying all twelve payloads because the player supplies none of them. The
-only piece that cannot ship is `netstandard`, and Dream A exists to delete that requirement.
+seconds of resident work, carrying all twelve payloads because the player supplies none of them - and
+now with nothing placed in that player by hand.
 
 ## Road 2 - add x86 debugging and HookLab
 

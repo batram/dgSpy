@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>RetargetNetstandardReferences</AssemblyName>
+    <RootNamespace>RetargetNetstandardReferences</RootNamespace>
+    <!-- This tool is invoked from HookLab.Bootstrap's build, which may itself be running under
+         msbuild.exe. Keeping it self-contained-free and framework-dependent means the Exec below is a
+         plain "dotnet <dll>" with no publish step. -->
+    <UseAppHost>false</UseAppHost>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="dnlib" Version="4.5.0" />
+  </ItemGroup>
+</Project>

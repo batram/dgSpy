@@ -156,5 +156,48 @@ public sealed class PayloadMatrixTests {
 		Assert.Contains("System.Collections.Immutable.dll",error.Message,StringComparison.Ordinal);
 	}
 
+	/// <summary>The property a stripped Unity player needs, asserted against the bytes that ship.
+	///
+	/// <para>A player's Managed directory has nine non-Unity assemblies and no Facades, so
+	/// <c>netstandard, Version=2.0.0.0</c> is not there - and it cannot be supplied, being strong-named to
+	/// Microsoft's key. A payload naming it is a payload a supported target refuses to load, which is what
+	/// the build's retarget step removes. Read from the shipped image rather than from the matrix, because
+	/// the matrix records what the build believed.</para></summary>
+	[Fact]
+	public void No_payload_a_player_must_load_references_the_netstandard_facade() {
+		var image=File.ReadAllBytes(Payload());
+		var matrix=PayloadMatrixVerification.VerifyPayloadFile(Payload());
+		var bootstrapResources=PayloadMatrixVerification.ReadEmbeddedResources(image,"payload");
+		foreach(var entry in matrix.Carried(PayloadCarrier.Bootstrap)) {
+			var references=PayloadMatrixVerification.ReadAssemblyReferences(bootstrapResources[entry.ResourceName]);
+			Assert.DoesNotContain("netstandard",references);
+			// The retarget is only meaningful if it pointed somewhere: the three rewritten payloads must
+			// name the corlib a player actually ships.
+			if(entry.Provenance.StartsWith("build:",StringComparison.Ordinal)) Assert.Contains("mscorlib",references);
+		}
+	}
+
+	[Fact]
+	public void A_build_derived_payload_must_name_its_pinned_inputs() {
+		// "build:" describes bytes dgSpy produced. Allowing it to stand alone would make it a way to
+		// describe bytes of no stated origin at all, which is the one thing provenance is for.
+		var error=Assert.Throws<BootstrapIntegrityException>(()=>PayloadMatrix.Parse(Matrix(("|nuget:c/5.6.0|","|build:SomeTransform|"))));
+		Assert.Contains("must name its pinned inputs",error.Message,StringComparison.Ordinal);
+		// And the well-formed spelling is accepted, so the rejection above is about the missing input.
+		Assert.Equal("build:SomeTransform(nuget:c/5.6.0)",
+			PayloadMatrix.Parse(Matrix(("|nuget:c/5.6.0|","|build:SomeTransform(nuget:c/5.6.0)|")))["Compiler"].Provenance);
+	}
+
+	[Fact]
+	public void The_shipped_compiler_payloads_are_build_derived_from_the_pinned_roslyn() {
+		var matrix=PayloadMatrixVerification.VerifyPayloadFile(Payload());
+		Assert.Equal("build:RetargetNetstandardReferences(nuget:microsoft.codeanalysis.common/5.6.0)",matrix["Microsoft.CodeAnalysis"].Provenance);
+		Assert.Equal("build:RetargetNetstandardReferences(nuget:microsoft.codeanalysis.csharp/5.6.0)",matrix["Microsoft.CodeAnalysis.CSharp"].Provenance);
+		Assert.Equal("build:RetargetNetstandardReferences(project:HookLab/HookLab.Contracts)",matrix["HookLab.Contracts"].Provenance);
+		// Identity is untouched by the rewrite, which is why nothing that binds to Roslyn had to change.
+		Assert.Equal("31bf3856ad364e35",matrix["Microsoft.CodeAnalysis.CSharp"].PublicKeyToken);
+		Assert.Equal(new Version(5,6,0,0),matrix["Microsoft.CodeAnalysis.CSharp"].AssemblyVersion);
+	}
+
 	static string Payload()=>HookLabPayload.Path();
 }

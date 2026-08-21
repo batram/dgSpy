@@ -176,7 +176,9 @@ if one can satisfy its declared identity, so "valid here" and "carried here" sta
 payload and prove it against that payload's own bytes, in both directions - every declared slot must be
 present at the declared identity and digest, and every embedded payload resource must be declared. A
 payload added to the bootstrap or to the resident probe without a matrix entry fails package
-verification rather than shipping unnoticed. See
+verification rather than shipping unnoticed, and so does a payload declared valid on `clrv4` or `mono`
+whose bytes still reference the `netstandard` facade, which a stripped Unity player does not ship and
+dgSpy may not supply. See
 [Resident payload matrix](../product/HOOKLAB.md#resident-payload-matrix) for what the matrix states and
 what it deliberately does not.
 
