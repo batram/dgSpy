@@ -622,22 +622,67 @@ namespace dgSpy.Extension {
 				}
 			}
 
-			async Task<Dictionary<string,string>> SendAsync(RuntimeRecord runtime,string operation,string payload,CancellationToken token) {
+			/// <summary>How long a control-channel round trip may take before the resident is called
+			/// unresponsive.
+			///
+			/// <para>Far above every measured round trip: steady-state install, update and remove are
+			/// 8-90 ms, and the one slow call is the first compiled hook at about 4 s, which carries
+			/// Roslyn's own start-up inside the target.</para></summary>
+			const int ResidentUnresponsiveMilliseconds=30000;
+
+			/// <summary>One request/response round trip with the resident, bounded.
+			///
+			/// <para>The bound is the whole point. <c>Task.Run(..., token)</c> cancels only the scheduling
+			/// of a call, never a call that has already begun, and <c>ProbeConnection.Send</c> then blocks
+			/// in a pipe read that <c>PipeStream</c> cannot time out - so a resident that never answers
+			/// used to hang the host past every deadline it had. Measured: an operation whose own deadline
+			/// was 70 seconds took a 900-second hidden-desktop timeout to end, and reported nothing about
+			/// which call did it.</para>
+			///
+			/// <para>On timeout the connection is disposed, which releases the blocked pipe read rather
+			/// than leaking its thread, and the caller is told which operation went unanswered.</para>
+			///
+			/// <para><b>It does not try to resume the target, and that is a measurement rather than an
+			/// omission.</b> The known cause of a resident going quiet on Mono is the target being
+			/// suspended underneath it: a compiled hook is compiled <em>inside</em> the target, so
+			/// installing one loads an assembly, and the Mono engine suspends the whole VM on an assembly
+			/// load and waits for a Run that dnSpy does not always issue. Resuming from here looks like the
+			/// obvious repair and is worse than the disease - both the engine's own run reconciliation and
+			/// an ordinary manager-level continue killed the target outright, within 80 ms, in separate
+			/// 40-cycle runs. A VM suspended mid-module-load with a pipe command in flight must be left
+			/// alone. The repair belongs in the engine's pending-message pump, not here.</para></summary>
+			async Task<ProbeMessage> ExchangeAsync(RuntimeRecord runtime,string operation,string payload,CancellationToken token) {
 				await runtime.OperationGate.WaitAsync(token).ConfigureAwait(false);
 				try {
 					var request=new ProbeMessage(1,ProbeMessageKind.Request,Guid.NewGuid().ToString("N"),operation,payload,runtime.HooksVersion);
-					var response=await Task.Run(()=>runtime.Connection.Send(request),token).ConfigureAwait(false);
+					// Deliberately not passed the token: cancelling the scheduling of a call that has already
+					// begun achieves nothing, and pretending otherwise is what hid this for so long.
+					var exchange=Task.Run(()=>runtime.Connection.Send(request));
+					if(await Task.WhenAny(exchange,Task.Delay(ResidentUnresponsiveMilliseconds,token)).ConfigureAwait(false)!=exchange) {
+						runtime.Connection.Dispose();
+						throw new RpcException("hooklab_resident_unresponsive","The HookLab resident did not answer '"+operation+"' within "+
+							(ResidentUnresponsiveMilliseconds/1000).ToString(CultureInfo.InvariantCulture)+" seconds. On Mono this usually means the "+
+							"target is suspended and the resident cannot run: check whether the session reports state=paused. Its control channel has "+
+							"been closed; initialize_hooklab can adopt the resident again once the target is running.");
+					}
+					ProbeMessage response;
+					// A broken transport is not an internal error, and saying so is the difference between
+					// "the target went away under this call" and "dgSpy has a bug".
+					try { response=await exchange.ConfigureAwait(false); }
+					catch(Exception ex) when (ex is System.IO.IOException || ex is ObjectDisposedException || ex is UnauthorizedAccessException) {
+						throw new RpcException("hooklab_resident_unreachable","The HookLab resident's control channel failed during '"+operation+"': "+
+							ex.GetType().Name+": "+ex.Message);
+					}
 					if(response.Operation=="error") throw new RpcException("hook_operation_failed","HookLab "+operation+" failed: "+response.PayloadJson);
 					if(response.ExpectedHooksVersion.HasValue) runtime.HooksVersion=response.ExpectedHooksVersion.Value;
-					return ParseReport(response.PayloadJson);
+					return response;
 				}
 				finally { runtime.OperationGate.Release(); }
 			}
-			async Task<string> SendRawAsync(RuntimeRecord runtime,string operation,string payload,CancellationToken token) {
-				await runtime.OperationGate.WaitAsync(token).ConfigureAwait(false);
-				try { var response=await Task.Run(()=>runtime.Connection.Send(new ProbeMessage(1,ProbeMessageKind.Request,Guid.NewGuid().ToString("N"),operation,payload,runtime.HooksVersion)),token).ConfigureAwait(false); if(response.Operation=="error") throw new RpcException("hook_operation_failed","HookLab "+operation+" failed: "+response.PayloadJson); if(response.ExpectedHooksVersion.HasValue) runtime.HooksVersion=response.ExpectedHooksVersion.Value; return response.PayloadJson; }
-				finally { runtime.OperationGate.Release(); }
-			}
+			async Task<Dictionary<string,string>> SendAsync(RuntimeRecord runtime,string operation,string payload,CancellationToken token) =>
+				ParseReport((await ExchangeAsync(runtime,operation,payload,token).ConfigureAwait(false)).PayloadJson);
+			async Task<string> SendRawAsync(RuntimeRecord runtime,string operation,string payload,CancellationToken token) =>
+				(await ExchangeAsync(runtime,operation,payload,token).ConfigureAwait(false)).PayloadJson;
 			void Inventory(RuntimeRecord runtime,string payload) {
 				using(var document=JsonDocument.Parse(payload)) { var root=document.RootElement; if(root.GetProperty("probe_instance_id").GetString()!=runtime.ProbeInstanceId) throw new RpcException("hooklab_resident_identity_mismatch","Authenticated resident reported a different probe identity."); runtime.HooksVersion=root.GetProperty("hooks_version").GetInt64(); var values=new List<ResidentHookRecord>(); foreach(var item in root.GetProperty("compiled_hooks").EnumerateArray()) { var patch=item.GetProperty("patch_id").GetString()!; HookOwnership.TryParse(runtime.ProbeInstanceId,patch,out var controller,out var hookId); values.Add(new ResidentHookRecord(runtime.SessionId,runtime.ProcessId,patch,controller,hookId,item.TryGetProperty("assembly_simple_name",out var assembly)?assembly.GetString()!:String.Empty,item.GetProperty("kind").GetString()!,item.GetProperty("module_mvid").GetString()!,item.GetProperty("metadata_token").GetInt32(),item.GetProperty("declaring_type").GetString()!,item.GetProperty("signature").GetString()!,item.GetProperty("il_sha256").GetString()!,item.GetProperty("source_sha256").GetString()!,item.GetProperty("revision").GetInt32(),item.GetProperty("enabled").GetBoolean())); } lock(gate) { foreach(var key in residentHooks.Where(value=>value.Value.SessionId==runtime.SessionId&&value.Value.ProcessId==runtime.ProcessId).Select(value=>value.Key).ToArray()) residentHooks.Remove(key); foreach(var value in values) residentHooks[value.Key]=value; }
 					// TryGetProperty, not GetProperty: a resident from before this existed reports no such

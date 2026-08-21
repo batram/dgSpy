@@ -261,13 +261,31 @@ backend table:
   all. The resident now releases its endpoint on `ProcessExit`, on the runtimes that need it. For a game
   this is the difference between a window that closes and one that does not.
 
-#### Known intermittent on Mono
+#### Known intermittent on Mono: the suspended target
 
-`remove_hook` has hung once in six runs of the live gate against Unity's embedded Mono 6.13, after every
-other step of the lifecycle had passed. It is not the deadlock class above - removal is a command over
-the resident's control pipe with no evaluation in it - and it has not been seen on mono-project's 6.12.
-Recorded here rather than left to be rediscovered: the rest of the lifecycle is repeatable, this one
-step is not yet, and it needs its own diagnostic pass.
+A control-channel command sometimes finds the target suspended and unable to answer. It affects both
+Mono builds - a stress loop that installs, updates and removes a compiled hook as fast as it can hits it
+every two to seven cycles on mono-project 6.12 and on Unity's 6.13 alike - and roughly one live gate run
+in six.
+
+The mechanism is measured, not inferred. A compiled hook is compiled **inside** the target, so
+installing or updating one loads an assembly; the Mono engine suspends the whole VM on an assembly load
+and waits for a Run, which dnSpy issues as it handles the module-load message. Sometimes it does not.
+The target then sits at `state=paused` with even its own unrelated threads frozen, and the resident
+cannot answer because it is not running.
+
+**Do not try to resume it from outside.** Both obvious repairs - the engine's own run reconciliation,
+and an ordinary manager-level continue - killed the target outright within 80 ms, in separate 40-cycle
+runs. A VM suspended mid-module-load with a control command in flight has to be left alone; the repair
+belongs in the engine's pending-message pump.
+
+What dgSpy does instead is refuse to hang. Every control-channel round trip is bounded at 30 seconds -
+far above the measured 8-90 ms steady state and the ~4 s first compile - and a resident that does not
+answer produces `hooklab_resident_unresponsive`, naming the operation and pointing at the paused
+session, with the target left alive. Before that bound existed the host waited past every deadline it
+had, because `Task.Run(..., token)` cancels only a call's scheduling and `PipeStream` cannot time out a
+read: one such hang took a 900-second harness timeout to end and said nothing about which call caused
+it.
 
 A range is a claim that a packaged live hook lifecycle has actually run there. Adding one needs its own
 evidence, not an expectation that it should work.

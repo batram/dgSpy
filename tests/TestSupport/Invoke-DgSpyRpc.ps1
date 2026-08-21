@@ -21,9 +21,17 @@ function Invoke-DgSpyRpc {
 	if ([string]::IsNullOrWhiteSpace($HostId)) { $HostId = $env:DGSPY_HOST_ID }
 
 	$client = [Net.Sockets.TcpClient]::new()
+	# A receive timeout, so a host that never answers fails this call instead of hanging the batch.
+	# DeadlineSeconds was advisory until now: it is sent to the host, and the client then blocked on
+	# ReadLine forever. A wedged extension therefore burned a whole hidden-desktop timeout - measured at
+	# 900 s against an operation whose own deadline was 70 - and reported nothing about which call did
+	# it. The margin is for the host's own deadline handling to answer first, so an operation that times
+	# out server-side still returns its named error rather than being cut off here.
+	$client.ReceiveTimeout = ($DeadlineSeconds + 15) * 1000
 	$client.Connect('127.0.0.1', $RpcPort)
 	try {
 		$stream = $client.GetStream()
+		$stream.ReadTimeout = $client.ReceiveTimeout
 		$reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8, $false, 4096, $true)
 		$writer = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false), 4096, $true)
 		$writer.AutoFlush = $true

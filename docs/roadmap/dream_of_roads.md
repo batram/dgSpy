@@ -112,7 +112,8 @@ under a Mono the caller supplies, driven through the whole product lifecycle - a
 arrival by debugger evaluation, the resident's own control channel, a Roslyn-compiled hook installed by
 the pinned Harmony, live behaviour change, an atomic revision replacement, removal restoring the
 original, detach, and a clean exit. 22 checks. Green on mono-project 6.12 x64 three times out of three
-and on Unity 2021.3's embedded 6.13 with its byte-identical player BCL five times out of six.
+and on Unity 2021.3's embedded 6.13 with its byte-identical player BCL five times out of six - the sixth
+being item 1 below, which now fails in 30 seconds by name instead of hanging the run.
 
 Deliberately the general case first, with Unity as a variant of it, rather than the other way round.
 Mono is the runtime; a player embeds it. `tests\run-unity-hooklab-smoke.ps1` keeps the one thing a
@@ -142,10 +143,14 @@ See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes),
 
 What remains, in this order:
 
-1. **The one intermittent.** `remove_hook` hung once in six runs against Unity's 6.13, after every other
-   step had passed, and has not been seen on 6.12. Removal is a command over the resident's control pipe
-   with no evaluation in it, so it is not the deadlock class above. It needs its own diagnostic pass
-   before this leg can be called repeatable.
+1. **The missing Run after a module load.** Chased, characterised, and not yet fixed. A compiled hook is
+   compiled inside the target, so installing one loads an assembly; the Mono engine suspends the VM on
+   assembly load and waits for a Run that dnSpy usually - not always - issues. The target then sits at
+   `state=paused` with its own unrelated threads frozen and the resident unable to answer. Both builds,
+   every two to seven cycles under stress. Resuming from the host is not the repair: the engine's run
+   reconciliation *and* an ordinary continue each killed the target within 80 ms. The fix belongs in
+   `DbgEngineImpl.OnDebuggerEventsCore`'s pending-message pump. Meanwhile the host no longer hangs -
+   round trips are bounded and report `hooklab_resident_unresponsive` with the target left alive.
 2. Extend the packaged and hidden-desktop UCH live gates through retirement against a real player rather
    than a console host on its runtime.
 
