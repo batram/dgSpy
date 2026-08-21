@@ -74,6 +74,16 @@ something called `System.Memory`" is the wrong question - mono-project's Mono ha
 that cannot satisfy the reference - and asking it by simple name would *cause* that unusable assembly
 to load, creating the very duplicate this exists to prevent.
 
+An answer *older* than the declared identity is reported, not refused, and the distinction matters. For
+a carried slot an older assembly is refused, because there our bytes are the ones in play. On a fallback
+the binder has already chosen the runtime's copy, so refusing protects nothing and only breaks a target
+that works - measured on mono-project's Mono, which answers a request for `System.Numerics.Vectors`
+4.1.6.0 with its own 4.0.0.0 and has satisfied the pinned Roslyn that way for as long as that leg has
+existed. The same runtime refuses its own too-old `System.Memory` and lets the embedded copy serve, so
+any rule treating the two alike would be wrong about one of them. The deferral line says which version
+answered and whether it was older than the reference, which is what makes a later `MissingMethodException`
+readable instead of mysterious.
+
 **Deferral is never silent.** Every start reports `payload_deferrals`, empty when nothing deferred and
 otherwise naming each slot and the full identity that answered instead. "It worked" is not evidence of
 which copy was used, and on a runtime whose facades differ between builds that distinction is the whole

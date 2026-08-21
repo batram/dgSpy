@@ -103,7 +103,7 @@ public sealed class PayloadMatrixTests {
 	[Fact]
 	public void The_shipped_payload_declares_exactly_what_it_carries() {
 		var matrix=PayloadMatrixVerification.VerifyPayloadFile(Payload());
-		Assert.Equal(new[]{"HookLab.Contracts","HookLab.Probe.CorDebug","Microsoft.CodeAnalysis","Microsoft.CodeAnalysis.CSharp","System.Collections.Immutable","System.Runtime.CompilerServices.Unsafe","System.Memory","System.Buffers","System.Reflection.Metadata","Harmony.Desktop","Harmony.CoreClr"},
+		Assert.Equal(new[]{"HookLab.Contracts","HookLab.Probe.CorDebug","Microsoft.CodeAnalysis","Microsoft.CodeAnalysis.CSharp","System.Collections.Immutable","System.Runtime.CompilerServices.Unsafe","System.Memory","System.Buffers","System.Numerics.Vectors","System.Threading.Tasks.Extensions","System.Text.Encoding.CodePages","System.Reflection.Metadata","Harmony.Desktop","Harmony.CoreClr"},
 			matrix.Entries.Select(entry=>entry.Id).ToArray());
 		// The runtime axis the matrix exists to make explicit: one pinned patch engine per family, and
 		// neither of them visible anywhere before this manifest described them.
@@ -112,10 +112,13 @@ public sealed class PayloadMatrixTests {
 		Assert.Equal("net6.0",matrix["Harmony.CoreClr"].TargetFramework);
 		Assert.Equal(PayloadRuntimes.CoreClr,matrix["Harmony.CoreClr"].Runtimes);
 		Assert.All(matrix.Entries,entry=>Assert.Equal(64,entry.Sha256.Length));
-		// The fallback axis, in the shipped matrix: exactly the two facades whose presence differs between
-		// Mono builds, deferring on Mono only. Naming them here means widening the set - or quietly making
-		// one of dgSpy's own payloads deferrable - has to be a deliberate edit to this list.
-		Assert.Equal(new[]{"System.Memory","System.Buffers"},
+		// The fallback axis, in the shipped matrix: exactly the facades whose presence differs between Mono
+		// builds, deferring on Mono only. Naming them here means widening the set - or quietly making one
+		// of dgSpy's own payloads deferrable - has to be a deliberate edit to this list.
+		//
+		// The last three were added when a *shipped* Unity player turned out to carry no Facades directory
+		// at all, which the editor profile does; every Mono build before that had supplied them.
+		Assert.Equal(new[]{"System.Memory","System.Buffers","System.Numerics.Vectors","System.Threading.Tasks.Extensions","System.Text.Encoding.CodePages"},
 			matrix.Entries.Where(entry=>entry.Fallback!=PayloadRuntimes.None).Select(entry=>entry.Id).ToArray());
 		Assert.All(matrix.Entries.Where(entry=>entry.Fallback!=PayloadRuntimes.None),entry=>{
 			Assert.Equal(PayloadRuntimes.Mono,entry.Fallback);

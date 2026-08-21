@@ -133,6 +133,42 @@
         <AsmName>System.Buffers</AsmName><AsmVersion>4.0.5.0</AsmVersion><AsmToken>cc7b13ffcd2ddd51</AsmToken>
         <Provenance>nuget:system.buffers/4.6.1</Provenance><Requires></Requires>
       </PayloadMatrixEntry>
+      <!-- The three facades a *shipped* Unity player turns out to lack, added with the evidence the
+           comment above asked for.
+
+           Measured 2026-08-21 against a real uch-debug-target player: a player's Managed directory holds
+           nine non-Unity assemblies - mscorlib, System, System.Core, System.Xml, System.Numerics,
+           System.Configuration, System.Security, Mono.Security, Assembly-CSharp - and no Facades
+           directory at all. Unity ships only what the game references. That is a strictly smaller set
+           than the editor's unityjit-win32 profile, which does have Facades, so every earlier "Unity"
+           measurement was taken against a richer runtime than any player has.
+
+           Fallback on mono for the same reason System.Memory is: mono-project 6.12 and the editor
+           profile supply all three, and deferring to a runtime's own copy is what keeps one of each in
+           the process. Not declared on clrv4 or coreclr, which supply them and never reach these rows. -->
+      <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.numerics.vectors\4.6.1\lib\net462\System.Numerics.Vectors.dll">
+        <PayloadId>System.Numerics.Vectors</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
+        <ResourceName>HookLab.Bootstrap.Payloads.System.Numerics.Vectors.dll</ResourceName>
+        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>mono</Runtimes><Fallback>mono</Fallback>
+        <AsmName>System.Numerics.Vectors</AsmName><AsmVersion>4.1.6.0</AsmVersion><AsmToken>b03f5f7f11d50a3a</AsmToken>
+        <Provenance>nuget:system.numerics.vectors/4.6.1</Provenance><Requires></Requires>
+      </PayloadMatrixEntry>
+      <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.threading.tasks.extensions\4.6.3\lib\net462\System.Threading.Tasks.Extensions.dll">
+        <PayloadId>System.Threading.Tasks.Extensions</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
+        <ResourceName>HookLab.Bootstrap.Payloads.System.Threading.Tasks.Extensions.dll</ResourceName>
+        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>mono</Runtimes><Fallback>mono</Fallback>
+        <AsmName>System.Threading.Tasks.Extensions</AsmName><AsmVersion>4.2.4.0</AsmVersion><AsmToken>cc7b13ffcd2ddd51</AsmToken>
+        <Provenance>nuget:system.threading.tasks.extensions/4.6.3</Provenance>
+        <Requires>System.Runtime.CompilerServices.Unsafe</Requires>
+      </PayloadMatrixEntry>
+      <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.text.encoding.codepages\8.0.0\lib\net462\System.Text.Encoding.CodePages.dll">
+        <PayloadId>System.Text.Encoding.CodePages</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
+        <ResourceName>HookLab.Bootstrap.Payloads.System.Text.Encoding.CodePages.dll</ResourceName>
+        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>mono</Runtimes><Fallback>mono</Fallback>
+        <AsmName>System.Text.Encoding.CodePages</AsmName><AsmVersion>8.0.0.0</AsmVersion><AsmToken>b03f5f7f11d50a3a</AsmToken>
+        <Provenance>nuget:system.text.encoding.codepages/8.0.0</Provenance>
+        <Requires>System.Memory,System.Runtime.CompilerServices.Unsafe</Requires>
+      </PayloadMatrixEntry>
       <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.reflection.metadata\10.0.1\lib\net462\System.Reflection.Metadata.dll">
         <PayloadId>System.Reflection.Metadata</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.System.Reflection.Metadata.dll</ResourceName>

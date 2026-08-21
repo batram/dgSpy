@@ -266,7 +266,10 @@ namespace HookLab.Bootstrap.Tests {
 			// Carried by the probe, so deliberately not served by this resolver - but described, which is
 			// the whole difference between a payload that ships and a payload that is accounted for.
 			Assert.All(matrix.Carried(PayloadCarrier.Probe), entry => Assert.Equal(PayloadRole.PatchEngine, entry.Role));
-			Assert.Equal(9, matrix.Carried(PayloadCarrier.Bootstrap).Count());
+			// Twelve since a shipped Unity player turned out to carry no BCL facades at all. The three that
+			// took it there are declared on mono only, which is why the CLR v4 load count in the test
+			// below is still nine: what a runtime never claims, it never loads.
+			Assert.Equal(12, matrix.Carried(PayloadCarrier.Bootstrap).Count());
 			Assert.Equal("nuget:lib.harmony/2.4.2", matrix["Harmony.Desktop"].Provenance);
 			Assert.Equal("project:HookLab/HookLab.Probe.CorDebug", matrix["HookLab.Probe.CorDebug"].Provenance);
 		}

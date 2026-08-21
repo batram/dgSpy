@@ -113,7 +113,10 @@ try {
 	Assert-That 'the harness loop reaches the breakpoint' (-not $stop.timed_out -and @($stop.events).Count -gt 0)
 
 	Write-Section 'initialize the resident (arrival by debugger evaluation)'
-	$initialized = Invoke-MutatingTool -Name 'initialize_hooklab' -Arguments @{ session_id = $script:activeSessionId; process_id = $processId }
+	# Arrival on a real player is the longest call in the suite: it stages a 16 MB payload, byte-loads it
+	# and Roslyn inside the target, and then waits out its own 20 s completion deadline. The client's
+	# ordinary 25 s HTTP wait expires while the operation is still running, which reads as a hang.
+	$initialized = Invoke-MutatingTool -Name 'initialize_hooklab' -Arguments @{ session_id = $script:activeSessionId; process_id = $processId } -TimeoutSeconds 180
 	Write-Host ("  initialize: " + ($initialized | ConvertTo-Json -Depth 4 -Compress))
 	Assert-That 'the resident arrived and its control channel verified' ($initialized.initialized -eq $true) ($initialized | ConvertTo-Json -Depth 4 -Compress)
 

@@ -143,10 +143,27 @@ See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes),
 
 What remains:
 
-1. Extend the packaged and hidden-desktop UCH live gates through retirement against a real player rather
-   than a console host on its runtime. `tests\run-unity-hooklab-smoke.ps1` is written against the real
-   tools and updated for a supported Mono, but has never been executed - it needs a player, and a Unity
-   editor and licence to build one. It parses; nothing more is claimed for it.
+1. **Finish arrival on a real player.** Measured 2026-08-21 against a live `uch-debug-target` player,
+   which is the first time any of this ran outside a console fixture, and it moved the boundary twice.
+
+   A shipped player's `Managed` directory holds nine non-Unity assemblies and **no `Facades` directory
+   at all** - Unity ships only what the game references. The editor's `unityjit-win32` profile *does*
+   have Facades, so every earlier "Unity" measurement was taken against a richer runtime than any player
+   has, and the claim that the two are byte-identical is wrong in exactly that way. Three more fallback
+   rows followed (`System.Numerics.Vectors`, `System.Threading.Tasks.Extensions`,
+   `System.Text.Encoding.CodePages`), and on a player all twelve payloads are carried with
+   `payload_deferrals` empty - the fallback axis behaving exactly as designed.
+
+   With those, and with `netstandard` supplied to the player by hand, **the resident arrives: `status=ok`
+   in 2.9 seconds**, patch engine loaded, control pipe published. Two things remain before this leg can
+   be a gate:
+
+   - `netstandard` cannot be shipped - see the dream below, which removes the requirement rather than
+     satisfying it.
+   - `initialize_hooklab` still returns `deadline_exceeded` against its 130 s bound **even though the
+     resident finished in 4.3 s and wrote a healthy completion report**. So the remaining problem is on
+     the host side, after a successful arrival, and it is a fresh, well-scoped bug rather than anything
+     to do with Mono payloads.
 
 The intermittent that stood here is closed, and the answer was humbling: an unhandled `IOException`
 thrown by **dgSpy's own test fixture**, whose `File.Delete`/`File.Move` swap collided with the gate
@@ -165,6 +182,54 @@ it, kept because the next thing in this area will need it too.
 Domain reloads, generics, inlining, finalizers, reconnect/adoption, and unsupported Mono variants still
 need explicit supported or refused results. No mod loader - UCH, BepInEx, or another - may become a
 dependency, and none of this implies IL2CPP or AOT support.
+
+## Dream - stop carrying a compiler into the target
+
+Not a road: nothing here is required, and the current arrangement works on every runtime measured,
+including a stripped Unity player. It is written down because the *reason* the payload is 16 MB and
+needs a fallback axis at all is one decision - **Roslyn runs inside the target** - and there are two
+credible ways to unmake it.
+
+Roslyn's external surface is exactly two problems. Seven implementation assemblies
+(`System.Collections.Immutable`, `System.Reflection.Metadata`, `System.Memory`, `System.Buffers`,
+`System.Runtime.CompilerServices.Unsafe`, `System.Threading.Tasks.Extensions`,
+`System.Text.Encoding.CodePages`) - real code, mergeable. And `netstandard, Version=2.0.0.0` - a pure
+type-forward facade, which merging cannot remove because merging keeps the *reference*. There is no
+escape by picking an older Roslyn: 4.9.2 and 5.6.0 ship `netstandard2.0` for everything that is not
+.NET Core, and the last `net45` build was Roslyn 1.0, which is C# 6 from 2015.
+
+**Dream A - one self-contained compiler assembly.** Merge Roslyn and its seven dependencies (ILRepack,
+or a pass over dnlib, which dgSpy already depends on), then eliminate the `netstandard` reference by
+rewriting each `[netstandard]Type` typeref to its real net4x home - the forward table is in the NuGet
+reference assembly, so the transform's inputs are pinned and its output is ours to hash into the matrix
+like any other payload. Result: one `HookLab.Compiler.dll` referencing only `mscorlib`, `System` and
+`System.Core`, which every Mono target and every stripped player has. Twelve bootstrap payloads become
+four, roughly 16 MB becomes roughly 5, and the entire fallback axis for the compiler group stops being
+necessary.
+
+Worth knowing before starting: a generated `netstandard` facade is *not* a substitute for the rewrite.
+The reference is strong-named to Microsoft's key, so no assembly we build can satisfy it, and taking
+Mono's or the framework's copy off a machine breaks the rule that every payload byte comes from a
+pinned package or our own build. The rewrite avoids the question entirely by never asking for
+`netstandard`.
+
+**Dream B - compile on the host.** dgSpy compiles the hook in its own process, which already has
+everything, and injects only the finished assembly. Removes the compiler group outright rather than
+shrinking it, collapses the CodeDom-versus-Roslyn selector, and makes the payload byte-identical on
+CLR v4, CoreCLR and Mono. The work is references: the host must compile against the *target's* own
+assemblies, which for a player are the DLLs in `Managed\` - exact, on disk, and already enumerated by
+`list_modules`. The existing guards (module MVID, IL SHA-256, signature) keep a stale compile from being
+installed. The real cost is evidence: the compatibility probe's compile stage and every "compiled hook"
+proof on all three runtimes would have to be re-earned.
+
+A footnote, not a third dream: `Mono.CSharp` - the mcs compiler as a single net4x library - would
+sidestep both, at the price of a C# 6/7-era language version and a compiler nobody maintains. For
+Prefix/Postfix snippets that may well be enough; it is a product-quality decision rather than a
+technical one.
+
+**Neither is urgent.** In-target Roslyn was measured arriving in a real stripped Unity player in 2.9
+seconds of resident work, carrying all twelve payloads because the player supplies none of them. The
+only piece that cannot ship is `netstandard`, and Dream A exists to delete that requirement.
 
 ## Road 2 - add x86 debugging and HookLab
 

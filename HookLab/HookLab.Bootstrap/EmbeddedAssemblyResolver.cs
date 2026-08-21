@@ -315,14 +315,25 @@ namespace HookLab.Bootstrap {
 				return new PayloadBinding(declared, Describe(bound), LocationOf(bound), true);
 
 			var supplied = bound.GetName();
-			// Lower than declared should be unreachable - a binder that answers a request with something
-			// that cannot satisfy it has already broken its own contract - but a MissingMethodException
-			// deep inside Roslyn is the shape this failure takes when it is not caught here, so it is.
-			if (entry.ExpectedVersion != null && (supplied.Version == null || supplied.Version < entry.ExpectedVersion))
-				throw new BootstrapIntegrityException("Fallback payload dependency '" + declared + "' was satisfied by " + supplied.FullName +
-					", which is older than the identity that was requested. Refusing to run compiled hooks against it.");
+			// An older answer is reported, not refused, and the distinction is the point of a fallback.
+			//
+			// Refusing is right for a *carried* slot - see ValidateVersion - because there our bytes are
+			// the ones in play. Here the binder has already chosen the runtime's copy, so our bytes are
+			// not a remedy: whatever we carry, payload code gets what the binder just returned. Refusing
+			// would only convert a target that works into one that does not.
+			//
+			// Measured on mono-project Mono 6.12, which answers a request for System.Numerics.Vectors
+			// 4.1.6.0 with its own 4.0.0.0 - and has satisfied the pinned Roslyn that way for as long as
+			// that leg has existed. Mono is lax for that assembly and strict for System.Memory, where it
+			// refuses its own 4.0.1.1 and lets the embedded copy serve; a rule that treated the two the
+			// same would have to be wrong about one of them.
+			//
+			// So the version becomes evidence rather than a verdict: the deferral names what answered and
+			// says when it is older than the reference, which is what an operator needs to read a later
+			// MissingMethodException correctly.
+			var older = entry.ExpectedVersion != null && (supplied.Version == null || supplied.Version < entry.ExpectedVersion);
 			manifest.Remove(entry.Name);
-			deferrals[entry.Name] = supplied.FullName;
+			deferrals[entry.Name] = supplied.FullName + (older ? " (older than the declared " + entry.ExpectedVersion + ")" : "");
 			return new PayloadBinding(declared, supplied.FullName, LocationOf(bound), false, true);
 		}
 

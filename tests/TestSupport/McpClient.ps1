@@ -59,13 +59,13 @@ function Write-Section {
 }
 
 function Invoke-Mcp {
-	param([string]$Method, [hashtable]$Parameters, [hashtable]$Headers, [switch]$Raw)
+	param([string]$Method, [hashtable]$Parameters, [hashtable]$Headers, [switch]$Raw, [int]$TimeoutSeconds = 25)
 	$script:requestId++
 	$body = @{ jsonrpc = '2.0'; id = $script:requestId; method = $Method }
 	if ($null -ne $Parameters) { $body.params = $Parameters }
 	if ($null -eq $Headers) { $Headers = @{ 'X-dgSpy-Token' = $script:mcpToken } }
 	$response = Invoke-RestMethod -Uri ($script:mcpGatewayUrl + '/mcp') -Method Post -ContentType 'application/json' `
-		-Headers $Headers -TimeoutSec 25 -Body ($body | ConvertTo-Json -Depth 12)
+		-Headers $Headers -TimeoutSec $TimeoutSeconds -Body ($body | ConvertTo-Json -Depth 12)
 	if ($Raw) { return $response }
 	if ($null -ne $response.error) { throw ('MCP error: ' + ($response.error | ConvertTo-Json -Compress)) }
 	return $response.result
@@ -76,12 +76,16 @@ function Invoke-Mcp {
 function Invoke-Tool {
 	# -AsText returns the raw JSON. Prefer it for emptiness checks: ConvertFrom-Json collapses an
 	# empty array in ways that make .Count unreliable in Windows PowerShell.
-	param([string]$Name, [hashtable]$Arguments, [switch]$ExpectError, [switch]$AsText)
+	# -TimeoutSeconds raises the HTTP wait for one call. The 25 s default suits ordinary tools and is far
+	# too short for a few: initialize_hooklab alone has a 20 s completion deadline of its own before any
+	# staging or payload load, so on a real Unity player it timed out client-side while the operation was
+	# still running - which reads as a product hang and is not one.
+	param([string]$Name, [hashtable]$Arguments, [switch]$ExpectError, [switch]$AsText, [int]$TimeoutSeconds = 25)
 	# The arguments are what makes a tool error actionable: "get_frame failed: thread_id is required"
 	# reads as a product bug until you can see the harness passed thread_id as null.
 	$rendered = "$Name($($Arguments | ConvertTo-Json -Compress -Depth 6))"
 	$script:lastCall = $rendered
-	$result = Invoke-Mcp -Method 'tools/call' -Parameters @{ name = $Name; arguments = $Arguments }
+	$result = Invoke-Mcp -Method 'tools/call' -Parameters @{ name = $Name; arguments = $Arguments } -TimeoutSeconds $TimeoutSeconds
 	if ($ExpectError) {
 		if (-not $result.isError) { throw "Tool $rendered was expected to fail but succeeded, returning: $($result.content[0].text)" }
 		return $result.content[0].text
@@ -99,7 +103,7 @@ function Invoke-Tool {
 # visible in the live harness without duplicating it at every call site. Tests that intentionally
 # exercise missing or stale guards must continue to call Invoke-Tool directly.
 function Invoke-MutatingTool {
-	param([string]$Name, [hashtable]$Arguments, [switch]$ExpectError, [switch]$AsText)
+	param([string]$Name, [hashtable]$Arguments, [switch]$ExpectError, [switch]$AsText, [int]$TimeoutSeconds = 25)
 	$callArguments = @{} + $Arguments
 	if (-not $callArguments.ContainsKey('session_id')) {
 		if ([string]::IsNullOrWhiteSpace($script:activeSessionId)) { throw "Mutation $Name has no session_id and no active smoke session." }
@@ -114,7 +118,7 @@ function Invoke-MutatingTool {
 	$stateProperty = $guard.Substring('expected_'.Length)
 	if (-not $callArguments.ContainsKey($guard)) { $callArguments[$guard] = $state.$stateProperty }
 	if ($required -contains 'expected_stop_id' -and -not $callArguments.ContainsKey('expected_stop_id')) { $callArguments.expected_stop_id = $state.stop_id }
-	return Invoke-Tool -Name $Name -Arguments $callArguments -ExpectError:$ExpectError -AsText:$AsText
+	return Invoke-Tool -Name $Name -Arguments $callArguments -ExpectError:$ExpectError -AsText:$AsText -TimeoutSeconds $TimeoutSeconds
 }
 
 function Wait-Until {
