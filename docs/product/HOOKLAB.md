@@ -27,17 +27,79 @@ enters a target. Each entry records:
 - the slot id and its role - contracts, resident, compiler, compiler-support, or patch engine;
 - the carrier that holds the bytes: the bootstrap, or the resident probe nested inside it;
 - the embedded resource name, target framework, and architecture;
-- the runtime families the payload is valid on - `clrv4`, `coreclr`, `unity`, or any combination;
+- the runtime families the payload is valid on - `clrv4`, `coreclr`, `mono`, or any combination;
+- the families on which the payload is a **fallback** rather than an insistence - see below;
 - the exact assembly name, version, and public key token;
 - provenance - the project or the pinned NuGet package and version it came from;
 - the other slots it needs at run time, and its SHA-256.
 
-The runtime axis is real, not decorative: the patch engine is `net48` Harmony on CLR v4 and Unity and
-`net6.0` Harmony on CoreCLR, compilation is CodeDom on CLR v4 and Roslyn on CoreCLR and Unity, and two
-Roslyn support slots are valid on CLR v4 and Unity but not on CoreCLR, which supplies them itself. The
-matrix is where those differences are stated once, instead of being recoverable only by reading the
-loaders that branch on them - and the resident honours them, serving only the slots declared valid on
-the runtime it is living in.
+The runtime axis is real, not decorative: the patch engine is `net48` Harmony on CLR v4 and Mono and
+`net6.0` Harmony on CoreCLR, compilation is CodeDom on CLR v4 and Roslyn on CoreCLR and Mono, and
+several Roslyn support slots are valid on CLR v4 and Mono but not on CoreCLR, which supplies them
+itself. The matrix is where those differences are stated once, instead of being recoverable only by
+reading the loaders that branch on them - and the resident honours them, serving only the slots
+declared valid on the runtime it is living in.
+
+### Carried, or a fallback for what the runtime lacks
+
+A payload set is a fallback for what a runtime does not supply. **What a runtime lacks is a property of
+a build, not of a family**, so the family flags alone could not express it - and stating it statically
+would be wrong whichever way it was stated:
+
+| | `System.Memory` | `System.Buffers` |
+| --- | --- | --- |
+| mono-project Mono 6.12 x64 | 4.0.1.1 - older than the pinned Roslyn's reference | absent |
+| the Mono a Unity 2021.3 player embeds | 4.0.99.0, in `Facades` | 4.0.99.0, in `Facades` |
+
+Not carrying them broke mono-project's Mono. Carrying them broke Unity's, and not by being missing:
+two `System.Memory` assemblies in one AppDomain make `ReadOnlySpan<T>` two distinct types, so Roslyn's
+own `ImmutableArray.Create<T>(ReadOnlySpan<T>)` overload became unfindable and every compiled hook
+failed. Nothing was wrong with either assembly. They were simply not the same type any more.
+
+So the matrix carries a second, narrower runtime axis. A slot may declare a **fallback set**: a subset
+of the families it is valid on, on which it defers to a runtime-supplied assembly *if one can satisfy
+the identity payload code actually references*. On such a family the resident asks the CLR binder for
+the payload's exact declared identity **before** byte-loading anything, and the answer decides:
+
+- **Nothing can satisfy it.** Ordinary probing fails, the CLR raises `AssemblyResolve` - which it only
+  ever does as a last resort - and the resident serves its own digest-verified bytes, through the same
+  code as a slot that was never a fallback. This is not a deferral, and the report says `carried`.
+- **The runtime supplies one.** The embedded copy is never loaded, *and its manifest entry is removed*,
+  so no later bind can be answered with a duplicate. A manifest entry is a standing promise to answer,
+  and a promise to answer with a second copy of an assembly already in the domain is the defect, not a
+  spare tyre.
+
+The question is deliberately the exact identity and not the simple name. "Does this runtime have
+something called `System.Memory`" is the wrong question - mono-project's Mono has one, at a version
+that cannot satisfy the reference - and asking it by simple name would *cause* that unusable assembly
+to load, creating the very duplicate this exists to prevent.
+
+**Deferral is never silent.** Every start reports `payload_deferrals`, empty when nothing deferred and
+otherwise naming each slot and the full identity that answered instead. "It worked" is not evidence of
+which copy was used, and on a runtime whose facades differ between builds that distinction is the whole
+question. The compatibility probe surfaces the same line per leg.
+
+#### Why this does not weaken provenance
+
+Deferral is confined by the parser to the `compiler-support` role, and a matrix that marks any other
+role a fallback is refused at parse time, in the resident and in the packaging tool alike. dgSpy's
+contracts, its resident, its pinned compiler and its patch engine - the assemblies whose provenance the
+whole bootstrap exists to guarantee - can never be satisfied by something found in the target. A
+compiler-support slot is a different kind of thing: a versioned BCL facade whose only correct number of
+copies in a process is one.
+
+Within that role the deferral is still not opportunistic discovery. The resident never enumerates the
+target's filesystem, never widens a search path, and never accepts an assembly by name: it asks the
+binder one question, using the identity the matrix declares - name, version and public key token, the
+same triple the packaging tool proves against the shipped bytes in both directions - and refuses
+anything answering below the declared version rather than running compiled hooks against it. What it
+defers to is, by construction, exactly what payload code's own references would have bound to a moment
+later anyway. The change is that exactly one copy is loaded and the report names it.
+
+`clrv4` is deliberately not a fallback family for these slots even though the same reasoning would fit:
+.NET Framework 4.8 has neither facade, no target has ever been measured supplying one, and the CLR v4
+leg must not acquire a conditional on an unmeasured hypothesis. CoreCLR does not declare these rows at
+all. Both take a code path with no new branch in it.
 
 Three things verify it, at different times and against different evidence:
 
@@ -54,8 +116,12 @@ A modern .NET target framework may not claim `clrv4`; the reverse is deliberatel
 the pinned `net462` `System.Collections.Immutable` really does load in a CoreCLR target.
 
 Note what the matrix does not claim. It records that a payload is *valid* on a runtime family, not that
-every payload is *used* on it, and it is not a substitute for the packaged live hook lifecycle gates -
-it fails a wrong payload set earlier and by name, not instead.
+every payload is *used* on it - and on a fallback family, not even that it is *loaded*; only a live run's
+`payload_deferrals` can say that. It is not a substitute for the packaged live hook lifecycle gates
+either: it fails a wrong payload set earlier and by name, not instead. Three kinds of evidence stay
+distinct here, and the fallback axis is exactly where they diverge. Source coverage says the rule is
+implemented and its boundary asserted; package verification says the shipped bytes are the declared
+ones; only running on a particular runtime build says which copy that build actually supplied.
 
 ## Compilation boundary
 
@@ -133,8 +199,8 @@ unsupported: the resident arrives through a single debugger evaluation, and plac
 needs an owned internal breakpoint, which only the CorDebug engine implements. Adding the Mono
 counterpart is engine work with its own evidence to earn.
 
-Everything downstream of arrival is proved on Unity's Mono, and ships: the compatibility probe's
-`unity` leg runs a complete lifecycle - Roslyn compiles, the pinned desktop Harmony patches, behavior
+Everything downstream of arrival is proved on Mono, and ships: the compatibility probe's
+`mono` leg runs a complete lifecycle - Roslyn compiles, the pinned desktop Harmony patches, behavior
 changes, events arrive, removal restores, the resident retires, and the player survives. Three earlier
 reasons a Mono resident was thought impossible are gone:
 
@@ -148,15 +214,18 @@ reasons a Mono resident was thought impossible are gone:
   the listener on the runtimes that need it and reports `listener_teardown`; CLR v4 and CoreCLR take
   the `not_required` path and are unchanged.
 - Compilation on Mono took the CodeDom path, because the selector keys on the corlib name and Mono's is
-  also `mscorlib` - and Mono's CodeDom shells out to an `mcs` no player ships. Unity now selects the
-  payload's own Roslyn, which needed two more declared slots: `System.Reflection.Metadata` and
+  also `mscorlib` - and Mono's CodeDom shells out to an `mcs` no player ships. Mono now selects the
+  payload's own Roslyn, which needed more declared slots: `System.Reflection.Metadata` and
   `System.Runtime.CompilerServices.Unsafe`, which CoreCLR has in its shared framework and CLR v4 never
   asked for because it never loads Roslyn.
 
-`unity` is a real family in the payload matrix, and the resident now serves only the slots declared
-valid on the runtime it is living in - so a slot added for one runtime can no longer break the bind on
-another. What remains before Unity can be advertised is **arrival**, and the backend row is written and
-verified against the shipped matrix, waiting on it.
+`mono` is a real family in the payload matrix - one family covering standalone Mono and the Mono a
+Unity player embeds - and the resident serves only the slots declared valid on the runtime it is living
+in, so a slot added for one runtime can no longer break the bind on another. Where two *builds* of Mono
+differ in what they supply, the fallback axis above decides per target and reports which copy answered.
+Both builds now run the full lifecycle: mono-project 6.12 carrying both facades, Unity 2021.3's 6.13
+deferring both to its own 4.0.99.0. What remains before Mono can be advertised is **arrival**, and the
+backend row is written and verified against the shipped matrix, waiting on it.
 
 A range is a claim that a packaged live hook lifecycle has actually run there. Adding one needs its own
 evidence, not an expectation that it should work.
@@ -216,10 +285,13 @@ whose named-pipe servers P/Invoke a `System.Native` shim absent on Windows. The 
 `unityjit-win32` profile is byte-identical to a shipped player's `Managed` directory, which is what
 makes that variant accurate without a game.
 
-**That variant does not currently pass.** Its class libraries supply their own `System.Memory`, and the
-payload carries one because mono-project's Mono ships a version too old for Roslyn; two of them in one
-domain split `ReadOnlySpan<T>` identity and compilation fails. What a runtime lacks is not constant
-across builds of that runtime, and the payload matrix cannot yet say so.
+Both variants pass, and the leg reports what distinguishes them. `payload_deferrals` is `none` on
+mono-project's Mono, which supplies neither facade usably and gets both from the payload
+(`payload_load_count=9`); on Unity's it names `System.Memory` and `System.Buffers` at 4.0.99.0 and the
+load count drops to 7. That line is the leg's only evidence of *which* copy was used, and until the
+fallback axis existed the Unity variant did not pass at all: two `System.Memory` assemblies in one
+domain split `ReadOnlySpan<T>` identity and Roslyn could not find its own `ImmutableArray.Create`
+overload. See [Carried, or a fallback for what the runtime lacks](#carried-or-a-fallback-for-what-the-runtime-lacks).
 
 ## Identity and the control channel
 

@@ -172,7 +172,8 @@ HookLab independently verifies its payload-specific manifest and the payload ent
 `hooklab\hooklab-payload-manifest.json` describes the payload file the host opens.
 `hooklab\hooklab-payload-matrix.json` describes what is inside it: every resident payload's role,
 carrier, runtime family, framework, architecture, assembly identity, provenance, dependencies, and
-digest. `compose`, `verify`, `package`, and `verify-package` all re-read the matrix out of the packaged
+digest - plus `fallback_runtimes`, the families on which the slot defers to a runtime-supplied assembly
+if one can satisfy its declared identity, so "valid here" and "carried here" stay separate statements. `compose`, `verify`, `package`, and `verify-package` all re-read the matrix out of the packaged
 payload and prove it against that payload's own bytes, in both directions - every declared slot must be
 present at the declared identity and digest, and every embedded payload resource must be declared. A
 payload added to the bootstrap or to the resident probe without a matrix entry fails package

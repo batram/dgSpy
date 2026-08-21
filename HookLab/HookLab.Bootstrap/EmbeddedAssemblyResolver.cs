@@ -17,12 +17,20 @@ namespace HookLab.Bootstrap {
 
 	sealed class EmbeddedAssemblyEntry {
 		internal EmbeddedAssemblyEntry(string name, string resourceName, string sha256) : this(name, resourceName, sha256, null) { }
-		internal EmbeddedAssemblyEntry(string name, string resourceName, string sha256, Version? expectedVersion) {
-			Name = name; ResourceName = resourceName; Sha256 = sha256; ExpectedVersion = expectedVersion;
+		internal EmbeddedAssemblyEntry(string name, string resourceName, string sha256, Version? expectedVersion)
+			: this(name, resourceName, sha256, expectedVersion, null) { }
+		internal EmbeddedAssemblyEntry(string name, string resourceName, string sha256, Version? expectedVersion, string? fallbackFor) {
+			Name = name; ResourceName = resourceName; Sha256 = sha256; ExpectedVersion = expectedVersion; FallbackFor = fallbackFor;
 		}
 		internal string Name { get; }
 		internal string ResourceName { get; }
 		internal string Sha256 { get; }
+		/// <summary>Non-null when the matrix declares this slot a fallback on the runtime this resident is
+		/// living in, and then it is the exact identity the matrix declares - the identity payload code
+		/// references. Null means "carried unconditionally": the historical behaviour, and the only
+		/// behaviour on any family the matrix does not mark, which is why CLR v4 and CoreCLR take a code
+		/// path with no new conditional in it at all.</summary>
+		internal string? FallbackFor { get; }
 		/// <summary>The version the payload matrix says these bytes carry, or null when the entry was built
 		/// without a matrix. A digest proves the bytes are the ones the build hashed; this proves the build
 		/// hashed the assembly it meant to, so swapping one pinned dependency for another version of itself
@@ -44,6 +52,7 @@ namespace HookLab.Bootstrap {
 		readonly object gate = new object();
 		readonly Dictionary<string, EmbeddedAssemblyEntry> manifest;
 		readonly Dictionary<string, Assembly> resolved = new Dictionary<string, Assembly>(StringComparer.Ordinal);
+		readonly Dictionary<string, string> deferrals = new Dictionary<string, string>(StringComparer.Ordinal);
 		readonly Func<string, byte[]?> reader;
 		ResolveEventHandler? handler;
 		int loadCount;
@@ -79,10 +88,19 @@ namespace HookLab.Bootstrap {
 			var current = CurrentRuntime;
 			var entries = matrix.Carried(PayloadCarrier.Bootstrap)
 				.Where(entry => (entry.Runtimes & current) != 0)
-				.Select(entry => new EmbeddedAssemblyEntry(entry.AssemblyName, entry.ResourceName, entry.Sha256, entry.AssemblyVersion))
+				.Select(entry => new EmbeddedAssemblyEntry(entry.AssemblyName, entry.ResourceName, entry.Sha256, entry.AssemblyVersion,
+					(entry.Fallback & current) != 0 ? DeclaredIdentity(entry) : null))
 				.ToArray();
 			return new EmbeddedAssemblyResolver(entries, name => ReadResource(assembly, name));
 		}
+
+		/// <summary>The identity the matrix declares for a payload, spelled the way a reference to it is.
+		/// Built from the matrix rather than from the bytes because it has to be asked for <em>before</em>
+		/// the bytes are loaded; DgSpyTool proves the two agree against the shipped image, in both
+		/// directions, so using the declaration here is not a weaker claim than reading the assembly.</summary>
+		static string DeclaredIdentity(PayloadMatrixEntry entry) =>
+			entry.AssemblyName + ", Version=" + entry.AssemblyVersion + ", Culture=neutral, PublicKeyToken=" +
+			(entry.PublicKeyToken == "none" ? "null" : entry.PublicKeyToken);
 
 		/// <summary>Which family the matrix means by the runtime this code is executing on.
 		///
@@ -133,8 +151,12 @@ namespace HookLab.Bootstrap {
 			lock (gate) {
 				if (!manifest.TryGetValue(simpleName, out var entry)) {
 					// Not ours. Answering null is correct here and is the only case where falling through to
-					// the CLR is right: the request is for something the bundle never claimed to carry.
-					Refuse(simpleName, "not in the manifest");
+					// the CLR is right: the request is for something the bundle never claimed to carry - or
+					// a fallback slot that already deferred, where the runtime's own copy is the one every
+					// later request must keep getting, and the refusal says so by identity rather than
+					// looking like a payload that was never declared.
+					Refuse(simpleName, deferrals.TryGetValue(simpleName, out var deferredTo)
+						? "deferred to the runtime-supplied " + deferredTo : "not in the manifest");
 					return null;
 				}
 				if (resolved.TryGetValue(simpleName, out var cached)) {
@@ -194,11 +216,16 @@ namespace HookLab.Bootstrap {
 		/// <summary>What one expected payload identity bound to, for diagnostics. Never the decision itself:
 		/// the decision is instance equality with the digest-verified embedded assembly.</summary>
 		internal sealed class PayloadBinding {
-			internal PayloadBinding(string expected, string actual, string location, bool verified) {
-				Expected = expected; Actual = actual; Location = location; MatchedVerifiedInstance = verified;
+			internal PayloadBinding(string expected, string actual, string location, bool verified) : this(expected, actual, location, verified, false) { }
+			internal PayloadBinding(string expected, string actual, string location, bool verified, bool deferred) {
+				Expected = expected; Actual = actual; Location = location; MatchedVerifiedInstance = verified; Deferred = deferred;
 			}
 			internal string Expected { get; }
 			internal string Actual { get; }
+			/// <summary>True when this slot was declared a fallback here and the runtime turned out to
+			/// supply an assembly that satisfies it, so the embedded copy was never loaded. Never silent:
+			/// the resident's report names the identity that answered instead.</summary>
+			internal bool Deferred { get; }
 			/// <summary>Empty for a byte-loaded assembly. Supporting evidence, not the contract - an empty
 			/// Location proves only that something was loaded from memory, not that it was our bytes.</summary>
 			internal string Location { get; }
@@ -229,7 +256,10 @@ namespace HookLab.Bootstrap {
 		internal IReadOnlyList<PayloadBinding> VerifyPayloadBindings() {
 			var bindings = new List<PayloadBinding>();
 			lock (gate) {
-				foreach (var entry in manifest.Values) {
+				// A copy: a deferral removes its entry from the manifest so nothing can serve a second copy
+				// of it later, and that would invalidate an iterator over the live dictionary.
+				foreach (var entry in manifest.Values.ToArray()) {
+					if (entry.FallbackFor != null) { bindings.Add(BindFallback(entry, entry.FallbackFor)); continue; }
 					var embedded = LoadEmbedded(entry);
 					// From the digest-verified bytes, not from the manifest text or from anything on disk:
 					// this is the identity payload references actually name.
@@ -247,6 +277,59 @@ namespace HookLab.Bootstrap {
 				}
 			}
 			return bindings;
+		}
+
+		/// <summary>Resolves one fallback slot by asking the binder for the identity the matrix declares,
+		/// before byte-loading anything, and lets the answer decide which copy the process gets.
+		///
+		/// <para>The question is deliberately the exact declared identity and not the simple name. "Does
+		/// this runtime have something called System.Memory" is the wrong question - mono-project's Mono
+		/// has one, at 4.0.1.1, which cannot satisfy the pinned Roslyn's reference - and asking it by simple
+		/// name would <em>cause</em> that unusable assembly to load, creating the duplicate this method
+		/// exists to prevent. The right question is the one payload code asks: can anything here satisfy
+		/// <c>System.Memory, Version=4.0.5.0, PublicKeyToken=cc7b13ffcd2ddd51</c>. Mono answers it with a
+		/// higher version where it has one and refuses where it has only a lower one - measured on both
+		/// builds, and the reason the two legs diverge here and nowhere else.</para>
+		///
+		/// <para>If nothing satisfies it, ordinary probing fails, the CLR raises AssemblyResolve, and this
+		/// resolver serves the digest-verified embedded bytes - the same instance, through the same code, as
+		/// a slot that was never a fallback. That case is not a deferral and is reported as a carried
+		/// binding.</para>
+		///
+		/// <para>If something does, the embedded copy is never loaded <em>and its manifest entry is
+		/// removed</em>, so no later resolve can hand out a second one. The entry is not simply left
+		/// unloaded: a manifest entry is a standing promise to answer, and a promise to answer with a
+		/// duplicate of an assembly already in the domain is the defect, not a spare tyre.</para>
+		///
+		/// <para>Callers hold <see cref="gate"/>. <see cref="Resolve"/> re-enters it on this same thread if
+		/// the hook fires, which is why it is a monitor and not a semaphore.</para></summary>
+		PayloadBinding BindFallback(EmbeddedAssemblyEntry entry, string declared) {
+			Assembly bound;
+			try { bound = Assembly.Load(new AssemblyName(declared)); }
+			catch (Exception ex) {
+				throw new BootstrapIntegrityException("Fallback payload dependency '" + declared + "' could not be resolved through the CLR binder, " +
+					"and this resident carries a copy that should have satisfied it: " + ex.GetType().Name + ": " + ex.Message);
+			}
+			if (resolved.TryGetValue(entry.Name, out var ours) && ReferenceEquals(bound, ours))
+				// The runtime does not supply a usable one. Carried, exactly as before this slot was marked.
+				return new PayloadBinding(declared, Describe(bound), LocationOf(bound), true);
+
+			var supplied = bound.GetName();
+			// Lower than declared should be unreachable - a binder that answers a request with something
+			// that cannot satisfy it has already broken its own contract - but a MissingMethodException
+			// deep inside Roslyn is the shape this failure takes when it is not caught here, so it is.
+			if (entry.ExpectedVersion != null && (supplied.Version == null || supplied.Version < entry.ExpectedVersion))
+				throw new BootstrapIntegrityException("Fallback payload dependency '" + declared + "' was satisfied by " + supplied.FullName +
+					", which is older than the identity that was requested. Refusing to run compiled hooks against it.");
+			manifest.Remove(entry.Name);
+			deferrals[entry.Name] = supplied.FullName;
+			return new PayloadBinding(declared, supplied.FullName, LocationOf(bound), false, true);
+		}
+
+		/// <summary>Which fallback slots deferred to a runtime-supplied assembly, and to exactly which
+		/// identity. Reported on every start: "it worked" is not evidence of which copy was used.</summary>
+		internal IReadOnlyList<string> Deferrals {
+			get { lock (gate) return deferrals.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Key + "=" + pair.Value).ToArray(); }
 		}
 
 		static string Describe(Assembly assembly) {

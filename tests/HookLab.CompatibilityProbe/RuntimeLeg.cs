@@ -62,7 +62,13 @@ sealed class RuntimeLeg {
 
 		Stage("backend_selection");
 		var selected = matrix.Entries.Where(entry => (entry.Runtimes & family.PayloadFlag) != 0).ToArray();
-		foreach (var entry in selected) identities.Add($"{entry.Id} -> {entry.AssemblyName}, Version={entry.AssemblyVersion}, PublicKeyToken={entry.PublicKeyToken} ({entry.TargetFramework}, {entry.Provenance})");
+		foreach (var entry in selected) {
+			// "fallback" is part of the identity line, not a footnote: on a fallback slot the shipped bytes
+			// are what this leg gets only if the target's runtime cannot satisfy the identity itself, and a
+			// refusal listing it as carried would name the wrong assembly.
+			var supply = (entry.Fallback & family.PayloadFlag) != 0 ? ", fallback" : "";
+			identities.Add($"{entry.Id} -> {entry.AssemblyName}, Version={entry.AssemblyVersion}, PublicKeyToken={entry.PublicKeyToken} ({entry.TargetFramework}, {entry.Provenance}{supply})");
+		}
 		Require(PayloadRole.Resident, selected, 1);
 		Require(PayloadRole.Contracts, selected, 1);
 		Require(PayloadRole.PatchEngine, selected, 1);
@@ -174,6 +180,10 @@ sealed class RuntimeLeg {
 		var prepared = Parse(File.ReadAllText(Path.Combine(run, "prepare.txt")));
 		report.Add("backend=" + Value(prepared, "backend_identity"));
 		report.Add("payload_load_count=" + Value(prepared, "payload_load_count"));
+		// Live evidence, and the only place it exists: which fallback slots this particular runtime build
+		// satisfied itself. Two Mono builds differ here, so a green leg that does not say which copy it
+		// used has not actually distinguished them.
+		report.Add("payload_deferrals=" + (prepared.TryGetValue("payload_deferrals", out var deferrals) && deferrals.Length != 0 ? deferrals : "none"));
 
 		Stage("listener_ready");
 		if (!prepared.TryGetValue("pipe_name", out var pipeName) || !prepared.TryGetValue("pipe_nonce_base64", out var nonce))

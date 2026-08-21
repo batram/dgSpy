@@ -143,6 +143,16 @@ namespace HookLab.Bootstrap.Tests {
 			Assert.Contains("HookLab.Bootstrap.Tests.dll", refusal, StringComparison.Ordinal);
 		}
 
+		/// <summary>The same identity satisfied from disk, against a slot the matrix declares a fallback:
+		/// now the runtime's copy is the answer, the embedded bytes are never read, the entry leaves the
+		/// manifest so no second copy can be handed out later, and the deferral is reported by identity.
+		/// One duplicate System.Memory in a Unity AppDomain is what this prevents.</summary>
+		[Fact]
+		public void A_fallback_slot_the_runtime_can_satisfy_defers_and_says_so() {
+			var deferral = InChildDomain("bindings-fallback", probe => probe.DeferSelfAsFallbackPayload());
+			Assert.StartsWith("HookLab.Bootstrap.Tests=HookLab.Bootstrap.Tests, Version=", deferral, StringComparison.Ordinal);
+		}
+
 		/// <summary>Each binder case gets its own AppDomain, because the product's rule is one resolver per
 		/// domain: a second resolver byte-loading identities a first one already loaded is a situation the
 		/// product never creates, and only the test could.</summary>
@@ -201,6 +211,36 @@ namespace HookLab.Bootstrap.Tests {
 			catch (Exception ex) { return ex.GetType().Name + ": " + ex.Message; }
 		}
 
+		/// <summary>The same hijack as <see cref="VerifySelfAsPayload"/>, except the slot is declared a
+		/// fallback - so the disk copy that satisfies the identity is now the right answer, and the
+		/// embedded bytes must never be loaded at all.
+		///
+		/// <para>Deliberately the same setup as the refusal test: the whole design rests on one claim -
+		/// that a slot marked fallback and a slot not marked fallback do opposite things when the runtime
+		/// can satisfy the identity itself - and running both against identical conditions is what makes
+		/// that a measurement rather than two unrelated assertions.</para></summary>
+		public string DeferSelfAsFallbackPayload() {
+			try {
+				var onDisk = typeof(ResolverProbe).Assembly;
+				var name = onDisk.GetName();
+				var bytes = File.ReadAllBytes(onDisk.Location);
+				var resolver = new EmbeddedAssemblyResolver(
+					new[] { new EmbeddedAssemblyEntry(name.Name!, "self", EmbeddedAssemblyResolver.Sha256Hex(bytes), name.Version, name.FullName) },
+					_ => throw new InvalidOperationException("the embedded bytes were read for a slot that should have deferred"));
+				resolver.Install();
+				var bindings = resolver.VerifyPayloadBindings();
+				var binding = bindings.Single();
+				if (!binding.Deferred) return "the fallback slot did not defer";
+				if (binding.MatchedVerifiedInstance) return "the fallback slot reported the embedded instance";
+				if (resolver.LoadCount != 0) return "the embedded copy was loaded anyway";
+				// The manifest entry is gone, so nothing can hand out a second copy later.
+				if (resolver.ManifestIdentities.Count != 0) return "the deferred slot is still in the manifest";
+				if (resolver.Resolve(name.FullName) != null) return "the resolver still serves the deferred identity";
+				return String.Join("|", resolver.Deferrals);
+			}
+			catch (Exception ex) { return ex.GetType().Name + ": " + ex.Message; }
+		}
+
 		static Assembly EmitDiskAssembly(string directory, string name, Version version) {
 			var assemblyName = new AssemblyName(name) { Version = version };
 			var builder = AppDomain.CurrentDomain.DefineDynamicAssembly(assemblyName, System.Reflection.Emit.AssemblyBuilderAccess.RunAndSave, directory);
@@ -212,7 +252,7 @@ namespace HookLab.Bootstrap.Tests {
 		[Fact]
 		public void A_malformed_matrix_refuses() {
 			Assert.Throws<BootstrapIntegrityException>(() => PayloadMatrix.Parse("only|two"));
-			Assert.Throws<BootstrapIntegrityException>(() => PayloadMatrix.Parse(PayloadMatrix.Header + "\nname|resident|bootstrap|r|net48|x64|clrv4|name|1.0.0.0|none|project:a||not-a-digest"));
+			Assert.Throws<BootstrapIntegrityException>(() => PayloadMatrix.Parse(PayloadMatrix.Header + "\nname|resident|bootstrap|r|net48|x64|clrv4||name|1.0.0.0|none|project:a||not-a-digest"));
 		}
 
 		/// <summary>The resident reads its own payload matrix at load time, so a matrix that cannot be

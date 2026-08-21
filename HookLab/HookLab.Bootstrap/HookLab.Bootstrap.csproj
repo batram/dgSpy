@@ -87,12 +87,12 @@
            already supplies loses the bind to it, and dependency_resolution refuses rather than shipping a
            second copy nobody asked for.
 
-           Roslyn's remaining net4x dependencies - System.Memory, Buffers, Numerics.Vectors,
-           Threading.Tasks.Extensions, Text.Encoding.CodePages - are deliberately absent. Mono supplies all
-           five itself, and shipping them produced exactly the refusal above: the runtime's own copy wins
-           the bind and the resident correctly refuses to pretend otherwise. Measured, not assumed, and the
-           bound to watch is a Unity player that lacks one - that fails at dependency_resolution by name,
-           which is a row to add with evidence rather than a mystery. -->
+           Roslyn's remaining net4x dependencies - Numerics.Vectors, Threading.Tasks.Extensions,
+           Text.Encoding.CodePages - are deliberately absent. Every Mono build measured supplies all three
+           itself, and shipping them produced exactly the refusal above: the runtime's own copy wins the
+           bind and the resident correctly refuses to pretend otherwise. A build that lacks one fails at
+           dependency_resolution by name, which is a row to add with evidence rather than a mystery - and
+           the Fallback column below is how it would be added without breaking the builds that have it. -->
       <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.runtime.compilerservices.unsafe\6.1.2\lib\net462\System.Runtime.CompilerServices.Unsafe.dll">
         <PayloadId>System.Runtime.CompilerServices.Unsafe</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.System.Runtime.CompilerServices.Unsafe.dll</ResourceName>
@@ -100,16 +100,28 @@
         <AsmName>System.Runtime.CompilerServices.Unsafe</AsmName><AsmVersion>6.0.3.0</AsmVersion><AsmToken>b03f5f7f11d50a3a</AsmToken>
         <Provenance>nuget:system.runtime.compilerservices.unsafe/6.1.2</Provenance><Requires></Requires>
       </PayloadMatrixEntry>
-      <!-- Roslyn needs System.Memory 4.0.5.0. mono-project's Mono 6.12 ships 4.0.1.1 in its own profile,
-           which is older and does not satisfy the reference, so this one is carried; System.Buffers it has
-           not at all. Unity's 6.13 supplies both and never reaches these rows. That difference between two
-           Mono builds is why "which facades does the runtime have" cannot be a static answer - the rows
-           are declared, and dependency_resolution refuses by name on any target where the runtime's own
-           copy wins the bind instead. -->
+      <!-- The two fallback slots, and the reason the Fallback column exists at all.
+
+           Roslyn needs System.Memory 4.0.5.0. mono-project's Mono 6.12 ships 4.0.1.1 in its own profile,
+           which is older and does not satisfy the reference, and no System.Buffers at all - so on that
+           build both of these have to be carried. The Mono a Unity 2021.3 player embeds supplies both at
+           4.0.99.0 in lib/mono/unityjit-win32/Facades, and carrying them there is not a spare tyre but a
+           second System.Memory in one AppDomain: ReadOnlySpan<T> becomes two distinct types and Roslyn
+           cannot find its own ImmutableArray.Create overload any more.
+
+           Neither build is wrong; "what the runtime lacks" is simply a property of a build rather than of
+           a family, which is what a family flag cannot say. Declaring these mono rows as fallbacks moves
+           the decision to where the answer exists - the target's own binder, asked for the exact declared
+           identity before anything is byte-loaded - and the resident reports which copy answered.
+
+           clrv4 is deliberately not a fallback family here even though the same argument would fit: .NET
+           Framework 4.8 has neither facade, no target has ever been measured supplying one, and the CLR v4
+           leg must not acquire a conditional on an unmeasured hypothesis. coreclr does not declare these
+           rows at all - its shared framework supplies them, so they were never carried there. -->
       <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.memory\4.6.3\lib\net462\System.Memory.dll">
         <PayloadId>System.Memory</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.System.Memory.dll</ResourceName>
-        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,mono</Runtimes>
+        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,mono</Runtimes><Fallback>mono</Fallback>
         <AsmName>System.Memory</AsmName><AsmVersion>4.0.5.0</AsmVersion><AsmToken>cc7b13ffcd2ddd51</AsmToken>
         <Provenance>nuget:system.memory/4.6.3</Provenance>
         <Requires>System.Buffers,System.Runtime.CompilerServices.Unsafe</Requires>
@@ -117,7 +129,7 @@
       <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.buffers\4.6.1\lib\net462\System.Buffers.dll">
         <PayloadId>System.Buffers</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
         <ResourceName>HookLab.Bootstrap.Payloads.System.Buffers.dll</ResourceName>
-        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,mono</Runtimes>
+        <Tfm>net462</Tfm><Arch>any</Arch><Runtimes>clrv4,mono</Runtimes><Fallback>mono</Fallback>
         <AsmName>System.Buffers</AsmName><AsmVersion>4.0.5.0</AsmVersion><AsmToken>cc7b13ffcd2ddd51</AsmToken>
         <Provenance>nuget:system.buffers/4.6.1</Provenance><Requires></Requires>
       </PayloadMatrixEntry>
@@ -158,8 +170,8 @@
       <Output TaskParameter="Items" ItemName="PayloadMatrixHashed" />
     </GetFileHash>
     <ItemGroup>
-      <PayloadMatrixLine Include="hooklab-payload-matrix|2" />
-      <PayloadMatrixLine Include="@(PayloadMatrixHashed->'%(PayloadId)|%(Role)|%(Carrier)|%(ResourceName)|%(Tfm)|%(Arch)|%(Runtimes)|%(AsmName)|%(AsmVersion)|%(AsmToken)|%(Provenance)|%(Requires)|%(FileHash)')" />
+      <PayloadMatrixLine Include="hooklab-payload-matrix|3" />
+      <PayloadMatrixLine Include="@(PayloadMatrixHashed->'%(PayloadId)|%(Role)|%(Carrier)|%(ResourceName)|%(Tfm)|%(Arch)|%(Runtimes)|%(Fallback)|%(AsmName)|%(AsmVersion)|%(AsmToken)|%(Provenance)|%(Requires)|%(FileHash)')" />
     </ItemGroup>
     <WriteLinesToFile File="$(IntermediateOutputPath)hooklab-payload-matrix.txt"
                       Lines="@(PayloadMatrixLine)"

@@ -48,10 +48,11 @@ namespace HookLab.Bootstrap {
 
 	sealed class PayloadMatrixEntry {
 		internal PayloadMatrixEntry(string id, PayloadRole role, PayloadCarrier carrier, string resourceName,
-			string targetFramework, string architecture, PayloadRuntimes runtimes, string assemblyName,
-			Version assemblyVersion, string publicKeyToken, string provenance, IReadOnlyList<string> requires, string sha256) {
+			string targetFramework, string architecture, PayloadRuntimes runtimes, PayloadRuntimes fallback,
+			string assemblyName, Version assemblyVersion, string publicKeyToken, string provenance,
+			IReadOnlyList<string> requires, string sha256) {
 			Id = id; Role = role; Carrier = carrier; ResourceName = resourceName;
-			TargetFramework = targetFramework; Architecture = architecture; Runtimes = runtimes;
+			TargetFramework = targetFramework; Architecture = architecture; Runtimes = runtimes; Fallback = fallback;
 			AssemblyName = assemblyName; AssemblyVersion = assemblyVersion; PublicKeyToken = publicKeyToken;
 			Provenance = provenance; Requires = requires; Sha256 = sha256;
 		}
@@ -62,6 +63,29 @@ namespace HookLab.Bootstrap {
 		internal string TargetFramework { get; }
 		internal string Architecture { get; }
 		internal PayloadRuntimes Runtimes { get; }
+		/// <summary>The subset of <see cref="Runtimes"/> on which this payload is a <em>fallback</em> for
+		/// something the runtime may already supply, rather than an asset dgSpy insists on.
+		///
+		/// <para>This is the axis the family flags could not express. A payload set is a fallback for what a
+		/// runtime lacks, and what a runtime lacks varies between builds of one family, not between
+		/// families: mono-project's Mono 6.12 ships <c>System.Memory</c> 4.0.1.1 - too old for the pinned
+		/// Roslyn - and no <c>System.Buffers</c> at all, while the Mono a Unity 2021.3 player embeds
+		/// supplies both at 4.0.99.0 in its <c>Facades</c> directory. Carrying the slot unconditionally put
+		/// two <c>System.Memory</c> assemblies in one Unity AppDomain, which made <c>ReadOnlySpan&lt;T&gt;</c>
+		/// two distinct types and Roslyn's own <c>ImmutableArray.Create</c> overload unfindable.</para>
+		///
+		/// <para>On a fallback family the resident asks the binder for the payload's exact declared identity
+		/// <em>before</em> byte-loading it. Whatever answers is what payload code would have bound to
+		/// anyway: the runtime's copy if it can satisfy the reference, ours - served by the resolve hook,
+		/// which the CLR raises only after ordinary probing failed - if it cannot. Either way exactly one
+		/// copy is ever loaded, and which one is reported by identity.</para>
+		///
+		/// <para>Deliberately confined to <see cref="PayloadRole.CompilerSupport"/>. dgSpy's contracts, its
+		/// resident, its pinned compiler and its patch engine are the assemblies whose provenance the whole
+		/// bootstrap exists to guarantee; none of them may ever defer to something found in the target.
+		/// A compiler-support facade is a different kind of thing - a versioned BCL shim whose only correct
+		/// number of copies in a process is one - and deferring is what keeps that true.</para></summary>
+		internal PayloadRuntimes Fallback { get; }
 		internal string AssemblyName { get; }
 		internal Version AssemblyVersion { get; }
 		/// <summary>Lower-case hex, or "none" for an unsigned assembly.</summary>
@@ -85,8 +109,8 @@ namespace HookLab.Bootstrap {
 	/// no dependency of its own - the resident is loaded before its own payload dependencies exist.</para></summary>
 	sealed class PayloadMatrix {
 		internal const string ResourceName = "HookLab.Bootstrap.Payloads.matrix.txt";
-		internal const string Header = "hooklab-payload-matrix|2";
-		const int FieldCount = 13;
+		internal const string Header = "hooklab-payload-matrix|3";
+		const int FieldCount = 14;
 
 		readonly Dictionary<string, PayloadMatrixEntry> byId;
 
@@ -128,20 +152,26 @@ namespace HookLab.Bootstrap {
 				var architecture = Required(field[5], "architecture", line);
 				if (architecture != "any" && architecture != "x64")
 					throw new BootstrapIntegrityException("Unsupported payload architecture '" + architecture + "': " + line);
-				var runtimes = ParseRuntimes(field[6], line);
+				var runtimes = ParseRuntimes(field[6], line, atLeastOne: true);
 				RejectFrameworkIncompatibility(tfm, runtimes, line);
-				var assemblyName = Required(field[7], "assembly name", line);
-				if (!Version.TryParse(field[8].Trim(), out var version))
-					throw new BootstrapIntegrityException("Malformed payload assembly version '" + field[8] + "': " + line);
-				var token = ParseToken(field[9], line);
-				var provenance = Required(field[10], "provenance", line);
+				var fallback = ParseRuntimes(field[7], line, atLeastOne: false);
+				if ((fallback & ~runtimes) != PayloadRuntimes.None)
+					throw new BootstrapIntegrityException("A payload cannot be a fallback on a runtime family it does not claim: " + line);
+				if (fallback != PayloadRuntimes.None && role != PayloadRole.CompilerSupport)
+					throw new BootstrapIntegrityException("Only a compiler-support payload may defer to a runtime-supplied assembly; '" +
+						id + "' is a " + field[1].Trim() + " payload: " + line);
+				var assemblyName = Required(field[8], "assembly name", line);
+				if (!Version.TryParse(field[9].Trim(), out var version))
+					throw new BootstrapIntegrityException("Malformed payload assembly version '" + field[9] + "': " + line);
+				var token = ParseToken(field[10], line);
+				var provenance = Required(field[11], "provenance", line);
 				if (!provenance.StartsWith("project:", StringComparison.Ordinal) && !provenance.StartsWith("nuget:", StringComparison.Ordinal))
 					throw new BootstrapIntegrityException("Payload provenance must name a project or a package: " + line);
-				var requires = field[11].Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(value => value.Trim()).ToArray();
-				var digest = NormalizeDigest(field[12]);
+				var requires = field[12].Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(value => value.Trim()).ToArray();
+				var digest = NormalizeDigest(field[13]);
 				if (digest.Length != 64 || !digest.All(IsHex))
-					throw new BootstrapIntegrityException("Malformed payload digest '" + field[12] + "': " + line);
-				entries.Add(new PayloadMatrixEntry(id, role, carrier, resource, tfm, architecture, runtimes,
+					throw new BootstrapIntegrityException("Malformed payload digest '" + field[13] + "': " + line);
+				entries.Add(new PayloadMatrixEntry(id, role, carrier, resource, tfm, architecture, runtimes, fallback,
 					assemblyName, version, token, provenance, requires, digest));
 			}
 
@@ -221,7 +251,7 @@ namespace HookLab.Bootstrap {
 			}
 		}
 
-		static PayloadRuntimes ParseRuntimes(string value, string line) {
+		static PayloadRuntimes ParseRuntimes(string value, string line, bool atLeastOne) {
 			var runtimes = PayloadRuntimes.None;
 			foreach (var token in value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)) {
 				switch (token.Trim()) {
@@ -231,7 +261,7 @@ namespace HookLab.Bootstrap {
 				default: throw new BootstrapIntegrityException("Unknown runtime family '" + token + "': " + line);
 				}
 			}
-			if (runtimes == PayloadRuntimes.None) throw new BootstrapIntegrityException("A payload must claim at least one runtime family: " + line);
+			if (atLeastOne && runtimes == PayloadRuntimes.None) throw new BootstrapIntegrityException("A payload must claim at least one runtime family: " + line);
 			return runtimes;
 		}
 

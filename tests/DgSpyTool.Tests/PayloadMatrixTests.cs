@@ -17,11 +17,15 @@ public sealed class PayloadMatrixTests {
 	// thing changed is unambiguously what the rejection is about.
 	const string Digest="0000000000000000000000000000000000000000000000000000000000000000";
 	static readonly string[] Rows={
-		"Contracts|contracts|bootstrap|P.Contracts.dll|netstandard2.0|any|clrv4,coreclr,mono|Contracts|1.0.0.0|none|project:a||"+Digest,
-		"Resident|resident|bootstrap|P.Resident.dll|net48|x64|clrv4,coreclr,mono|Resident|1.0.0.0|none|project:b|Contracts,Compiler|"+Digest,
-		"Compiler|compiler|bootstrap|P.Compiler.dll|netstandard2.0|any|clrv4,coreclr,mono|Compiler|5.6.0.0|31bf3856ad364e35|nuget:c/5.6.0||"+Digest,
-		"Engine.Desktop|patch-engine|probe|Q.Desktop.dll|net48|any|clrv4,mono|0Harmony|2.4.2.0|none|nuget:d/2.4.2||"+Digest,
-		"Engine.CoreClr|patch-engine|probe|Q.CoreClr.dll|net6.0|any|coreclr|0Harmony|2.4.2.0|none|nuget:d/2.4.2||"+Digest,
+		// The seventh field is the fallback set: the subset of the runtimes field on which the slot defers
+		// to whatever the runtime already supplies. Empty on everything here except the Facade row, which
+		// exists so the rules about it are exercised against a matrix that also has a legal use of it.
+		"Contracts|contracts|bootstrap|P.Contracts.dll|netstandard2.0|any|clrv4,coreclr,mono||Contracts|1.0.0.0|none|project:a||"+Digest,
+		"Resident|resident|bootstrap|P.Resident.dll|net48|x64|clrv4,coreclr,mono||Resident|1.0.0.0|none|project:b|Contracts,Compiler|"+Digest,
+		"Compiler|compiler|bootstrap|P.Compiler.dll|netstandard2.0|any|clrv4,coreclr,mono||Compiler|5.6.0.0|31bf3856ad364e35|nuget:c/5.6.0||"+Digest,
+		"Facade|compiler-support|bootstrap|P.Facade.dll|net462|any|clrv4,mono|mono|Facade|4.0.5.0|cc7b13ffcd2ddd51|nuget:e/4.6.3||"+Digest,
+		"Engine.Desktop|patch-engine|probe|Q.Desktop.dll|net48|any|clrv4,mono||0Harmony|2.4.2.0|none|nuget:d/2.4.2||"+Digest,
+		"Engine.CoreClr|patch-engine|probe|Q.CoreClr.dll|net6.0|any|coreclr||0Harmony|2.4.2.0|none|nuget:d/2.4.2||"+Digest,
 	};
 
 	static string Matrix(params (string Find,string Replace)[] edits) {
@@ -35,8 +39,33 @@ public sealed class PayloadMatrixTests {
 	[Fact]
 	public void The_example_matrix_is_accepted_so_the_rejections_below_are_about_what_they_change() {
 		var matrix=PayloadMatrix.Parse(Matrix());
-		Assert.Equal(5,matrix.Entries.Count);
+		Assert.Equal(6,matrix.Entries.Count);
 		Assert.Equal("Resident",matrix.Entries.Single(entry=>entry.Role==PayloadRole.Resident).Id);
+		// The fallback set is a subset of the runtime set, not a restatement of it: the Facade row is valid
+		// on CLR v4 and Mono, and defers only on Mono.
+		Assert.Equal(PayloadRuntimes.Mono,matrix["Facade"].Fallback);
+		Assert.Equal(PayloadRuntimes.ClrV4|PayloadRuntimes.Mono,matrix["Facade"].Runtimes);
+		Assert.Equal(PayloadRuntimes.None,matrix["Compiler"].Fallback);
+	}
+
+	[Fact]
+	public void A_fallback_on_a_family_the_payload_does_not_claim_is_refused() {
+		// Otherwise a slot could describe deferral behaviour on a runtime that never loads it at all,
+		// which reads as coverage and is not.
+		var error=Assert.Throws<BootstrapIntegrityException>(()=>PayloadMatrix.Parse(Matrix(("clrv4,mono|mono|Facade","clrv4,mono|coreclr,mono|Facade"))));
+		Assert.Contains("cannot be a fallback on a runtime family it does not claim",error.Message,StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void Only_a_compiler_support_payload_may_defer_to_the_runtime() {
+		// The security boundary, asserted rather than described: dgSpy's own contracts, resident, compiler
+		// and patch engine are exactly the assemblies whose provenance the bootstrap exists to guarantee,
+		// and none of them may be satisfied by something already present in the target.
+		foreach(var role in new[]{"contracts","resident","compiler","patch-engine"}) {
+			var error=Assert.Throws<BootstrapIntegrityException>(()=>
+				PayloadMatrix.Parse(Matrix(("|compiler-support|bootstrap|P.Facade.dll","|"+role+"|bootstrap|P.Facade.dll"))));
+			Assert.Contains("Only a compiler-support payload may defer",error.Message,StringComparison.Ordinal);
+		}
 	}
 
 	[Fact]
@@ -83,6 +112,15 @@ public sealed class PayloadMatrixTests {
 		Assert.Equal("net6.0",matrix["Harmony.CoreClr"].TargetFramework);
 		Assert.Equal(PayloadRuntimes.CoreClr,matrix["Harmony.CoreClr"].Runtimes);
 		Assert.All(matrix.Entries,entry=>Assert.Equal(64,entry.Sha256.Length));
+		// The fallback axis, in the shipped matrix: exactly the two facades whose presence differs between
+		// Mono builds, deferring on Mono only. Naming them here means widening the set - or quietly making
+		// one of dgSpy's own payloads deferrable - has to be a deliberate edit to this list.
+		Assert.Equal(new[]{"System.Memory","System.Buffers"},
+			matrix.Entries.Where(entry=>entry.Fallback!=PayloadRuntimes.None).Select(entry=>entry.Id).ToArray());
+		Assert.All(matrix.Entries.Where(entry=>entry.Fallback!=PayloadRuntimes.None),entry=>{
+			Assert.Equal(PayloadRuntimes.Mono,entry.Fallback);
+			Assert.Equal(PayloadRole.CompilerSupport,entry.Role);
+		});
 	}
 
 	[Fact]

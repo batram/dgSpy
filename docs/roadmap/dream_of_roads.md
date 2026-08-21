@@ -55,9 +55,9 @@ If only part of an outcome is complete, rewrite the road around what remains.
 ## Road 1 - finish Mono: one payload set across its builds, then arrival
 
 Everything except arrival now works on Mono, and ships. The opt-in `--runtime mono` probe leg drives a
-complete lifecycle against mono-project 6.12 x64 - Roslyn compiles, the pinned desktop Harmony patches,
-behaviour changes, events arrive, removal restores, the resident retires, the target survives - five
-runs out of five. `mono` is a real family in the payload matrix; the resident serves only the slots
+complete lifecycle against both Mono builds that matter - mono-project 6.12 x64 and the runtime and
+byte-identical BCL profile a Unity 2021.3 player embeds - Roslyn compiles, the pinned desktop Harmony
+patches, behaviour changes, events arrive, removal restores, the resident retires, the target survives. `mono` is a real family in the payload matrix; the resident serves only the slots
 declared valid on the runtime it is in; and the Mono backend row exists and is verified against the
 shipped matrix. Five things blocked it and all five are fixed:
 
@@ -86,15 +86,27 @@ The family is `mono`, not `unity`: the runtime is Mono, a player merely embeds i
 own test (`Type.GetType("Mono.Runtime")`) cannot tell the two apart anyway. The backend row matches both
 runtime GUIDs, because dnSpy reports one soft-debugger engine under two names.
 
-Two things remain, in this order:
+The payload-set question is answered, and both Mono builds now pass. A payload set is a fallback for
+what a runtime lacks, and what a runtime lacks is a property of a *build*: mono-project's 6.12 has
+`System.Memory` 4.0.1.1 - too old for the pinned Roslyn - and no `System.Buffers`, while Unity 2021.3's
+6.13 supplies both at 4.0.99.0 in `Facades`. Carrying them unconditionally put two `System.Memory`
+assemblies in one Unity AppDomain, split `ReadOnlySpan<T>` into two types, and made Roslyn's own
+`ImmutableArray.Create<T>(ReadOnlySpan<T>)` unfindable.
 
-0. **The Unity BCL variant regressed and needs the payload-set question answered.** `System.Memory`
-   4.0.5.0 is a payload because mono-project's Mono ships 4.0.1.1, too old for Roslyn. Unity's BCL
-   supplies its own, so forcing ours to bind splits `ReadOnlySpan<T>` identity and compilation fails with
-   `MissingMethodException: ImmutableArray.Create<T>(ReadOnlySpan<T>)`. The general problem: a payload set
-   is a fallback for what a runtime lacks, and that is not constant across builds of one runtime. Letting
-   a compiler-support slot defer to a runtime-provided assembly - and report that it did - is the likely
-   answer, and it needs its own security argument rather than a quiet relaxation.
+The matrix now carries a second, narrower axis beside the family flags: a slot may declare a **fallback
+set**, and on those families the resident asks the binder for the payload's exact declared identity
+before byte-loading anything. If nothing can satisfy it the embedded bytes are served as before; if the
+runtime can, the embedded copy is never loaded and its manifest entry is removed, so no later bind can
+produce a duplicate. Confined by the parser to `compiler-support`, so dgSpy's contracts, resident,
+compiler and patch engine can never defer; never a filesystem search, only one question to the binder
+using the identity the packaging tool proves against the shipped bytes; and never silent - every start
+reports `payload_deferrals` with the identity that answered. `clrv4` and `coreclr` declare no fallback
+and take a code path with no new branch. Three consecutive probe runs each: mono-project green with
+`payload_deferrals=none`, Unity green deferring both facades. See
+[Carried, or a fallback for what the runtime lacks](../product/HOOKLAB.md#carried-or-a-fallback-for-what-the-runtime-lacks)
+and [2026-08-21](../local/evidence/2026-08-21-road1-payload-fallback-axis.md).
+
+One thing remains:
 
 1. **Implement owned internal breakpoints for the Mono engine.** A resident arrives through one
    debugger evaluation, and placing that evaluation uses `OwnedBreakpointService`, whose only

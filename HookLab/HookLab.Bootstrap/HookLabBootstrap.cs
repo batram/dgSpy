@@ -281,6 +281,13 @@ namespace HookLab.Bootstrap {
 				"target_image_path=" + Sanitize(outcome.TargetImagePath),
 				"payload_identities=" + string.Join(",", installed.ManifestIdentities),
 				"payload_load_count=" + installed.LoadCount.ToString(CultureInfo.InvariantCulture),
+				// Which fallback slots the runtime satisfied itself, and with what. Always present, empty
+				// when nothing deferred: a line that appears only sometimes reads as an anomaly, and the
+				// interesting report is the one that says "none" on a runtime where it usually says
+				// something. "It worked" is not evidence of which copy of a facade was used.
+				// Semicolon-separated, because every value in it is an assembly full name and those contain
+				// commas: a comma-joined list of identities cannot be split back into identities.
+				"payload_deferrals=" + Sanitize(string.Join("; ", installed.Deferrals)),
 				"residency_commit=completed",
 				"behavior_commit=" + (outcome.PatchId == null ? "not_started" : "completed"),
 				"prototype_compromises=" + (outcome.PipeName.Length == 0 ? "endpoint_none," : "") + "identity_partly_self_asserted,no_residency_rollback",

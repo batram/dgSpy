@@ -134,7 +134,7 @@ static class PayloadMatrixVerification {
 	/// authoritative; this exists so the layout states its resident payload inventory without anyone
 	/// having to open a PE file.</summary>
 	internal static object Publishable(PayloadMatrix matrix) => new {
-		format_version = 2,
+		format_version = 3,
 		payloads = matrix.Entries.Select(entry => new {
 			id = entry.Id,
 			role = Spell(entry.Role),
@@ -143,6 +143,11 @@ static class PayloadMatrixVerification {
 			target_framework = entry.TargetFramework,
 			architecture = entry.Architecture,
 			runtimes = Spell(entry.Runtimes),
+			// The families on which this slot defers to a runtime-supplied assembly if one can satisfy its
+			// declared identity. Published beside runtimes and never folded into it: "valid here" and
+			// "carried here" stopped being the same statement, and a layout that only said the first would
+			// describe a payload set the resident does not necessarily load.
+			fallback_runtimes = Spell(entry.Fallback),
 			assembly = entry.AssemblyName,
 			assembly_version = entry.AssemblyVersion.ToString(),
 			public_key_token = entry.PublicKeyToken,
