@@ -76,13 +76,37 @@ namespace MonoHookLabTarget {
 			return "mono " + (display?.Invoke(null, null) as string ?? "unknown");
 		}
 
+		/// <summary>Publishes one value atomically, and never throws.
+		///
+		/// <para>Written whole and swapped into place, because the gate polls these files from another
+		/// process and a partially written <c>behavior.txt</c> reads as a hook that produced nonsense.</para>
+		///
+		/// <para>The retry and the catch are not defensive habit. The gate reads this file every 100 ms
+		/// while this loop rewrites it every 100 ms, and Windows answers that collision with a sharing
+		/// violation rather than a wait - so the swap really does fail, roughly once every few hundred
+		/// writes. Without the catch that <c>IOException</c> is unhandled on the main thread, and an
+		/// unhandled exception in a debugged target stops the target: the debugger is doing its job, but
+		/// the resident is then frozen and cannot answer dgSpy's next control command. That cost a long
+		/// investigation, during which the fault looked like a dgSpy or dnSpy defect from every angle
+		/// except this one. A test fixture that stops itself is a fixture bug, and it must not be able to
+		/// masquerade as a product one.</para></summary>
 		static void Write(string path, string text) {
-			// Written whole and moved into place: the gate polls these files from another process, and a
-			// partially written behavior.txt reads as a hook that produced nonsense.
 			var temporary = path + ".tmp";
 			File.WriteAllText(temporary, text);
-			if (File.Exists(path)) File.Delete(path);
-			File.Move(temporary, path);
+			for (var attempt = 0; attempt < 50; attempt++) {
+				try {
+					if (File.Exists(path)) File.Delete(path);
+					File.Move(temporary, path);
+					return;
+				}
+				catch (IOException) {
+					Thread.Sleep(10);
+				}
+			}
+			// Half a second of contention is not a value worth publishing late; drop it and let the next
+			// tick say the same thing. The stale file is still valid - it is simply one tick behind.
+			try { File.Delete(temporary); }
+			catch (IOException) { }
 		}
 	}
 }

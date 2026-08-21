@@ -141,28 +141,26 @@ See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes),
 [Arrival on Mono](../product/HOOKLAB.md#arrival-on-mono) and
 [2026-08-21](../local/evidence/2026-08-21-road1-mono-arrival.md).
 
-What remains, in this order:
+What remains:
 
-1. **The exception that stops the target under a control command.** Chased to the event, and not a pump
-   bug: the pump correctly raises a message that requires a Run and waits: dnSpy deliberately *stops*
-   instead, on an exception Mono reports as **uncaught**, which is correct behaviour for an unhandled
-   exception. Instrumenting the pump showed three or four exception events per sixty-cycle run and a
-   stall after nearly every one; the culprit is a `System.IO.IOException` reported uncaught on a thread
-   dnSpy cannot name. dgSpy's own pipe threads all catch `IOException` and the target survives, so it is
-   very likely catchable and mis-classified - one hypothesis worth testing first is that Mono cannot
-   evaluate the `catch (Exception) when (disposed)` filters in `ProbePipeServer` and so reports a
-   filtered-catchable exception as uncaught. Resuming from the host is not the repair: the engine's run
-   reconciliation *and* an ordinary continue each killed the target within 80 ms. Meanwhile the host no
-   longer hangs - round trips are bounded and report `hooklab_resident_unresponsive` with the target
-   left alive.
+1. Extend the packaged and hidden-desktop UCH live gates through retirement against a real player rather
+   than a console host on its runtime. `tests\run-unity-hooklab-smoke.ps1` is written against the real
+   tools and updated for a supported Mono, but has never been executed - it needs a player, and a Unity
+   editor and licence to build one. It parses; nothing more is claimed for it.
 
-   One member of this family *was* fixed: a breakpoint hit during a func-eval. An atomic action places
-   an owned breakpoint, waits for the hit, then evaluates with the other threads running, and the
-   target's own loop re-enters that method - `suspendCount` climbed 1, 2, 3, 4 and the evaluation died
-   on its deadline. Breakpoints now do not fire during an evaluation, which is what every other debugger
-   does.
-2. Extend the packaged and hidden-desktop UCH live gates through retirement against a real player rather
-   than a console host on its runtime.
+The intermittent that stood here is closed, and the answer was humbling: an unhandled `IOException`
+thrown by **dgSpy's own test fixture**, whose `File.Delete`/`File.Move` swap collided with the gate
+polling the same file every 100 ms. An unhandled exception stops a debugged target, a stopped target
+cannot answer its resident, and the resulting stall looked like a product fault from every angle except
+the one that named the throwing frame. The fixture now retries the swap and never throws; 120 stress
+cycles across both Mono builds are clean.
+
+Two real fixes came out of chasing it, and both stand on their own. A breakpoint hit during a func-eval
+no longer suspends the VM - an atomic action's own owned breakpoint could be re-entered mid-evaluation,
+`suspendCount` climbed 1, 2, 3, 4 and the evaluation died on its deadline. And every control-channel
+round trip is now bounded, because `Task.Run(..., token)` cancels only a call's scheduling and
+`PipeStream` cannot time out a read. `tests\run-mono-hooklab-stress.ps1` is the instrument that found
+it, kept because the next thing in this area will need it too.
 
 Domain reloads, generics, inlining, finalizers, reconnect/adoption, and unsupported Mono variants still
 need explicit supported or refused results. No mod loader - UCH, BepInEx, or another - may become a

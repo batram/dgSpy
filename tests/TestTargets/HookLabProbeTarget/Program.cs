@@ -89,13 +89,34 @@ namespace HookLabProbeTarget {
 			return condition();
 		}
 
-		/// <summary>Writes through a temporary file. The probe polls these, and a reader that catches a
-		/// half-written report would report a parse failure instead of the stage that actually failed.</summary>
+		/// <summary>Writes through a temporary file, and never throws. The probe polls these, and a reader
+		/// that catches a half-written report would report a parse failure instead of the stage that
+		/// actually failed.
+		///
+		/// <para>The retry is the other half of that. The probe reads this file while the loop rewrites it,
+		/// and Windows answers that collision with a sharing violation rather than a wait - so the swap
+		/// itself fails occasionally. Unhandled, it kills the fixture, and the probe then reports
+		/// <c>stage=behavior</c>: "the hook installed but the target still ticks 42", which points at
+		/// HookLab rather than at the file write that actually died. Seen once on the clrv4 leg under
+		/// load, and diagnosed only after the identical race was caught red-handed in
+		/// MonoHookLabTarget, where a debugger was attached to name the throwing frame.</para></summary>
 		static void Write(string path, string text) {
 			var temporary = path + ".tmp";
 			File.WriteAllText(temporary, text, Utf8);
-			if (File.Exists(path)) File.Delete(path);
-			File.Move(temporary, path);
+			for (var attempt = 0; attempt < 50; attempt++) {
+				try {
+					if (File.Exists(path)) File.Delete(path);
+					File.Move(temporary, path);
+					return;
+				}
+				catch (IOException) {
+					Thread.Sleep(10);
+				}
+			}
+			// Half a second of contention is not a tick worth publishing late; the previous value is still
+			// valid, just one behind, and the next tick will say the same thing.
+			try { File.Delete(temporary); }
+			catch (IOException) { }
 		}
 
 		static void WriteFacts(string path) {

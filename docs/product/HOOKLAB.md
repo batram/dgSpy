@@ -265,36 +265,36 @@ backend table:
   all. The resident now releases its endpoint on `ProcessExit`, on the runtimes that need it. For a game
   this is the difference between a window that closes and one that does not.
 
-#### Known intermittent on Mono: the suspended target
+#### A stopped target cannot answer its resident
 
-A control-channel command sometimes finds the target suspended and unable to answer. It affects both
-Mono builds - a stress loop that installs, updates and removes a compiled hook as fast as it can hits it
-every two to seven cycles on mono-project 6.12 and on Unity's 6.13 alike - and roughly one live gate run
-in six.
+This is inherent, not a defect, and it is the one behaviour worth understanding before hooking a real
+game. The resident answers dgSpy over a control channel **from inside the target**, on the target's own
+threads. While the target is stopped - at a breakpoint, on a paused session, or on an unhandled
+exception - it cannot answer at all. `install_hook`, `update_hook`, `remove_hook` and `get_hook_events`
+all wait, and after 30 seconds dgSpy reports `hooklab_resident_unresponsive`, naming the operation and
+pointing at the session state. The target is left alive and the resident recovers as soon as it runs
+again.
 
-The mechanism is measured, not inferred, and it is **not** a bug in the engine's pending-message pump.
-The pump does exactly what it should: it raises a message that requires a Run and waits for one. What
-happens is that dnSpy deliberately *stops* instead - the target sits at `state=paused` with even its own
-unrelated threads frozen, and the resident cannot answer because it is not running.
+The case that surprises people is the third one. **An unhandled exception in the target stops the
+target**, because that is what a debugger is for - and a target that has been stopped that way looks,
+from the outside, exactly like a resident that has failed. `state=paused` is the tell. It is worth
+checking before suspecting HookLab: the long investigation recorded in
+`docs/local/evidence/2026-08-21-road1-mono-arrival.md` ended at an unhandled `IOException` thrown by
+dgSpy's *own test fixture*, which had been stopping itself the whole time.
 
-What it stops on is an **exception reported as uncaught**, on which breaking is correct behaviour.
-Instrumenting the pump found three or four exception events per sixty-cycle run and a stall after
-nearly every one; the one that wedges it is a `System.IO.IOException` that Mono reports as uncaught, on
-a thread dnSpy cannot name. dgSpy's own pipe threads all catch `IOException`, and the target survives,
-so the exception is very likely catchable and mis-classified - the open question is where. Until that is
-answered this is not fixed, only bounded.
+**Do not try to resume the target from the host to get an answer out of it.** Both obvious repairs -
+the engine's own run reconciliation, and an ordinary manager-level continue - killed the target outright
+within 80 ms, in separate 40-cycle runs. A VM suspended with a control command in flight has to be left
+alone.
 
-**Do not try to resume it from outside.** Both obvious repairs - the engine's own run reconciliation,
-and an ordinary manager-level continue - killed the target outright within 80 ms, in separate 40-cycle
-runs. A VM suspended with a control command in flight has to be left alone.
-
-What dgSpy does instead is refuse to hang. Every control-channel round trip is bounded at 30 seconds -
-far above the measured 8-90 ms steady state and the ~4 s first compile - and a resident that does not
-answer produces `hooklab_resident_unresponsive`, naming the operation and pointing at the paused
-session, with the target left alive. Before that bound existed the host waited past every deadline it
+The 30-second bound is what keeps this legible. Before it existed the host waited past every deadline it
 had, because `Task.Run(..., token)` cancels only a call's scheduling and `PipeStream` cannot time out a
-read: one such hang took a 900-second harness timeout to end and said nothing about which call caused
-it.
+read: one such wait took a 900-second harness timeout to end and said nothing about which call caused
+it. `tests\run-mono-hooklab-stress.ps1` is the instrument for anything in this area - it cycles a hook
+through install, update and remove dozens of times and, on a stall, reports whether the target is alive,
+whether its own unrelated threads are still advancing, and what the session state is. Those three
+answers separate a wedged resident from a suspended VM from a dead target, and getting them confused
+sends an investigation a long way in the wrong direction.
 
 A range is a claim that a packaged live hook lifecycle has actually run there. Adding one needs its own
 evidence, not an expectation that it should work.
