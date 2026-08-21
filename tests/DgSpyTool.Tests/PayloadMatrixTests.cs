@@ -103,7 +103,7 @@ public sealed class PayloadMatrixTests {
 	[Fact]
 	public void The_shipped_payload_declares_exactly_what_it_carries() {
 		var matrix=PayloadMatrixVerification.VerifyPayloadFile(Payload());
-		Assert.Equal(new[]{"HookLab.Contracts","HookLab.Probe.CorDebug","Microsoft.CodeAnalysis","Microsoft.CodeAnalysis.CSharp","System.Collections.Immutable","System.Runtime.CompilerServices.Unsafe","System.Memory","System.Buffers","System.Numerics.Vectors","System.Threading.Tasks.Extensions","System.Text.Encoding.CodePages","System.Reflection.Metadata","Harmony.Desktop","Harmony.CoreClr"},
+		Assert.Equal(new[]{"HookLab.Contracts","HookLab.Probe.CorDebug","Microsoft.CodeAnalysis","Microsoft.CodeAnalysis.CSharp","HookLab.Compat","System.Collections.Immutable","System.Runtime.CompilerServices.Unsafe","System.Memory","System.Buffers","System.Numerics.Vectors","System.Threading.Tasks.Extensions","System.Text.Encoding.CodePages","System.Reflection.Metadata","Harmony.Desktop","Harmony.CoreClr"},
 			matrix.Entries.Select(entry=>entry.Id).ToArray());
 		// The runtime axis the matrix exists to make explicit: one pinned patch engine per family, and
 		// neither of them visible anywhere before this manifest described them.

@@ -38,7 +38,9 @@ namespace HookLab.Bootstrap.Tests {
 		[Fact]
 		public void Manifest_carries_exactly_the_probe_contracts_and_compiler_runtime() {
 			var resolver = EmbeddedAssemblyResolver.FromEmbeddedManifest();
-			Assert.Equal(new[] { "HookLab.Contracts", "HookLab.Probe.CorDebug", "Microsoft.CodeAnalysis", "Microsoft.CodeAnalysis.CSharp", "System.Buffers", "System.Collections.Immutable", "System.Memory", "System.Reflection.Metadata", "System.Runtime.CompilerServices.Unsafe" }, resolver.ManifestIdentities.ToArray());
+			// HookLab.Compat holds placeholder definitions for the types no supported target ships, so that
+			// preparing Roslyn's types can succeed where using those types never would.
+			Assert.Equal(new[] { "HookLab.Compat", "HookLab.Contracts", "HookLab.Probe.CorDebug", "Microsoft.CodeAnalysis", "Microsoft.CodeAnalysis.CSharp", "System.Buffers", "System.Collections.Immutable", "System.Memory", "System.Reflection.Metadata", "System.Runtime.CompilerServices.Unsafe" }, resolver.ManifestIdentities.ToArray());
 			// 0Harmony is deliberately absent: the probe carries and resolves its own pinned backend, and a
 			// second embedded copy served by this resolver would win the bind and leave two 0Harmony
 			// assemblies resident - the duplicate patching backend the plan forbids.
@@ -266,10 +268,12 @@ namespace HookLab.Bootstrap.Tests {
 			// Carried by the probe, so deliberately not served by this resolver - but described, which is
 			// the whole difference between a payload that ships and a payload that is accounted for.
 			Assert.All(matrix.Carried(PayloadCarrier.Probe), entry => Assert.Equal(PayloadRole.PatchEngine, entry.Role));
-			// Twelve since a shipped Unity player turned out to carry no BCL facades at all. The three that
-			// took it there are declared on mono only, which is why the CLR v4 load count in the test
-			// below is still nine: what a runtime never claims, it never loads.
-			Assert.Equal(12, matrix.Carried(PayloadCarrier.Bootstrap).Count());
+			// Thirteen: twelve since a shipped Unity player turned out to carry no BCL facades at all, plus
+			// HookLab.Compat, whose placeholder types let Roslyn's own types be *prepared* on a runtime that
+			// ships no System.Xml.Linq. Three of the twelve are declared on mono only, which is why the
+			// CLR v4 load count in the test below is ten rather than thirteen: what a runtime never claims,
+			// it never loads.
+			Assert.Equal(13, matrix.Carried(PayloadCarrier.Bootstrap).Count());
 			Assert.Equal("nuget:lib.harmony/2.4.2", matrix["Harmony.Desktop"].Provenance);
 			Assert.Equal("project:HookLab/HookLab.Probe.CorDebug", matrix["HookLab.Probe.CorDebug"].Provenance);
 		}
@@ -282,7 +286,7 @@ namespace HookLab.Bootstrap.Tests {
 				Assert.NotNull(assembly);
 				Assert.Equal("", assembly!.Location);
 			}
-			Assert.Equal(9, resolver.LoadCount);
+			Assert.Equal(10, resolver.LoadCount);
 		}
 	}
 }

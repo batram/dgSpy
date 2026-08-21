@@ -1,9 +1,10 @@
 # Dream of roads
 
-This is dgSpy's ordered roadmap for open product work as of 2026-08-20. It is not a release promise.
+This is dgSpy's ordered roadmap for open product work as of 2026-08-21. It is not a release promise.
 The current product already includes verified x64 CLR v4, CoreCLR, and Mono/Unity debugger bridges,
-remote-host routing, immutable packaging, compiled HookLab hooks across CLR v4 and CoreCLR, its GUI
-editor, and the installed standalone watcher. Preserve those foundations; do not restart completed plans.
+remote-host routing, immutable packaging, compiled HookLab hooks across CLR v4, CoreCLR and Mono -
+including inside an unmodified shipped Unity player - its GUI editor, and the installed standalone
+watcher. Preserve those foundations; do not restart completed plans.
 
 Runtime backends are now an explicit compatibility framework, and the next roads build on it rather than
 rebuilding it: a build-generated resident payload matrix proved against the shipped bytes, a
@@ -46,158 +47,54 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Settle the Mono payload set across BCL variants, then give the Mono engine owned internal breakpoints.
+1. Give Mono's remaining unknowns - domain reloads, generics, inlining, finalizers, adoption - explicit
+   supported or refused results.
 2. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
 3. Revisit high-risk execution, editing, and scripting one workflow at a time.
 4. Keep the remaining compatibility expansions parked until product scope changes.
 5. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - Mono works: one payload set across its builds, and arrival
+## Road 1 - name Mono's remaining unknowns, supported or refused
 
-Mono is a supported HookLab runtime, standalone and embedded alike. The opt-in `--runtime mono` probe leg drives a
-complete lifecycle against both Mono builds that matter - mono-project 6.12 x64 and the runtime and
-byte-identical BCL profile a Unity 2021.3 player embeds - Roslyn compiles, the pinned desktop Harmony
-patches, behaviour changes, events arrive, removal restores, the resident retires, the target survives. `mono` is a real family in the payload matrix; the resident serves only the slots
-declared valid on the runtime it is in; and the Mono backend row exists and is verified against the
-shipped matrix. Five things blocked it and all five are fixed:
+Mono is a supported HookLab runtime, standalone and embedded alike, and the outcome the previous Road 1
+existed for is met: one payload set across both Mono builds, arrival, and a compiled hook installed by
+the pinned Harmony **inside an unmodified shipped Unity player**. `tests\run-unity-hooklab-smoke.ps1`
+drives that whole lifecycle in 20 checks against a player with nothing added to its `Managed` directory,
+and `tests\run-mono-hooklab-smoke.ps1` drives the general case on a fixture this repository builds.
+Owned internal breakpoints are engine-neutral and each engine exports a provider. All of that is product
+behaviour now, described in
+[Supported runtimes](../product/HOOKLAB.md#supported-runtimes),
+[Arrival on Mono](../product/HOOKLAB.md#arrival-on-mono),
+[Resident payload matrix](../product/HOOKLAB.md#resident-payload-matrix) and
+[No payload may need the netstandard facade](../product/HOOKLAB.md#no-payload-may-need-the-netstandard-facade).
 
-- **The control endpoint had no statable protection.** Mono implements neither
-  `WindowsIdentity.GetCurrent().User` nor `PipeSecurity.AddAccessRule`. The descriptor is now built
-  through `advapi32`/`CreateNamedPipeW` instead and is byte-identical to the managed one, verified by
-  reading it back off the kernel object. CLR v4 and CoreCLR keep their managed construction.
-- **The target did not survive retirement.** Mono crashes at process exit if a listener thread is still
-  unwinding out of a disposed `NamedPipeServerStream`. Retirement now waits for the listener where the
-  runtime requires it and reports `listener_teardown`; `Dispose` still does not wait, so the func-eval
-  bound that made it non-blocking is untouched, and CLR v4 and CoreCLR take the `not_required` path.
-- **Asynchronous pipes fault on Mono 6.12**, in the overlapped completion callback, taking the target
-  with them. The endpoint is created synchronously now, which is all a single blocking listener thread
-  ever needed. Unity 6.13 tolerated the async version, which is why it survived this long.
-- **Disposing a synchronous pipe does not release a parked listener on Mono**, so retirement hung rather
-  than crashed. `Dispose` wakes the listener with one connect to its own endpoint first.
-- **Compilation chose CodeDom.** The selector keyed on the corlib name, and Mono's is also `mscorlib`,
-  so a Mono target took the .NET Framework path - and Mono's CodeDom shells out to an `mcs` that is not
-  there to shell to. Mono now selects the payload's own Roslyn, which needed four more declared slots and
-  exposed a missing binding unification in the resident's resolver.
+What remains is not a defect list. It is a set of questions a Mono target can ask that this product has
+never answered on the record, and each needs an explicit **supported** or **refused** result rather than
+an untested assumption:
 
-See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes) and
-[The Mono leg](../product/HOOKLAB.md#the-mono-leg).
+1. **Domain reloads.** A resident lives in an application domain. Unity reloads domains, and nothing has
+   been measured about what a reload does to a resident, its endpoint, or installed hooks. Refusing
+   loudly across a reload is an acceptable answer; not knowing is not.
+2. **Generic methods and generic declaring types.** The hook identity guards - token, signature, MVID,
+   IL digest - are stated for closed methods. Whether a generic carrier is supported, and what a refusal
+   says if not, is unmeasured.
+3. **Inlining.** Mono may inline a small method, and a patch on an inlined callee changes nothing at
+   already-jitted call sites. The observable rule and its refusal need to be stated.
+4. **Finalizers and the retirement path.** Retirement waits for its listener on Mono. What a finalizer
+   thread that is mid-hook does at that moment is untested.
+5. **Reconnect and adoption.** An existing resident is adopted rather than replaced. Adoption across a
+   dropped Mono soft-debugger connection has not been driven end to end.
+6. **Unsupported Mono variants.** Unity's own standalone `mono.exe` carries a CoreFX-derived
+   `System.IO.Pipes` whose servers cannot open on Windows. That is known and refused in a comment; it
+   should be refused by name, at readiness, with a test.
 
-The family is `mono`, not `unity`: the runtime is Mono, a player merely embeds it, and the resident's
-own test (`Type.GetType("Mono.Runtime")`) cannot tell the two apart anyway. The backend row matches both
-runtime GUIDs, because dnSpy reports one soft-debugger engine under two names.
+Each of these is one bounded slice: a fixture that shows the question, a measurement, and then either a
+supported result with a gate or a refusal with the reason in its message.
+`tests\run-mono-hooklab-stress.ps1` is the instrument for anything intermittent, and is kept for exactly
+that.
 
-The payload-set question is answered, and both Mono builds now pass. A payload set is a fallback for
-what a runtime lacks, and what a runtime lacks is a property of a *build*: mono-project's 6.12 has
-`System.Memory` 4.0.1.1 - too old for the pinned Roslyn - and no `System.Buffers`, while Unity 2021.3's
-6.13 supplies both at 4.0.99.0 in `Facades`. Carrying them unconditionally put two `System.Memory`
-assemblies in one Unity AppDomain, split `ReadOnlySpan<T>` into two types, and made Roslyn's own
-`ImmutableArray.Create<T>(ReadOnlySpan<T>)` unfindable.
-
-The matrix now carries a second, narrower axis beside the family flags: a slot may declare a **fallback
-set**, and on those families the resident asks the binder for the payload's exact declared identity
-before byte-loading anything. If nothing can satisfy it the embedded bytes are served as before; if the
-runtime can, the embedded copy is never loaded and its manifest entry is removed, so no later bind can
-produce a duplicate. Confined by the parser to `compiler-support`, so dgSpy's contracts, resident,
-compiler and patch engine can never defer; never a filesystem search, only one question to the binder
-using the identity the packaging tool proves against the shipped bytes; and never silent - every start
-reports `payload_deferrals` with the identity that answered. `clrv4` and `coreclr` declare no fallback
-and take a code path with no new branch. Three consecutive probe runs each: mono-project green with
-`payload_deferrals=none`, Unity green deferring both facades. See
-[Carried, or a fallback for what the runtime lacks](../product/HOOKLAB.md#carried-or-a-fallback-for-what-the-runtime-lacks)
-and [2026-08-21](../local/evidence/2026-08-21-road1-payload-fallback-axis.md).
-
-**Arrival works, and Mono is advertised.** `HookLabBackends.Pending` is empty and the Mono row is in
-`All`. The new gate is `tests\run-mono-hooklab-smoke.ps1`: a fixture this repository builds, launched
-under a Mono the caller supplies, driven through the whole product lifecycle - attach, readiness,
-arrival by debugger evaluation, the resident's own control channel, a Roslyn-compiled hook installed by
-the pinned Harmony, live behaviour change, an atomic revision replacement, removal restoring the
-original, detach, and a clean exit. 22 checks. Green on mono-project 6.12 x64 three times out of three
-and on Unity 2021.3's embedded 6.13 with its byte-identical player BCL five times out of six - the sixth
-being item 1 below, which now fails in 30 seconds by name instead of hanging the run.
-
-Deliberately the general case first, with Unity as a variant of it, rather than the other way round.
-Mono is the runtime; a player embeds it. `tests\run-unity-hooklab-smoke.ps1` keeps the one thing a
-fixture cannot supply - a real player - and no longer needs a Unity licence to answer whether HookLab
-works on Mono at all.
-
-Four things blocked arrival, and none was a missing capability:
-
-- **Nobody could ask the soft debugger.** It places engine breakpoints for every stepper, through the
-  same callback shape CorDebug's bridge uses. The owned-breakpoint contract simply lived in the CorDebug
-  contracts assembly and was imported as a singleton, so there was one implementation by construction.
-  It is now engine-neutral, imported `ImportMany`, and each engine exports a provider.
-- **Three func-eval deadlocks, all one bug.** An event whose handler suspends the VM and waits for a Run
-  cannot be raised by a func-eval: the only thread that could issue that Run is the one parked inside
-  the invoke. The engine already knew this for exceptions, and not for `AssemblyLoad`, `ThreadStart` or
-  `UserLog` - which is to say, not for loading a payload, starting a resident's threads, or an ordinary
-  `Debug.WriteLine`. Each was found by measurement, one at a time, each hiding the next.
-- **The application domain identity was the debugger's, not the runtime's.** dnSpy's Mono engine numbers
-  domains from its own counter and says so; Mono's root domain is 0, not the CLR's 1. Arrival refused on
-  its own guard, correctly, over a value the host had no business asserting.
-- **A target that hosted a resident could not exit.** CLR v4 and CoreCLR abandon a parked background
-  listener at process exit; Mono does not. The resident now releases its endpoint on `ProcessExit`.
-
-See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes),
-[Arrival on Mono](../product/HOOKLAB.md#arrival-on-mono) and
-[2026-08-21](../local/evidence/2026-08-21-road1-mono-arrival.md).
-
-**Arrival on a real player is done, and `tests\run-unity-hooklab-smoke.ps1` is a gate rather than
-evidence.** It passes all 10 checks against an **unmodified** shipped player - nothing placed in its
-`Managed` directory by hand - covering attach, readiness, breakpoint, arrival, the resident answering
-over its own control channel, and the player still running after detach.
-
-Measured 2026-08-21 against a live `uch-debug-target` player, the first time any of this ran outside a
-console fixture, and it moved the boundary three times.
-
-A shipped player's `Managed` directory holds nine non-Unity assemblies and **no `Facades` directory at
-all** - Unity ships only what the game references. The editor's `unityjit-win32` profile *does* have
-Facades, so every earlier "Unity" measurement was taken against a richer runtime than any player has,
-and the claim that the two are byte-identical is wrong in exactly that way. Three more fallback rows
-followed (`System.Numerics.Vectors`, `System.Threading.Tasks.Extensions`,
-`System.Text.Encoding.CodePages`), and on a player all twelve payloads are carried with
-`payload_deferrals` empty - the fallback axis behaving exactly as designed.
-
-The `deadline_exceeded` that stood in the way was two bugs, both fixed. The host's pipe **handshake was
-unbounded** - `ProbeConnection`'s constructor read with no timeout, the same gap that was closed for
-`Send` but missed here - so a resident that could not answer hung the whole call past its 130 s deadline
-with nothing to say which read had blocked. And the smoke left its own breakpoint armed through arrival:
-arrival resumes the target so the resident's worker can publish, a player's loop re-enters `TickLoop`
-within milliseconds, and the target stopped again where it could not answer. Fixing the bound turned
-130 s of silence into a five-second `TimeoutException` naming the cause, which made the second half
-obvious.
-
-**The last blocker was `netstandard`, and it is now deleted rather than satisfied.** A payload compiled
-for `netstandard2.0` cannot load where the facade does not exist, and the facade cannot be shipped: it
-is strong-named to Microsoft's key, so nothing dgSpy builds can satisfy the reference, and taking a copy
-off a machine is exactly the disk provenance the resolver forbids. The build now rewrites every
-`[netstandard]Type` reference to the .NET Framework assembly that really defines the type, using the
-pinned `Microsoft.NETFramework.ReferenceAssemblies.net48` package as the mapping, and the reference
-disappears with its last use. Three payloads needed it - the two Roslyn assemblies and dgSpy's own
-`HookLab.Contracts`, which was `netstandard2.0` for the same ordinary reason. Identity is untouched;
-the bytes become dgSpy's, and the matrix says so through a third provenance kind that must name its
-pinned inputs. Package verification now fails any payload declared valid on `clrv4` or `mono` whose
-shipped bytes still name `netstandard`, so the property is enforced rather than intended.
-
-See [No payload may need the netstandard facade](../product/HOOKLAB.md#no-payload-may-need-the-netstandard-facade)
-and [2026-08-21](../local/evidence/2026-08-21-road1-netstandard-retarget.md).
-
-The intermittent that stood here is closed, and the answer was humbling: an unhandled `IOException`
-thrown by **dgSpy's own test fixture**, whose `File.Delete`/`File.Move` swap collided with the gate
-polling the same file every 100 ms. An unhandled exception stops a debugged target, a stopped target
-cannot answer its resident, and the resulting stall looked like a product fault from every angle except
-the one that named the throwing frame. The fixture now retries the swap and never throws; 120 stress
-cycles across both Mono builds are clean.
-
-Two real fixes came out of chasing it, and both stand on their own. A breakpoint hit during a func-eval
-no longer suspends the VM - an atomic action's own owned breakpoint could be re-entered mid-evaluation,
-`suspendCount` climbed 1, 2, 3, 4 and the evaluation died on its deadline. And every control-channel
-round trip is now bounded, because `Task.Run(..., token)` cancels only a call's scheduling and
-`PipeStream` cannot time out a read. `tests\run-mono-hooklab-stress.ps1` is the instrument that found
-it, kept because the next thing in this area will need it too.
-
-Domain reloads, generics, inlining, finalizers, reconnect/adoption, and unsupported Mono variants still
-need explicit supported or refused results. No mod loader - UCH, BepInEx, or another - may become a
-dependency, and none of this implies IL2CPP or AOT support.
+Two boundaries stay fixed while this proceeds. No mod loader - UCH, BepInEx, or another - may become a
+dependency. And none of this implies IL2CPP or AOT support.
 
 ## Dream - stop carrying a compiler into the target
 

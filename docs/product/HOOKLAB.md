@@ -86,13 +86,43 @@ else's bytes:
   resident and in the packaging tool alike, so the third kind cannot become a way to describe bytes of
   no stated origin.
 
-Only two groups of types have no home a player ships: `System.Xml.Linq` and two
-`System.Runtime.Serialization` attributes, both reached from Roslyn's XML-documentation and
-serialization paths, which compiling a hook body never enters. That is measurement, not hope: those
-same types resolved through `netstandard` to the same absent assemblies before the rewrite, on a player
-leg that reached arrival. What changed is that an unresolvable facade for *every* type became an
-unresolvable assembly for a handful nothing calls. Any type outside the permitted set fails the build
-by name rather than failing inside a target.
+The permitted set is exactly a player's own: `mscorlib`, `System`, `System.Core`, `System.Xml`,
+`System.Numerics`. Anything else becomes a placeholder, below.
+
+#### Placeholders, for types that must exist but never run
+
+Thirteen netstandard types have no home a player ships - `System.Xml.Linq` and two
+`System.Runtime.Serialization` attributes. It is tempting to reason that Roslyn's XML-documentation and
+serialization paths are never entered by compiling a hook body, so the references cost nothing. That
+reasoning is wrong, and a live player proved it:
+
+```
+TypeLoadException: Could not load type of field
+'Microsoft.CodeAnalysis.CSharp.DocumentationCommentCompiler:_includedFileCache' (10)
+due to: Could not load file or assembly 'System.Xml.Linq, Version=4.0.0.0, ...'
+```
+
+**Mono resolves a type's base type and field types when it prepares the type, not when the code using
+them runs.** Roslyn's ordinary `Emit` path prepares `DocumentationCommentCompiler`; preparing it demands
+its `_includedFileCache` field's type, whose base type mentions `System.Xml.Linq.XDocument`. The cache
+is never read. CLR v4 resolves lazily and never noticed, which is why every other leg was green.
+
+So the build emits `HookLab.Compat`, a generated payload holding a placeholder definition for each such
+type, and points those references at it. The placeholders exist to be **found**, not to work: they carry
+no members, so a method body that actually used one fails loudly at the call rather than answering
+wrongly. Base types are copied from the pinned reference assemblies and emitted transitively, so an
+attribute still derives from `System.Attribute`, `LoadOptions` is still an enum, and the
+`XObject`/`XNode`/`XContainer`/`XDocument` chain is intact.
+
+Two things keep this honest. The build prints every placeholder it emits with its base type, so a set
+that grows is a set someone has to look at; and a netstandard type whose home is in neither the
+permitted set nor the pinned placeholder sources fails the build by name rather than inside a target.
+
+A separate diagnostic, `--demand-report`, lists what a payload demands *eagerly* - base types,
+interfaces and field types, generic arguments included. That is the set that matters on Mono, and it is
+how the problem was sized at one type. Its first version walked only the scope type of each signature
+and reported "none", because the scope type of `Dictionary<string, XDocument>` is `Dictionary`, in
+mscorlib.
 
 Package verification enforces the outcome, not just the intent: any payload declared valid on `clrv4`
 or `mono` whose shipped bytes still name `netstandard` fails the package. A CoreCLR-only asset may name
@@ -464,8 +494,15 @@ identical in both. Making the general case the gate - and Unity a variant of it 
 HookLab work on Mono" from being answerable only on a machine with a Unity editor and a licence.
 `tests\run-unity-hooklab-smoke.ps1` remains, and adds the one thing a fixture cannot: a real player,
 with a game loop, a mod loader and a graphics thread. It runs against the player **as shipped** -
-nothing placed in its `Managed` directory by hand - which is what
-[No payload may need the netstandard facade](#no-payload-may-need-the-netstandard-facade) bought.
+nothing placed in its `Managed` directory by hand - and drives the whole lifecycle in 20 checks: attach,
+readiness, arrival, the resident's control channel, a Roslyn-compiled hook installed by the pinned
+Harmony, live behaviour change, an atomic revision replacement, removal restoring the original, detach,
+and the player still running.
+
+Behaviour is observed through a file the hook writes, not through a breakpoint in the hooked method.
+Once Harmony patches a method the debugger's breakpoint on it stops being reached, because the original
+body has been detoured - ordinary for a patched method, and fatal for an instrument that needs to stop
+in exactly the method under test.
 
 The gate asserts the target is on Mono from the runtime's own answer rather than from having launched
 `mono.exe`, so a launch that silently fell through to the CLR fails rather than passing quietly. It

@@ -37,11 +37,48 @@ $token = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
 $dnSpyHostId = $null; $gatewayProcess = $null
 $script:activeSessionId = ''
 
+# Behaviour is observed through a file the hook writes, exactly as run-mono-hooklab-smoke.ps1 does, and
+# deliberately not through a breakpoint in the hooked method.
+#
+# Measured here: once Harmony patches TickLoop the debugger's breakpoint on it stops being reached,
+# because the original body has been detoured. That is ordinary for a patched method and not a defect,
+# but it makes "stop in the method and read a field" unusable as evidence that the patch worked - the
+# very state being tested is the state that breaks the instrument.
+#
+# A file needs nothing from the debugger, nothing from func-eval, and only mscorlib from the hook.
+function Clear-Behavior { Remove-Item -LiteralPath $script:behaviorPath -Force -ErrorAction SilentlyContinue }
+
+function Wait-Behavior([string]$Expected, [int]$Seconds = 20) {
+	$deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+	do {
+		$value = Get-Content -LiteralPath $script:behaviorPath -ErrorAction SilentlyContinue | Select-Object -First 1
+		if ($value -eq $Expected) { return $true }
+		Start-Sleep -Milliseconds 200
+	} until ([DateTime]::UtcNow -gt $deadline)
+	return $false
+}
+
+# The negative form, and the one that makes "removed" mean something. A hook that has been removed must
+# stop writing, so the file must still be absent after the player has had ample time to tick.
+function Test-NoBehavior([int]$Seconds = 6) {
+	Clear-Behavior
+	Start-Sleep -Seconds $Seconds
+	return -not (Test-Path -LiteralPath $script:behaviorPath)
+}
+
+function New-BehaviorHookSource([string]$ClassName, [string]$Value) {
+	return 'public static class ' + $ClassName + ' { public static void Postfix() { System.IO.File.WriteAllText(@"' +
+		$script:behaviorPath + '", "' + $Value + '"); } }'
+}
+
+
 . "$PSScriptRoot\TestSupport\McpClient.ps1"
 Initialize-McpClient -GatewayUrl $gatewayUrl -Token $token
 
 $runDirectory = Join-Path $env:TEMP ("dgspy-unity-hooklab-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
+# The hook writes here and the gate reads it, so a run cleans up after itself with the rest.
+$script:behaviorPath = Join-Path $runDirectory 'behavior.txt'
 
 try {
 	Write-Section 'preflight'
@@ -101,7 +138,9 @@ try {
 	} 60
 	Assert-That 'the harness assembly is loaded' $harnessLoaded
 	$modules = @((Invoke-Tool -Name 'list_modules' -Arguments @{ session_id = $script:activeSessionId; count = 500 }).modules)
-	$harnessModule = @($modules | Where-Object { $_.name -like 'Assembly-CSharp*' })[0].name
+	$harnessSymbol = @($modules | Where-Object { $_.name -like 'Assembly-CSharp*' })[0]
+	$harnessModule = $harnessSymbol.name
+	$harnessModuleId = $harnessSymbol.module_id
 	$breakpoint = Invoke-MutatingTool -Name 'set_breakpoint' -Arguments @{
 		session_id = $script:activeSessionId; module = $harnessModule
 		type = 'UchDebugTarget.DebugTargetHarness'; method = 'TickLoop'
@@ -133,6 +172,64 @@ try {
 	$status = Invoke-Tool -Name 'get_hooklab_status' -Arguments @{ session_id = $script:activeSessionId; process_id = $processId }
 	Write-Host ("  status: " + ($status | ConvertTo-Json -Depth 4 -Compress))
 	Assert-That 'the resident reports a probe identity' ($null -ne $status)
+
+	Write-Section 'a compiled hook, inside a shipped player'
+	# The part a fixture cannot stand in for, and the reason this section exists.
+	#
+	# The Mono lifecycle gate compiles and patches under the editor's unityjit-win32 profile, which has a
+	# Facades directory. A shipped player has none, and nine non-Unity assemblies in total. So a compile
+	# that reaches for anything outside that set passes there and fails here - which is exactly the
+	# residual left by rewriting Roslyn's netstandard references onto their real net4x homes, two of
+	# which (System.Xml.Linq, System.Runtime.Serialization) a player does not ship. This is the
+	# measurement that closes that argument.
+	$members = Invoke-Tool -Name 'list_members' -Arguments @{
+		session_id = $script:activeSessionId; module = $harnessModule
+		type = 'UchDebugTarget.DebugTargetHarness'; name_pattern = 'TickLoop'
+	}
+	$carrier = @($members.symbols | Where-Object { $_.name -like '*TickLoop*' })[0]
+	Assert-That 'the carrier method is discoverable in the player' ($null -ne $carrier -and $null -ne $carrier.method_token) ($members | ConvertTo-Json -Compress -Depth 4)
+	$template = Invoke-Tool -Name 'get_hook_template' -Arguments @{
+		session_id = $script:activeSessionId; module_id = $harnessModuleId
+		method_token = [int]$carrier.method_token; template = 'Postfix'
+	}
+	Assert-That 'the host derives the identity guards from the live module' `
+		($null -ne $template.target -and $template.target.il_sha256) ($template | ConvertTo-Json -Compress -Depth 4)
+
+	# Reflection rather than a typed __instance: typing it would make the hook source reference
+	# Assembly-CSharp and, through MonoBehaviour, UnityEngine - so a compile failure could be about the
+	# reference set rather than about the compiler. mscorlib alone keeps this about Roslyn running here.
+	$hook = @{
+		session_id = $script:activeSessionId; process_id = $processId; hook_id = 'unity-player-tick'; kind = 'Postfix'
+		# The template describes the method, not the assembly that holds it, so the simple name comes from
+		# the module list - the same place the breakpoint's module name came from.
+		module_id = $harnessModuleId; assembly = [IO.Path]::GetFileNameWithoutExtension($harnessModule); declaring_type = $template.target.declaring_type
+		method = $template.target.method; method_token = $template.target.method_token; signature = $template.target.signature
+		module_mvid = $template.target.module_mvid; il_sha256 = $template.target.il_sha256; revision = 1
+		source = New-BehaviorHookSource 'DgSpyPlayerPostfixV1' 'hooked-v1'
+	}
+	# The player must be running for its loop to reach the hook at all: arrival left the session paused.
+	if (-not (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $script:activeSessionId }).is_running) {
+		$null = Invoke-MutatingTool -Name 'continue' -Arguments @{ session_id = $script:activeSessionId }
+	}
+	Assert-That 'the unhooked player writes nothing' (Test-NoBehavior) 'something was already writing the behaviour file'
+
+	$created = Invoke-MutatingTool -Name 'create_hook' -Arguments $hook -TimeoutSeconds 180
+	Assert-That 'Roslyn compiles and the pinned Harmony patches inside a shipped player' `
+		($created.installed -and $created.hook.revision -eq 1) ($created | ConvertTo-Json -Compress -Depth 5)
+	Assert-That 'the hook changes live behaviour in the player' (Wait-Behavior 'hooked-v1' 30) 'the hooked player never wrote its sentinel'
+
+	$hook.revision = 2
+	$hook.source = New-BehaviorHookSource 'DgSpyPlayerPostfixV2' 'hooked-v2'
+	Clear-Behavior
+	$updated = Invoke-MutatingTool -Name 'update_hook' -Arguments $hook -TimeoutSeconds 180
+	Assert-That 'a compiled revision atomically replaces the previous one' ($updated.installed -and $updated.hook.revision -eq 2) ($updated | ConvertTo-Json -Compress -Depth 5)
+	Assert-That 'revision 2 changes live behaviour' (Wait-Behavior 'hooked-v2' 30) 'the revision-2 sentinel never appeared'
+
+	$removed = Invoke-MutatingTool -Name 'remove_hook' -Arguments @{ session_id = $script:activeSessionId; process_id = $processId; hook_id = 'unity-player-tick' }
+	Assert-That 'remove reports ownership-scoped removal' $removed.removed ($removed | ConvertTo-Json -Compress -Depth 4)
+	Assert-That 'removing the hook restores the original behaviour' (Test-NoBehavior) 'the removed hook was still writing'
+	Assert-That 'the resident inventory is empty after remove' `
+		(@((Invoke-Tool -Name 'list_hooks' -Arguments @{ session_id = $script:activeSessionId; process_id = $processId }).hooks).Count -eq 0)
 
 	Write-Section 'detach, and the target survives'
 	$null = Invoke-MutatingTool -Name 'clear_breakpoints' -Arguments @{ session_id = $script:activeSessionId }

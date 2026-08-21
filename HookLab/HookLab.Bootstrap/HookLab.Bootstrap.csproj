@@ -34,14 +34,15 @@
   <PropertyGroup>
     <RetargetTool>$(MSBuildThisFileDirectory)..\..\Build\RetargetNetstandardReferences\RetargetNetstandardReferences.csproj</RetargetTool>
     <NetFxReferenceAssemblies>$(PkgMicrosoft_NETFramework_ReferenceAssemblies_net48)\build\.NETFramework\v4.8</NetFxReferenceAssemblies>
-    <!-- The assemblies a rewritten reference may point at, most-preferred first, and the whole safety
-         argument in one line. The first five are in every target this product supports, including a
-         stripped Unity player's nine-assembly Managed directory. The last two are not in a player - and
-         are reached only by Roslyn's XML documentation and serialization paths, which a compile of a hook
-         body never enters. That is not a hope: those same types resolve through netstandard today, to the
-         same absent assemblies, on the player leg that already passes. Making them explicit turns an
-         unresolvable facade for every type into an unresolvable assembly for the handful nothing calls. -->
-    <NetFxRetargetAllowed>mscorlib,System,System.Core,System.Xml,System.Numerics,System.Xml.Linq,System.Runtime.Serialization</NetFxRetargetAllowed>
+    <!-- The assemblies a rewritten reference may point at: exactly the ones a stripped Unity player's
+         nine-assembly Managed directory contains, which is the smallest set any supported target has.
+         Anything else becomes a placeholder in the generated compatibility assembly below. -->
+    <NetFxRetargetAllowed>mscorlib,System,System.Core,System.Xml,System.Numerics</NetFxRetargetAllowed>
+    <!-- Where placeholder shapes are read from - base types, sealedness, enum-ness - so a placeholder for
+         an attribute still derives from System.Attribute. Reference assemblies only; nothing is shipped
+         from them. A netstandard type whose home is outside both lists fails the build by name. -->
+    <NetFxRetargetPlaceholderSources>System.Xml.Linq,System.Runtime.Serialization</NetFxRetargetPlaceholderSources>
+    <HookLabCompatAssembly>HookLab.Compat</HookLabCompatAssembly>
     <RoslynCommonSource>$(NuGetPackageRoot)microsoft.codeanalysis.common\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.dll</RoslynCommonSource>
     <RoslynCSharpSource>$(NuGetPackageRoot)microsoft.codeanalysis.csharp\5.6.0\lib\netstandard2.0\Microsoft.CodeAnalysis.CSharp.dll</RoslynCSharpSource>
   </PropertyGroup>
@@ -83,16 +84,15 @@
       <RetargetPayload Include="@(ReferencePath)" Condition="'%(Filename)' == 'HookLab.Contracts'" />
       <RetargetPayload Include="$(RoslynCommonSource)" />
       <RetargetPayload Include="$(RoslynCSharpSource)" />
-      <RetargetPayload>
-        <Retargeted>$(RetargetDirectory)%(Filename)%(Extension)</Retargeted>
-      </RetargetPayload>
     </ItemGroup>
     <Error Condition="'@(RetargetPayload->Count())' != '3'" Text="Expected three payloads to retarget, resolved: @(RetargetPayload->'%(Filename)')" />
     <MSBuild Projects="$(RetargetTool)" Targets="Restore;Build" Properties="Configuration=Release"
              RemoveProperties="TargetFramework;TargetFrameworks;Platform;PlatformTarget;RuntimeIdentifier;OutputPath;IntermediateOutputPath">
       <Output TaskParameter="TargetOutputs" ItemName="_RetargetTool" />
     </MSBuild>
-    <Exec Command="dotnet &quot;@(_RetargetTool->'%(FullPath)')&quot; --reference-assemblies &quot;$(NetFxReferenceAssemblies)&quot; --allow $(NetFxRetargetAllowed) --input &quot;%(RetargetPayload.FullPath)&quot; --output &quot;%(RetargetPayload.Retargeted)&quot;" />
+    <!-- One invocation for all three, not one each: a single generated compatibility assembly serves
+         every rewritten payload, so its contents have to be decided before any of them is written. -->
+    <Exec Command="dotnet &quot;@(_RetargetTool->'%(FullPath)')&quot; --reference-assemblies &quot;$(NetFxReferenceAssemblies)&quot; --allow $(NetFxRetargetAllowed) --compat-assembly $(HookLabCompatAssembly) --placeholders-from $(NetFxRetargetPlaceholderSources) --output-directory &quot;$(RetargetDirectory).&quot; @(RetargetPayload->'--input &quot;%(FullPath)&quot;', ' ')" />
     <ItemGroup>
       <FileWrites Include="$(RetargetDirectory)*.dll" />
     </ItemGroup>
@@ -141,7 +141,7 @@
         <Tfm>net48</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
         <AsmName>Microsoft.CodeAnalysis</AsmName><AsmVersion>5.6.0.0</AsmVersion><AsmToken>31bf3856ad364e35</AsmToken>
         <Provenance>build:RetargetNetstandardReferences(nuget:microsoft.codeanalysis.common/5.6.0)</Provenance>
-        <Requires>System.Collections.Immutable,System.Runtime.CompilerServices.Unsafe</Requires>
+        <Requires>System.Collections.Immutable,System.Runtime.CompilerServices.Unsafe,HookLab.Compat</Requires>
       </PayloadMatrixEntry>
       <PayloadMatrixEntry Include="$(RetargetDirectory)Microsoft.CodeAnalysis.CSharp.dll">
         <PayloadId>Microsoft.CodeAnalysis.CSharp</PayloadId><Role>compiler</Role><Carrier>bootstrap</Carrier>
@@ -150,6 +150,25 @@
         <AsmName>Microsoft.CodeAnalysis.CSharp</AsmName><AsmVersion>5.6.0.0</AsmVersion><AsmToken>31bf3856ad364e35</AsmToken>
         <Provenance>build:RetargetNetstandardReferences(nuget:microsoft.codeanalysis.csharp/5.6.0)</Provenance>
         <Requires>Microsoft.CodeAnalysis,System.Collections.Immutable,System.Runtime.CompilerServices.Unsafe</Requires>
+      </PayloadMatrixEntry>
+      <!-- Placeholder definitions for the types no supported target ships, and the reason a compile can
+           happen inside a stripped Unity player at all.
+
+           Mono resolves a type's base type and field types when it *prepares* the type. Roslyn's ordinary
+           Emit path prepares DocumentationCommentCompiler, whose _includedFileCache field is a
+           DocumentationCommentIncludeCache, whose base type mentions System.Xml.Linq.XDocument - and a
+           player has no System.Xml.Linq. Measured 2026-08-21 against a live player: TypeLoadException,
+           over a cache the compile never reads. CLR v4 resolves lazily and never noticed.
+
+           These types exist to be found, not to work: no members, so the method bodies that would use
+           them fail loudly at the call if that assumption is ever wrong, instead of answering wrongly.
+           The build prints every placeholder it emits, so the set cannot grow unnoticed. -->
+      <PayloadMatrixEntry Include="$(RetargetDirectory)$(HookLabCompatAssembly).dll">
+        <PayloadId>HookLab.Compat</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
+        <ResourceName>HookLab.Bootstrap.Payloads.HookLab.Compat.dll</ResourceName>
+        <Tfm>net48</Tfm><Arch>any</Arch><Runtimes>clrv4,coreclr,mono</Runtimes>
+        <AsmName>HookLab.Compat</AsmName><AsmVersion>1.0.0.0</AsmVersion><AsmToken>none</AsmToken>
+        <Provenance>build:RetargetNetstandardReferences(nuget:microsoft.netframework.referenceassemblies.net48/1.0.3)</Provenance><Requires></Requires>
       </PayloadMatrixEntry>
       <PayloadMatrixEntry Include="$(NuGetPackageRoot)system.collections.immutable\10.0.1\lib\net462\System.Collections.Immutable.dll">
         <PayloadId>System.Collections.Immutable</PayloadId><Role>compiler-support</Role><Carrier>bootstrap</Carrier>
