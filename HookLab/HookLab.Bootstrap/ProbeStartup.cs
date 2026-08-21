@@ -281,6 +281,38 @@ namespace HookLab.Bootstrap {
 		/// every desktop retirement pay a wait it does not need.</summary>
 		static bool ListenerTeardownMustBeAwaited => Type.GetType("Mono.Runtime") != null;
 
+		static int endpointExitHookInstalled;
+
+		/// <summary>Makes sure a target that has hosted a resident can still exit, on the runtimes where
+		/// that is not free.
+		///
+		/// <para>A resident is meant to outlive the debugger: it stays loaded, its endpoint stays up, and
+		/// retirement is an explicit operation. CLR v4 and CoreCLR abandon a background listener parked in
+		/// a blocking read when the process goes down, so this costs them nothing and they do not take it.
+		/// Mono does not abandon it. Measured on mono-project 6.12: a fixture that had hosted a resident
+		/// stopped its own loop on request and then never exited at all, while the same fixture without a
+		/// resident exited immediately. For a game that is a window the operator can no longer close, which
+		/// is a worse outcome than anything the resident was installed to observe.</para>
+		///
+		/// <para>The endpoint only, deliberately. Unpatching here would run the patch engine over a runtime
+		/// that is already tearing down, to restore methods nobody will call again - the retirement path
+		/// exists for callers who want that, and it is the one that reports what it managed to do. This
+		/// hook reports nothing and cannot: there is no longer anyone to report to.</para></summary>
+		static void ReleaseEndpointWhenTheProcessExits() {
+			if (!ListenerTeardownMustBeAwaited) return;
+			if (Interlocked.Exchange(ref endpointExitHookInstalled, 1) != 0) return;
+			AppDomain.CurrentDomain.ProcessExit += (sender, arguments) => {
+				IDisposable? handle;
+				lock (Gate) handle = server as IDisposable;
+				if (handle == null) return;
+				// Nothing here may throw. A handler that faults during process exit turns "the target could
+				// not close" into "the target crashed on the way out", which is the same defect wearing a
+				// worse report.
+				try { handle.Dispose(); } catch (Exception) { }
+				try { AwaitListenerOf(handle, ListenerTeardownTimeoutMilliseconds); } catch (Exception) { }
+			};
+		}
+
 		/// <summary>Long enough for a listener released by its own endpoint's disposal, short enough that a
 		/// wedged one is reported rather than waited on. Deliberately not the func-eval budget
 		/// <see cref="QuiescenceTimeoutMilliseconds"/> answers to: the runtimes that take this wait do not
@@ -325,7 +357,7 @@ namespace HookLab.Bootstrap {
 			ProbePipeServer? pipe = null;
 			ProbeRuntime? probe = null;
 			try {
-				if (parameters.Endpoint == "pipe") { pipe = new ProbePipeServer(HandleCommand); PipeConstructionCountForTest++; }
+				if (parameters.Endpoint == "pipe") { pipe = new ProbePipeServer(HandleCommand); PipeConstructionCountForTest++; ReleaseEndpointWhenTheProcessExits(); }
 				var initialization = new ProbeInitialization(expected, provider, pipe, parameters.EventCapacity, parameters.ByteCapacity);
 				// T04 owns the ordering inside here: the target guard is validated before any Harmony type
 				// resolves, then the backend inventory runs. Nothing above may touch HarmonyLib.
@@ -385,6 +417,7 @@ namespace HookLab.Bootstrap {
 					var endpointSecret = parameters.EndpointSecret;
 					pipe = new ProbePipeServer(HandleCommand, injectedSecret: endpointSecret, authenticationEnabled: endpointSecret != null, controllerSid: parameters.ControllerSid);
 					PipeConstructionCountForTest++;
+					ReleaseEndpointWhenTheProcessExits();
 					if (!pipe.WaitUntilListening(2000)) throw new InvalidOperationException("HookLab probe listener did not become ready: " + (pipe.ListenerFailure ?? "timeout"));
 				}
 				// The public HookLab service uses explicit bounded drain commands. Do not also register the pipe

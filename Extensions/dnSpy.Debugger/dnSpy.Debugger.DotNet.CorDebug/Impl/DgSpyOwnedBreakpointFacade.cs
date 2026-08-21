@@ -8,7 +8,7 @@ using System;
 using System.ComponentModel.Composition;
 using dndbg.Engine;
 using dnSpy.Contracts.Debugger;
-using dnSpy.Contracts.Debugger.DotNet.CorDebug;
+using dnSpy.Contracts.Debugger.DotNet;
 using dnSpy.Contracts.Metadata;
 
 namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
@@ -30,13 +30,18 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 	/// Narrow bridge used by dgSpy to own an engine breakpoint independently of dnSpy's public
 	/// breakpoint collection. It intentionally exposes no general access to <see cref="DbgEngineImpl"/>
 	/// or <see cref="DnDebugger"/>.
+	///
+	/// <para>One of several providers now; the Mono engine exports its own. Behaviour here is unchanged -
+	/// the interface moved out of the CorDebug contracts assembly and gained a name, and nothing else.
+	/// </para>
 	/// </summary>
-	[Export(typeof(IDgSpyOwnedBreakpointService))]
+	[Export(typeof(IDgSpyOwnedBreakpointProvider))]
 	[PartCreationPolicy(CreationPolicy.Shared)]
-	sealed class DgSpyOwnedBreakpointService : IDgSpyOwnedBreakpointService {
+	sealed class DgSpyOwnedBreakpointService : IDgSpyOwnedBreakpointProvider {
 		public bool IsSupported(DbgRuntime runtime) => DbgEngineImpl.TryGetEngine(runtime) is not null;
+		public string EngineName => "CorDebug";
 
-		void IDgSpyOwnedBreakpointService.Create(DbgRuntime runtime, ModuleId module, uint token, uint offset,
+		void IDgSpyOwnedBreakpointProvider.Create(DbgRuntime runtime, ModuleId module, uint token, uint offset,
 			Func<DbgThread?, bool> condition, Action<IDgSpyOwnedBreakpointHandle?, string?> completed) {
 			if (runtime is null) throw new ArgumentNullException(nameof(runtime));
 			if (condition is null) throw new ArgumentNullException(nameof(condition));
@@ -55,7 +60,7 @@ namespace dnSpy.Debugger.DotNet.CorDebug.Impl {
 			});
 		}
 
-		void IDgSpyOwnedBreakpointService.ReconcileRun(DbgRuntime runtime, Action<string?> completed) {
+		void IDgSpyOwnedBreakpointProvider.ReconcileRun(DbgRuntime runtime, Action<string?> completed) {
 			if (runtime is null) throw new ArgumentNullException(nameof(runtime));
 			if (completed is null) throw new ArgumentNullException(nameof(completed));
 			var engine = DbgEngineImpl.TryGetEngine(runtime);

@@ -3,9 +3,9 @@ using System.Threading;
 using System.Threading.Tasks;
 
 namespace dgSpy.Extension.Debugger.OwnedBreakpoints {
-	static class CorDebugRunReconciliation {
+	static class EngineRunReconciliation {
 		internal static async Task RunAsync(bool supported,Action<Action<string?>> begin,CancellationToken cancellationToken) {
-			if (!supported) throw new NotSupportedException("CorDebug state reconciliation is unavailable for this debugger engine.");
+			if (!supported) throw new NotSupportedException("Engine state reconciliation is unavailable for this debugger engine.");
 			if (begin is null) throw new ArgumentNullException(nameof(begin));
 			cancellationToken.ThrowIfCancellationRequested();
 			var completed=new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);

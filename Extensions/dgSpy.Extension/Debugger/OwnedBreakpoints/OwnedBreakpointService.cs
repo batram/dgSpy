@@ -1,10 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using dnSpy.Contracts.Debugger;
-using dnSpy.Contracts.Debugger.DotNet.CorDebug;
+using dnSpy.Contracts.Debugger.DotNet;
 using dnSpy.Contracts.Debugger.DotNet.Code;
 
 namespace dgSpy.Extension.Debugger.OwnedBreakpoints {
@@ -22,21 +23,51 @@ namespace dgSpy.Extension.Debugger.OwnedBreakpoints {
 
 	public delegate bool OwnedBreakpointHitHandler(in OwnedBreakpointHit hit);
 
-	/// <summary>CorDebug-only internal breakpoint ownership. It never consults the public breakpoint collection.</summary>
+	/// <summary>Internal breakpoint ownership across every debugger engine that offers it. It never
+	/// consults the public breakpoint collection.
+	///
+	/// <para>Engine-neutral by import shape, not by branching: the providers arrive through
+	/// <c>ImportMany</c> and each one answers for its own runtimes, so adding an engine is exporting a
+	/// part rather than editing this file. It was a singleton import while CorDebug was the only
+	/// implementation, and that import - not any property of the soft debugger - is what made HookLab
+	/// arrival CorDebug-only.</para></summary>
 	[Export(typeof(OwnedBreakpointService))]
 	[PartCreationPolicy(CreationPolicy.Shared)]
 	public sealed class OwnedBreakpointService : IDisposable {
 		readonly object sync=new object();
-		readonly IDgSpyOwnedBreakpointService engineBreakpoints;
+		readonly IDgSpyOwnedBreakpointProvider[] providers;
 		readonly List<OwnedBreakpoint> owners=new List<OwnedBreakpoint>();
 		readonly Dictionary<string,Guid> pendingStops=new Dictionary<string,Guid>(StringComparer.Ordinal);
 		bool disposed;
 		[ImportingConstructor]
-		OwnedBreakpointService(IDgSpyOwnedBreakpointService engineBreakpoints) => this.engineBreakpoints=engineBreakpoints;
+		OwnedBreakpointService([ImportMany] IEnumerable<IDgSpyOwnedBreakpointProvider> providers) => this.providers=providers.ToArray();
 
-		public bool IsSupported(DbgRuntime runtime) => engineBreakpoints.IsSupported(runtime);
-		public Task ReconcileRunAsync(DbgRuntime runtime,CancellationToken cancellationToken) =>
-			CorDebugRunReconciliation.RunAsync(IsSupported(runtime),completed=>engineBreakpoints.ReconcileRun(runtime,completed),cancellationToken);
+		/// <summary>The one provider whose engine controls this runtime, or null.
+		///
+		/// <para>Two providers claiming one runtime is a composition mistake rather than a preference to
+		/// resolve, and it would show up as an intermittently wrong engine. It is refused by name.</para></summary>
+		internal IDgSpyOwnedBreakpointProvider? ProviderFor(DbgRuntime runtime) {
+			if (runtime is null) throw new ArgumentNullException(nameof(runtime));
+			IDgSpyOwnedBreakpointProvider? found=null;
+			foreach (var provider in providers) {
+				if (!provider.IsSupported(runtime)) continue;
+				if (found is not null)
+					throw new InvalidOperationException("Two debugger engines claim the same runtime for owned breakpoints: "+
+						found.EngineName+" and "+provider.EngineName+".");
+				found=provider;
+			}
+			return found;
+		}
+
+		/// <summary>The engines that could own a breakpoint here at all, for refusal text and diagnostics.</summary>
+		public IReadOnlyList<string> EngineNames => providers.Select(provider=>provider.EngineName).OrderBy(name=>name,StringComparer.Ordinal).ToArray();
+
+		public bool IsSupported(DbgRuntime runtime) => ProviderFor(runtime) is not null;
+		public Task ReconcileRunAsync(DbgRuntime runtime,CancellationToken cancellationToken) {
+			var provider=ProviderFor(runtime);
+			return EngineRunReconciliation.RunAsync(provider is not null,
+				completed=>provider!.ReconcileRun(runtime,completed),cancellationToken);
+		}
 		public IReadOnlyList<OwnedBreakpoint> Owners { get { lock(sync) return owners.ToArray(); } }
 
 		public async Task<OwnedBreakpoint> AddOwnerAsync(DbgRuntime runtime, DbgDotNetCodeLocation location,
@@ -44,7 +75,9 @@ namespace dgSpy.Extension.Debugger.OwnedBreakpoints {
 			if (runtime is null) throw new ArgumentNullException(nameof(runtime));
 			if (location is null) throw new ArgumentNullException(nameof(location));
 			if (onHit is null) throw new ArgumentNullException(nameof(onHit));
-			if (!IsSupported(runtime)) throw new NotSupportedException("Owned internal breakpoints are unavailable for this debugger engine.");
+			var provider=ProviderFor(runtime) ?? throw new NotSupportedException(
+				"Owned internal breakpoints are unavailable for this debugger engine. Engines that offer them: "+
+				(EngineNames.Count==0?"none":String.Join(", ",EngineNames))+".");
 			cancellationToken.ThrowIfCancellationRequested();
 			var owner=new OwnedBreakpoint(this,runtime,location,Guid.NewGuid());
 			lock(sync) {
@@ -52,7 +85,7 @@ namespace dgSpy.Extension.Debugger.OwnedBreakpoints {
 				owners.Add(owner);
 			}
 			var created=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-			engineBreakpoints.Create(runtime,location.Module,location.Token,location.Offset,thread => {
+			provider.Create(runtime,location.Module,location.Token,location.Offset,thread => {
 				owner.RecordHit();
 				var hit=new OwnedBreakpointHit(runtime,thread,location,owner.OwnerToken);
 				bool pause;
@@ -61,7 +94,7 @@ namespace dgSpy.Extension.Debugger.OwnedBreakpoints {
 				if (pause) lock(sync) pendingStops[StopKey(runtime.Process,thread)]=owner.OwnerToken;
 				return pause;
 			},(handle,error) => {
-				if (handle is null) owner.SetFailed(error ?? "The CorDebug engine did not create the owned breakpoint.");
+				if (handle is null) owner.SetFailed(error ?? ("The "+provider.EngineName+" engine did not create the owned breakpoint."));
 				else owner.SetHandle(handle);
 				created.TrySetResult(true);
 			});

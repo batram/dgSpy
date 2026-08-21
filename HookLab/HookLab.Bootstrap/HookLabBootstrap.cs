@@ -73,24 +73,30 @@ namespace HookLab.Bootstrap {
 				// Advanced as each stage is entered, so a refusal reports where it happened rather than
 				// leaving the reader to infer it from an exception type that several stages can throw.
 				var stage = ResidentStages.Parameters;
+				// Written beside the completion report as each stage is entered, so a resident that never
+				// returns at all still says where it stopped. Captured rather than passed because the path
+				// only exists once the parameters have parsed - which is itself a stage.
+				string? completionPath = null;
+				Func<string, string> enter = value => { ResidentStages.Trace(completionPath, value); return value; };
 				try {
 					var parsed = BootstrapParameters.Parse(parameters);
+					completionPath = parsed.CompletionPath;
 					if (parsed.Endpoint != "none" && parsed.Endpoint != "pipe") throw new ArgumentException("Prepare requires endpoint=none or endpoint=pipe.", nameof(parameters));
-					stage = ResidentStages.PayloadVerify;
+					stage = enter(ResidentStages.PayloadVerify);
 					installed = resolver ?? EmbeddedAssemblyResolver.FromEmbeddedManifest();
 					installed.Install(); resolver = installed;
 					// Before any payload code runs, not after: a binding is worth checking only while
 					// nothing has acted on it.
-					stage = ResidentStages.DependencyResolution;
+					stage = enter(ResidentStages.DependencyResolution);
 					installed.VerifyPayloadBindings();
-					stage = ResidentStages.ResidencyCommit;
+					stage = enter(ResidentStages.ResidencyCommit);
 					// The target guard before the patch engine, deliberately: the engine is the first thing
 					// this resident loads into the process, and it may not be loaded into one that has not
 					// been proved to be the target.
 					ValidateTarget(parsed);
-					stage = ResidentStages.PatchEngineLoad;
+					stage = enter(ResidentStages.PatchEngineLoad);
 					LoadPatchEngine();
-					stage = ResidentStages.ResidencyCommit;
+					stage = enter(ResidentStages.ResidencyCommit);
 					var outcome = ProbeStartup.Prepare(parsed);
 					ResidentLauncher.Prepare(parsed);
 					return Describe(outcome, installed) + "generation_identity=" + ResidentLauncher.GenerationIdentity + "\npayloads_resident=true\n";

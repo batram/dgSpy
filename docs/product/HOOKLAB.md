@@ -3,7 +3,7 @@
 HookLab adds exactly guarded Harmony hooks to an attached x64 CLR v4 or CoreCLR process, through two
 separate explicit backends. It supports direct authoring through dgSpy and automatic application
 through the separately installed HookLab watcher. x86 residents are outside the current HookLab
-boundary, and Mono/Unity residents are not advertised - see [Supported runtimes](#supported-runtimes).
+boundary - see [Supported runtimes](#supported-runtimes).
 
 ## Resident model
 
@@ -191,18 +191,14 @@ than left implied by the word "CoreCLR":
 | CLR v4 (`v4.0.30319`), x64 | yes | packaged CLR v4 HookLab live gate, cross-identity gate, compatibility probe |
 | CoreCLR 10.0 up to but excluding 11.0, x64 | yes | packaged CoreCLR HookLab live gate, cross-identity gate, compatibility probe |
 | Any other CoreCLR major version | no | none - a version outside every supported range is refused by name |
-| Mono 6.12 up to but excluding 6.14, x64 | not yet - everything but arrival is proved | compatibility probe's mono leg; see below |
+| Mono 6.12 up to but excluding 6.14, x64 | yes | Mono HookLab live gate against both builds, compatibility probe's mono leg; see below |
 
-Mono/Unity targets are fully supported for ordinary debugging. HookLab residency there is **not
-available yet**, and the refusal names the one missing piece rather than calling the runtime
-unsupported: the resident arrives through a single debugger evaluation, and placing that evaluation
-needs an owned internal breakpoint, which only the CorDebug engine implements. Adding the Mono
-counterpart is engine work with its own evidence to earn.
+Mono is a supported HookLab runtime, standalone and embedded alike. The resident arrives the same way
+it does on CoreCLR - one debugger evaluation - and the soft debugger places that evaluation on an owned
+internal breakpoint of its own, exported by the Mono engine beside the CorDebug one.
 
-Everything downstream of arrival is proved on Mono, and ships: the compatibility probe's
-`mono` leg runs a complete lifecycle - Roslyn compiles, the pinned desktop Harmony patches, behavior
-changes, events arrive, removal restores, the resident retires, and the player survives. Three earlier
-reasons a Mono resident was thought impossible are gone:
+Four earlier reasons a Mono resident was thought impossible are gone, and a fifth - arrival - turned out
+to be one import shape and three event-suspend deadlocks rather than a missing capability:
 
 - Unity's Mono implements neither `WindowsIdentity.GetCurrent().User` nor
   `PipeSecurity.AddAccessRule`, so the control endpoint's access control cannot be built the managed
@@ -223,9 +219,55 @@ reasons a Mono resident was thought impossible are gone:
 Unity player embeds - and the resident serves only the slots declared valid on the runtime it is living
 in, so a slot added for one runtime can no longer break the bind on another. Where two *builds* of Mono
 differ in what they supply, the fallback axis above decides per target and reports which copy answered.
-Both builds now run the full lifecycle: mono-project 6.12 carrying both facades, Unity 2021.3's 6.13
-deferring both to its own 4.0.99.0. What remains before Mono can be advertised is **arrival**, and the
-backend row is written and verified against the shipped matrix, waiting on it.
+Both builds run the full lifecycle: mono-project 6.12 carrying both facades, Unity 2021.3's 6.13
+deferring both to its own 4.0.99.0.
+
+### Arrival on Mono
+
+Nothing about the soft debugger ever blocked arrival. It places engine breakpoints for every stepper,
+through the same callback shape the CorDebug bridge uses. What blocked it was that dgSpy could not ask:
+the owned-breakpoint contract lived in the CorDebug contracts assembly and was imported as a singleton,
+so there was exactly one implementation by construction. It is now an engine-neutral contract imported
+`ImportMany`, and each engine exports its own provider.
+
+Three deadlocks stood behind that, all one bug wearing three hats: **an event whose handler suspends the
+VM and waits for a Run cannot be raised by a func-eval**, because the only thread that could issue that
+Run is the one parked inside the invoke. The engine already knew this for exceptions. It did not know it
+for the three events a resident arrival necessarily raises:
+
+| Event | Raised by | Symptom before |
+| --- | --- | --- |
+| `AssemblyLoad` | loading the payload | `Assembly.Load(byte[])` timed out at the evaluation deadline; the same call takes 6 ms when the target runs it itself |
+| `ThreadStart` | the resident's listener and worker | arrival got past the payload and stopped at residency commit |
+| `UserLog` | an ordinary `Debug.WriteLine` under residency commit | the VM ran for about a second, then froze for the whole deadline |
+
+Each now declines to suspend while an evaluation is in flight, and raises its message without waiting
+for a Run. `TypeLoad`, which arrives in a flood behind every assembly load, never suspended in the first
+place.
+
+Two smaller differences were real and are stated where every other runtime difference lives, in the
+backend table:
+
+- **The application domain identity.** The resident asserts `AppDomain.CurrentDomain.Id` about itself
+  and the host names the domain it intends; the guard compares them. dnSpy's Mono engine numbers
+  application domains from a counter of its own - it says so - and Mono's root domain is 0, not the CLR
+  default domain's 1. Arrival refused with `Guard 'appdomain_id' mismatch. Expected '1', actual '0'`,
+  which was the guard working correctly on a value the host had no business asserting. The backend now
+  states the runtime's own numbering, and a caller naming a specific domain on an engine that invents
+  its ids is refused rather than guessed at.
+- **The target must still be able to exit.** A resident outlives the debugger by design: it stays
+  loaded and its endpoint stays up until retirement. CLR v4 and CoreCLR abandon its background listener
+  when the process goes down; Mono does not, and a target that had hosted a resident never exited at
+  all. The resident now releases its endpoint on `ProcessExit`, on the runtimes that need it. For a game
+  this is the difference between a window that closes and one that does not.
+
+#### Known intermittent on Mono
+
+`remove_hook` has hung once in six runs of the live gate against Unity's embedded Mono 6.13, after every
+other step of the lifecycle had passed. It is not the deadlock class above - removal is a command over
+the resident's control pipe with no evaluation in it - and it has not been seen on mono-project's 6.12.
+Recorded here rather than left to be rediscovered: the rest of the lifecycle is repeatable, this one
+step is not yet, and it needs its own diagnostic pass.
 
 A range is a claim that a packaged live hook lifecycle has actually run there. Adding one needs its own
 evidence, not an expectation that it should work.
@@ -292,6 +334,33 @@ load count drops to 7. That line is the leg's only evidence of *which* copy was 
 fallback axis existed the Unity variant did not pass at all: two `System.Memory` assemblies in one
 domain split `ReadOnlySpan<T>` identity and Roslyn could not find its own `ImmutableArray.Create`
 overload. See [Carried, or a fallback for what the runtime lacks](#carried-or-a-fallback-for-what-the-runtime-lacks).
+
+## Mono HookLab live gate
+
+The probe leg above loads the payload into its own fixture, which is the delivery path minus the
+debugger. `tests\run-mono-hooklab-smoke.ps1` is the part it structurally cannot cover: the resident
+arrives the way the product delivers it - one debugger evaluation placed on an owned internal
+breakpoint - and the gate then drives the whole lifecycle over the resident's own control channel.
+
+It runs against a fixture this repository builds (`tests\TestTargets\MonoHookLabTarget`) under a Mono
+the caller supplies, and it takes the same `-MonoRuntime`/`-MonoAssemblies` parameters the probe does,
+so one command covers both Mono builds:
+
+```powershell
+$env:DGSPY_MONO_EXE = 'C:\Program Files\Mono\bin\mono.exe'
+.\tests\run-mono-hooklab-smoke.ps1
+```
+
+That ordering is deliberate. Mono is the runtime; a Unity player merely embeds it, and arrival is
+identical in both. Making the general case the gate - and Unity a variant of it - is what stops "does
+HookLab work on Mono" from being answerable only on a machine with a Unity editor and a licence.
+`tests\run-unity-hooklab-smoke.ps1` remains, and adds the one thing a fixture cannot: a real player,
+with a game loop, a mod loader and a graphics thread.
+
+The gate asserts the target is on Mono from the runtime's own answer rather than from having launched
+`mono.exe`, so a launch that silently fell through to the CLR fails rather than passing quietly. It
+ends by stopping the target and requiring a clean exit, because a process that has hosted a resident and
+cannot exit is a defect this runtime actually had.
 
 ## Identity and the control channel
 

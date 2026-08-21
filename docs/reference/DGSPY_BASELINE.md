@@ -5,11 +5,10 @@
 - Windows x64 host.
 - Self-contained `net10.0-windows` dnSpy/dgSpy package.
 - CLR v4 and CoreCLR CorDebug targets, plus Mono/Unity debug targets.
-- HookLab supports CLR v4 and CoreCLR residents through separate explicit backends; its shared payload
-  remains `net48` internally and carries runtime-specific compiler and patch-engine assets. Mono/Unity
-  targets are ordinary debug targets only: everything a Unity resident needs after arrival is proved and
-  ships, but placing the arrival evaluation needs an owned internal breakpoint the Mono engine does not
-  implement, so HookLab refuses there and says so.
+- HookLab supports CLR v4, CoreCLR and Mono residents through separate explicit backends; its shared
+  payload remains `net48` internally and carries runtime-specific compiler and patch-engine assets, and
+  states per runtime family which of them it carries and which it defers to the runtime's own copy.
+  Mono covers standalone Mono and the Mono a Unity player embeds - one runtime, two names.
 - x86 targets and the old net48 dnSpy host are out of scope.
 
 ## Prerequisites

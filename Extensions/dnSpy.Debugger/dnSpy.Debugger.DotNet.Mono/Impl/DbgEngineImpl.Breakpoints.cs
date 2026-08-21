@@ -56,6 +56,19 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl {
 					SendMessage(new DbgMessageBreak(thread, GetMessageFlags()));
 				return true;
 			}
+			else if (breakpoint.Tag is DgSpyOwnedBreakpointCondition owned) {
+				if (!owned.Condition(thread))
+					return false;
+				// The stop has to be announced, and this is the only place that can do it.
+				//
+				// A stepper's callback returns true and the stepper then sends its own message; an owned
+				// breakpoint has no such owner inside the engine. Without this the VM really is suspended
+				// while dnSpy's manager still believes the process is running, and everything downstream
+				// reads that state rather than the VM's: measured as HookLab arrival failing with
+				// "Pause the session before evaluating" at a breakpoint that had just been hit.
+				SendMessage(new DbgMessageBreak(thread, GetMessageFlags()));
+				return true;
+			}
 			else if (breakpoint.Tag is Func<DbgThread?, bool> callback)
 				return callback(thread);
 			else {
@@ -331,6 +344,56 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl {
 		}
 
 		internal void RemoveBreakpointForStepper(BreakpointEventRequest breakpoint) {
+			debuggerThread.VerifyAccess();
+			using (TempBreak())
+				breakpoint.Disable();
+		}
+
+		/// <summary>
+		/// Creates an engine breakpoint owned outside dnSpy's public breakpoint collection, for dgSpy.
+		///
+		/// <para>Deliberately its own method rather than a second caller of
+		/// <see cref="CreateBreakpointForStepper"/>: the stepper's contract is "the declaring type is
+		/// already loaded, so this cannot fail", and it signals every failure as a bare
+		/// <see cref="InvalidOperationException"/>. An owned breakpoint is placed on a method the caller
+		/// named, which really can be in a type the runtime has not prepared yet, and the difference
+		/// between "that method does not exist" and "the soft debugger has no sequence point at that IL
+		/// offset yet" is the whole of the operator's next question.</para>
+		/// </summary>
+		/// <summary>Marks a breakpoint request as dgSpy's rather than a stepper's. Its own type, not a
+		/// second <c>Func&lt;DbgThread?, bool&gt;</c>, precisely because the two need different handling on
+		/// a hit that stays stopped - see <see cref="SendCodeBreakpointHitMessage_MonoDebug"/> - and a tag
+		/// they shared could only be told apart by guessing.</summary>
+		internal sealed class DgSpyOwnedBreakpointCondition {
+			internal DgSpyOwnedBreakpointCondition(Func<DbgThread?, bool> condition) => Condition = condition;
+			internal Func<DbgThread?, bool> Condition { get; }
+		}
+
+		internal BreakpointEventRequest CreateDgSpyOwnedBreakpoint(DbgModule module, uint token, uint offset, Func<DbgThread?, bool> condition) {
+			debuggerThread.VerifyAccess();
+			var reflectionModule = module.GetReflectionModule() ??
+				throw new InvalidOperationException("The module has no reflection metadata, so no method in it can carry an owned breakpoint.");
+			if (!TryGetModuleData(module, out var data))
+				throw new InvalidOperationException("The module does not belong to this Mono runtime.");
+			var info = CreateBreakpoint(reflectionModule, data.ModuleId, token, offset);
+			if (info.bp is null)
+				throw new InvalidOperationException(DescribeBindFailure(info.error, data.ModuleId, token, offset));
+			info.bp.Tag = new DgSpyOwnedBreakpointCondition(condition);
+			return info.bp;
+		}
+
+		/// <summary>Why the soft debugger would not place the breakpoint, in the terms the operator can
+		/// act on. Mono raises the second case as an ArgumentException carrying
+		/// NO_SEQ_POINT_AT_IL_OFFSET, and it is not always permanent: a type the runtime has not prepared
+		/// has no sequence points yet.</summary>
+		static string DescribeBindFailure(DbgEngineBoundCodeBreakpointMessage error, ModuleId module, uint token, uint offset) =>
+			error.Kind == DbgEngineBoundCodeBreakpointMessageKind.FunctionNotFound
+				? "The Mono runtime has no method at token 0x" + token.ToString("X8") + " in " + module.ModuleName + "."
+				: "The Mono runtime would not place a breakpoint at IL offset " + offset.ToString() + " of token 0x" + token.ToString("X8") +
+					" in " + module.ModuleName + ". The soft debugger reports no sequence point there, which is also what it reports " +
+					"for a method whose declaring type it has not prepared yet.";
+
+		internal void RemoveDgSpyOwnedBreakpoint(BreakpointEventRequest breakpoint) {
 			debuggerThread.VerifyAccess();
 			using (TempBreak())
 				breakpoint.Disable();

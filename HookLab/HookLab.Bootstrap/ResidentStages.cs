@@ -39,6 +39,30 @@ namespace HookLab.Bootstrap {
 		/// attempt's cleanup is still outstanding.</summary>
 		internal const string Precondition = "precondition";
 
+		/// <summary>Records the stage a resident is entering, beside its completion report, so that a
+		/// resident which never returns still says how far it got.
+		///
+		/// <para>Every other diagnostic here is carried in the report, and a report only exists once the
+		/// work has finished. That leaves exactly one failure shape unexplained - the resident that
+		/// stopped somewhere and published nothing - and it is not hypothetical: arrival on Mono hung
+		/// inside a debugger evaluation with no return value, no exception and no report, and the only
+		/// way to learn which stage it died in was to add this.</para>
+		///
+		/// <para>Appended, not overwritten, so what is left behind is the route rather than the last
+		/// signpost. The route is what distinguishes the cases: <see cref="ResidencyCommit"/> is entered
+		/// twice - once for the target guard and once for the probe - and a file holding only the last
+		/// value cannot say which of the two a resident stopped in.</para>
+		///
+		/// <para>Best-effort by construction. It runs on the way into each stage, in a target dgSpy does
+		/// not own, and a diagnostic that could itself throw would turn a hang into a crash. It writes
+		/// only beside a completion path the caller already chose; with no completion path there is
+		/// nowhere it would be read from and it does nothing.</para></summary>
+		internal static void Trace(string? completionPath, string stage) {
+			if (completionPath == null || completionPath.Length == 0) return;
+			try { System.IO.File.AppendAllText(completionPath + ".stages", stage + "\n"); }
+			catch (Exception) { }
+		}
+
 		internal static readonly string[] All = {
 			Parameters, PayloadVerify, DependencyResolution, PatchEngineLoad, ResidencyCommit, BehaviorCommit, Retirement, Precondition,
 		};

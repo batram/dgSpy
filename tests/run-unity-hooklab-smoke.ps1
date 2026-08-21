@@ -1,13 +1,14 @@
 # Proves HookLab arrival on a live Unity player, over the Mono soft debugger, from a composed layout.
 #
-# Arrival is the one thing the compatibility probe structurally cannot prove: its fixture loads the
-# payload into itself, which is the delivery path minus the debugger. Here the resident gets in the way
-# the product does - one debugger evaluation in the target - and dgSpy then verifies its control channel
-# before reporting success. Everything downstream of arrival on this runtime (compile, patch, events,
-# removal, retirement) is what `--runtime unity` in the compatibility probe covers, in seconds.
+# Unity is the special case here, not the subject. Mono is the runtime and a player merely embeds it,
+# so the general gate is run-mono-hooklab-smoke.ps1: it drives this same lifecycle against a fixture
+# this repository builds, under both mono-project's Mono and the runtime and byte-identical class
+# libraries a Unity 2021.3 player carries. Everything downstream of arrival is covered faster still by
+# the compatibility probe's `--runtime mono` leg.
 #
-# Needs a listening uch-debug-target player, which this repo neither builds nor ships - it takes a Unity
-# editor and a licence. Launch it first:
+# What only this script can add is a real player: a game loop, a mod loader, a graphics thread, and a
+# process nobody wrote to be debugged. It needs a listening uch-debug-target player, which this repo
+# neither builds nor ships - it takes a Unity editor and a licence. Launch it first:
 #   .\tools\Launch-Target.ps1 -PlayerRoot .\build\release -Port 56000 -NoSuspend
 param(
 	[string]$AgentAddress = '127.0.0.1',
@@ -81,21 +82,14 @@ try {
 	Assert-That 'the session carries a target process' ($null -ne $processId)
 
 	Write-Section 'HookLab readiness on a Unity target'
-	# The boundary, asserted rather than merely hit: a Unity target is refused, and the refusal names the
-	# missing piece. Everything downstream of arrival is proved on Unity's Mono by the compatibility
-	# probe's unity leg; what is not proved is placing the arrival evaluation, which needs an owned
-	# internal breakpoint that only the CorDebug engine implements.
-	#
-	# When that lands, this section is what flips: the refusal disappears and the sections below it -
-	# already written against the real tools - become the lifecycle proof.
+	# A Unity target is now a supported HookLab target, not a refusal. What this script adds over
+	# run-mono-hooklab-smoke.ps1 - which proves the same lifecycle against both Mono builds on a fixture
+	# this repository builds - is the one thing a fixture cannot stand in for: a real player, with a real
+	# game loop, a real mod loader, and a real graphics thread.
 	$readiness = Invoke-Tool -Name 'get_hooklab_readiness' -Arguments @{ session_id = $script:activeSessionId; process_id = $processId }
 	Write-Host ("  readiness: " + ($readiness | ConvertTo-Json -Depth 4 -Compress))
-	$refusal = "$($readiness.refusal)$($readiness.summary)"
-	Assert-That 'a Unity target is refused for the arrival reason, not as an unsupported runtime' `
-		($refusal -match 'owned internal breakpoint') $refusal
-	Write-Host '  NOTE: arrival is unimplemented for the Mono engine, so the lifecycle below is skipped.'
-	$arrivalImplemented = $false
-	if (-not $arrivalImplemented) { return }
+	Assert-That 'a Unity target is reported ready rather than refused' `
+		($readiness.refuses -eq $false) ($readiness | ConvertTo-Json -Depth 4 -Compress)
 
 	Write-Section 'reach a managed frame'
 	# Arrival is one evaluation in the target, and Mono can only invoke on a suspended thread that has

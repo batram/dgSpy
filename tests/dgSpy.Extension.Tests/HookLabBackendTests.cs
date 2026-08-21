@@ -51,7 +51,7 @@ public sealed class HookLabBackendTests {
 	[Fact]
 	public void Missing_runtime_is_rejected_explicitly() {
 		Assert.Null(HookLabBackends.Select(64,"X64",Array.Empty<HookLabRuntimeIdentity>()));
-		Assert.Equal("HookLab currently supports x64 desktop CLR v4 and CoreCLR targets; the attached process exposes no managed runtime.",
+		Assert.Equal("HookLab currently supports x64 desktop CLR v4, CoreCLR and Mono targets; the attached process exposes no managed runtime.",
 			HookLabBackends.UnsupportedReason(64,"X64",Array.Empty<HookLabRuntimeIdentity>()));
 	}
 
@@ -61,23 +61,36 @@ public sealed class HookLabBackendTests {
 		Assert.Contains("the attached process exposes Mono.",reason,StringComparison.Ordinal);
 	}
 
-	/// <summary>A Mono target is refused, and the refusal says which piece is missing rather than calling
-	/// the runtime unsupported. Everything except arrival is proved there - the compatibility probe's mono
-	/// leg runs a whole lifecycle - so "unsupported" would be false and "not yet" needs a reason.
+	/// <summary>A Mono target selects the Mono backend, under either of the two names dnSpy gives the one
+	/// soft-debugger engine.
 	///
-	/// <para>Both names dnSpy gives the one soft-debugger engine answer the same way. A row that covered
-	/// only Unity would leave a standalone Mono target being told its runtime is unsupported, which is not
-	/// what is wrong with it.</para></summary>
+	/// <para>Both names, deliberately parameterised rather than tested once: a row that answered only for
+	/// "Unity" would leave a standalone Mono target refused as an unsupported runtime, which is the
+	/// Unity-shaped mistake this backend exists not to make. Mono is the runtime; a player merely embeds
+	/// it.</para></summary>
 	[Theory]
 	[InlineData("7A99738E-9A75-4268-9B74-BBA174764FC7","MonoCLR")]
 	[InlineData("CE8A11EE-73EF-4A51-B5D0-BDA2E665A2B4","Unity")]
-	public void A_mono_target_is_refused_with_the_reason_arrival_is_missing(string guid,string name) {
+	public void A_mono_target_selects_the_mono_backend_under_either_engine_name(string guid,string name) {
 		var mono=new[]{ new HookLabRuntimeIdentity(new Guid(guid),name) };
-		Assert.Null(HookLabBackends.Select(64,"X64",mono));
-		var reason=HookLabBackends.UnsupportedReason(64,"X64",mono);
-		Assert.Contains("owned internal breakpoint",reason,StringComparison.Ordinal);
-		Assert.Contains("CorDebug engine",reason,StringComparison.Ordinal);
+		Assert.Null(HookLabBackends.UnsupportedReason(64,"X64",mono));
+		var backend=Assert.IsType<HookLabBackend>(HookLabBackends.Select(64,"X64",mono));
+		Assert.Equal("mono-x64",backend.Id);
+		Assert.Equal("mono",backend.Family);
+		Assert.Equal(HookLabArrival.DebuggerEvaluation,backend.Arrival);
+		// Mono reports the CLR v4 system version for itself, so this is a constant rather than something
+		// derived from a loaded coreclr.dll a Mono target does not have.
+		Assert.Equal("v4.0.30319",backend.FixedRuntimeId);
+		Assert.False(backend.SynchronizesAfterArrival);
+		Assert.Equal("Harmony.Desktop",backend.PatchEnginePayloadId);
 	}
+
+	/// <summary>Nothing is pending. Asserted rather than left implicit: the refusal path that names a
+	/// missing piece still exists and is still right for the next runtime to reach that state, and an
+	/// entry silently left here after its arrival landed would keep refusing a runtime that works.</summary>
+	[Fact]
+	public void No_backend_is_left_waiting_on_arrival() =>
+		Assert.Empty(HookLabBackends.Pending.Select(pending=>pending.Backend.Id));
 
 	/// <summary>CLR v2 shares the .NET Framework runtime GUID, so the GUID alone is not the identity.</summary>
 	[Fact]
@@ -96,8 +109,8 @@ public sealed class HookLabBackendTests {
 	}
 
 	[Fact]
-	public void The_table_is_the_two_reachable_backends_and_nothing_else() {
-		Assert.Equal(new[]{"clrv4-x64","coreclr-x64"},HookLabBackends.All.Select(backend=>backend.Id).ToArray());
+	public void The_table_is_the_three_reachable_backends_and_nothing_else() {
+		Assert.Equal(new[]{"clrv4-x64","coreclr-x64","mono-x64"},HookLabBackends.All.Select(backend=>backend.Id).ToArray());
 		Assert.All(HookLabBackends.All,backend=>{ Assert.Equal(64,backend.Bitness); Assert.Equal("X64",backend.Architecture); });
 		Assert.Equal(HookLabBackends.All.Length,HookLabBackends.All.Select(backend=>backend.Priority).Distinct().Count());
 	}

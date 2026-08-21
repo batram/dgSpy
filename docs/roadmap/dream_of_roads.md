@@ -52,9 +52,9 @@ If only part of an outcome is complete, rewrite the road around what remains.
 4. Keep the remaining compatibility expansions parked until product scope changes.
 5. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - finish Mono: one payload set across its builds, then arrival
+## Road 1 - Mono works: one payload set across its builds, and arrival
 
-Everything except arrival now works on Mono, and ships. The opt-in `--runtime mono` probe leg drives a
+Mono is a supported HookLab runtime, standalone and embedded alike. The opt-in `--runtime mono` probe leg drives a
 complete lifecycle against both Mono builds that matter - mono-project 6.12 x64 and the runtime and
 byte-identical BCL profile a Unity 2021.3 player embeds - Roslyn compiles, the pinned desktop Harmony
 patches, behaviour changes, events arrive, removal restores, the resident retires, the target survives. `mono` is a real family in the payload matrix; the resident serves only the slots
@@ -106,20 +106,48 @@ and take a code path with no new branch. Three consecutive probe runs each: mono
 [Carried, or a fallback for what the runtime lacks](../product/HOOKLAB.md#carried-or-a-fallback-for-what-the-runtime-lacks)
 and [2026-08-21](../local/evidence/2026-08-21-road1-payload-fallback-axis.md).
 
-One thing remains:
+**Arrival works, and Mono is advertised.** `HookLabBackends.Pending` is empty and the Mono row is in
+`All`. The new gate is `tests\run-mono-hooklab-smoke.ps1`: a fixture this repository builds, launched
+under a Mono the caller supplies, driven through the whole product lifecycle - attach, readiness,
+arrival by debugger evaluation, the resident's own control channel, a Roslyn-compiled hook installed by
+the pinned Harmony, live behaviour change, an atomic revision replacement, removal restoring the
+original, detach, and a clean exit. 22 checks. Green on mono-project 6.12 x64 three times out of three
+and on Unity 2021.3's embedded 6.13 with its byte-identical player BCL five times out of six.
 
-1. **Implement owned internal breakpoints for the Mono engine.** A resident arrives through one
-   debugger evaluation, and placing that evaluation uses `OwnedBreakpointService`, whose only
-   implementation - `DgSpyOwnedBreakpointFacade` - lives in `dnSpy.Debugger.DotNet.CorDebug` and reports
-   `IsSupported` false for anything else. Measured against a live Unity player: attach, readiness and
-   every other precondition pass, then `initialize_hooklab` refuses with "Owned internal breakpoints are
-   unavailable for this debugger engine". Nothing about Mono blocks the evaluation itself - the soft
-   debugger invokes methods routinely - so this is engine work, not a runtime boundary.
-   `tests\run-unity-hooklab-smoke.ps1` asserts that refusal today and becomes the lifecycle proof when
-   it lifts. Note also that Mono can only invoke on a suspended thread with managed frames, so arrival
-   needs a real stopping point; CorDebug hides that difference by hijacking a thread.
-2. Move the Mono row from `HookLabBackends.Pending` to `All`, and extend the package and hidden-desktop
-   UCH live gates through retirement against a real player rather than a console host on its runtime.
+Deliberately the general case first, with Unity as a variant of it, rather than the other way round.
+Mono is the runtime; a player embeds it. `tests\run-unity-hooklab-smoke.ps1` keeps the one thing a
+fixture cannot supply - a real player - and no longer needs a Unity licence to answer whether HookLab
+works on Mono at all.
+
+Four things blocked arrival, and none was a missing capability:
+
+- **Nobody could ask the soft debugger.** It places engine breakpoints for every stepper, through the
+  same callback shape CorDebug's bridge uses. The owned-breakpoint contract simply lived in the CorDebug
+  contracts assembly and was imported as a singleton, so there was one implementation by construction.
+  It is now engine-neutral, imported `ImportMany`, and each engine exports a provider.
+- **Three func-eval deadlocks, all one bug.** An event whose handler suspends the VM and waits for a Run
+  cannot be raised by a func-eval: the only thread that could issue that Run is the one parked inside
+  the invoke. The engine already knew this for exceptions, and not for `AssemblyLoad`, `ThreadStart` or
+  `UserLog` - which is to say, not for loading a payload, starting a resident's threads, or an ordinary
+  `Debug.WriteLine`. Each was found by measurement, one at a time, each hiding the next.
+- **The application domain identity was the debugger's, not the runtime's.** dnSpy's Mono engine numbers
+  domains from its own counter and says so; Mono's root domain is 0, not the CLR's 1. Arrival refused on
+  its own guard, correctly, over a value the host had no business asserting.
+- **A target that hosted a resident could not exit.** CLR v4 and CoreCLR abandon a parked background
+  listener at process exit; Mono does not. The resident now releases its endpoint on `ProcessExit`.
+
+See [Supported runtimes](../product/HOOKLAB.md#supported-runtimes),
+[Arrival on Mono](../product/HOOKLAB.md#arrival-on-mono) and
+[2026-08-21](../local/evidence/2026-08-21-road1-mono-arrival.md).
+
+What remains, in this order:
+
+1. **The one intermittent.** `remove_hook` hung once in six runs against Unity's 6.13, after every other
+   step had passed, and has not been seen on 6.12. Removal is a command over the resident's control pipe
+   with no evaluation in it, so it is not the deadlock class above. It needs its own diagnostic pass
+   before this leg can be called repeatable.
+2. Extend the packaged and hidden-desktop UCH live gates through retirement against a real player rather
+   than a console host on its runtime.
 
 Domain reloads, generics, inlining, finalizers, reconnect/adoption, and unsupported Mono variants still
 need explicit supported or refused results. No mod loader - UCH, BepInEx, or another - may become a

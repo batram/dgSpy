@@ -788,10 +788,20 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl {
 					break;
 
 				case EventType.ThreadStart:
-					expectedSuspendPolicy = SuspendPolicy.All;
 					var tse = (ThreadStartEvent)evt;
-					SendMessage(new DelegatePendingMessage(true, false, () => InitializeDomain(tse.Thread.Domain)));
-					SendMessage(new DelegatePendingMessage(true, true, () => CreateThread(tse.Thread)));
+					// A thread started *by a func-eval* must not suspend, for the same reason an assembly
+					// loaded by one must not: the Run it would wait for could only come from the thread
+					// parked inside the invoke.
+					//
+					// This is not hypothetical either. dgSpy's resident starts its endpoint listener and
+					// its worker during arrival, so the evaluation that installs it necessarily raises this
+					// event - and with a single-threaded target there is nothing else alive to break the
+					// deadlock. Measured after the AssemblyLoad fix below: arrival got past loading the
+					// payload and then timed out here instead.
+					var startedWhileEvaluating = IsEvaluating;
+					expectedSuspendPolicy = startedWhileEvaluating ? SuspendPolicy.None : SuspendPolicy.All;
+					SendMessage(new DelegatePendingMessage(!startedWhileEvaluating, false, () => InitializeDomain(tse.Thread.Domain)));
+					SendMessage(new DelegatePendingMessage(!startedWhileEvaluating, true, () => CreateThread(tse.Thread)));
 					break;
 
 				case EventType.ThreadDeath:
@@ -825,11 +835,23 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl {
 					break;
 
 				case EventType.AssemblyLoad:
-					expectedSuspendPolicy = SuspendPolicy.All;
 					var ale = (AssemblyLoadEvent)evt;
-					SendMessage(new DelegatePendingMessage(true, false, () => InitializeDomain(ale.Assembly.Domain)));
+					// An assembly loaded *by a func-eval* must not suspend, and its bookkeeping must not
+					// wait for a Run.
+					//
+					// The Run could only come from the thread that is parked inside the invoke, so waiting
+					// for one deadlocks the evaluation until its own timeout - measured as
+					// Assembly.Load(byte[]) timing out at exactly the evaluation deadline while the same
+					// call takes 6 ms when the target runs it itself. Loading an assembly is not a corner
+					// case here: it is the first thing dgSpy's resident arrival does.
+					//
+					// The Exception case below already takes this shape for the same reason, and TypeLoad
+					// - which arrives in a flood right behind an assembly load - never suspends at all.
+					var loadedWhileEvaluating = IsEvaluating;
+					expectedSuspendPolicy = loadedWhileEvaluating ? SuspendPolicy.None : SuspendPolicy.All;
+					SendMessage(new DelegatePendingMessage(!loadedWhileEvaluating, false, () => InitializeDomain(ale.Assembly.Domain)));
 					// The debugger agent doesn't support netmodules...
-					SendMessage(new DelegatePendingMessage(true, true, () => CreateModule(ale.Assembly.ManifestModule)));
+					SendMessage(new DelegatePendingMessage(!loadedWhileEvaluating, true, () => CreateModule(ale.Assembly.ManifestModule)));
 					break;
 
 				case EventType.AssemblyUnload:
@@ -929,9 +951,18 @@ namespace dnSpy.Debugger.DotNet.Mono.Impl {
 					break;
 
 				case EventType.UserLog:
-					expectedSuspendPolicy = SuspendPolicy.All;
 					var ule = (UserLogEvent)evt;
-					SendMessage(new NormalPendingMessage(this, true, new DbgMessageProgramMessage(ule.Message, TryGetThread(ule.Thread), GetMessageFlags())));
+					// A program message written *by a func-eval* must not suspend, and must not wait for a
+					// Run: see the AssemblyLoad and ThreadStart cases above. The message is still raised -
+					// the operator asked for the target's output and this is it - it simply cannot be
+					// allowed to stop a target that only the parked thread could restart.
+					//
+					// This one was the last of the three to be found, and the most surprising: an ordinary
+					// Debug.WriteLine somewhere under residency commit was enough to wedge HookLab arrival
+					// on Mono for its whole evaluation deadline.
+					var loggedWhileEvaluating = IsEvaluating;
+					expectedSuspendPolicy = loggedWhileEvaluating ? SuspendPolicy.None : SuspendPolicy.All;
+					SendMessage(new NormalPendingMessage(this, !loggedWhileEvaluating, new DbgMessageProgramMessage(ule.Message, TryGetThread(ule.Thread), GetMessageFlags())));
 					break;
 
 				case EventType.VMDisconnect:

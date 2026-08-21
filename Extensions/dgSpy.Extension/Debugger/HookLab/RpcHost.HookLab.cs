@@ -271,7 +271,17 @@ namespace dgSpy.Extension {
 					// "CoreCLR means read it from the process", restated here as a conditional.
 					var runtimeId=backend.FixedRuntimeId ?? CoreClrRuntimeId(process.Id);
 					if(String.IsNullOrWhiteSpace(runtimeId)) throw new RpcException("hooklab_runtime_identity_unavailable","The debugger did not publish the exact CoreCLR runtime version.");
-					return (WasRunning:process.IsRunning,Backend:backend,RuntimeId:runtimeId,Domain:gathered.Domain);
+					// Spell the application domain in the runtime's own terms, not the debugger's. The
+					// resident asserts AppDomain.CurrentDomain.Id about itself and the guard compares the
+					// two, so a value only the debugger understands is a guard that can only fail - which
+					// is exactly what a Mono target did, refusing with "Expected '1', actual '0'".
+					var domain=gathered.Domain;
+					if(domain.IdentityId==DefaultApplicationDomainId) domain=(domain.Name,backend.RootApplicationDomainIdentity);
+					else if(backend.DebuggerNumbersApplicationDomainsItself)
+						throw new RpcException("hooklab_application_domain_unsupported",
+							"This debugger engine numbers "+backend.Name+" application domains itself rather than reporting the runtime's own ids, "+
+							"so a specific domain cannot be named for HookLab on it. Omit app_domain_id; a single-domain target needs no selection.");
+					return (WasRunning:process.IsRunning,Backend:backend,RuntimeId:runtimeId,Domain:domain);
 				},token).ConfigureAwait(false);
 				var wasRunning=target.WasRunning;
 				// One location derived from BOTH identities, rather than Path.GetTempPath() answering
@@ -321,7 +331,8 @@ namespace dgSpy.Extension {
 						// both need host services, so this stays one switch in one place rather than being
 						// hidden behind indirection - but it is the only place left that knows which is which.
 						if(target.Backend.Arrival==HookLabArrival.DebuggerEvaluation) {
-							completionReport=await ExecuteInitializationOperationAsync(host,source,PayloadOperation.initialize,identity,token,true).ConfigureAwait(false);
+							completionReport=await ExecuteInitializationOperationAsync(host,source,PayloadOperation.initialize,identity,token,true,
+								carrierDomainIsRuntimeDomain:!target.Backend.DebuggerNumbersApplicationDomainsItself).ConfigureAwait(false);
 							// The report is written by a worker thread INSIDE the target, so the target has
 							// to be running to produce it. Waiting for it while the process is stopped is a
 							// deadlock that the deadline breaks rather than a slow operation.
@@ -677,13 +688,18 @@ namespace dgSpy.Extension {
 				return report;
 			}
 
-			async Task<Dictionary<string,string>> ExecuteInitializationOperationAsync(RpcHost host,RpcRequest source,PayloadOperation operation,JsonObject? parameters,CancellationToken token,bool requireCarrier=false) {
+			/// <param name="carrierDomainIsRuntimeDomain">True when the debugger's application domain ids
+			/// are the runtime's own, so the carrier's domain may be handed to the resident as an identity.
+			/// False for an engine that numbers domains itself, where the identity already computed from
+			/// the backend is the only value the target can verify - overwriting it with the debugger's
+			/// ordinal is what made a Mono arrival refuse its own guard.</param>
+			async Task<Dictionary<string,string>> ExecuteInitializationOperationAsync(RpcHost host,RpcRequest source,PayloadOperation operation,JsonObject? parameters,CancellationToken token,bool requireCarrier=false,bool carrierDomainIsRuntimeDomain=true) {
 				if(!requireCarrier && await TryReachEvaluablePauseAsync(host,source,token).ConfigureAwait(false)) return await EvaluatePayloadAsync(host,source,operation,parameters,token).ConfigureAwait(false);
 				await EnsurePausedAsync(host,source,token).ConfigureAwait(false);
 				var carriers=await SelectInternalCarriersAsync(host,source,token).ConfigureAwait(false);
 				AtomicActionResult? lastResult=null;
 				foreach(var carrier in carriers) {
-					if(parameters is not null) parameters["appdomain_id"]=carrier.AppDomainId;
+					if(parameters is not null && carrierDomainIsRuntimeDomain) parameters["appdomain_id"]=carrier.AppDomainId;
 					var result=await RunInitializationPayloadAsync(host,source,carrier,operation,parameters,token,requireCarrier).ConfigureAwait(false);
 					if(result.Status.ActionOutcome==HookLab.Contracts.ActionOutcome.completed) return Report(result);
 					lastResult=result;

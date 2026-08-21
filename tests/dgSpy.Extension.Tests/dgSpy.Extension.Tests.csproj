@@ -26,7 +26,7 @@
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\BreakpointSnapPolicy.cs" Link="Debugger\BreakpointSnapPolicy.cs" />
 	<Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\ProgramDiscoverySelection.cs" Link="Debugger\ProgramDiscoverySelection.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\OwnedBreakpoints\OwnedBreakpointStopLabel.cs" Link="Debugger\OwnedBreakpoints\OwnedBreakpointStopLabel.cs" />
-    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\OwnedBreakpoints\CorDebugRunReconciliation.cs" Link="Debugger\OwnedBreakpoints\CorDebugRunReconciliation.cs" />
+    <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\OwnedBreakpoints\EngineRunReconciliation.cs" Link="Debugger\OwnedBreakpoints\EngineRunReconciliation.cs" />
     <Compile Include="..\..\Extensions\dgSpy.Extension\Debugger\ActionLeaseCoordinator.cs" Link="Debugger\ActionLeaseCoordinator.cs" />
     <!-- Deliberately dnSpy-free: it carries the capture-then-recheck decision that closes the lease
          check-to-dispatch race, so it can be exercised here against the real coordinator and the real

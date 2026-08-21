@@ -28,10 +28,13 @@ namespace dgSpy.Extension {
 	/// string, and a test can require them to agree.</para></summary>
 	sealed class HookLabBackend {
 		internal HookLabBackend(string id,string name,string family,HookLabArrival arrival,Guid[] runtimeGuids,string runtimeNamePrefix,
-			int priority,string? fixedRuntimeId,bool synchronizesAfterArrival,string patchEnginePayloadId,string[] compilerPayloadIds) {
+			int priority,string? fixedRuntimeId,bool synchronizesAfterArrival,string patchEnginePayloadId,string[] compilerPayloadIds,
+			string rootApplicationDomainIdentity="1",bool debuggerNumbersApplicationDomainsItself=false) {
 			Id=id; Name=name; Family=family; Arrival=arrival; RuntimeGuids=runtimeGuids; RuntimeNamePrefix=runtimeNamePrefix;
 			Priority=priority; FixedRuntimeId=fixedRuntimeId; SynchronizesAfterArrival=synchronizesAfterArrival;
 			PatchEnginePayloadId=patchEnginePayloadId; CompilerPayloadIds=compilerPayloadIds;
+			RootApplicationDomainIdentity=rootApplicationDomainIdentity;
+			DebuggerNumbersApplicationDomainsItself=debuggerNumbersApplicationDomainsItself;
 		}
 
 		/// <summary>Stable identifier, architecture included, so an x86 variant can never be confused with
@@ -61,6 +64,23 @@ namespace dgSpy.Extension {
 		internal bool SynchronizesAfterArrival { get; }
 		internal string PatchEnginePayloadId { get; }
 		internal string[] CompilerPayloadIds { get; }
+		/// <summary>What <c>AppDomain.CurrentDomain.Id</c> returns in this runtime's first application
+		/// domain - the value the resident asserts about itself, and therefore the one the host has to
+		/// name when it says which domain the payload is for.
+		///
+		/// <para>"1" was a shared constant until Mono arrived, because a CLR default domain really is 1.
+		/// Mono's root domain is 0, measured: arrival refused with "Guard 'appdomain_id' mismatch.
+		/// Expected '1', actual '0'" - the guard working exactly as intended, on a value the host had no
+		/// business asserting.</para></summary>
+		internal string RootApplicationDomainIdentity { get; }
+		/// <summary>True when the debugger's application domain ids are its own invention rather than the
+		/// runtime's.
+		///
+		/// <para>dnSpy's Mono engine assigns them from a counter and says so - "We don't func-eval because
+		/// of Unity func-eval crashes, just use an ID that's probably correct". They are fine for choosing
+		/// a domain inside the debugger and meaningless to the target, so they must never be handed to the
+		/// resident as an identity, and a caller naming one cannot be honoured.</para></summary>
+		internal bool DebuggerNumbersApplicationDomainsItself { get; }
 		internal int Bitness => 64;
 		internal string Architecture => "X64";
 
@@ -71,7 +91,7 @@ namespace dgSpy.Extension {
 		public override string ToString()=>Name;
 	}
 
-	/// <summary>The complete, concrete set of supported backends. Two entries, listed by hand: this is a
+	/// <summary>The complete, concrete set of supported backends. Three entries, listed by hand: this is a
 	/// table of what has been proved to work, not a provider ecosystem, and adding a row is meant to
 	/// require the evidence that a new row implies.</summary>
 	static class HookLabBackends {
@@ -121,21 +141,24 @@ namespace dgSpy.Extension {
 			// coreclr.dll and a Mono target has none. The Mono build version is a different fact, not
 			// available here, and the compatibility probe is where it is pinned to a proved range.
 			fixedRuntimeId:"v4.0.30319",synchronizesAfterArrival:false,
-			patchEnginePayloadId:"Harmony.Desktop",compilerPayloadIds:new[]{"Microsoft.CodeAnalysis","Microsoft.CodeAnalysis.CSharp"});
+			patchEnginePayloadId:"Harmony.Desktop",compilerPayloadIds:new[]{"Microsoft.CodeAnalysis","Microsoft.CodeAnalysis.CSharp"},
+			// Mono's root domain is 0, not the CLR's 1, and dnSpy numbers Mono domains itself. Both are
+			// measured; see the property documentation.
+			rootApplicationDomainIdentity:"0",debuggerNumbersApplicationDomainsItself:true);
 
-		internal static readonly HookLabBackend[] All={ DesktopClrV4,CoreClr };
+		internal static readonly HookLabBackend[] All={ DesktopClrV4,CoreClr,Mono };
 
 		/// <summary>Backends whose payload, compiler and resident behaviour are proved but whose arrival is
 		/// not, with the reason each is still refused. They are described here rather than deleted because
 		/// everything except arrival is real and tested - and because a refusal that names the missing piece
-		/// is worth more than one that says "unsupported runtime".</summary>
-		internal static readonly (HookLabBackend Backend,string Reason)[] Pending={
-			(Mono,
-			 "HookLab on Mono is not available yet: the resident arrives through one debugger evaluation, "+
-			 "and placing that evaluation needs an owned internal breakpoint, which only the CorDebug engine "+
-			 "implements. Everything after arrival is proved on Mono - payload set, Roslyn compilation, "+
-			 "the patch engine, the control endpoint, and retirement - by the compatibility probe's mono leg."),
-		};
+		/// is worth more than one that says "unsupported runtime".
+		///
+		/// <para>Empty since 2026-08-21, when the Mono soft debugger got its own owned-breakpoint provider
+		/// and Mono moved to <see cref="All"/>. Kept, rather than deleted with its last occupant, because
+		/// the distinction it draws is the durable one: a runtime whose resident behaviour is proved and
+		/// whose arrival is not is a real state, and the next runtime to reach it should land here rather
+		/// than in a refusal that says "unsupported".</para></summary>
+		internal static readonly (HookLabBackend Backend,string Reason)[] Pending=Array.Empty<(HookLabBackend,string)>();
 
 		/// <summary>Every backend whose runtime this process has loaded, in priority order. Exposed so a
 		/// test can assert what a mixed-runtime process matches, rather than only what it is given.</summary>
@@ -155,7 +178,7 @@ namespace dgSpy.Extension {
 		internal static string? UnsupportedReason(int bitness,string architecture,IEnumerable<HookLabRuntimeIdentity> runtimes) {
 			if(runtimes is null) throw new ArgumentNullException(nameof(runtimes));
 			if(bitness!=64 || !String.Equals(architecture,"X64",StringComparison.OrdinalIgnoreCase))
-				return "HookLab currently supports x64 desktop CLR v4 and CoreCLR targets; the attached process architecture is "+architecture+" ("+bitness+"-bit).";
+				return "HookLab currently supports x64 desktop CLR v4, CoreCLR and Mono targets; the attached process architecture is "+architecture+" ("+bitness+"-bit).";
 			var attached=runtimes.ToArray();
 			if(Select(bitness,architecture,attached) is not null) return null;
 			// A runtime we know and cannot yet reach says which piece is missing. "The attached process
@@ -163,7 +186,7 @@ namespace dgSpy.Extension {
 			foreach(var pending in Pending)
 				if(attached.Any(pending.Backend.Matches)) return pending.Reason;
 			var names=attached.Select(runtime=>String.IsNullOrWhiteSpace(runtime.Name)?runtime.Guid.ToString("D"):runtime.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-			return "HookLab currently supports x64 desktop CLR v4 and CoreCLR targets; the attached process exposes "+(names.Length==0?"no managed runtime":String.Join(", ",names))+".";
+			return "HookLab currently supports x64 desktop CLR v4, CoreCLR and Mono targets; the attached process exposes "+(names.Length==0?"no managed runtime":String.Join(", ",names))+".";
 		}
 	}
 }

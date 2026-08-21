@@ -96,16 +96,26 @@ public class CompositionTests {
 	}
 
 	/// <summary>
-	/// dgSpy consumes only the contracts assembly. CorDebug owns the implementation export, so the
-	/// extension never needs a runtime reference to the scanner-loaded implementation assembly.
+	/// dgSpy consumes only the contracts assembly. Each engine owns its own implementation export, so the
+	/// extension never needs a runtime reference to a scanner-loaded implementation assembly.
+	///
+	/// <para>Both engines, asserted by name. One provider is what the composition looked like while
+	/// arrival was CorDebug-only, and a Mono provider that quietly failed to compose would present as
+	/// "HookLab does not support this target" rather than as a missing part.</para>
 	/// </summary>
 	[Fact]
-	public void Owned_breakpoint_service_contract_is_exported() {
+	public void Owned_breakpoint_providers_are_exported_by_both_engines() {
 		RequirePublishedHost();
 		var exporters = PartsExporting(PublishedHost.Instance.Catalog,
-			"dnSpy.Contracts.Debugger.DotNet.CorDebug.IDgSpyOwnedBreakpointService");
-		Assert.Single(exporters);
-		Assert.Contains("CorDebug", exporters[0].Definition.Type.FullName ?? "", StringComparison.Ordinal);
+			"dnSpy.Contracts.Debugger.DotNet.IDgSpyOwnedBreakpointProvider");
+		var names = exporters.Select(a => a.Definition.Type.FullName ?? "").ToList();
+		Assert.True(names.Any(n => n.Contains("CorDebug", StringComparison.Ordinal)),
+			"the CorDebug owned-breakpoint provider did not compose, so HookLab cannot arrive on CLR v4 or " +
+			"CoreCLR. Exported providers: " + string.Join(", ", names));
+		Assert.True(names.Any(n => n.Contains("Mono", StringComparison.Ordinal)),
+			"the Mono owned-breakpoint provider did not compose, so HookLab cannot arrive on Mono or Unity. " +
+			"Exported providers: " + string.Join(", ", names));
+		Assert.Equal(2, exporters.Count);
 	}
 
 	[Fact]
