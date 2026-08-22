@@ -174,14 +174,29 @@ public sealed class HookLabUiBoundaryTests {
 	[Fact]
 	public void HookLab_toolbar_actions_follow_initialized_selection_and_collection_state() {
 		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","ToolWindows","HookLabToolWindow.cs")));
-		Assert.Contains("publicboolCanInitialize=>!busy&&!initialized",source,StringComparison.Ordinal);
-		Assert.Contains("publicstringInitializeLabel=>initialized?\"HookLabInitialized\":initializing?\"Initializing...\":\"InitializeHookLab\"",source,StringComparison.Ordinal);
+		Assert.Contains("publicboolCanInitialize=>!busy",source,StringComparison.Ordinal);
+		Assert.Contains("publicstringInitializeLabel=>initializing?\"Initializing...\":initialized?\"InitializeCurrentTarget\":\"InitializeHookLab\"",source,StringComparison.Ordinal);
 		Assert.Contains("initialize.SetBinding(IsEnabledProperty,\"CanInitialize\")",source,StringComparison.Ordinal);
 		Assert.Contains("publicboolCanRemove=>!busy&&selected?.Owned==true",source,StringComparison.Ordinal);
 		Assert.Contains("remove.SetBinding(IsEnabledProperty,\"CanRemove\")",source,StringComparison.Ordinal);
 		Assert.Contains("publicboolCanRemoveAll=>!busy&&Hooks.Any(value=>value.Owned)",source,StringComparison.Ordinal);
 		Assert.Contains("all.SetBinding(IsEnabledProperty,\"CanRemoveAll\")",source,StringComparison.Ordinal);
 		Assert.Contains("lock(gate){initialized=false;hooks.Clear();events.Clear();}",source,StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void Gui_initialization_resumes_a_stopped_resident_and_resolves_multiple_targets_explicitly() {
+		var service=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
+		Assert.Contains("varprocess=awaitOnDebuggerAsync(SelectHookLabUiProcess,token)",service,StringComparison.Ordinal);
+		Assert.Contains("matches.Length>1&&manager.CurrentProcess.Currentis",service,StringComparison.Ordinal);
+		Assert.Contains("if(manager.CurrentProcess.Currentis",service,StringComparison.Ordinal);
+		Assert.Contains("Multipleprocessesareattached.Selectamethodortheintendedprocess",service,StringComparison.Ordinal);
+		var adoption=service.IndexOf("if(discovered.Length==1)",StringComparison.Ordinal);
+		var resume=service.IndexOf("if(!wasRunning)awaitResumeAsync(host,source,token)",adoption,StringComparison.Ordinal);
+		var health=service.IndexOf("store.VerifyHealthAndRefresh",adoption,StringComparison.Ordinal);
+		Assert.True(adoption>=0&&resume>adoption&&health>resume,"A stopped adopted resident must run before its pipe health check.");
+		var ui=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","ToolWindows","HookLabToolWindow.cs")));
+		Assert.Contains("Header=\"Process\",DisplayMemberBinding=newSystem.Windows.Data.Binding(\"Process\")",ui,StringComparison.Ordinal);
 	}
 
 	[Fact]

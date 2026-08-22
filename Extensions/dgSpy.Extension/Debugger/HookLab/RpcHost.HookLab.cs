@@ -56,8 +56,21 @@ namespace dgSpy.Extension {
 		async Task<object> InitializeHookLabFromUiAsync(CancellationToken token) {
 			await EnsureUiSessionAsync(token).ConfigureAwait(false);
 			string session; lock(sync) session=sessionId!;
-			var process=await OnDebuggerAsync(()=>manager.Processes.Length==1 ? manager.Processes[0].Id : throw new RpcException("ambiguous_target","HookLab initialization from the GUI requires exactly one active process."),token).ConfigureAwait(false);
+			var process=await OnDebuggerAsync(SelectHookLabUiProcess,token).ConfigureAwait(false);
 			return await hookLab.InitializeAsync(this,new RpcRequest { Operation="initialize_hooklab",Arguments=new JsonObject { ["session_id"]=session,["process_id"]=process } },token).ConfigureAwait(false);
+		}
+		int SelectHookLabUiProcess() {
+			var processes=manager.Processes;
+			var selected=HookLabUiBridge.SelectedMethod;
+			if(selected is not null) {
+				var matches=processes.Where(process=>process.Runtimes.SelectMany(runtime=>runtime.Modules).Any(module=>TryMetadata(module)?.Mvid==selected.Module.Mvid)).ToArray();
+				if(matches.Length==1) return matches[0].Id;
+				if(matches.Length>1 && manager.CurrentProcess.Current is dnSpy.Contracts.Debugger.DbgProcess currentMatch && matches.Contains(currentMatch)) return currentMatch.Id;
+				if(matches.Length>1) throw new RpcException("ambiguous_target","The selected method is loaded in multiple attached processes. Select the intended process in dnSpy, then initialize HookLab again.");
+			}
+			if(manager.CurrentProcess.Current is dnSpy.Contracts.Debugger.DbgProcess current && processes.Contains(current)) return current.Id;
+			if(processes.Length==1) return processes[0].Id;
+			throw new RpcException("ambiguous_target","Multiple processes are attached. Select a method or the intended process in dnSpy, then initialize HookLab again.");
 		}
 		async Task EnsureUiSessionAsync(CancellationToken token) {
 			await OnDebuggerAsync(()=>{
@@ -314,6 +327,10 @@ namespace dgSpy.Extension {
 					if(discovered.Length>1) throw new RpcException("hooklab_resident_ambiguous","Multiple authenticated HookLab residents name this exact target.");
 					Dictionary<string,string> completionReport;
 					if(discovered.Length==1) {
+						// A resident pipe is serviced by target threads. At a breakpoint the endpoint exists
+						// but cannot answer, so temporarily run it just as the fresh-injection path below does.
+						// The outer finally restores the caller's original running/paused state.
+						if(!wasRunning) await ResumeAsync(host,source,token).ConfigureAwait(false);
 						var health=store.VerifyHealthAndRefresh(discovered[0],2000); var adopted=discovered[0];
 						connection=new ProbeConnection(adopted.PipeName,adopted.Secret,adopted.EndpointNonce);
 						var adoptedRuntime=new RuntimeRecord(session,processId,connection,health.Status.ExpectedHooksVersion??0,adopted.ProbeInstanceId,true,target.Domain.IdentityId); connection=null; Inventory(adoptedRuntime,health.Status.PayloadJson);
