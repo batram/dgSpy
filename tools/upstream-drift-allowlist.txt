@@ -171,13 +171,21 @@ dnSpy/dnSpy.Contracts.Debugger/StartDebuggingOptions.cs                         
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DbgEngineImpl.cs           honour the explicit redirect request on launch
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/Impl/DbgEngineImpl.cs               honour the explicit redirect request on launch
 
-# Internal atomic actions need an engine breakpoint owner below dnSpy's public
-# duplicate-rejecting breakpoint collection. CoreCLR initialization also needs
-# one authoritative, idempotent engine-state reconciliation when the manager's
-# running state is stale after func-eval. Keep both operations narrow so dgSpy
-# does not use reflection or expose general CorDebug internals.
+# Internal atomic actions and HookLab arrival need an engine breakpoint owner
+# below dnSpy's public duplicate-rejecting breakpoint collection. The contract
+# is engine-neutral; CorDebug and Mono each export a narrow provider. CoreCLR
+# initialization also needs one authoritative, idempotent engine-state
+# reconciliation when the manager's running state is stale after func-eval.
 Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/Impl/DgSpyOwnedBreakpointFacade.cs  narrow owned-breakpoint and authoritative run-state facade
-dnSpy/dnSpy.Contracts.Debugger.DotNet.CorDebug/DgSpyOwnedBreakpointService.cs                narrow CorDebug services contract for dgSpy consumers
+dnSpy/dnSpy.Contracts.Debugger.DotNet/DgSpyOwnedBreakpoints.cs                               engine-neutral owned-breakpoint contract for dgSpy consumers
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/Impl/DbgEngineImpl.Breakpoints.cs       Mono owned breakpoints and func-eval-safe hit handling
+Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.Mono/Impl/DgSpyOwnedBreakpointFacade.cs      Mono owned-breakpoint and run-state provider
+
+# HookLab's net48 payload must load in stripped Unity players that carry no
+# netstandard facade. This build tool retargets pinned compiler references to
+# their real framework homes and emits the narrowly measured compatibility
+# placeholders instead of adding files to the target.
+Build/RetargetNetstandardReferences/**                                                        HookLab netstandard-reference retarget build tool
 
 # ICorDebugThread::GetUserState returning a failed HRESULT was converted to state 0,
 # which is indistinguishable from a thread with no flags set. Anything asking "is
