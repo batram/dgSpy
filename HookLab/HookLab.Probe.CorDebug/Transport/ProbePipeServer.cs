@@ -120,6 +120,9 @@ namespace HookLab.Probe.CorDebug.Transport {
 		/// <summary>Set when the listener thread ended on an exception rather than on shutdown. Null is the
 		/// normal case; a non-null value means the endpoint stopped accepting connections without being disposed.</summary>
 		public string? ListenerFailure { get; private set; }
+		/// <summary>The original listener-startup exception. Kept alongside the bounded text so startup can
+		/// rethrow the classified failure without losing its type or inner exception at the thread boundary.</summary>
+		public Exception? ListenerException { get; private set; }
 
 		public bool WaitUntilListening(int timeoutMilliseconds) {
 			if (timeoutMilliseconds <= 0) throw new ArgumentOutOfRangeException(nameof(timeoutMilliseconds));
@@ -207,7 +210,7 @@ namespace HookLab.Probe.CorDebug.Transport {
 			// .NET Framework, and this process is the debuggee - measured, by exactly that route. It is recorded
 			// rather than discarded, for the same reason ProbeRuntime counts consumer dispatch failures: a
 			// listener that died looks identical to one that shut down cleanly otherwise.
-			catch (Exception ex) { ListenerFailure = ex.GetType().FullName + ": " + ex.Message; listening.Set(); }
+			catch (Exception ex) { ListenerException = ex; ListenerFailure = ex.GetType().FullName + ": " + ex.Message; listening.Set(); }
 			// Never disposed by Dispose(): a Dispose that stopped owning this handle while the listener may
 			// still reach this line would make Set() throw ObjectDisposedException out of a thread delegate,
 			// which terminates the process on .NET Framework - and that process is the debuggee. Measured.

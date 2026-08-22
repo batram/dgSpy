@@ -319,6 +319,11 @@ namespace HookLab.Bootstrap {
 		/// reach retirement through a CorDebug evaluation.</summary>
 		internal const int ListenerTeardownTimeoutMilliseconds = 2000;
 
+		/// <summary>Preserves a listener-startup failure across the listener-thread boundary. The timeout is
+		/// synthesized only when the listener supplied no exception at all.</summary>
+		internal static Exception ListenerStartupFailure(Exception? failure) => failure ??
+			new InvalidOperationException("HookLab probe listener did not become ready: timeout");
+
 		static string? ListenerFailureOf(IDisposable serverHandle) {
 			try {
 				var property = serverHandle.GetType().GetProperty("ListenerFailure", BindingFlags.Public | BindingFlags.Instance);
@@ -418,7 +423,7 @@ namespace HookLab.Bootstrap {
 					pipe = new ProbePipeServer(HandleCommand, injectedSecret: endpointSecret, authenticationEnabled: endpointSecret != null, controllerSid: parameters.ControllerSid);
 					PipeConstructionCountForTest++;
 					ReleaseEndpointWhenTheProcessExits();
-					if (!pipe.WaitUntilListening(2000)) throw new InvalidOperationException("HookLab probe listener did not become ready: " + (pipe.ListenerFailure ?? "timeout"));
+					if (!pipe.WaitUntilListening(2000)) throw ListenerStartupFailure(pipe.ListenerException);
 				}
 				// The public HookLab service uses explicit bounded drain commands. Do not also register the pipe
 				// as a push consumer here: that would remove events from the authoritative buffer before the

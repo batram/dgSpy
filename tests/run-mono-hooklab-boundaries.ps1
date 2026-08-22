@@ -73,7 +73,15 @@ function Get-GuardTypeName($Type) { if ($Type.FullName) { $Type.FullName } else 
 # The install is attempted; whatever happens is then classified. "Refused" is a first-class pass here -
 # the roadmap asks for supported *or* refused, and a shape HookLab cannot honestly intercept should say
 # so. What fails is silence: an install that reports success while the observed value never moves.
-function Test-Boundary([string]$Name,[string]$Type,[string]$Method,[string]$HookId,[int]$Delta) {
+function Test-Boundary(
+	[string]$Name,
+	[string]$Type,
+	[string]$Method,
+	[string]$HookId,
+	[int]$Delta,
+	[ValidateSet('Supported','Refused')][string]$Expected,
+	[string]$RefusalPattern = ''
+) {
 	Write-Host ""
 	Write-Host "-- $Name" -ForegroundColor Cyan
 	$members = Rpc 'list_members' @{ session_id=$sessionId; module=$moduleName; module_id=$moduleId; type=$Type; name_pattern=$Method }
@@ -89,7 +97,9 @@ function Test-Boundary([string]$Name,[string]$Type,[string]$Method,[string]$Hook
 	$template = $null
 	try { $template = Rpc 'get_hook_template' @{ session_id=$sessionId; module_id=$moduleId; method_token=[int]$member.method_token; template='Postfix' } }
 	catch {
-		Check "$Name gives a decisive answer" $true ("refused at get_hook_template: " + $_.Exception.Message)
+		$message = $_.Exception.Message
+		$expectedRefusal = $Expected -eq 'Refused' -and $RefusalPattern -and $message -match $RefusalPattern
+		Check "$Name gives the expected answer" $expectedRefusal ("unexpected refusal at get_hook_template: " + $message)
 		Write-Host ("   REFUSED (template): " + $_.Exception.Message) -ForegroundColor Yellow
 		return
 	}
@@ -107,21 +117,28 @@ function Test-Boundary([string]$Name,[string]$Type,[string]$Method,[string]$Hook
 	}
 	try { $created = Rpc 'create_hook' $hook 120 }
 	catch {
-		Check "$Name gives a decisive answer" $true ("refused at create_hook: " + $_.Exception.Message)
+		$message = $_.Exception.Message
+		$expectedRefusal = $Expected -eq 'Refused' -and $RefusalPattern -and $message -match $RefusalPattern
+		Check "$Name gives the expected answer" $expectedRefusal ("unexpected refusal at create_hook: " + $message)
 		Write-Host ("   REFUSED (install): " + $_.Exception.Message) -ForegroundColor Yellow
+		return
+	}
+	if ($Expected -eq 'Refused') {
+		Check "$Name gives the expected answer" $false 'the carrier was installed even though a named refusal was expected'
+		try { $null = Rpc 'remove_hook' @{ session_id=$sessionId; process_id=$processId; hook_id=$HookId } } catch { }
 		return
 	}
 
 	# Installed. Now the only question that matters: did anything about the target actually change?
-	$expected = $baseline + $Delta
-	$observed = Wait-Until { (Behavior) -eq $expected } 20
+	$expectedBehavior = $baseline + $Delta
+	$observed = Wait-Until { (Behavior) -eq $expectedBehavior } 20
 	if ($observed) {
-		Write-Host ("   SUPPORTED: behaviour moved " + $baseline + " -> " + $expected) -ForegroundColor Green
-		Check "$Name gives a decisive answer" $true
+		Write-Host ("   SUPPORTED: behaviour moved " + $baseline + " -> " + $expectedBehavior) -ForegroundColor Green
+		Check "$Name gives the expected answer" $true
 	}
 	else {
-		Write-Host ("   SILENT: installed=" + $created.installed + " but behaviour stayed at " + (Behavior) + " (expected " + $expected + ")") -ForegroundColor Red
-		Check "$Name gives a decisive answer" $false "installed successfully but intercepted nothing, and said nothing about it"
+		Write-Host ("   SILENT: installed=" + $created.installed + " but behaviour stayed at " + (Behavior) + " (expected " + $expectedBehavior + ")") -ForegroundColor Red
+		Check "$Name gives the expected answer" $false "installed successfully but intercepted nothing, and said nothing about it"
 	}
 	try { $null = Rpc 'remove_hook' @{ session_id=$sessionId; process_id=$processId; hook_id=$HookId } } catch { }
 	$null = Wait-Until { (Behavior) -eq $baseline } 20
@@ -158,7 +175,8 @@ try {
 	$processId = @($attached.process_ids)[0]
 
 	$modules = @((Rpc 'list_modules' @{ session_id=$sessionId; name_pattern='MonoHookLabTarget' }).modules)
-	Check 'the fixture module is discovered' ($modules.Count -ge 1)
+	Check 'the fixture module is discovered unambiguously' ($modules.Count -eq 1) ("count=" + $modules.Count)
+	if ($modules.Count -ne 1) { throw "Expected exactly one MonoHookLabTarget module, found $($modules.Count)." }
 	$moduleId = $modules[0].module_id
 	$moduleName = $modules[0].name
 
@@ -173,12 +191,12 @@ try {
 	if (-not (Rpc 'get_session_state' @{ session_id=$sessionId }).is_running) { $null = Rpc 'continue' @{ session_id=$sessionId } }
 
 	# The control case. If this one is not decisive the gate is measuring itself, not the boundaries.
-	Test-Boundary 'a plain static method' 'MonoHookLabTarget.Program' 'Work' 'boundary-plain' 100
+	Test-Boundary 'a plain static method' 'MonoHookLabTarget.Program' 'Work' 'boundary-plain' 100 'Supported'
 
 	# Boundary 1: a generic method definition. There is no single runtime method to patch until it is
 	# closed over a type argument, and the guards - token, signature, IL digest - describe the
 	# definition rather than any instantiation of it.
-	Test-Boundary 'a generic method' 'MonoHookLabTarget.Program' 'GenericWork' 'boundary-generic-method' 200
+	Test-Boundary 'a generic method' 'MonoHookLabTarget.Program' 'GenericWork' 'boundary-generic-method' 200 'Refused' 'generic'
 
 	# Boundary 2: a non-generic method on a generic declaring type. Same problem, one level out.
 	# The exact spelling of a nested generic type name is the debugger's to state, not this gate's to
@@ -186,13 +204,13 @@ try {
 	$holder = @((Rpc 'list_types' @{ session_id=$sessionId; module=$moduleName; module_id=$moduleId; name_pattern='Holder' }).symbols | Select-Object -First 1)[0]
 	if ($holder) {
 		Write-Host ("generic type resolved as: " + $holder.name)
-		Test-Boundary 'a method on a generic type' $holder.name 'Work' 'boundary-generic-type' 300
+		Test-Boundary 'a method on a generic type' $holder.name 'Work' 'boundary-generic-type' 300 'Refused' 'generic'
 	}
 	else { Check 'the generic declaring type is discoverable' $false 'list_types found no Holder' }
 
 	# Boundary 3: a method the JIT is asked to inline. Patching it cannot affect call sites already
 	# compiled, so an install can succeed while nothing is intercepted.
-	Test-Boundary 'an aggressively inlined method' 'MonoHookLabTarget.Program' 'Inlineable' 'boundary-inlined' 400
+	Test-Boundary 'an aggressively inlined method' 'MonoHookLabTarget.Program' 'Inlineable' 'boundary-inlined' 400 'Supported'
 
 	# The refusal above came from get_hook_template, which is an authoring convenience. It says nothing
 	# about install_hook/create_hook, which take every identity fact as an argument and can be called

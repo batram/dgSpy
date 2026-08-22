@@ -11,6 +11,15 @@ namespace HookLab.Bootstrap.Tests {
 			ParameterBuilder.ForCurrentProcess().With("appdomain_id", runner.AppDomainId);
 
 		[Fact]
+		public void Listener_startup_preserves_the_classified_exception_and_its_cause() {
+			var cause = new DllNotFoundException("Unable to load DLL 'System.Native'");
+			var classified = new PlatformNotSupportedException("The runtime cannot host the endpoint.", cause);
+			var propagated = HookLab.Bootstrap.ProbeStartup.ListenerStartupFailure(classified);
+			Assert.Same(classified, propagated);
+			Assert.Same(cause, propagated.InnerException);
+		}
+
+		[Fact]
 		public void A_guarded_install_resolves_the_graph_from_bytes_and_observes_an_event() {
 			using (var runner = BootstrapRunner.Create("bootstrap-happy-path")) {
 				var report = Report.Parse(runner.Start(Parameters(runner).WithHook().ToString()));
