@@ -30,6 +30,16 @@ public sealed class PipelineTests : IDisposable {
 		Assert.Contains("<ProjectReference Include=\"..\\..\\HookLab\\HookLab.Packaging\\HookLab.Packaging.csproj\" />",extension,StringComparison.Ordinal);
 	}
 	[Fact]
+	public void Component_restore_is_serial_but_compilation_remains_parallel() {
+		var repo=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));
+		var graph=System.Xml.Linq.XDocument.Load(Path.Combine(repo,"Build","DgSpy.Components.proj"));
+		var targets=graph.Root!.Elements("Target").ToDictionary(target=>(string)target.Attribute("Name")!,StringComparer.Ordinal);
+		var restore=Assert.Single(targets["Restore"].Elements("MSBuild"));
+		Assert.Equal("false",(string?)restore.Attribute("BuildInParallel"));
+		var componentBuild=targets["Build"].Elements("MSBuild").First();
+		Assert.Equal("true",(string?)componentBuild.Attribute("BuildInParallel"));
+	}
+	[Fact]
 	public void Ci_builds_the_net10_package_once_and_reuses_it() {
 		var repo=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));
 		var workflow=File.ReadAllText(Path.Combine(repo,".github","workflows","dgspy-ci.yml"));

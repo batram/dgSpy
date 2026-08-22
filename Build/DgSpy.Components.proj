@@ -23,7 +23,7 @@
   </ItemGroup>
   <Target Name="Restore">
     <MSBuild Projects="@(ComponentProject);$(MSBuildThisFileDirectory)..\Extensions\dgSpy.Extension\dgSpy.Extension.csproj"
-             Targets="Restore" BuildInParallel="true"
+			 Targets="Restore" BuildInParallel="false"
 			 Properties="Configuration=$(Configuration);DgSpyHostContractsRoot=$(DgSpyHostContractsRoot)" />
   </Target>
   <!-- No DependsOnTargets="Restore": restore must run in its own evaluation pass (the /restore
