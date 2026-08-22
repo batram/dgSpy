@@ -97,8 +97,8 @@ never change target state.
 
 ## HookLab runtime backends
 
-`HookLabBackends` is the host's complete, concrete table of supported runtime backends - two rows,
-`clrv4-x64` and `coreclr-x64` - and one immutable `HookLabBackend` states everything that varies with
+`HookLabBackends` is the host's complete, concrete table of supported runtime backends - three rows,
+`clrv4-x64`, `coreclr-x64`, and `mono-x64` - and one immutable `HookLabBackend` states everything that varies with
 the runtime: family, architecture, how the payload arrives (native bootstrap or one debugger
 evaluation), whether the runtime id is a constant or must be read from the live target, whether the
 debugger is re-synchronised afterwards, and which payload matrix slots supply its patch engine and
@@ -107,7 +107,9 @@ compiler.
 Selection is deterministic. A target that matches no row is refused by name; a process that has loaded
 both runtimes - which really happens - resolves by declared priority rather than by the order of a
 chain of conditionals, and CLR v4 wins. The .NET Framework runtime GUID alone is not an identity,
-because CLR v2 shares it.
+because CLR v2 shares it. Mono and the Mono embedded in Unity are one runtime backend with two debugger
+runtime GUIDs; they share arrival and resident behavior rather than pretending the containing product is
+a fourth runtime family.
 
 The payload ids are the ids in the [resident payload matrix](HOOKLAB.md#resident-payload-matrix), so
 the host's statement of what a runtime uses and the build's statement of what it ships for that runtime
@@ -132,6 +134,13 @@ machine-readable JSON with stable exit categories. The dgSpy extension keeps its
 adapter, but both adapters use one protected discovery root and target identity. Each discovers,
 authenticates, inventories, and adopts an existing resident before injection. The resident accepts
 simultaneous authenticated controllers and keeps one shared hooks-version gate across them.
+
+The adapters also consume one strict `ResidentInventoryParser` from `HookLab.Injector`. Probe-instance
+identity, hook ownership, exact method guards, compiled-hook state, shadow detection, and hooks-version
+therefore have one host-side wire interpretation. Session bookkeeping and UI source retention remain in
+the debugger adapter; watcher scheduling and desired-state policy remain in the watcher. Arrival is still
+separate: the standalone injector is CLR-v4 native injection, while the debugger adapter can also reach
+CoreCLR and Mono through evaluation.
 
 Resident hook IDs are controller-qualified (`dgspy:<id>` or `watcher:<id>`). Inventory reports that
 owner and the exact case-sensitive CLR assembly simple name captured at installation. dgSpy exposes

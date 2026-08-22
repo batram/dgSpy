@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Text.Json;
 using System.Collections.Concurrent;
 using System.Text;
 using System.Security.Cryptography;
@@ -80,8 +79,13 @@ public sealed class ResidentCoordinator {
 	// against resident state, so the replacement had to be proved identical rather than assumed.
 	static string SourceDigest(string source) { using var sha=SHA256.Create(); return OneShotInjector.Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(source))); }
 	static void EnsureSameTarget(ResidentHookStatus observed,HookDefinition desired,bool legacy=false) { var target=desired.Target!; if((!legacy&&(observed.Controller!=HookOwnership.WatcherController||observed.HookId!=desired.Id))||(!String.IsNullOrEmpty(observed.AssemblySimpleName)&&!String.Equals(observed.AssemblySimpleName,target.Assembly,StringComparison.Ordinal))||observed.Kind!=desired.Hook!.Kind||observed.ModuleMvid!=target.ModuleMvid||observed.MetadataToken!=target.MetadataToken||observed.DeclaringType!=target.DeclaringType||observed.Signature!=target.Signature||observed.IlSha256!=target.IlSha256) throw new InvalidOperationException("Resident hook id names a different exact target or owner; refusing conflict."); }
-	static ResidentStatusResult ParseStatus(string payload,string probeInstanceId) { using var document=JsonDocument.Parse(payload); var root=document.RootElement; if(root.GetProperty("probe_instance_id").GetString()!=probeInstanceId) throw new InvalidOperationException("Authenticated resident status reported a different probe instance."); var hooks=root.GetProperty("compiled_hooks").EnumerateArray().Select(value=>ParseHook(probeInstanceId,value)).ToArray(); return new(0,0,"",probeInstanceId,root.GetProperty("hooks_version").GetInt64(),hooks); }
-	static ResidentHookStatus ParseHook(string probeInstanceId,JsonElement value) { var patchId=value.GetProperty("patch_id").GetString()!; HookOwnership.TryParse(probeInstanceId,patchId,out var controller,out var hookId); return new(patchId,controller,hookId,value.TryGetProperty("assembly_simple_name",out var assembly)?assembly.GetString()!:String.Empty,value.GetProperty("kind").GetString()!,value.GetProperty("module_mvid").GetString()!,value.GetProperty("metadata_token").GetInt32(),value.GetProperty("declaring_type").GetString()!,value.GetProperty("signature").GetString()!,value.GetProperty("il_sha256").GetString()!,value.GetProperty("source_sha256").GetString()!,value.GetProperty("revision").GetInt32(),value.GetProperty("enabled").GetBoolean()); }
+	static ResidentStatusResult ParseStatus(string payload,string probeInstanceId) {
+		var inventory=ResidentInventoryParser.Parse(payload,probeInstanceId);
+		var hooks=inventory.Hooks.Select(value=>new ResidentHookStatus(value.PatchId,value.Controller,value.HookId,value.AssemblySimpleName,value.Kind.ToString(),
+			value.Target.ModuleMvid.ToString("D"),unchecked((int)value.Target.MetadataToken),value.Target.DeclaringType,value.Target.MethodSignature,value.Target.IlSha256,
+			value.SourceSha256,value.Revision,value.Enabled)).ToArray();
+		return new(0,0,"",inventory.ProbeInstanceId,inventory.HooksVersion,hooks);
+	}
 
 	static bool SameTarget(TargetIdentity left,TargetIdentity right)=>(left.HostId==HostId||left.HostId=="apply-once")&&left.ProcessId==right.ProcessId&&left.ProcessCreationTimeUtc.ToUniversalTime().Ticks==right.ProcessCreationTimeUtc.ToUniversalTime().Ticks&&String.Equals(Path.GetFullPath(left.ImagePath),Path.GetFullPath(right.ImagePath),StringComparison.OrdinalIgnoreCase)&&left.Architecture==right.Architecture&&left.RuntimeId==right.RuntimeId&&left.AppDomainId==right.AppDomainId;
 

@@ -664,7 +664,8 @@ The watcher can atomically enroll that canonical export into its separately prot
 Enrollment verifies the deployment again, rejects identity conflicts, and durably disables the profile
 before publication; automatic application begins only after an explicit `enable-profile` command.
 
-The debugger-integrated and standalone adapters currently retain separate resident ownership paths.
+The debugger-integrated and standalone adapters share authenticated resident inventory parsing and exact
+hook ownership interpretation, but currently retain separate arrival and resident ownership paths.
 Neither may inject a competing generation merely because it cannot adopt a resident it discovered.
 Authenticated cross-adoption and preservation of foreign-owned hooks remain roadmap work.
 

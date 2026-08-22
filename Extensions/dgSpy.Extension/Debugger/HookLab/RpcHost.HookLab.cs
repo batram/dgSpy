@@ -17,6 +17,7 @@ using dgSpy.Protocol;
 using HookLab.Contracts;
 using HookLab.Host.Transport;
 using HookLab.Host.Transport.Discovery;
+using HookLab.Injector;
 using HookLab.Packaging;
 using HookLab.Probe.CorDebug.Transport;
 using dnlib.DotNet;
@@ -684,14 +685,16 @@ namespace dgSpy.Extension {
 			async Task<string> SendRawAsync(RuntimeRecord runtime,string operation,string payload,CancellationToken token) =>
 				(await ExchangeAsync(runtime,operation,payload,token).ConfigureAwait(false)).PayloadJson;
 			void Inventory(RuntimeRecord runtime,string payload) {
-				using(var document=JsonDocument.Parse(payload)) { var root=document.RootElement; if(root.GetProperty("probe_instance_id").GetString()!=runtime.ProbeInstanceId) throw new RpcException("hooklab_resident_identity_mismatch","Authenticated resident reported a different probe identity."); runtime.HooksVersion=root.GetProperty("hooks_version").GetInt64(); var values=new List<ResidentHookRecord>(); foreach(var item in root.GetProperty("compiled_hooks").EnumerateArray()) { var patch=item.GetProperty("patch_id").GetString()!; HookOwnership.TryParse(runtime.ProbeInstanceId,patch,out var controller,out var hookId); values.Add(new ResidentHookRecord(runtime.SessionId,runtime.ProcessId,patch,controller,hookId,item.TryGetProperty("assembly_simple_name",out var assembly)?assembly.GetString()!:String.Empty,item.GetProperty("kind").GetString()!,item.GetProperty("module_mvid").GetString()!,item.GetProperty("metadata_token").GetInt32(),item.GetProperty("declaring_type").GetString()!,item.GetProperty("signature").GetString()!,item.GetProperty("il_sha256").GetString()!,item.GetProperty("source_sha256").GetString()!,item.GetProperty("revision").GetInt32(),item.GetProperty("enabled").GetBoolean())); } lock(gate) { foreach(var key in residentHooks.Where(value=>value.Value.SessionId==runtime.SessionId&&value.Value.ProcessId==runtime.ProcessId).Select(value=>value.Key).ToArray()) residentHooks.Remove(key); foreach(var value in values) residentHooks[value.Key]=value; }
-					// TryGetProperty, not GetProperty: a resident from before this existed reports no such
-					// field, and an adopted one is exactly the case where the two builds can differ.
-					runtime.Shadowed.Clear();
-					if(root.TryGetProperty("shadowed_hooks",out var shadowedHooks) && shadowedHooks.ValueKind==JsonValueKind.Array)
-						foreach(var item in shadowedHooks.EnumerateArray())
-							runtime.Shadowed[item.GetProperty("patch_id").GetString()!]=(item.GetProperty("declaring_type").GetString()!,item.GetProperty("shadowing_assembly").GetString()!);
-				}
+				ResidentInventory inventory;
+				try { inventory=ResidentInventoryParser.Parse(payload,runtime.ProbeInstanceId); }
+				catch(ResidentIdentityMismatchException) { throw new RpcException("hooklab_resident_identity_mismatch","Authenticated resident reported a different probe identity."); }
+				runtime.HooksVersion=inventory.HooksVersion;
+				var values=inventory.Hooks.Select(item=>new ResidentHookRecord(runtime.SessionId,runtime.ProcessId,item.PatchId,item.Controller,item.HookId,item.AssemblySimpleName,
+					item.Kind.ToString(),item.Target.ModuleMvid.ToString("D"),unchecked((int)item.Target.MetadataToken),item.Target.DeclaringType,item.Target.MethodSignature,
+					item.Target.IlSha256,item.SourceSha256,item.Revision,item.Enabled)).ToArray();
+				lock(gate) { foreach(var key in residentHooks.Where(value=>value.Value.SessionId==runtime.SessionId&&value.Value.ProcessId==runtime.ProcessId).Select(value=>value.Key).ToArray()) residentHooks.Remove(key); foreach(var value in values) residentHooks[value.Key]=value; }
+				runtime.Shadowed.Clear();
+				foreach(var item in inventory.ShadowedHooks) runtime.Shadowed[item.PatchId]=(item.DeclaringType,item.ShadowingAssembly);
 			}
 
 			async Task DrainRemovalBacklogAsync(RuntimeRecord runtime,CancellationToken token) {

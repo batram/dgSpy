@@ -1,0 +1,34 @@
+using HookLab.Contracts;
+using HookLab.Injector;
+using Xunit;
+
+namespace HookLab.ApplyOnce.Tests;
+
+public sealed class ResidentInventoryTests {
+	[Fact]
+	public void ResidentInventoryHasOneStrictSharedInterpretation() {
+		const string payload="""
+			{"probe_instance_id":"probe","hooks_version":7,"compiled_hooks":[{"patch_id":"probe:dgspy:alpha","assembly_simple_name":"Target","kind":"Postfix","module_mvid":"11111111-2222-3333-4444-555555555555","metadata_token":100663297,"declaring_type":"Target.Type","signature":"System.Int32 Work()","il_sha256":"abc","source_sha256":"def","revision":3,"enabled":true}],"shadowed_hooks":[{"patch_id":"probe:dgspy:alpha","declaring_type":"Target.Type","shadowing_assembly":"Target.v2"}]}
+			""";
+		var inventory=ResidentInventoryParser.Parse(payload,"probe");
+		Assert.Equal(7,inventory.HooksVersion);
+		var hook=Assert.Single(inventory.Hooks);
+		Assert.Equal("dgspy",hook.Controller); Assert.Equal("alpha",hook.HookId); Assert.Equal(HookKind.Postfix,hook.Kind);
+		Assert.Equal(new Guid("11111111-2222-3333-4444-555555555555"),hook.Target.ModuleMvid);
+		Assert.Equal((uint)100663297,hook.Target.MetadataToken); Assert.True(hook.Enabled);
+		var shadowed=Assert.Single(inventory.ShadowedHooks); Assert.Equal("Target.v2",shadowed.ShadowingAssembly);
+	}
+
+	[Fact]
+	public void ResidentInventoryRefusesAStatusFromAnotherAuthenticatedResident() {
+		const string payload="{\"probe_instance_id\":\"other\",\"hooks_version\":0,\"compiled_hooks\":[]}";
+		var error=Assert.Throws<ResidentIdentityMismatchException>(()=>ResidentInventoryParser.Parse(payload,"expected"));
+		Assert.Contains("other",error.Message,StringComparison.Ordinal); Assert.Contains("expected",error.Message,StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void ResidentInventoryRefusesMalformedHookIdentityInsteadOfPartiallyAdoptingIt() {
+		const string payload="{\"probe_instance_id\":\"probe\",\"hooks_version\":0,\"compiled_hooks\":[{\"patch_id\":\"probe:dgspy:alpha\",\"assembly_simple_name\":\"Target\",\"kind\":\"Postfix\",\"module_mvid\":\"not-a-guid\",\"metadata_token\":1,\"declaring_type\":\"T\",\"signature\":\"S\",\"il_sha256\":\"a\",\"source_sha256\":\"b\",\"revision\":1,\"enabled\":true}]}";
+		Assert.Throws<InvalidDataException>(()=>ResidentInventoryParser.Parse(payload,"probe"));
+	}
+}

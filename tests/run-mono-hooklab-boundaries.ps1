@@ -42,7 +42,18 @@ $hostId = 0; $target = $null; $sessionId = $null; $pass = 0; $fail = 0
 function Rpc([string]$Operation,[hashtable]$Arguments=@{},[int]$Deadline=70) { Invoke-DgSpyRpc -OperationName $Operation -OperationArguments $Arguments -RpcPort $RpcPort -DeadlineSeconds $Deadline }
 function Check([string]$Name,$Condition,[string]$Detail='') { if([bool]$Condition){$script:pass++;Write-Host "PASS  $Name" -ForegroundColor DarkGreen}else{$script:fail++;Write-Host "FAIL  $Name  $Detail" -ForegroundColor Red} }
 function Wait-Until([scriptblock]$Condition,[int]$Seconds=20) { $deadline=[DateTime]::UtcNow.AddSeconds($Seconds); do { if(& $Condition){return $true}; Start-Sleep -Milliseconds 200 } until([DateTime]::UtcNow -gt $deadline); return $false }
-function Behavior { $value=(Get-Content -LiteralPath (Join-Path $root 'behavior.txt') -ErrorAction SilentlyContinue | Select-Object -First 1); if($value){[int]$value}else{-1} }
+function Behavior {
+	$path = Join-Path $root 'behavior.txt'
+	# The fixture publishes by deleting the old file and moving a complete replacement into place. A
+	# reader can land in that tiny gap; absence is not a value and must not become a synthetic baseline.
+	for ($attempt = 0; $attempt -lt 20; $attempt++) {
+		$value = Get-Content -LiteralPath $path -ErrorAction SilentlyContinue | Select-Object -First 1
+		$parsed = 0
+		if ($value -and [int]::TryParse($value,[ref]$parsed)) { return $parsed }
+		Start-Sleep -Milliseconds 10
+	}
+	throw 'behavior.txt did not contain a complete integer after 200 ms.'
+}
 
 # Reflection over the file on disk, not the live target, matching run-mono-hooklab-smoke.ps1: the guards
 # create_hook checks are properties of the assembly, and deriving them from the debugger would be asking
