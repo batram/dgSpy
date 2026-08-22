@@ -25,6 +25,28 @@ namespace HookLab.Bootstrap.Tests {
 		}
 
 		[Fact]
+		public void Native_entry_publishes_a_prepare_refusal_before_any_worker_exists() {
+			var directory=Path.Combine(Path.GetTempPath(),"hooklab-native-refusal-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
+			try {
+				var completion=Path.Combine(directory,"completion.txt"); var parameters=Path.Combine(directory,"initialize.params");
+				using(var runner=BootstrapRunner.Create("bootstrap-native-refusal")) {
+					File.WriteAllText(parameters,Parameters(runner,completion).ToString().Replace("endpoint=none\n",""),new UTF8Encoding(false));
+					Assert.Equal(2,runner.NativeInitialize(parameters));
+				}
+				var report=Report.Parse(File.ReadAllText(completion)); Assert.Equal("error",report["status"]); Assert.Contains("endpoint",report["error_message"],StringComparison.Ordinal);
+			}
+			finally { try { Directory.Delete(directory,true); } catch { } }
+		}
+
+		[Fact]
+		public void A_second_byte_loaded_bootstrap_generation_is_refused_in_the_same_appdomain() {
+			using(var runner=BootstrapRunner.Create("bootstrap-generation-rendezvous")) {
+				var first=Report.Parse(runner.Prepare(Parameters(runner,Path.GetTempFileName()).With("endpoint","none").ToString())); Assert.Equal("ok",first["status"]);
+				var second=Report.Parse(runner.StartByteLoaded(Parameters(runner,Path.GetTempFileName()).With("endpoint","none").ToString())); Assert.Equal("error",second["status"]); Assert.Contains("resident_generation_present",second["error_message"],StringComparison.Ordinal);
+			}
+		}
+
+		[Fact]
 		public void Pipe_endpoint_identity_survives_prepare_to_async_completion() {
 			var completion = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".hooklab-completion");
 			try {

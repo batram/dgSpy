@@ -79,6 +79,7 @@ namespace HookLab.Bootstrap {
 				string? completionPath = null;
 				Func<string, string> enter = value => { ResidentStages.Trace(completionPath, value); return value; };
 				try {
+					ResidentGenerationRendezvous.Claim();
 					var parsed = BootstrapParameters.Parse(parameters);
 					completionPath = parsed.CompletionPath;
 					if (parsed.Endpoint != "none" && parsed.Endpoint != "pipe") throw new ArgumentException("Prepare requires endpoint=none or endpoint=pipe.", nameof(parameters));
@@ -145,6 +146,8 @@ namespace HookLab.Bootstrap {
 		[MethodImpl(MethodImplOptions.NoInlining)]
 		public static string Start(string parameters) {
 			lock (Gate) {
+				try { ResidentGenerationRendezvous.Claim(); }
+				catch(Exception ex) { return Error(ResidentStages.Precondition,ex.GetType().FullName??"Exception",ex.Message,false,ex); }
 				if (startedResult != null) return Error(ResidentStages.Precondition, "already_started", "This bootstrap has already run in this AppDomain.", false);
 				if (ProbeStartup.HasRetainedCleanup) {
 					ProbeStartup.Shutdown();

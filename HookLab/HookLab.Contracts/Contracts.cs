@@ -43,6 +43,18 @@ namespace HookLab.Contracts {
 		static string Required(string value, string name) => string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value is required.", name) : value;
 	}
 
+	/// <summary>Compares type-bearing metadata emitted by dnlib with reflection names. ECMA metadata
+	/// writes nested types with '/', while <see cref="Type.FullName"/> writes the same boundary as '+'.</summary>
+	public static class MethodIdentityText {
+		public static bool Equivalent(string left, string right) =>
+			string.Equals(Canonicalize(left), Canonicalize(right), StringComparison.Ordinal);
+
+		public static string Canonicalize(string value) {
+			if (value == null) throw new ArgumentNullException(nameof(value));
+			return value.Replace('/', '+');
+		}
+	}
+
 	public sealed class HookLimits {
 		public HookLimits(int maximumEventsPerSecond, int maximumEventBytes, int maximumSerializationDepth, int maximumCollectionCount, int maximumStringLength, int maximumConsecutiveFailures) {
 			MaximumEventsPerSecond = Positive(maximumEventsPerSecond, nameof(maximumEventsPerSecond)); MaximumEventBytes = Positive(maximumEventBytes, nameof(maximumEventBytes));

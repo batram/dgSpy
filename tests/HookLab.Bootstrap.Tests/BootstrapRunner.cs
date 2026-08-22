@@ -33,6 +33,7 @@ namespace HookLab.Bootstrap.Tests {
 		public string Start(string parameters) => inner != null ? inner.Start(parameters) : HookLabBootstrap.Start(parameters);
 		public string Prepare(string parameters) => inner != null ? inner.Prepare(parameters) : HookLabBootstrap.Prepare(parameters);
 		public string Commit() => inner != null ? inner.Commit() : HookLabBootstrap.Commit();
+		public int NativeInitialize(string parameterFile) => inner != null ? inner.NativeInitialize(parameterFile) : NativeEntry.Initialize(parameterFile);
 		public string DrainEvents(int maximumCount) => inner != null ? inner.DrainEvents(maximumCount) : HookLabBootstrap.DrainEvents(maximumCount);
 		public int WorkerStarts => inner != null ? inner.WorkerStarts : ResidentLauncher.WorkerStarts;
 		public int[] CommitInstrumentation => inner != null ? inner.CommitInstrumentation : new[] {

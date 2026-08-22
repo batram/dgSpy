@@ -654,8 +654,10 @@ The MCP surface includes:
 
 The GUI uses the same service directly rather than calling MCP. Method context commands create
 observation or custom C# hooks. The HookLab window exposes real initialization, editing, enable/disable,
-show, event, and removal operations. Observation rows are deliberately non-editable. Method glyphs show
-single or multiple installed hooks without guessing which row a click should mutate.
+show, event, and removal operations. Observation rows are deliberately non-editable. Authenticated
+watcher-owned hooks appear with their `watcher` owner and read-only state; their edit, enable/disable,
+and removal actions remain unavailable. Method glyphs show single or multiple installed hooks without
+guessing which row a click should mutate.
 
 ## Standalone watcher
 
@@ -678,10 +680,19 @@ The watcher can atomically enroll that canonical export into its separately prot
 Enrollment verifies the deployment again, rejects identity conflicts, and durably disables the profile
 before publication; automatic application begins only after an explicit `enable-profile` command.
 
-The debugger-integrated and standalone adapters share authenticated resident inventory parsing and exact
-hook ownership interpretation, but currently retain separate arrival and resident ownership paths.
-Neither may inject a competing generation merely because it cannot adopt a resident it discovered.
-Authenticated cross-adoption and preservation of foreign-owned hooks remain roadmap work.
+The debugger-integrated and standalone adapters share authenticated discovery, resident inventory
+parsing, exact hook ownership interpretation, and legacy-record recovery. A retained watcher payload
+directory without a discovery record is never treated as an empty target: its exact identity, endpoint
+secret, nonce, and completion report must authenticate against the live resident before the canonical
+record is rebuilt. If they cannot, initialization refuses rather than injecting a competing generation.
+Foreign-owned hooks are preserved and exposed to the other controller as inspect-only inventory.
+
+The native bootstrap byte-loads its managed entry assembly in the selected AppDomain, including the
+default domain, so CLR path binding cannot silently substitute an older assembly with the same identity.
+An AppDomain-wide generation rendezvous still enforces first-writer ownership before payload loading;
+byte-loading is not permission to create a second resident. Managed pre-worker refusals publish their
+full report to `completion_path`, and the native layer publishes a bounded HRESULT/exit-code fallback
+when an older managed entry can return only an integer.
 
 ## Current limitations
 

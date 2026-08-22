@@ -49,11 +49,11 @@ namespace dgSpy.Extension.ToolWindows {
 		HookLabHookRow? Single=>rows.Length==1?rows[0]:null;
 		public void Show()=>HookLabUiBridge.ShowMethod(Method);
 		public bool CanEdit=>HookLabUiBridge.SingleCompiled(Method) is not null;
-		public bool CanManage=>Single is not null;
+		public bool CanManage=>Single?.Owned==true;
 		public string ToggleHeader=>Single?.Enabled==false?"Enable Hook":"Disable Hook";
 		public void Edit() { var row=HookLabUiBridge.SingleCompiled(Method); if(row is not null) new CustomHookEditorDialog(row).ShowDialog(); else Show(); }
-		public async void ToggleOrShow() { var row=Single; if(row is null) { Show(); return; } try { await HookLabUiBridge.ToggleAsync(row); } catch(Exception ex) { HookLabUiBridge.ReportStatus(ex.Message); } }
-		public async void Remove() { var row=Single; if(row is null) { Show(); return; } try { await HookLabUiBridge.RemoveAsync(row); } catch(Exception ex) { HookLabUiBridge.ReportStatus(ex.Message); } }
+		public async void ToggleOrShow() { var row=Single; if(row?.Owned!=true) { Show(); return; } try { await HookLabUiBridge.ToggleAsync(row); } catch(Exception ex) { HookLabUiBridge.ReportStatus(ex.Message); } }
+		public async void Remove() { var row=Single; if(row?.Owned!=true) { Show(); return; } try { await HookLabUiBridge.RemoveAsync(row); } catch(Exception ex) { HookLabUiBridge.ReportStatus(ex.Message); } }
 		public override string ToString()=>Single is HookLabHookRow row ? "HookLab: "+row.Id+" - "+row.State+" (click to "+(row.Enabled?"disable":"enable")+")" : "HookLab: "+Total+" hooks ("+Compiled+" compiled, "+Observers+" observer) - open HookLab to manage";
 	}
 

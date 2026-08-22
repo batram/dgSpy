@@ -308,7 +308,9 @@ namespace dgSpy.Extension {
 					var identity=TargetIdentity(source.Arguments,processId,completion,runtimeId,target.Domain.Name,target.Domain.IdentityId);
 					// SameTarget here, with the domain: adoption must not hand back a resident living in a
 					// different application domain than the one this operation is for.
-					var live=LiveTarget(processId,DgSpyStateRoot.ResidentHostId,runtimeId,target.Domain.IdentityId); var store=new ProbeDiscoveryStore(DgSpyStateRoot.SharedResidentRoot()); var discovered=store.DiscoverStrict(new ExtensionLiveTargets(runtimeId),DateTime.UtcNow).Where(value=>SameTarget(value.Target,live)).ToArray();
+					var live=LiveTarget(processId,DgSpyStateRoot.ResidentHostId,runtimeId,target.Domain.IdentityId); var store=new ProbeDiscoveryStore(DgSpyStateRoot.SharedResidentRoot()); ProbeDiscoveryRecord[] discovered;
+					try { discovered=new LegacyResidentRecovery(DgSpyStateRoot.SharedResidentRoot()).FindOrRecover(live,new ExtensionLiveTargets(runtimeId)).ToArray(); }
+					catch(UnregisteredResidentException ex) { throw new RpcException("hooklab_unregistered_resident_detected",ex.Message); }
 					if(discovered.Length>1) throw new RpcException("hooklab_resident_ambiguous","Multiple authenticated HookLab residents name this exact target.");
 					Dictionary<string,string> completionReport;
 					if(discovered.Length==1) {
@@ -693,6 +695,7 @@ namespace dgSpy.Extension {
 					item.Kind.ToString(),item.Target.ModuleMvid.ToString("D"),unchecked((int)item.Target.MetadataToken),item.Target.DeclaringType,item.Target.MethodSignature,
 					item.Target.IlSha256,item.SourceSha256,item.Revision,item.Enabled)).ToArray();
 				lock(gate) { foreach(var key in residentHooks.Where(value=>value.Value.SessionId==runtime.SessionId&&value.Value.ProcessId==runtime.ProcessId).Select(value=>value.Key).ToArray()) residentHooks.Remove(key); foreach(var value in values) residentHooks[value.Key]=value; }
+				HookLabUiBridge.PublishResidentHooks(runtime.SessionId,runtime.ProcessId,values.Select(value=>new HookLabResidentRow(value.HookId,value.Kind,value.DeclaringType+" [0x"+value.MetadataToken.ToString("X8",CultureInfo.InvariantCulture)+"]",value.PatchId,value.Revision,value.Enabled,String.IsNullOrEmpty(value.Controller)?"unknown":value.Controller,value.Controller==HookOwnership.DgSpyController)).ToArray());
 				runtime.Shadowed.Clear();
 				foreach(var item in inventory.ShadowedHooks) runtime.Shadowed[item.PatchId]=(item.DeclaringType,item.ShadowingAssembly);
 			}
@@ -1139,7 +1142,7 @@ namespace dgSpy.Extension {
 				// replace Prefix with Postfix on the same exactly guarded method.
 				public bool SameTarget(HookDefinition other)=>ModuleId==other.ModuleId && MethodToken==other.MethodToken && Mvid==other.Mvid && Signature==other.Signature && IlSha256==other.IlSha256;
 				static int Positive(JsonObject values,string name,int fallback) { var value=(int?)values[name] ?? fallback; return value>0 ? value : throw new RpcException("invalid_arguments",name+" must be positive."); }
-				public JsonObject Parameters(string completion,string? residentHookId=null) { var values=new JsonObject { ["host_id"]=DgSpyStateRoot.ResidentHostId,["image_path"]=ImagePath,["process_id"]=ProcessId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=ProcessCreationTicks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]=RuntimeId,["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion,["hook_id"]=residentHookId??HookId,["hook_kind"]=Kind,["hook_assembly"]=Assembly,["hook_type"]=DeclaringType,["hook_method"]=Method,["hook_module_mvid"]=Mvid,["hook_metadata_token"]=MethodToken.ToString(CultureInfo.InvariantCulture),["hook_declaring_type"]=DeclaringType,["hook_method_signature"]=Signature,["hook_il_sha256"]=IlSha256,["maximum_events_per_second"]=MaximumEventsPerSecond.ToString(CultureInfo.InvariantCulture),["maximum_string_length"]=MaximumStringLength.ToString(CultureInfo.InvariantCulture) }; if(Source is not null) { values["hook_source_base64"]=Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Source)); values["hook_revision"]=Revision.ToString(CultureInfo.InvariantCulture); } return values; }
+				public JsonObject Parameters(string completion,string? residentHookId=null) { var residentType=MethodIdentityText.Canonicalize(DeclaringType); var residentSignature=MethodIdentityText.Canonicalize(Signature); var values=new JsonObject { ["host_id"]=DgSpyStateRoot.ResidentHostId,["image_path"]=ImagePath,["process_id"]=ProcessId.ToString(CultureInfo.InvariantCulture),["process_creation_utc_ticks"]=ProcessCreationTicks.ToString(CultureInfo.InvariantCulture),["architecture"]="x64",["runtime_id"]=RuntimeId,["appdomain_id"]="1",["endpoint"]="pipe",["completion_path"]=completion,["hook_id"]=residentHookId??HookId,["hook_kind"]=Kind,["hook_assembly"]=Assembly,["hook_type"]=residentType,["hook_method"]=Method,["hook_module_mvid"]=Mvid,["hook_metadata_token"]=MethodToken.ToString(CultureInfo.InvariantCulture),["hook_declaring_type"]=residentType,["hook_method_signature"]=residentSignature,["hook_il_sha256"]=IlSha256,["maximum_events_per_second"]=MaximumEventsPerSecond.ToString(CultureInfo.InvariantCulture),["maximum_string_length"]=MaximumStringLength.ToString(CultureInfo.InvariantCulture) }; if(Source is not null) { values["hook_source_base64"]=Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Source)); values["hook_revision"]=Revision.ToString(CultureInfo.InvariantCulture); } return values; }
 			}
 		}
 	}

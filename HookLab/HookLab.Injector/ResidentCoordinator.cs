@@ -12,10 +12,10 @@ namespace HookLab.Injector;
 
 public sealed class ResidentCoordinator {
 	const string HostId=DgSpyStateRoot.ResidentHostId;
-	readonly string? payloadDirectory; readonly ProbeDiscoveryStore store; readonly ResidentPayloadStore payloads;
+	readonly string? payloadDirectory; readonly ProbeDiscoveryStore store; readonly ResidentPayloadStore payloads; readonly LegacyResidentRecovery recovery;
 	readonly ConcurrentDictionary<(int ProcessId,long CreationTicks),object> gates=new();
 	readonly object storeGate=new();
-	public ResidentCoordinator(string? payloadDirectory,string? stateRoot=null) { this.payloadDirectory=payloadDirectory; store=new ProbeDiscoveryStore(stateRoot); payloads=new ResidentPayloadStore(stateRoot); payloads.CleanupExited(); }
+	public ResidentCoordinator(string? payloadDirectory,string? stateRoot=null) { this.payloadDirectory=payloadDirectory; store=new ProbeDiscoveryStore(stateRoot); payloads=new ResidentPayloadStore(stateRoot); recovery=new LegacyResidentRecovery(stateRoot); payloads.CleanupExited(); }
 
 	public InjectorResult Apply(InjectorRequest request) {
 		lock(gates.GetOrAdd((request.ProcessId,request.ProcessCreationUtcTicks),_=>new object())) return ApplySerialized(request);
@@ -25,7 +25,7 @@ public sealed class ResidentCoordinator {
 		var expected=LiveIdentity.Read(request.ProcessId);
 		if(expected.ProcessCreationTimeUtc.ToUniversalTime().Ticks!=request.ProcessCreationUtcTicks) throw new InvalidOperationException("Target process identity changed before HookLab operation.");
 		if(request.PermittedImagePath is not null&&!String.Equals(Path.GetFullPath(request.PermittedImagePath),Path.GetFullPath(expected.ImagePath),StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Target image is outside the permitted executable path: "+expected.ImagePath);
-		ProbeDiscoveryRecord[] records; lock(storeGate) records=store.DiscoverStrict(new SystemLiveTargets(),DateTime.UtcNow).Where(record=>SameTarget(record.Target,expected)).ToArray();
+		ProbeDiscoveryRecord[] records; lock(storeGate) records=recovery.FindOrRecover(expected,new SystemLiveTargets()).ToArray();
 		if(records.Length>1) throw new InvalidOperationException("Multiple authenticated-resident records name the same live target; refusing ambiguous adoption.");
 		if(records.Length==1) {
 			ProbeHealthResult health; lock(storeGate) health=store.VerifyHealthAndRefresh(records[0],2000);
@@ -78,7 +78,7 @@ public sealed class ResidentCoordinator {
 	// See OneShotInjector.Hex: Convert.ToHexString does not exist on net48, and this digest is compared
 	// against resident state, so the replacement had to be proved identical rather than assumed.
 	static string SourceDigest(string source) { using var sha=SHA256.Create(); return OneShotInjector.Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(source))); }
-	static void EnsureSameTarget(ResidentHookStatus observed,HookDefinition desired,bool legacy=false) { var target=desired.Target!; if((!legacy&&(observed.Controller!=HookOwnership.WatcherController||observed.HookId!=desired.Id))||(!String.IsNullOrEmpty(observed.AssemblySimpleName)&&!String.Equals(observed.AssemblySimpleName,target.Assembly,StringComparison.Ordinal))||observed.Kind!=desired.Hook!.Kind||observed.ModuleMvid!=target.ModuleMvid||observed.MetadataToken!=target.MetadataToken||observed.DeclaringType!=target.DeclaringType||observed.Signature!=target.Signature||observed.IlSha256!=target.IlSha256) throw new InvalidOperationException("Resident hook id names a different exact target or owner; refusing conflict."); }
+	static void EnsureSameTarget(ResidentHookStatus observed,HookDefinition desired,bool legacy=false) { var target=desired.Target!; if((!legacy&&(observed.Controller!=HookOwnership.WatcherController||observed.HookId!=desired.Id))||(!String.IsNullOrEmpty(observed.AssemblySimpleName)&&!String.Equals(observed.AssemblySimpleName,target.Assembly,StringComparison.Ordinal))||observed.Kind!=desired.Hook!.Kind||observed.ModuleMvid!=target.ModuleMvid||observed.MetadataToken!=target.MetadataToken||!MethodIdentityText.Equivalent(observed.DeclaringType,target.DeclaringType!)||!MethodIdentityText.Equivalent(observed.Signature,target.Signature!)||observed.IlSha256!=target.IlSha256) throw new InvalidOperationException("Resident hook id names a different exact target or owner; refusing conflict."); }
 	static ResidentStatusResult ParseStatus(string payload,string probeInstanceId) {
 		var inventory=ResidentInventoryParser.Parse(payload,probeInstanceId);
 		var hooks=inventory.Hooks.Select(value=>new ResidentHookStatus(value.PatchId,value.Controller,value.HookId,value.AssemblySimpleName,value.Kind.ToString(),

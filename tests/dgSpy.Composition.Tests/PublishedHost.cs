@@ -45,26 +45,39 @@ sealed class PublishedHost {
 	/// Null when the host has not been published, so tests can report that clearly
 	/// instead of failing with an unrelated file-not-found.
 	/// </summary>
-	public static string? LocateBinDirectory() {
-		var fromEnv = Environment.GetEnvironmentVariable("DGSPY_PUBLISH_BIN");
-		if (!string.IsNullOrEmpty(fromEnv))
-			return Directory.Exists(fromEnv) ? fromEnv : null;
+	public static string? LocateBinDirectory() => LocateBinDirectory(
+		Environment.GetEnvironmentVariable("DGSPY_PUBLISH_BIN"), AppContext.BaseDirectory);
 
-		var dir = AppContext.BaseDirectory;
+	internal static string? LocateBinDirectory(string? configured, string startDirectory) {
+		if (!string.IsNullOrEmpty(configured))
+			return IsHostBin(configured) ? Path.GetFullPath(configured) : null;
+
+		var dir = Path.GetFullPath(startDirectory);
 		for (int i = 0; i < 12 && dir is not null; i++) {
+			// DgSpyTool publishes this directory by atomic rename only after writing the
+			// complete inventory. Prefer it over the old compiler publish tree below:
+			// that tree can be older than the package whose composition we mean to test.
+			var completedLayout = Path.Combine(dir, "artifacts", "layouts", "local");
+			var completedBin = Path.Combine(completedLayout, "bin");
+			if (File.Exists(Path.Combine(completedLayout, "dgspy-layout.json")) && IsHostBin(completedBin))
+				return completedBin;
+
 			var candidate = Path.Combine(dir,
 				"dnSpy", "dnSpy", "bin", "Release", "net10.0-windows", "win-x64", "publish", "bin");
-			if (Directory.Exists(candidate) && File.Exists(Path.Combine(candidate, "dnSpy.Contracts.DnSpy.dll")))
+			if (IsHostBin(candidate))
 				return candidate;
 			dir = Path.GetDirectoryName(dir.TrimEnd(Path.DirectorySeparatorChar));
 		}
 		return null;
 	}
 
+	static bool IsHostBin(string path) => Directory.Exists(path) &&
+		File.Exists(Path.Combine(path, "dnSpy.Contracts.DnSpy.dll"));
+
 	PublishedHost() {
 		BinDirectory = LocateBinDirectory()
 			?? throw new InvalidOperationException(
-				"verified host not found. Run DgSpyTool pipeline or set DGSPY_PUBLISH_BIN.");
+				"verified host not found. Run DgSpyTool pipeline or point DGSPY_PUBLISH_BIN at its bin directory.");
 
 		// The published host is self-contained, so every dependency sits next to
 		// the assemblies under test. Resolve from there rather than from the test

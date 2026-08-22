@@ -16,6 +16,7 @@ using dgSpy.Extension;
 namespace HookLab.Probe.Tests {
 	public sealed class ProbeCoreTests {
 		static readonly MethodInfo TargetMethod = typeof(Fixture).GetMethod(nameof(Fixture.Add))!;
+		static readonly MethodInfo NestedSignatureMethod = typeof(Fixture).GetMethod(nameof(Fixture.ReadOffset))!;
 		/// <summary>A top-level target, so an emitted assembly can genuinely redefine its type by name.</summary>
 		static readonly MethodInfo ShadowableMethod = typeof(ShadowableFixture).GetMethod(nameof(ShadowableFixture.Add))!;
 		static readonly MethodInfo PreexistingShadowMethod = typeof(PreexistingShadowFixture).GetMethod(nameof(PreexistingShadowFixture.Add))!;
@@ -36,6 +37,17 @@ namespace HookLab.Probe.Tests {
 			AssertGuard("method_signature", new MethodGuard(valid.ModuleMvid, valid.MetadataToken, valid.DeclaringType, "System.Int32 Add(System.String)", valid.IlSha256));
 			AssertGuard("il_sha256", new MethodGuard(valid.ModuleMvid, valid.MetadataToken, valid.DeclaringType, valid.MethodSignature, new string('0', 64)));
 			MethodGuards.ValidateMethod(TargetMethod, valid);
+		}
+
+		[Fact]
+		public void DnlibNestedTypeNamesMatchReflectionIdentity() {
+			var reflection = GuardFor(NestedSignatureMethod);
+			Assert.Contains("+", reflection.DeclaringType);
+			Assert.Contains("+", reflection.MethodSignature);
+			var dnlib = new MethodGuard(reflection.ModuleMvid, reflection.MetadataToken,
+				reflection.DeclaringType.Replace('+', '/'), reflection.MethodSignature.Replace('+', '/'), reflection.IlSha256);
+
+			MethodGuards.ValidateMethod(NestedSignatureMethod, dnlib);
 		}
 
 		[Fact]
@@ -832,6 +844,7 @@ namespace HookLab.Probe.Tests {
 				[MethodImpl(MethodImplOptions.NoInlining)] public static int Work() => 0;
 			}
 			[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
+			[MethodImpl(MethodImplOptions.NoInlining)] public static int ReadOffset(InstanceFixture value) => value.Offset;
 			[MethodImpl(MethodImplOptions.NoInlining)] public static object Echo(object value) => value;
 			[MethodImpl(MethodImplOptions.NoInlining)] public static int Caller() => Add(1, 2);
 			[MethodImpl(MethodImplOptions.NoInlining)] public static void Throwing() { throw new FixtureException(); }

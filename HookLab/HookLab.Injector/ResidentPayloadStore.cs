@@ -15,6 +15,13 @@ public sealed class ResidentPayloadStore {
 		var name=processId.ToString(CultureInfo.InvariantCulture)+"-"+creationUtcTicks.ToString(CultureInfo.InvariantCulture)+"-"+Guid.NewGuid().ToString("N");
 		var path=SafeChild(name); Directory.CreateDirectory(path); RejectReparse(path); return path;
 	}
+	public IReadOnlyList<string> Find(int processId,long creationUtcTicks) {
+		if(!Directory.Exists(root)) return Array.Empty<string>();
+		var prefix=processId.ToString(CultureInfo.InvariantCulture)+"-"+creationUtcTicks.ToString(CultureInfo.InvariantCulture)+"-";
+		var matches=new List<string>();
+		foreach(var path in Directory.EnumerateDirectories(root,prefix+"*",SearchOption.TopDirectoryOnly)) { RejectReparse(path); EnsureChild(path); matches.Add(path); }
+		return matches.AsReadOnly();
+	}
 	public void Delete(string path) { var exact=Path.GetFullPath(path); EnsureChild(exact); if(Directory.Exists(exact)) Directory.Delete(exact,true); }
 	public void CleanupExited() {
 		if(!Directory.Exists(root)) return;

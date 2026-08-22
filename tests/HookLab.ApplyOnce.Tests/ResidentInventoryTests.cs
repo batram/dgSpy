@@ -1,10 +1,22 @@
 using HookLab.Contracts;
+using HookLab.Host.Transport.Discovery;
 using HookLab.Injector;
 using Xunit;
 
 namespace HookLab.ApplyOnce.Tests;
 
 public sealed class ResidentInventoryTests {
+	[Fact]
+	public void Unauthenticated_legacy_resident_evidence_refuses_a_second_injection() {
+		var root=Path.Combine(Path.GetTempPath(),"hooklab-legacy-recovery-"+Guid.NewGuid().ToString("N"));
+		try {
+			new ResidentPayloadStore(root).Create(123,456);
+			var target=new TargetIdentity("hooklab-resident",@"C:\Target.exe",123,new DateTime(456,DateTimeKind.Utc),"x64","v4.0.30319","1");
+			var error=Assert.Throws<UnregisteredResidentException>(()=>new LegacyResidentRecovery(root).FindOrRecover(target,new ExactTarget()));
+			Assert.Contains("Refusing a second injection",error.Message,StringComparison.Ordinal);
+		}
+		finally { try { Directory.Delete(root,true); } catch { } }
+	}
 	[Fact]
 	public void ResidentInventoryHasOneStrictSharedInterpretation() {
 		const string payload="""
@@ -31,4 +43,6 @@ public sealed class ResidentInventoryTests {
 		const string payload="{\"probe_instance_id\":\"probe\",\"hooks_version\":0,\"compiled_hooks\":[{\"patch_id\":\"probe:dgspy:alpha\",\"assembly_simple_name\":\"Target\",\"kind\":\"Postfix\",\"module_mvid\":\"not-a-guid\",\"metadata_token\":1,\"declaring_type\":\"T\",\"signature\":\"S\",\"il_sha256\":\"a\",\"source_sha256\":\"b\",\"revision\":1,\"enabled\":true}]}";
 		Assert.Throws<InvalidDataException>(()=>ResidentInventoryParser.Parse(payload,"probe"));
 	}
+
+	sealed class ExactTarget : ILiveTargetIdentity { public bool IsCurrent(TargetIdentity identity)=>true; }
 }

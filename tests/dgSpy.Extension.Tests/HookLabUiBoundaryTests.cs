@@ -22,7 +22,7 @@ public sealed class HookLabUiBoundaryTests {
 		var source=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","ToolWindows","HookLabToolWindow.cs")));
 		Assert.Contains("Content=\"Edit\"",source,StringComparison.Ordinal);
 		Assert.Contains("edit.SetBinding(IsEnabledProperty,\"CanEdit\")",source,StringComparison.Ordinal);
-		Assert.Contains("selected?.Compiled==true&&selected.Sourceisnotnull&&selected.MethodDefinitionisnotnull",source,StringComparison.Ordinal);
+		Assert.Contains("selected?.Owned==true&&selected.Compiled&&selected.Sourceisnotnull&&selected.MethodDefinitionisnotnull",source,StringComparison.Ordinal);
 		Assert.Contains("newCustomHookEditorDialog(value).ShowDialog()",source,StringComparison.Ordinal);
 		Assert.Contains("existing.Revision+1,existing.Source,existing.Kind",source,StringComparison.Ordinal);
 		Assert.Contains("id.IsReadOnly=existingisnotnull",source,StringComparison.Ordinal);
@@ -177,11 +177,39 @@ public sealed class HookLabUiBoundaryTests {
 		Assert.Contains("publicboolCanInitialize=>!busy&&!initialized",source,StringComparison.Ordinal);
 		Assert.Contains("publicstringInitializeLabel=>initialized?\"HookLabInitialized\":initializing?\"Initializing...\":\"InitializeHookLab\"",source,StringComparison.Ordinal);
 		Assert.Contains("initialize.SetBinding(IsEnabledProperty,\"CanInitialize\")",source,StringComparison.Ordinal);
-		Assert.Contains("publicboolCanRemove=>!busy&&selectedisnotnull",source,StringComparison.Ordinal);
+		Assert.Contains("publicboolCanRemove=>!busy&&selected?.Owned==true",source,StringComparison.Ordinal);
 		Assert.Contains("remove.SetBinding(IsEnabledProperty,\"CanRemove\")",source,StringComparison.Ordinal);
-		Assert.Contains("publicboolCanRemoveAll=>!busy&&Hooks.Count>0",source,StringComparison.Ordinal);
+		Assert.Contains("publicboolCanRemoveAll=>!busy&&Hooks.Any(value=>value.Owned)",source,StringComparison.Ordinal);
 		Assert.Contains("all.SetBinding(IsEnabledProperty,\"CanRemoveAll\")",source,StringComparison.Ordinal);
 		Assert.Contains("lock(gate){initialized=false;hooks.Clear();events.Clear();}",source,StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void Foreign_resident_hooks_are_visible_but_every_management_surface_is_read_only() {
+		var ui=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","ToolWindows","HookLabToolWindow.cs")));
+		var service=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
+		var glyph=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","ToolWindows","HookLabGlyphMarker.cs")));
+		Assert.Contains("HookLabUiBridge.PublishResidentHooks",service,StringComparison.Ordinal);
+		Assert.Contains("value.Controller==HookOwnership.DgSpyController",service,StringComparison.Ordinal);
+		Assert.Contains("Header=\"Owner\"",ui,StringComparison.Ordinal);
+		Assert.Contains("Enabled(read-only)",ui,StringComparison.Ordinal);
+		Assert.Contains("publicboolCanEdit=>!busy&&selected?.Owned==true",ui,StringComparison.Ordinal);
+		Assert.Contains("publicboolCanToggle=>!busy&&selected?.Owned==true",ui,StringComparison.Ordinal);
+		Assert.Contains("publicboolCanRemove=>!busy&&selected?.Owned==true",ui,StringComparison.Ordinal);
+		Assert.Contains("removeHook.IsEnabled=vm.CanRemove",ui,StringComparison.Ordinal);
+		Assert.Contains("value.Owned&&value.Id==id",ui,StringComparison.Ordinal);
+		Assert.Contains("publicboolCanManage=>Single?.Owned==true",glyph,StringComparison.Ordinal);
+		Assert.Contains("if(row?.Owned!=true){Show();return;}",glyph,StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void Hook_requests_use_reflection_nested_type_names_for_old_and_new_residents() {
+		var service=Normalize(File.ReadAllText(RepoFile("Extensions","dgSpy.Extension","Debugger","HookLab","RpcHost.HookLab.cs")));
+		Assert.Contains("varresidentType=MethodIdentityText.Canonicalize(DeclaringType)",service,StringComparison.Ordinal);
+		Assert.Contains("varresidentSignature=MethodIdentityText.Canonicalize(Signature)",service,StringComparison.Ordinal);
+		Assert.Contains("[\"hook_type\"]=residentType",service,StringComparison.Ordinal);
+		Assert.Contains("[\"hook_declaring_type\"]=residentType",service,StringComparison.Ordinal);
+		Assert.Contains("[\"hook_method_signature\"]=residentSignature",service,StringComparison.Ordinal);
 	}
 
 	static string Normalize(string value)=>String.Concat(value.Where(character=>!Char.IsWhiteSpace(character)));

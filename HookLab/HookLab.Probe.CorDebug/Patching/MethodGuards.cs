@@ -30,8 +30,8 @@ namespace HookLab.Probe.CorDebug.Patching {
 			if (guard == null) throw new ArgumentNullException(nameof(guard));
 			Check("module_mvid", guard.ModuleMvid.ToString("D"), method.Module.ModuleVersionId.ToString("D"));
 			Check("metadata_token", guard.MetadataToken.ToString(), unchecked((uint)method.MetadataToken).ToString());
-			Check("declaring_type", guard.DeclaringType, method.DeclaringType?.FullName ?? "");
-			Check("method_signature", guard.MethodSignature, Signature(method));
+			CheckMethodIdentity("declaring_type", guard.DeclaringType, method.DeclaringType?.FullName ?? "");
+			CheckMethodIdentity("method_signature", guard.MethodSignature, Signature(method));
 			Check("il_sha256", NormalizeHash(guard.IlSha256), IlSha256(method));
 		}
 
@@ -49,6 +49,9 @@ namespace HookLab.Probe.CorDebug.Patching {
 		static string NormalizeHash(string value) => value.Replace("-", "").ToLowerInvariant();
 		static void Check(string name, string expected, string actual) {
 			if (!string.Equals(expected, actual, StringComparison.Ordinal)) throw new GuardMismatchException(name, expected, actual);
+		}
+		static void CheckMethodIdentity(string name, string expected, string actual) {
+			if (!MethodIdentityText.Equivalent(expected, actual)) throw new GuardMismatchException(name, expected, actual);
 		}
 	}
 }
