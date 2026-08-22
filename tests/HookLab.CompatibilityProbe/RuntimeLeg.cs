@@ -38,7 +38,11 @@ sealed class RuntimeLeg {
 			var started = CommitResidency(run, target, facts);
 			var record = Authenticate(target, facts, started);
 			InstallAndObserve(run, record, facts);
-			Retire(run, target);
+			if (family == RuntimeFamily.Mono) {
+				VerifyDomainReload(run, target);
+				InstallFinalizerBarrier(run, record, facts);
+			}
+			Retire(run, target, family == RuntimeFamily.Mono);
 			return report;
 		}
 		catch (ProbeRefusal) { throw; }
@@ -237,9 +241,43 @@ sealed class RuntimeLeg {
 			throw new ProbeRefusal(stage, "The resident still owns a patch after removal.", identities);
 	}
 
-	void Retire(string run, Process target) {
+	void VerifyDomainReload(string run, Process target) {
+		Stage("domain_reload");
+		File.WriteAllText(Path.Combine(run, "reload-domain.txt"), "reload\n", Utf8);
+		var result = Path.Combine(run, "domain-reload.txt");
+		if (!WaitFor(() => File.Exists(result), target, TimeSpan.FromSeconds(15)))
+			throw new ProbeRefusal(stage, "The Mono fixture did not unload and recreate an application domain.", identities);
+		var domains = Parse(File.ReadAllText(result));
+		var oldId = Value(domains, "old_appdomain_id");
+		var newId = Value(domains, "new_appdomain_id");
+		if (oldId.Length == 0 || newId.Length == 0 || Value(domains, "old_domain_unloaded") != "true")
+			throw new ProbeRefusal(stage, "The reload fixture did not prove that unloading invalidated the old application domain: " + Describe(domains), identities);
+		report.Add("domain_reload=old_domain_invalidated (" + oldId + "->" + newId +
+			(oldId == newId ? ", id_reused" : ", id_changed") + ")");
+	}
+
+	void InstallFinalizerBarrier(string run, ProbeDiscoveryRecord record, Facts facts) {
+		Stage("finalizer_retirement");
+		var source = "using System;using System.IO;using System.Threading;public static class H{public static void Prefix(){" +
+			"File.WriteAllText(@\"" + run.Replace("\"", "\"\"") + "\\\\finalizer-entered.txt\",\"entered\");" +
+			"while(!File.Exists(@\"" + run.Replace("\"", "\"\"") + "\\\\release-finalizer.txt\"))Thread.Sleep(10);" +
+			"File.WriteAllText(@\"" + run.Replace("\"", "\"\"") + "\\\\finalizer-completed.txt\",\"completed\");}}";
+		ProbeTransportClient.Send(record, "install_compiled_prefix",
+			HookParameters(facts, record, "compatibility-probe-finalizer", "Prefix", source, true),
+			HooksVersion(record), 30000);
+		File.WriteAllText(Path.Combine(run, "finalize.txt"), "finalize\n", Utf8);
+		if (!WaitFor(() => File.Exists(Path.Combine(run, "finalizer-entered.txt")), null, TimeSpan.FromSeconds(15)))
+			throw new ProbeRefusal(stage, "The CLR finalizer thread did not enter the patched carrier.", identities);
+	}
+
+	void Retire(string run, Process target, bool finalizerBarrier) {
 		Stage("retire");
 		File.WriteAllText(Path.Combine(run, "stop.txt"), "stop\n", Utf8);
+		if (finalizerBarrier) {
+			if (!WaitFor(() => File.Exists(Path.Combine(run, "shutdown-entered.txt")), target, TimeSpan.FromSeconds(15)))
+				throw new ProbeRefusal(stage, "The target did not enter retirement while its finalizer thread was inside the hook.", identities);
+			File.WriteAllText(Path.Combine(run, "release-finalizer.txt"), "release\n", Utf8);
+		}
 		if (!target.WaitForExit(30000)) throw new ProbeRefusal(stage, "The target did not exit within 30 seconds of being asked to stop.", identities);
 		if (target.ExitCode != 0) throw new ProbeRefusal(stage, "The target exited with code " + target.ExitCode.ToString(CultureInfo.InvariantCulture) + ".", identities);
 		var shutdown = Path.Combine(run, "shutdown.txt");
@@ -250,6 +288,9 @@ sealed class RuntimeLeg {
 		// which is a leak worth failing a probe over even though the target is gone.
 		if (Value(values, "behavior_commit") != "stopped")
 			throw new ProbeRefusal(stage, "Retirement was not clean: " + Describe(values), identities);
+		if (finalizerBarrier && !File.Exists(Path.Combine(run, "finalizer-completed.txt")))
+			throw new ProbeRefusal(stage, "The finalizer did not leave the hook after retirement began.", identities);
+		if (finalizerBarrier) report.Add("finalizer_during_retirement=completed");
 		report.Add("retired=clean");
 	}
 
@@ -292,7 +333,13 @@ sealed class RuntimeLeg {
 	/// token, declaring type, signature and IL digest - because the resident refuses anything less, and
 	/// because a hook that installs against a method it cannot prove is the one failure mode HookLab may
 	/// never have.</summary>
-	string HookParameters(Facts facts, ProbeDiscoveryRecord record, string hookId, string kind, string? source) {
+	string HookParameters(Facts facts, ProbeDiscoveryRecord record, string hookId, string kind, string? source,
+		bool finalizerCarrier = false) {
+		var type = finalizerCarrier ? facts["finalizer_type"] : facts["type"];
+		var method = finalizerCarrier ? facts["finalizer_method"] : facts["method"];
+		var token = finalizerCarrier ? facts["finalizer_token"] : facts["token"];
+		var signature = finalizerCarrier ? facts["finalizer_signature"] : facts["signature"];
+		var digest = finalizerCarrier ? facts["finalizer_il_sha256"] : facts["il_sha256"];
 		var pairs = new List<(string, string)> {
 			("host_id", DgSpyStateRoot.ResidentHostId), ("image_path", record.Target.ImagePath),
 			("process_id", record.Target.ProcessId.ToString(CultureInfo.InvariantCulture)),
@@ -300,9 +347,9 @@ sealed class RuntimeLeg {
 			("architecture", "x64"), ("runtime_id", facts["runtime_id"]), ("appdomain_id", facts["appdomain_id"]),
 			("endpoint", "none"), ("completion_path", "unused"),
 			("hook_id", hookId), ("hook_kind", kind), ("hook_assembly", facts["assembly"]),
-			("hook_type", facts["type"]), ("hook_method", facts["method"]), ("hook_module_mvid", facts["mvid"]),
-			("hook_metadata_token", facts["token"]), ("hook_declaring_type", facts["type"]),
-			("hook_method_signature", facts["signature"]), ("hook_il_sha256", facts["il_sha256"]),
+			("hook_type", type), ("hook_method", method), ("hook_module_mvid", facts["mvid"]),
+			("hook_metadata_token", token), ("hook_declaring_type", type),
+			("hook_method_signature", signature), ("hook_il_sha256", digest),
 			("hook_revision", "1"), ("maximum_events_per_second", "20"), ("maximum_string_length", "128"),
 		};
 		if (source is not null) pairs.Add(("hook_source_base64", Convert.ToBase64String(Encoding.UTF8.GetBytes(source))));

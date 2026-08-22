@@ -419,7 +419,8 @@ dotnet run --project tests\HookLab.CompatibilityProbe -c Release -- --negative
 
 Each leg runs named stages - `payload_verify`, `backend_selection`, `target_launch`, `runtime_range`,
 `residency_commit`, `listener_ready`, `authenticated`, `compile`, `behavior`, `event`, `remove`,
-`retire` - and a failure reports the stage plus every payload identity that stage had selected. That is
+`retire` - and a failure reports the stage plus every payload identity that stage had selected. The
+Mono leg additionally runs `domain_reload` and `finalizer_retirement`. That is
 the point of it: a wrong patch engine or an unresolvable compiler dependency used to appear only as a
 timeout inside a packaged live gate, long after everything else had run. `--negative` additionally
 requires a payload with one byte changed to be refused, so the verification stage cannot pass vacuously.
@@ -472,6 +473,19 @@ load count drops to 7. That line is the leg's only evidence of *which* copy was 
 fallback axis existed the Unity variant did not pass at all: two `System.Memory` assemblies in one
 domain split `ReadOnlySpan<T>` identity and Roslyn could not find its own `ImmutableArray.Create`
 overload. See [Carried, or a fallback for what the runtime lacks](#carried-or-a-fallback-for-what-the-runtime-lacks).
+
+The Mono leg also gives decisive answers to two lifecycle boundaries:
+
+- **An AppDomain reload does not carry a resident forward.** The fixture creates a secondary domain,
+  unloads it, proves its old proxy is invalid, and creates its replacement. Mono 6.12 reused managed
+  AppDomain ID `1` for the replacement, so `appdomain_id` is an address within the current runtime,
+  not a reload generation. Code and residents in the unloaded domain are gone; the replacement domain
+  needs normal initialization and may legitimately receive the same numeric ID.
+- **A finalizer already inside a hook completes during retirement.** A barrier hook on a carrier called
+  only by a real CLR finalizer publishes entry, retirement starts and unpatches while that thread is
+  held inside the prefix, and the fixture then releases it. The finalizer leaves the hook and Mono's
+  listener teardown reports a clean retirement. The barriers make the overlap constructed, not a
+  timing assertion.
 
 ## Mono HookLab live gate
 

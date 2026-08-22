@@ -47,63 +47,68 @@ If only part of an outcome is complete, rewrite the road around what remains.
 
 ## Route at a glance
 
-1. Answer Mono's last two unknowns - domain reloads and finalizers during retirement - with live
-   evidence, or a fixture that shows why they cannot yet be measured.
-2. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
-3. Revisit high-risk execution, editing, and scripting one workflow at a time.
-4. Keep the remaining compatibility expansions parked until product scope changes.
-5. Improve HookLab authoring only when a concrete failing hook exists.
+1. Add ordinary x86 debugging and x86 HookLab through a proved architecture boundary.
+2. Revisit high-risk execution, editing, and scripting one workflow at a time.
+3. Keep the remaining compatibility expansions parked until product scope changes.
+4. Improve HookLab authoring only when a concrete failing hook exists.
 
-## Road 1 - domain reloads and finalizers, the last two Mono unknowns
+## Road 1 - add x86 debugging and HookLab
 
-Mono is a supported HookLab runtime, standalone and embedded alike. One payload set across both Mono
-builds, arrival, and a compiled hook installed by the pinned Harmony **inside an unmodified shipped
-Unity player** are all product behaviour now, gated by `tests\run-unity-hooklab-smoke.ps1` (20 checks
-against a player with nothing added to its `Managed` directory) and `tests\run-mono-hooklab-smoke.ps1`
-(22 checks on a fixture this repository builds).
+x86 is an architecture boundary, not a build flag. First prove whether the x64 host can control an x86
+CorDebug target without loading architecture-mismatched native debugger components. If it cannot, use
+the smallest authenticated x86 helper/sidecar boundary justified by the prototype.
 
-Four of the six questions this road carried are answered, each with a supported-or-refused result and a
-gate behind it - `tests\run-mono-hooklab-boundaries.ps1`, 19 checks, plus unit coverage:
+1. Prove and document the ordinary debugger architecture decision on a disposable CLR v4 x86 target.
+2. Add ordinary x86 debugging with exact matching runtime components and full x64 regression gates;
+   add CoreCLR x86 only for explicitly supported runtime versions.
+3. Add x86 native bootstrap/payload manifest slots and HookLab backend variants, auditing pointer size,
+   calling conventions, structure layout, discovery, adoption, packaging, and retirement.
 
-- **Generic carriers are refused, by name.** A generic method definition or a method on an open generic
-  type is not one runtime method, so there is nothing to intercept. It was already impossible; the
-  refusal now names the carrier and the reason instead of surfacing Harmony's
-  `NotSupportedException: Specified method is not supported.` A closed instantiation stays patchable.
-- **Inlinable carriers are supported**, measured with an `AggressiveInlining` carrier on Mono 6.12.
-  Interception of call sites already compiled is not claimed, and the gate keeps measuring rather than
-  asserting a guarantee.
-- **Reconnect and adoption work end to end.** A hook survives with no debugger attached, the soft
-  debugger accepts a second session after a detach, `initialize_hooklab` adopts the existing resident
-  rather than byte-loading a second generation, and the new session can remove the old session's hook.
-- **A runtime that cannot open a named pipe is refused as unsupported**, naming the reason. Unity's own
-  `mono.exe` is the measured example; it is x86-only, so the architecture guard refuses it before the
-  endpoint is reached and the classification is asserted where it is decided rather than live.
+No x86 combination is advertised until its packaged ordinary-debugger and, where claimed, complete
+HookLab lifecycle passes. Cross-architecture discovery and adoption must fail deterministically.
 
-See [Hook shapes, and what is refused](../product/HOOKLAB.md#hook-shapes-and-what-is-refused).
+## Road 2 - consider high-risk capabilities separately
 
-Two remain, and both need something this repository cannot currently produce:
+General target C# execution, assembly editing or project export, live method-body replacement, and
+dnSpy-host scripting are separate trust domains. HookLab's bounded compiler authorizes none of them.
 
-1. **Domain reloads.** The *stated* behaviour already exists and is unit-tested: the resident's target
-   identity includes the application domain, so an operation after a reload is refused by an
-   `appdomain_id` guard mismatch - the resident does not follow a reload. What is missing is live
-   evidence, and it needs a target that actually reloads its scripting domain. The `uch-debug-target`
-   player does not, so this needs either a fixture built to reload one or a player that does. Until
-   then the claim is "guarded", not "measured".
-2. **Finalizers during retirement.** Retirement waits for its listener on Mono. What a CLR finalizer
-   thread that is mid-hook does at that moment is untested, and constructing that race deterministically
-   is the whole difficulty. `tests\run-mono-hooklab-stress.ps1` is the instrument if it turns out to be
-   intermittent rather than constructible.
+If a named workflow justifies one, proceed roughly in this order:
 
-Neither blocks the supported claims above; both are cases where "we do not know" is the honest current
-answer, and each needs a fixture before it needs a fix.
+1. Tighten the existing expression and invocation tier per engine.
+2. Add deterministic copy-on-write artifact or project export before overwrite support.
+3. Consider a digest-verified target payload against a disposable x64 CLR v4 fixture.
+4. Consider live replacement only with exact paused-target and original-body guards.
+5. Leave dnSpy-host scripting last because it runs with the host user's authority and may not admit
+   honest hard cancellation.
 
-Two boundaries stay fixed while this proceeds. No mod loader - UCH, BepInEx, or another - may become a
-dependency. And none of this implies IL2CPP or AOT support.
+Each capability requires its own permission, bounds, audit policy, remote-default-off behavior,
+side-effect reporting, and end-to-end refusal tests.
 
-## Dream - stop carrying a compiler into the target
+## Road 3 - parked horizons
+
+Native debugging, IL2CPP, reverse patches, generic hook providers, profiler/ReJIT, and Visual Basic
+parity remain outside the current CLR v4, CoreCLR, and Unity/Mono scope.
+
+Deterministic Unity fixtures, headless Mono connection-failure handling, and broader multi-session
+isolation are independent quality projects. Promote one only with a concrete workflow, fixture, and
+acceptance boundary.
+
+## Road 4 - improve HookLab authoring when demanded
+
+There is currently no failing base hook that justifies an authoring slice. Generic methods and declaring
+types, additional resident compiler references, a larger source boundary, Roslyn editor assistance,
+natural collision-safe parameter names, and richer package management are known possibilities, not
+open defects. The historical compact VmConnect source proves past pressure but still compiled and ran;
+it must be reproduced against the current package before it can motivate a source-boundary change.
+
+Pull one item forward only from a concrete hook that fails on the current verified package. That slice
+needs a target fixture that fails before it, compilation and runtime rollback coverage, and the existing
+exact MVID, token, signature, and IL identity guarantees.
+
+## Dream of dreams 1 - stop carrying a compiler into the target
 
 Not a road: nothing here is required, and the current arrangement works on every runtime measured,
-including an unmodified stripped Unity player. It is written down because the *reason* the payload is
+including an unmodified stripped Unity player. It is written down because the _reason_ the payload is
 16 MB and needs a fallback axis at all is one decision - **Roslyn runs inside the target**.
 
 **The blocking half of this dream is spent.** It used to carry two items: remove the `netstandard`
@@ -127,7 +132,7 @@ none of it removing a requirement. Do it when payload size is the problem someon
 **Compile on the host instead.** dgSpy compiles the hook in its own process, which already has
 everything, and injects only the finished assembly. Removes the compiler group outright rather than
 shrinking it, collapses the CodeDom-versus-Roslyn selector, and makes the payload byte-identical on
-CLR v4, CoreCLR and Mono. The work is references: the host must compile against the *target's* own
+CLR v4, CoreCLR and Mono. The work is references: the host must compile against the _target's_ own
 assemblies, which for a player are the DLLs in `Managed\` - exact, on disk, and already enumerated by
 `list_modules`. The existing guards (module MVID, IL SHA-256, signature) keep a stale compile from being
 installed. The real cost is evidence: the compatibility probe's compile stage and every "compiled hook"
@@ -142,59 +147,6 @@ technical one.
 **Neither is urgent.** In-target Roslyn was measured arriving in a real stripped Unity player in 2.9
 seconds of resident work, carrying all twelve payloads because the player supplies none of them - and
 now with nothing placed in that player by hand.
-
-## Road 2 - add x86 debugging and HookLab
-
-x86 is an architecture boundary, not a build flag. First prove whether the x64 host can control an x86
-CorDebug target without loading architecture-mismatched native debugger components. If it cannot, use
-the smallest authenticated x86 helper/sidecar boundary justified by the prototype.
-
-1. Prove and document the ordinary debugger architecture decision on a disposable CLR v4 x86 target.
-2. Add ordinary x86 debugging with exact matching runtime components and full x64 regression gates;
-   add CoreCLR x86 only for explicitly supported runtime versions.
-3. Add x86 native bootstrap/payload manifest slots and HookLab backend variants, auditing pointer size,
-   calling conventions, structure layout, discovery, adoption, packaging, and retirement.
-
-No x86 combination is advertised until its packaged ordinary-debugger and, where claimed, complete
-HookLab lifecycle passes. Cross-architecture discovery and adoption must fail deterministically.
-
-## Road 3 - consider high-risk capabilities separately
-
-General target C# execution, assembly editing or project export, live method-body replacement, and
-dnSpy-host scripting are separate trust domains. HookLab's bounded compiler authorizes none of them.
-
-If a named workflow justifies one, proceed roughly in this order:
-
-1. Tighten the existing expression and invocation tier per engine.
-2. Add deterministic copy-on-write artifact or project export before overwrite support.
-3. Consider a digest-verified target payload against a disposable x64 CLR v4 fixture.
-4. Consider live replacement only with exact paused-target and original-body guards.
-5. Leave dnSpy-host scripting last because it runs with the host user's authority and may not admit
-   honest hard cancellation.
-
-Each capability requires its own permission, bounds, audit policy, remote-default-off behavior,
-side-effect reporting, and end-to-end refusal tests.
-
-## Road 4 - parked horizons
-
-Native debugging, IL2CPP, reverse patches, generic hook providers, profiler/ReJIT, and Visual Basic
-parity remain outside the current CLR v4, CoreCLR, and Unity/Mono scope.
-
-Deterministic Unity fixtures, headless Mono connection-failure handling, and broader multi-session
-isolation are independent quality projects. Promote one only with a concrete workflow, fixture, and
-acceptance boundary.
-
-## Road 5 - improve HookLab authoring when demanded
-
-There is currently no failing base hook that justifies an authoring slice. Generic methods and declaring
-types, additional resident compiler references, a larger source boundary, Roslyn editor assistance,
-natural collision-safe parameter names, and richer package management are known possibilities, not
-open defects. The historical compact VmConnect source proves past pressure but still compiled and ran;
-it must be reproduced against the current package before it can motivate a source-boundary change.
-
-Pull one item forward only from a concrete hook that fails on the current verified package. That slice
-needs a target fixture that fails before it, compilation and runtime rollback coverage, and the existing
-exact MVID, token, signature, and IL identity guarantees.
 
 ## Invariants for every road
 

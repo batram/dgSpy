@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using HookLabProbeDomain;
 
 namespace HookLabProbeTarget {
 	/// <summary>A disposable target for the resident compatibility probe, built for both CLR v4 and
@@ -57,13 +58,24 @@ namespace HookLabProbeTarget {
 				// only through an invoke path would prove less than the product does.
 				var behavior = Path.Combine(run, "behavior.txt");
 				var stop = Path.Combine(run, "stop.txt");
+				var reload = Path.Combine(run, "reload-domain.txt");
+				var finalize = Path.Combine(run, "finalize.txt");
+				var reloaded = false;
+				var finalized = false;
 				var deadline = DateTime.UtcNow.AddMinutes(3);
 				while (!File.Exists(stop) && DateTime.UtcNow < deadline) {
 					Write(behavior, Work.Tick(41).ToString(CultureInfo.InvariantCulture) + "\n");
+					if (!reloaded && File.Exists(reload)) { ExerciseDomainReload(run); reloaded = true; }
+					if (!finalized && File.Exists(finalize)) {
+						new FinalizableCarrier();
+						GC.Collect();
+						finalized = true;
+					}
 					Thread.Sleep(25);
 				}
 
 				var shutdown = entry.GetMethod("Shutdown", BindingFlags.Public | BindingFlags.Static);
+				Write(Path.Combine(run, "shutdown-entered.txt"), "entered\n");
 				if (shutdown != null) Write(Path.Combine(run, "shutdown.txt"), (string)shutdown.Invoke(null, null)!);
 				return 0;
 			}
@@ -121,6 +133,7 @@ namespace HookLabProbeTarget {
 
 		static void WriteFacts(string path) {
 			var method = typeof(Work).GetMethod(nameof(Work.Tick))!;
+			var finalizerMethod = typeof(FinalizerWork).GetMethod(nameof(FinalizerWork.Touch))!;
 			var lines = new[] {
 				"assembly=" + method.Module.Assembly.GetName().Name,
 				"mvid=" + method.Module.ModuleVersionId.ToString("D"),
@@ -129,6 +142,11 @@ namespace HookLabProbeTarget {
 				"token=" + unchecked((uint)method.MetadataToken).ToString(CultureInfo.InvariantCulture),
 				"signature=" + Signature(method),
 				"il_sha256=" + IlSha256(method),
+				"finalizer_type=" + finalizerMethod.DeclaringType!.FullName,
+				"finalizer_method=" + finalizerMethod.Name,
+				"finalizer_token=" + unchecked((uint)finalizerMethod.MetadataToken).ToString(CultureInfo.InvariantCulture),
+				"finalizer_signature=" + Signature(finalizerMethod),
+				"finalizer_il_sha256=" + IlSha256(finalizerMethod),
 				"process_id=" + System.Diagnostics.Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture),
 				// Mono's corlib is also called mscorlib, so a corlib-name test alone would report a Mono
 				// target as CLR v4. That is exactly the confusion the Mono leg exists to rule out, so the
@@ -144,6 +162,35 @@ namespace HookLabProbeTarget {
 				"appdomain_id=" + AppDomain.CurrentDomain.Id.ToString(CultureInfo.InvariantCulture),
 			};
 			Write(path, string.Join("\n", lines) + "\n");
+		}
+
+		static void ExerciseDomainReload(string run) {
+			#if NETFRAMEWORK
+			#pragma warning disable SYSLIB0024 // This Mono-only boundary fixture deliberately exercises AppDomain reload.
+			var setup = new AppDomainSetup { ApplicationBase = AppDomain.CurrentDomain.BaseDirectory };
+			var assemblyName = typeof(DomainIdentity).Assembly.FullName!;
+			var first = AppDomain.CreateDomain("hooklab-reload-first", null, setup);
+			var firstIdentity = first.CreateInstanceAndUnwrap(
+				assemblyName, typeof(DomainIdentity).FullName!) as DomainIdentity
+				?? throw new InvalidOperationException("The first application domain returned no identity proxy.");
+			var firstId = firstIdentity.Id;
+			var unloadWitness = Path.Combine(run, "old-domain-unloaded.txt");
+			firstIdentity.ArmUnloadWitness(unloadWitness);
+			AppDomain.Unload(first);
+			var second = AppDomain.CreateDomain("hooklab-reload-second", null, setup);
+			var secondIdentity = second.CreateInstanceAndUnwrap(
+				assemblyName, typeof(DomainIdentity).FullName!) as DomainIdentity
+				?? throw new InvalidOperationException("The reloaded application domain returned no identity proxy.");
+			var secondId = secondIdentity.Id;
+			Write(Path.Combine(run, "domain-reload.txt"),
+				"old_appdomain_id=" + firstId.ToString(CultureInfo.InvariantCulture) + "\n" +
+				"new_appdomain_id=" + secondId.ToString(CultureInfo.InvariantCulture) + "\n" +
+				"old_domain_unloaded=" + File.Exists(unloadWitness).ToString().ToLowerInvariant() + "\n");
+			AppDomain.Unload(second);
+			#pragma warning restore SYSLIB0024
+			#else
+			throw new PlatformNotSupportedException("Application-domain reload is a Mono/CLR v4 boundary.");
+			#endif
 		}
 
 		/// <summary>Mono's own version string when there is one. The probe pins a Mono leg to a proved
@@ -174,5 +221,14 @@ namespace HookLabProbeTarget {
 		/// runtimes; unoptimized at the project level for the same reason.</summary>
 		[MethodImpl(MethodImplOptions.NoInlining)]
 		public static int Tick(int value) => value + 1;
+	}
+
+	public sealed class FinalizableCarrier {
+		~FinalizableCarrier() { FinalizerWork.Touch(); }
+	}
+
+	public static class FinalizerWork {
+		[MethodImpl(MethodImplOptions.NoInlining)]
+		public static void Touch() { }
 	}
 }

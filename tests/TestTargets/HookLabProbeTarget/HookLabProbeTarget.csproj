@@ -15,4 +15,7 @@
     <AssemblyName>HookLabProbeTarget</AssemblyName>
     <RootNamespace>HookLabProbeTarget</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\HookLabProbeDomain\HookLabProbeDomain.csproj" />
+  </ItemGroup>
 </Project>
