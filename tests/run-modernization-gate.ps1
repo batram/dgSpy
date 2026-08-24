@@ -61,6 +61,7 @@ try {
 		$env:DGSPY_LAYOUT_ROOT = $completedLayout
 	}
 	Invoke-Checked 'PowerShell host-launcher tests' { .\tests\TestSupport\Start-DgSpyHost.Tests.ps1 }
+	Invoke-Checked 'dnSpy.Console long-path load test' { .\tests\TestSupport\Test-DnSpyConsoleLongPath.ps1 -LayoutRoot $completedLayout }
 	Invoke-Checked 'immutable pipeline tests' { dotnet test tests\DgSpyTool.Tests\DgSpyTool.Tests.csproj -c Release --nologo -v:minimal }
 
 	# Deliberately early, and deliberately before anything that needs a GUI. It drives the complete

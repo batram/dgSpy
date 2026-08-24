@@ -975,7 +975,18 @@ namespace dnSpy_Console {
 				file = Path.GetFullPath(file);
 				if (!File.Exists(file))
 					return null;
-				return CreateProjectModuleOptions(ModuleDefMD.Load(file, moduleContext));
+				ModuleDefMD module;
+				try {
+					module = ModuleDefMD.Load(file, moduleContext);
+				}
+				catch (IOException) {
+					// dnlib opens filenames through a native memory-mapped-file path which
+					// cannot open some paths that System.IO can (notably long Windows paths).
+					// Loading the bytes avoids changing or shortening the source path.
+					module = ModuleDefMD.Load(File.ReadAllBytes(file), moduleContext);
+					module.Location = file;
+				}
+				return CreateProjectModuleOptions(module);
 			}
 			catch {
 			}

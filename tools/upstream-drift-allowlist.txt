@@ -237,6 +237,6 @@ dnSpy/dnSpy.Decompiler/MSBuild/NoMSBuildProjectWriterLogger.cs            Warnin
 dnSpy/dnSpy.Decompiler/Properties/dnSpy.Decompiler.Resources.resx         MSBuild_NameTruncated3, neutral culture only
 dnSpy/dnSpy.Decompiler/Properties/dnSpy.Decompiler.Resources.Designer.cs  MSBuild_NameTruncated3 accessor
 dnSpy/dnSpy/Documents/Tabs/SaveCommands.cs                                route Warning into the export dialog message list
-dnSpy/dnSpy.Console/Program.cs                                            --max-name-len and --max-dir-name-len, and Warning to stderr without incrementing the error count
+dnSpy/dnSpy.Console/Program.cs                                            export limits and warnings; long-path managed-file fallback preserving source location
 dnSpy/dnSpy.Console/Properties/dnSpy.Console.Resources.resx               Warning1 and the two option descriptions
 dnSpy/dnSpy.Console/Properties/dnSpy.Console.Resources.Designer.cs        Warning1 and option-description accessors
