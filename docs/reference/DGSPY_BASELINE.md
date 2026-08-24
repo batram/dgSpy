@@ -42,8 +42,10 @@ Do not reintroduce a Restore dependency inside the Build invocation: on a fresh 
 evaluated before NuGet writes their assets keep the empty evaluation and fail with a `CS0518`
 cascade.
 
-The host step builds the complete solution, then publishes only the `dnSpy` GUI and console entry projects
-into one canonical directory.
+The host step builds the complete solution, publishes only the `dnSpy` GUI and console entry projects
+into one freshly recreated canonical directory, then overlays the shared solution-build output that
+contains MEF-discovered extensions not referenced by either entry project. It excludes the nested
+`win-x64` build directory, internal `FileLists`, and unsupported `dnSpy-x86.*` launcher files.
 Do not publish `dnSpy.sln`: solution-wide self-contained publish creates a separate runtime, Roslyn,
 and localization tree for every class-library project and can inflate `dnSpy\**\bin`/`obj` beyond
 14 GB. `win-x86` output is stale and unsupported; the pipeline builds only `win-x64`.

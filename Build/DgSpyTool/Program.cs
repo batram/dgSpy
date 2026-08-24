@@ -169,7 +169,8 @@ internal static class DgSpyBuildTool {
 
 	static void BuildHost(Options options) {
 		var repo=Full(options.Required("repo")); var output=Full(options.Required("output"));
-		var publish=Path.Combine(repo,"dnSpy","dnSpy","bin","Release","net10.0-windows","win-x64","publish");
+		var sharedOutput=Path.Combine(repo,"dnSpy","dnSpy","bin","Release","net10.0-windows");
+		var publish=Path.Combine(sharedOutput,"win-x64","publish");
 		CleanUnsupportedHostBuildOutputs(Path.Combine(repo,"dnSpy"),publish);
 		Run(repo,"dotnet","build",Path.Combine(repo,"Build","AppHostPatcher","AppHostPatcher.csproj"),"-c","Release","-f","net48","--nologo","-v:minimal","-clp:ErrorsOnly");
 		// Publishing a solution publishes every project independently. With a self-contained RID that
@@ -177,17 +178,12 @@ internal static class DgSpyBuildTool {
 		// publish directories: 14 GB of bin/obj for a single x64 host. Build the complete solution so all
 		// extensions still participate, then publish only the application entry project from those outputs.
 		Run(repo,"dotnet","build",Path.Combine(repo,"dnSpy.sln"),"-c","Release","-f","net10.0-windows","--nologo","-v:minimal","-clp:ErrorsOnly");
+		if(Directory.Exists(publish)) Directory.Delete(publish,true);
 		Run(repo,"dotnet","publish",Path.Combine(repo,"dnSpy","dnSpy","dnSpy.csproj"),"-c","Release","-f","net10.0-windows","-r","win-x64","--self-contained","true","--no-restore","--nologo","-v:minimal","-clp:ErrorsOnly");
 		Run(repo,"dotnet","publish",Path.Combine(repo,"dnSpy","dnSpy.Console","dnSpy.Console.csproj"),"-c","Release","-f","net10.0-windows","-r","win-x64","--self-contained","true","--no-restore","-o",publish,"--nologo","-v:minimal","-clp:ErrorsOnly");
-		// These contracts are implemented by optional debugger extensions and intentionally are not
-		// references of the GUI entry project. dgSpy compiles against them, so project-only publication
-		// must project the complete-solution contract surface explicitly.
-		foreach(var contract in new[]{"dnSpy.Contracts.Debugger.DotNet.CorDebug","dnSpy.Contracts.Debugger.DotNet.Mono"})
-			foreach(var extension in new[]{"dll","pdb","xml"}) {
-				var source=Path.Combine(repo,"dnSpy",contract,"bin","Release","net10.0-windows",contract+"."+extension);
-				if(!File.Exists(source)) throw new InvalidOperationException("Built host contract is missing: "+source);
-				File.Copy(source,Path.Combine(publish,Path.GetFileName(source)),true);
-			}
+		OverlaySharedHostOutput(sharedOutput,publish);
+		foreach(var contract in new[]{"dnSpy.Contracts.Debugger.DotNet.CorDebug.dll","dnSpy.Contracts.Debugger.DotNet.Mono.dll"})
+			if(!File.Exists(Path.Combine(publish,contract))) throw new InvalidOperationException("Built host contract is missing: "+Path.Combine(publish,contract));
 		if(!File.Exists(Path.Combine(publish,"dnSpy.exe"))) throw new InvalidOperationException("Host publish output is missing: "+publish);
 		// The whole publish directory becomes the layout's bin, so a bin inside it becomes bin/bin and
 		// ships. dotnet publish never deletes what it no longer produces, so one left by an older layout
@@ -225,6 +221,28 @@ internal static class DgSpyBuildTool {
 		for(var parent=new DirectoryInfo(path).Parent;parent is not null&&!String.Equals(parent.FullName,root,StringComparison.OrdinalIgnoreCase);parent=parent.Parent)
 			if(parent.Name.Equals("bin",StringComparison.OrdinalIgnoreCase)||parent.Name.Equals("obj",StringComparison.OrdinalIgnoreCase)) return true;
 		return false;
+	}
+
+	/// <summary>Projects that are MEF-discovered at runtime deliberately are not references of the GUI
+	/// entry project. The complete solution build deposits them in one shared output; project publish
+	/// supplies the self-contained runtime, and this overlay supplies that complete host surface.</summary>
+	internal static void OverlaySharedHostOutput(string sharedOutput,string publish) {
+		Directory.CreateDirectory(publish);
+		foreach(var file in Directory.EnumerateFiles(sharedOutput)) {
+			if(Path.GetFileName(file).StartsWith("dnSpy-x86.",StringComparison.OrdinalIgnoreCase)) continue;
+			File.Copy(file,Path.Combine(publish,Path.GetFileName(file)),true);
+		}
+		foreach(var directory in Directory.EnumerateDirectories(sharedOutput)) {
+			var name=Path.GetFileName(directory);
+			if(name.Equals("win-x64",StringComparison.OrdinalIgnoreCase)||name.Equals("FileLists",StringComparison.OrdinalIgnoreCase)) continue;
+			OverlayDirectory(directory,Path.Combine(publish,name));
+		}
+	}
+
+	static void OverlayDirectory(string source,string destination) {
+		Directory.CreateDirectory(destination);
+		foreach(var directory in Directory.EnumerateDirectories(source,"*",SearchOption.AllDirectories)) Directory.CreateDirectory(Path.Combine(destination,Path.GetRelativePath(source,directory)));
+		foreach(var file in Directory.EnumerateFiles(source,"*",SearchOption.AllDirectories)) { var target=Path.Combine(destination,Path.GetRelativePath(source,file)); Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file,target,true); }
 	}
 
 	static void BuildComponents(Options options) {

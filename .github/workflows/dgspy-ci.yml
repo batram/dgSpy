@@ -107,6 +107,11 @@ jobs:
         env:
           DGSPY_LAYOUT_ROOT: ${{ runner.temp }}/dgspy-package/cli
         run: dotnet test tests/DgSpyTool.Tests/DgSpyTool.Tests.csproj --configuration Release --nologo --verbosity minimal
+      - name: Published composition tests
+        shell: pwsh
+        env:
+          DGSPY_PUBLISH_BIN: ${{ runner.temp }}/dgspy-package/cli/bin
+        run: dotnet test tests/dgSpy.Composition.Tests/dgSpy.Composition.Tests.csproj --configuration Release --nologo --verbosity minimal
       - name: Upload verified package
         uses: actions/upload-artifact@v4
         with:
