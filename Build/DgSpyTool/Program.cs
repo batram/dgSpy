@@ -230,7 +230,8 @@ internal static class DgSpyBuildTool {
 		Directory.CreateDirectory(publish);
 		foreach(var file in Directory.EnumerateFiles(sharedOutput)) {
 			if(Path.GetFileName(file).StartsWith("dnSpy-x86.",StringComparison.OrdinalIgnoreCase)) continue;
-			File.Copy(file,Path.Combine(publish,Path.GetFileName(file)),true);
+			var target=Path.Combine(publish,Path.GetFileName(file));
+			if(!File.Exists(target)) File.Copy(file,target);
 		}
 		foreach(var directory in Directory.EnumerateDirectories(sharedOutput)) {
 			var name=Path.GetFileName(directory);
@@ -242,7 +243,7 @@ internal static class DgSpyBuildTool {
 	static void OverlayDirectory(string source,string destination) {
 		Directory.CreateDirectory(destination);
 		foreach(var directory in Directory.EnumerateDirectories(source,"*",SearchOption.AllDirectories)) Directory.CreateDirectory(Path.Combine(destination,Path.GetRelativePath(source,directory)));
-		foreach(var file in Directory.EnumerateFiles(source,"*",SearchOption.AllDirectories)) { var target=Path.Combine(destination,Path.GetRelativePath(source,file)); Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file,target,true); }
+		foreach(var file in Directory.EnumerateFiles(source,"*",SearchOption.AllDirectories)) { var target=Path.Combine(destination,Path.GetRelativePath(source,file)); Directory.CreateDirectory(Path.GetDirectoryName(target)!); if(!File.Exists(target)) File.Copy(file,target); }
 	}
 
 	static void BuildComponents(Options options) {

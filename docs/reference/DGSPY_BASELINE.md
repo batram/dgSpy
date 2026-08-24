@@ -44,7 +44,10 @@ cascade.
 
 The host step builds the complete solution, publishes only the `dnSpy` GUI and console entry projects
 into one freshly recreated canonical directory, then overlays the shared solution-build output that
-contains MEF-discovered extensions not referenced by either entry project. It excludes the nested
+contains MEF-discovered extensions not referenced by either entry project. The overlay is additive:
+the RID-specific self-contained publish owns every path it produced, while the solution output may
+only fill missing files. Overwriting publish files with ordinary build outputs leaves a host that runs
+but silently fails to load the dgSpy extension. The overlay excludes the nested
 `win-x64` build directory, internal `FileLists`, and unsupported `dnSpy-x86.*` launcher files.
 Do not publish `dnSpy.sln`: solution-wide self-contained publish creates a separate runtime, Roslyn,
 and localization tree for every class-library project and can inflate `dnSpy\**\bin`/`obj` beyond

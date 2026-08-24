@@ -133,17 +133,22 @@ public sealed class PruneTests : IDisposable {
 	public void Host_overlay_adds_shared_extensions_without_nested_publish_or_x86_launcher() {
 		var shared=Area("shared-host"); var publish=Area("canonical-publish");
 		File.WriteAllText(Path.Combine(shared,"dnSpy.Debugger.x.dll"),"extension");
+		File.WriteAllText(Path.Combine(shared,"dnSpy.dll"),"build-output-host");
 		File.WriteAllText(Path.Combine(shared,"dnSpy-x86.exe"),"unsupported");
-		Directory.CreateDirectory(Path.Combine(shared,"Themes")); File.WriteAllText(Path.Combine(shared,"Themes","Dark.xaml"),"theme");
+		Directory.CreateDirectory(Path.Combine(shared,"Themes")); File.WriteAllText(Path.Combine(shared,"Themes","Dark.xaml"),"theme"); File.WriteAllText(Path.Combine(shared,"Themes","Published.xaml"),"build-output-theme");
 		Directory.CreateDirectory(Path.Combine(shared,"FileLists")); File.WriteAllText(Path.Combine(shared,"FileLists","build.txt"),"internal");
 		Directory.CreateDirectory(Path.Combine(shared,"win-x64","publish")); File.WriteAllText(Path.Combine(shared,"win-x64","publish","nested.dll"),"nested");
 		File.WriteAllText(Path.Combine(publish,"coreclr.dll"),"runtime");
+		File.WriteAllText(Path.Combine(publish,"dnSpy.dll"),"published-host");
+		Directory.CreateDirectory(Path.Combine(publish,"Themes")); File.WriteAllText(Path.Combine(publish,"Themes","Published.xaml"),"published-theme");
 
 		DgSpyBuildTool.OverlaySharedHostOutput(shared,publish);
 
 		Assert.True(File.Exists(Path.Combine(publish,"coreclr.dll")));
+		Assert.Equal("published-host",File.ReadAllText(Path.Combine(publish,"dnSpy.dll")));
 		Assert.True(File.Exists(Path.Combine(publish,"dnSpy.Debugger.x.dll")));
 		Assert.True(File.Exists(Path.Combine(publish,"Themes","Dark.xaml")));
+		Assert.Equal("published-theme",File.ReadAllText(Path.Combine(publish,"Themes","Published.xaml")));
 		Assert.False(File.Exists(Path.Combine(publish,"dnSpy-x86.exe")));
 		Assert.False(Directory.Exists(Path.Combine(publish,"FileLists")));
 		Assert.False(Directory.Exists(Path.Combine(publish,"win-x64")));
