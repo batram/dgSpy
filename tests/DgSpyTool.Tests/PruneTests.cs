@@ -93,6 +93,42 @@ public sealed class PruneTests : IDisposable {
 	public async Task Pruning_an_absent_artifacts_tree_is_not_an_error() =>
 		Assert.Equal(0,await DgSpyBuildTool.RunAsync(new[]{"prune","--artifacts",Path.Combine(root,"never-created")}));
 
+	[Fact]
+	public void A_successful_pipeline_retains_only_the_newest_generated_build() {
+		foreach(var area in DgSpyBuildTool.BuildIdScopedAreas) {
+			Aged(Area(area),"gate-"+new string('a',32),TimeSpan.FromHours(3));
+			Aged(Area(area),"gate-"+new string('b',32),TimeSpan.FromHours(2));
+			Aged(Area(area),"gate-"+new string('c',32),TimeSpan.FromHours(1));
+			Aged(Area(area),"release",TimeSpan.FromDays(30));
+		}
+
+		DgSpyBuildTool.PruneAfterSuccessfulPipeline(root);
+
+		foreach(var area in DgSpyBuildTool.BuildIdScopedAreas) {
+			Assert.False(Directory.Exists(Path.Combine(Area(area),"gate-"+new string('a',32))),area);
+			Assert.False(Directory.Exists(Path.Combine(Area(area),"gate-"+new string('b',32))),area);
+			Assert.True(Directory.Exists(Path.Combine(Area(area),"gate-"+new string('c',32))),area);
+			Assert.True(Directory.Exists(Path.Combine(Area(area),"release")),area);
+		}
+	}
+
+	[Fact]
+	public void Host_cleanup_removes_legacy_publish_and_x86_builds_but_preserves_runtime_assets() {
+		var dnSpy=Area("dnSpy-source");
+		var canonical=Path.Combine(dnSpy,"dnSpy","bin","Release","net10.0-windows","win-x64","publish");
+		var legacy=Path.Combine(dnSpy,"Roslyn","Project","bin","Release","net10.0-windows","win-x64","publish");
+		var x86=Path.Combine(dnSpy,"Roslyn","Project","obj","Release","net10.0-windows","win-x86");
+		var runtimeAsset=Path.Combine(dnSpy,"dnSpy","bin","Release","net10.0-windows","runtimes","win-x86");
+		foreach(var directory in new[]{canonical,legacy,x86,runtimeAsset}) { Directory.CreateDirectory(directory); File.WriteAllText(Path.Combine(directory,"content.txt"),directory); }
+
+		DgSpyBuildTool.CleanUnsupportedHostBuildOutputs(dnSpy,canonical);
+
+		Assert.True(Directory.Exists(canonical));
+		Assert.False(Directory.Exists(legacy));
+		Assert.False(Directory.Exists(x86));
+		Assert.True(Directory.Exists(runtimeAsset));
+	}
+
 	string Area(string name) { var path=Path.Combine(root,name); Directory.CreateDirectory(path); return path; }
 
 	static string Aged(string area,string name,TimeSpan age) {

@@ -42,6 +42,14 @@ Do not reintroduce a Restore dependency inside the Build invocation: on a fresh 
 evaluated before NuGet writes their assets keep the empty evaluation and fail with a `CS0518`
 cascade.
 
+The host step builds the complete solution, then publishes only the `dnSpy` GUI and console entry projects
+into one canonical directory.
+Do not publish `dnSpy.sln`: solution-wide self-contained publish creates a separate runtime, Roslyn,
+and localization tree for every class-library project and can inflate `dnSpy\**\bin`/`obj` beyond
+14 GB. `win-x86` output is stale and unsupported; the pipeline builds only `win-x64`.
+Before building, the supported host step removes legacy per-project `publish` directories and x86
+`bin`/`obj` trees. It preserves `runtimes\win-x86` assets carried by the x64 application.
+
 The completed outputs are:
 
 - `artifacts\host-raw\local`: immutable host compiler artifact.
@@ -52,6 +60,12 @@ The completed outputs are:
 The pipeline never deploys into a compiler output directory. Composition starts in fresh staging,
 records every file's size, SHA-256, and owner, verifies the complete inventory, and publishes by
 directory rename. Failed composition or installation leaves the previous completed tree available.
+
+After a pipeline has successfully published and verified its package, it automatically prunes older
+machine-generated build IDs from all four artifact areas and retains the newest one. Pruning never
+runs on a failed pipeline and never removes deliberate names such as `local` or `release`. For manual
+inspection or cleanup, use `dotnet run --project Build\DgSpyTool -- prune --dry-run true` and then
+repeat without `--dry-run true`.
 
 The verified layout also contains the standalone HookLab watcher under `hooklab-watcher`, including its
 unelevated `HookLab.Watcher.Companion.exe` notification-area operator surface, closed deployments, and

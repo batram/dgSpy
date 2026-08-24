@@ -67,7 +67,7 @@ internal static class DgSpyBuildTool {
 		{"host-only","true"},
 	});
 
-	static int Help() { Console.WriteLine("install-dgspy codex|claude [--force]\ninstall-dgspy host-only\nDgSpyTool pipeline|build|build-host|build-components|compose|verify|package|verify-package|install|snapshot"); return 2; }
+	static int Help() { Console.WriteLine("install-dgspy codex|claude [--force]\ninstall-dgspy host-only\nDgSpyTool pipeline|prune|build|build-host|build-components|compose|verify|package|verify-package|install|snapshot"); return 2; }
 
 	/// <summary>The four artifact areas the pipeline writes, each keyed by build id.</summary>
 	internal static readonly string[] BuildIdScopedAreas={ "layouts",@"packages\dgspy-win-x64","host-raw","dgspy-components" };
@@ -132,6 +132,13 @@ internal static class DgSpyBuildTool {
 		catch(Exception) { return 0; }
 	}
 
+	/// <summary>Runs only after a pipeline has published and verified its package. One generated build
+	/// remains available for retry/diagnosis; named builds are excluded by <see cref="Prune"/>.</summary>
+	internal static void PruneAfterSuccessfulPipeline(string artifacts)=>Prune(new Options(new(StringComparer.OrdinalIgnoreCase) {
+		{"artifacts",artifacts},
+		{"keep","1"},
+	}));
+
 	static void Pipeline(Options options) {
 		var (repo,artifacts,buildId)=ResolvePipelineOptions(options);
 		Build(new Options(new(StringComparer.OrdinalIgnoreCase){{"repo",repo},{"artifacts",artifacts},{"build-id",buildId}}));
@@ -140,6 +147,7 @@ internal static class DgSpyBuildTool {
 		Compose(new Options(new(StringComparer.OrdinalIgnoreCase){{"host",host},{"components",Path.Combine(components,"extension")},{"cli",Path.Combine(components,"cli")},{"gateway",Path.Combine(components,"gateway")},{"installer",Path.Combine(components,"installer")},{"launcher",Path.Combine(components,"launcher")},{"watcher",Path.Combine(components,"watcher")},{"bootstrap",Path.Combine(components,"payload","HookLab.Bootstrap.dll")},{"native-bootstrap",Path.Combine(components,"payload","HookLab.NativeBootstrap.x64.dll")},{"output",layout}}));
 		var package=Full(options.Value("package") ?? Path.Combine(artifacts,"packages","dgspy-win-x64",buildId));
 		Package(new Options(new(StringComparer.OrdinalIgnoreCase){{"layout",layout},{"output",package}}));
+		PruneAfterSuccessfulPipeline(artifacts);
 		Console.WriteLine("pipeline complete: "+package);
 	}
 
@@ -162,8 +170,24 @@ internal static class DgSpyBuildTool {
 	static void BuildHost(Options options) {
 		var repo=Full(options.Required("repo")); var output=Full(options.Required("output"));
 		var publish=Path.Combine(repo,"dnSpy","dnSpy","bin","Release","net10.0-windows","win-x64","publish");
+		CleanUnsupportedHostBuildOutputs(Path.Combine(repo,"dnSpy"),publish);
 		Run(repo,"dotnet","build",Path.Combine(repo,"Build","AppHostPatcher","AppHostPatcher.csproj"),"-c","Release","-f","net48","--nologo","-v:minimal","-clp:ErrorsOnly");
-		Run(repo,"dotnet","publish",Path.Combine(repo,"dnSpy.sln"),"-c","Release","-f","net10.0-windows","-r","win-x64","--self-contained","true","--nologo","-v:minimal","-clp:ErrorsOnly");
+		// Publishing a solution publishes every project independently. With a self-contained RID that
+		// copied the complete runtime, Roslyn and every language satellite into dozens of class-library
+		// publish directories: 14 GB of bin/obj for a single x64 host. Build the complete solution so all
+		// extensions still participate, then publish only the application entry project from those outputs.
+		Run(repo,"dotnet","build",Path.Combine(repo,"dnSpy.sln"),"-c","Release","-f","net10.0-windows","--nologo","-v:minimal","-clp:ErrorsOnly");
+		Run(repo,"dotnet","publish",Path.Combine(repo,"dnSpy","dnSpy","dnSpy.csproj"),"-c","Release","-f","net10.0-windows","-r","win-x64","--self-contained","true","--no-restore","--nologo","-v:minimal","-clp:ErrorsOnly");
+		Run(repo,"dotnet","publish",Path.Combine(repo,"dnSpy","dnSpy.Console","dnSpy.Console.csproj"),"-c","Release","-f","net10.0-windows","-r","win-x64","--self-contained","true","--no-restore","-o",publish,"--nologo","-v:minimal","-clp:ErrorsOnly");
+		// These contracts are implemented by optional debugger extensions and intentionally are not
+		// references of the GUI entry project. dgSpy compiles against them, so project-only publication
+		// must project the complete-solution contract surface explicitly.
+		foreach(var contract in new[]{"dnSpy.Contracts.Debugger.DotNet.CorDebug","dnSpy.Contracts.Debugger.DotNet.Mono"})
+			foreach(var extension in new[]{"dll","pdb","xml"}) {
+				var source=Path.Combine(repo,"dnSpy",contract,"bin","Release","net10.0-windows",contract+"."+extension);
+				if(!File.Exists(source)) throw new InvalidOperationException("Built host contract is missing: "+source);
+				File.Copy(source,Path.Combine(publish,Path.GetFileName(source)),true);
+			}
 		if(!File.Exists(Path.Combine(publish,"dnSpy.exe"))) throw new InvalidOperationException("Host publish output is missing: "+publish);
 		// The whole publish directory becomes the layout's bin, so a bin inside it becomes bin/bin and
 		// ships. dotnet publish never deletes what it no longer produces, so one left by an older layout
@@ -184,6 +208,23 @@ internal static class DgSpyBuildTool {
 			var ownership=Directory.EnumerateFiles(content,"*",SearchOption.AllDirectories).ToDictionary(path=>Relative(staging,path),_=>"host",StringComparer.OrdinalIgnoreCase);
 			WriteManifest(staging,ownership); VerifyInventoryOnly(staging); Require(content,"dnSpy.exe"); Require(content,"bin/dnSpy.dll");
 		},"build-host --repo "+Quote(repo)+" --output "+Quote(output));
+	}
+
+	/// <summary>Removes output shapes created by the old solution-wide publish. A win-x86 runtime asset
+	/// inside an x64 application (runtimes/win-x86) is data, not an x86 build tree, and is preserved.</summary>
+	internal static void CleanUnsupportedHostBuildOutputs(string dnSpyRoot,string canonicalPublish) {
+		if(!Directory.Exists(dnSpyRoot)) return;
+		var canonical=Full(canonicalPublish);
+		foreach(var directory in Directory.EnumerateDirectories(dnSpyRoot,"publish",SearchOption.AllDirectories).Select(Full).Where(path=>!String.Equals(path,canonical,StringComparison.OrdinalIgnoreCase)).ToArray())
+			Directory.Delete(directory,true);
+		foreach(var directory in Directory.EnumerateDirectories(dnSpyRoot,"win-x86",SearchOption.AllDirectories).Select(Full).Where(path=>!new DirectoryInfo(path).Parent!.Name.Equals("runtimes",StringComparison.OrdinalIgnoreCase)&&IsUnderBuildOutput(path,dnSpyRoot)).ToArray())
+			Directory.Delete(directory,true);
+	}
+
+	static bool IsUnderBuildOutput(string path,string root) {
+		for(var parent=new DirectoryInfo(path).Parent;parent is not null&&!String.Equals(parent.FullName,root,StringComparison.OrdinalIgnoreCase);parent=parent.Parent)
+			if(parent.Name.Equals("bin",StringComparison.OrdinalIgnoreCase)||parent.Name.Equals("obj",StringComparison.OrdinalIgnoreCase)) return true;
+		return false;
 	}
 
 	static void BuildComponents(Options options) {
