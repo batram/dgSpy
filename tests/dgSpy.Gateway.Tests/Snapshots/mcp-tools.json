@@ -148,7 +148,7 @@
     },
     {
       "name": "create_remote_host_package",
-      "description": "SIDE EFFECTING and audited. Create or replace a personalized ZIP for a remote Windows debugger host; the host does not need to be connected. gateway_address is an IP address or DNS hostname only, never a URL or host:port: this tool selects port 7353 for mutual TLS or 7352 for authenticated plaintext. It never builds, transfers, or executes the host. After extraction, dnSpy.exe reads the personalized package and connects automatically; the launcher script is optional. compression defaults to optimal; use none for fastest extraction or fastest for light compression.",
+      "description": "SIDE EFFECTING and audited. Create or replace a personalized ZIP for a remote Windows debugger host; the host does not need to be connected. gateway_address is an IP address or DNS hostname only, never a URL or host:port: this tool selects port 7353 for mutual TLS or 7352 for authenticated plaintext. A Gateway that already serves hosts through a different address accepts this one as well: it listens on every address it has provisioned, so hosts on separate networks coexist. It never builds, transfers, or executes the host. After extraction, dnSpy.exe reads the personalized package and connects automatically; the launcher script is optional. compression defaults to optimal; use none for fastest extraction or fastest for light compression.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -163,6 +163,13 @@
           "use_tls": {
             "type": "boolean",
             "description": "Remote host transport. true or omitted uses mutual TLS on port 7353; false uses authenticated plaintext on port 7352. This protocol is not HTTP."
+          },
+          "listen_addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional. The exact set of local IP addresses the Gateway listens on, replacing the accumulated set; use [\u00220.0.0.0\u0022] to listen on every interface. Omit this in the normal case: the Gateway already listens on the union of every gateway_address it has provisioned, so a second host on another network needs nothing here. Every entry must be an IP address assigned to this Gateway, never a DNS name, and gateway_address is always included."
           },
           "output_root": {
             "type": "string"

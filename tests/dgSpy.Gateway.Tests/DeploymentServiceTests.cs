@@ -82,6 +82,62 @@ public sealed class DeploymentServiceTests : IDisposable {
 		Assert.True((bool?)revoked["revoked"]); Assert.False((bool?)revoked["gateway_restart_required"]); Assert.False(router.TryAuthenticate("remote-a",secondToken,false,null,out _)); Assert.Equal(0,await ReadAfterClose(secondRemote)); socketListener.Stop();
 		static async Task<int> ReadAfterClose(System.Net.Sockets.TcpClient client) { var buffer=new byte[1]; using var timeout=new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(2)); return await client.GetStream().ReadAsync(buffer,timeout.Token); }
 	}
+	/// <summary>A Gateway with a LAN adapter and a virtual switch reaches different hosts through
+	/// different addresses. Provisioning the second one used to be refused outright — the listener held a
+	/// single address and the only way forward was revoking every working host — so this pins that the
+	/// addresses accumulate, that both are actually bound, and that the scalar field an older Gateway
+	/// reads still names the first of them.</summary>
+	[Fact]
+	public async Task Remote_hosts_on_different_gateway_addresses_share_one_multi_address_listener() {
+		var router=new HostRouter(); using var listener=new RemoteHostListener(router); var service=new DeploymentService(listener);
+		await service.ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-lan"},{"gateway_address","127.0.0.1"},{"use_tls",false},{"compression","none"}},router,default);
+		var second=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await service.ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-vswitch"},{"gateway_address","127.0.0.2"},{"use_tls",false},{"compression","none"}},router,default)))!;
+
+		var registry=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"state","packages","gateway-hosts.json")))!;
+		Assert.Equal(new[]{"127.0.0.1","127.0.0.2"},registry["listener"]!["addresses"]!.AsArray().Select(node=>(string?)node));
+		Assert.Equal("127.0.0.1",(string?)registry["listener"]?["address"]);
+		Assert.Equal(new[]{"127.0.0.1","127.0.0.2"},registry["hosts"]!.AsArray().Select(node=>(string?)node!["gateway_address"]));
+		var bound=second["listener"]!["listening"]!.AsArray().Select(node=>(string?)node).ToArray();
+		Assert.Contains("127.0.0.1:7352:False",bound); Assert.Contains("127.0.0.2:7352:False",bound);
+		Assert.Empty(second["listener"]!["unavailable"]!.AsArray());
+		Assert.True(router.IsRegistered("remote-lan")); Assert.True(router.IsRegistered("remote-vswitch"));
+		foreach(var address in new[]{"127.0.0.1","127.0.0.2"}) { using var connection=new System.Net.Sockets.TcpClient(); await connection.ConnectAsync(System.Net.IPAddress.Parse(address),7352); Assert.True(connection.Connected); }
+	}
+	/// <summary>The escape hatch for a Gateway whose reachable address is not knowable up front, and the
+	/// reason a wildcard absorbs everything listed beside it: binding 0.0.0.0 and 127.0.0.1 on one port
+	/// would collide, and the wildcard already covers the specific address.</summary>
+	[Fact]
+	public async Task Listen_addresses_can_widen_the_listener_to_every_interface() {
+		var router=new HostRouter(); using var listener=new RemoteHostListener(router); var service=new DeploymentService(listener);
+		var result=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await service.ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-any"},{"gateway_address","127.0.0.1"},{"use_tls",false},{"compression","none"},{"listen_addresses",new JsonArray("0.0.0.0")}},router,default)))!;
+
+		var registry=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"state","packages","gateway-hosts.json")))!;
+		Assert.Equal(new[]{"0.0.0.0"},registry["listener"]!["addresses"]!.AsArray().Select(node=>(string?)node));
+		Assert.Equal("127.0.0.1",(string?)registry["hosts"]![0]!["gateway_address"]);
+		Assert.Contains("0.0.0.0:7352:False",result["listener"]!["listening"]!.AsArray().Select(node=>(string?)node));
+		using var connection=new System.Net.Sockets.TcpClient(); await connection.ConnectAsync(System.Net.IPAddress.Loopback,7352); Assert.True(connection.Connected);
+	}
+	/// <summary>listen_addresses replaces the set rather than adding to it, so widening a listener that is
+	/// already up has to release the narrower address as well as bind the wildcard. Leaving both live
+	/// would put two sockets on one port, and leaving only the old one would silently ignore the
+	/// argument.</summary>
+	[Fact]
+	public async Task Widening_an_already_bound_listener_releases_the_narrower_address() {
+		var router=new HostRouter(); using var listener=new RemoteHostListener(router); var service=new DeploymentService(listener);
+		await service.ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"},{"use_tls",false},{"compression","none"}},router,default);
+		var widened=JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(await service.ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"},{"use_tls",false},{"compression","none"},{"listen_addresses",new JsonArray("0.0.0.0")}},router,default)))!;
+
+		var bound=widened["listener"]!["listening"]!.AsArray().Select(node=>(string?)node).ToArray();
+		Assert.Contains("0.0.0.0:7352:False",bound); Assert.DoesNotContain("127.0.0.1:7352:False",bound);
+		Assert.Empty(widened["listener"]!["unavailable"]!.AsArray());
+		using var connection=new System.Net.Sockets.TcpClient(); await connection.ConnectAsync(System.Net.IPAddress.Loopback,7352); Assert.True(connection.Connected);
+	}
+	[Fact]
+	public async Task Listen_addresses_must_be_bindable_addresses_rather_than_names() {
+		var router=new HostRouter(); using var listener=new RemoteHostListener(router);
+		var error=await Assert.ThrowsAsync<GatewayControlException>(()=>new DeploymentService(listener).ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"},{"listen_addresses",new JsonArray("gateway.example")}},router,default));
+		Assert.Equal("invalid_arguments",error.Code);
+	}
 	[Fact]
 	public async Task Ordinary_gateway_start_consumes_the_persisted_listener_configuration() {
 		var provisioningRouter=new HostRouter(); using(var provisioningListener=new RemoteHostListener(provisioningRouter)) await new DeploymentService(provisioningListener).ExecuteAsync("create_remote_host_package",new JsonObject{{"host_id","remote-a"},{"gateway_address","127.0.0.1"},{"use_tls",false}},provisioningRouter,default);

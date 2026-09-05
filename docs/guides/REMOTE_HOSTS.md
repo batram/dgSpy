@@ -34,6 +34,41 @@ create_remote_host_package { host_id: "win11-clean", gateway_address: "192.168.2
 and `none` is intended for local-network deployment to slower VMs where extraction time matters more
 than transfer size.
 
+## Several Gateway addresses
+
+A Gateway is often reachable at different addresses depending on which network a host sits on: a LAN
+adapter for machines on the office network, a Hyper-V or WSL virtual switch address for guests behind
+it. `gateway_address` is the address one host dials, so hosts on different networks are provisioned
+with different ones, and the Gateway listens on the union of every address it has provisioned. No
+revocation, restart, or shared address is needed to add a host on a second network:
+
+```text
+create_remote_host_package { host_id: "office-iis",  gateway_address: "192.168.2.115" }
+create_remote_host_package { host_id: "hyperv-lab",  gateway_address: "172.31.224.1" }
+```
+
+Each package still dials exactly one address — its own. The persisted registry records the whole set
+under `listener.addresses`, keeping `listener.address` as the first of them so a registry stays
+readable by a Gateway that predates this.
+
+Every address gets its own socket, and one failing to bind leaves the others up: a virtual switch that
+is currently down costs only the hosts behind it. `doctor`'s `remote_listener` check names any address
+that could not be bound; only losing all of them fails provisioning outright.
+
+To bind every interface instead of an accumulated set, pass the optional `listen_addresses`, which
+replaces the set rather than widening it — the way to drop an address that no longer exists:
+
+```text
+create_remote_host_package { host_id: "roaming", gateway_address: "192.168.2.115", listen_addresses: ["0.0.0.0"] }
+```
+
+`0.0.0.0` covers every interface and absorbs any address beside it, because binding a wildcard and a
+specific address on one port collides. Entries must be IP addresses assigned to this Gateway;
+`gateway_address` is always included, so the host being packaged can always reach it. `DGSPY_REMOTE_ADDRESS`
+accepts the same forms as a comma-separated list for a Gateway configured entirely from the environment.
+A DNS hostname in `gateway_address` names the Gateway from outside rather than one of its interfaces,
+so it widens the bind to every interface.
+
 ## Target minimal flow
 
 ```text
@@ -137,13 +172,14 @@ TLS packages protect the host connection with pinned self-signed mutual TLS:
 The Gateway exposes two independent boundaries:
 
 ```text
-127.0.0.1:7350       MCP clients
-configured-IP:7352   optional plaintext remote hosts
-configured-IP:7353   optional mutually authenticated TLS remote hosts
+127.0.0.1:7350        MCP clients
+configured-IPs:7352   optional plaintext remote hosts
+configured-IPs:7353   optional mutually authenticated TLS remote hosts
 ```
 
-The host listeners may be enabled together or separately. Set `DGSPY_REMOTE_DISABLE_PLAINTEXT=true` to
-disable plaintext. TLS additionally requires `DGSPY_REMOTE_TLS_PORT`,
+Each configured address is bound separately on both host ports, so the two ports above exist once per
+address. The host listeners may be enabled together or separately. Set `DGSPY_REMOTE_DISABLE_PLAINTEXT=true`
+to disable plaintext. TLS additionally requires `DGSPY_REMOTE_TLS_PORT`,
 `DGSPY_GATEWAY_SERVER_CERTIFICATE_FILE`, and `DGSPY_GATEWAY_SERVER_CERTIFICATE_PASSWORD_FILE`.
 Neither listener accepts MCP. Removing a client-certificate pin revokes that package. Replacing either
 certificate requires repackaging and an explicit matching pin update.

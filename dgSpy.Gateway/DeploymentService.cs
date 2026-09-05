@@ -72,6 +72,15 @@ public sealed class DeploymentService {
 		var freshness=DeploymentFreshness(); var freshnessJson=System.Text.Json.JsonSerializer.SerializeToNode(freshness)!;
 		checks.Add(Check("deployment_freshness",(bool?)freshnessJson["stale"]!=true,(string?)freshnessJson["detail"] ?? "",(string?)freshnessJson["recovery"]));
 		var registry=Environment.GetEnvironmentVariable("DGSPY_HOSTS_FILE"); checks.Add(Check("host_registry",string.IsNullOrWhiteSpace(registry)||File.Exists(registry),registry ?? "implicit local host",string.IsNullOrWhiteSpace(registry)||File.Exists(registry)?null:"Configured registry is missing."));
+		// The listener spans one socket per configured address, so it can come up on some interfaces and
+		// not others. Nothing else surfaces that: the hosts behind a refused address simply never appear.
+		if(remoteListener is not null) {
+			var described=System.Text.Json.JsonSerializer.SerializeToNode(remoteListener.Describe())!;
+			var listening=described["listening"]!.AsArray(); var down=described["unavailable"]!.AsArray();
+			var detail=listening.Count==0 ? "no remote-host listener bound" : string.Join(", ",listening.Select(node=>(string?)node));
+			if(down.Count>0) detail+="; unavailable: "+string.Join(", ",down.Select(node=>$"{(string?)node!["endpoint"]} {(string?)node!["error"]}"));
+			checks.Add(Check("remote_listener",down.Count==0,detail,down.Count==0?null:"An address this Gateway is configured to listen on could not be bound, so any host provisioned through it cannot connect. Confirm the interface is up and the port free, then re-run create_remote_host_package for that host."));
+		}
 		object[] hosts; try { hosts=await router.ListHostsAsync(token); var serialized=hosts.Select(item=>System.Text.Json.JsonSerializer.Serialize(item)).ToArray(); var connected=serialized.Count(item=>item.Contains("\"state\":\"connected\"",StringComparison.Ordinal)); var degraded=serialized.Count(item=>item.Contains("\"state\":\"degraded\"",StringComparison.Ordinal)); var available=connected+degraded;
 			// A contained dispatcher fault leaves a host connected and usable, so it must not fail this
 			// check — but it is still the trace of something that went wrong on the debugger thread, and
@@ -456,6 +465,7 @@ public sealed class DeploymentService {
 		var hostId=SafeSegment((string?)args["host_id"] ?? throw new GatewayControlException("invalid_arguments","host_id is required."));
 		var address=((string?)args["gateway_address"] ?? throw new GatewayControlException("invalid_arguments","gateway_address is required.")).Trim();
 		if(string.IsNullOrWhiteSpace(address)) throw new GatewayControlException("invalid_arguments","gateway_address is required.");
+		var listenAddresses=ReadListenAddresses(args);
 		var compression=((string?)args["compression"] ?? "optimal").ToLowerInvariant();
 		var compressionLevel=compression switch { "none"=>CompressionLevel.NoCompression,"fastest"=>CompressionLevel.Fastest,"optimal"=>CompressionLevel.Optimal,_=>throw new GatewayControlException("invalid_arguments","compression must be none, fastest, or optimal.") };
 		var useTls=(bool?)args["use_tls"] ?? true; var output=Path.GetFullPath((string?)args["output_root"] ?? packageRoot);
@@ -477,7 +487,7 @@ public sealed class DeploymentService {
 			var personalized=new SortedDictionary<string,byte[]>(StringComparer.OrdinalIgnoreCase);
 			var credential=Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)); personalized["state/host.id"]=Utf8(hostId); personalized["state/rpc.token"]=Utf8(credential);
 			var remote=new JsonObject { ["format_version"]=1,["host_id"]=hostId,["gateway_address"]=address,["gateway_port"]=useTls?7353:7352,["transport"]=useTls?"tls":"plaintext" };
-			var gatewayHost=new JsonObject { ["host_id"]=hostId,["display_name"]=hostId,["transport"]=useTls?"outbound_tls":"outbound",["token_file"]=hostId+".token" };
+			var gatewayHost=new JsonObject { ["host_id"]=hostId,["display_name"]=hostId,["transport"]=useTls?"outbound_tls":"outbound",["token_file"]=hostId+".token",["gateway_address"]=address };
 			byte[]? serverPfx=null,serverCer=null,clientCer=null; string? serverPassword=null,clientPassword=null;
 			if(useTls) {
 				var serverPfxPath=Path.Combine(packageRoot,"gateway-server.pfx"); var serverCerPath=Path.Combine(packageRoot,"gateway-server.cer"); var serverPasswordPath=Path.Combine(packageRoot,"gateway-server.password");
@@ -492,7 +502,7 @@ public sealed class DeploymentService {
 			WriteRemoteArchive(temporaryArchive,payload,personalized,compressionLevel,token);
 			File.WriteAllText(Path.Combine(packageRoot,hostId+".token"),credential,new UTF8Encoding(false));
 			if(useTls) { File.WriteAllBytes(Path.Combine(packageRoot,"gateway-server.pfx"),serverPfx!); File.WriteAllBytes(Path.Combine(packageRoot,"gateway-server.cer"),serverCer!); File.WriteAllText(Path.Combine(packageRoot,"gateway-server.password"),serverPassword!,new UTF8Encoding(false)); File.WriteAllBytes(Path.Combine(packageRoot,hostId+"-client.cer"),clientCer!); }
-			UpdateRemoteRegistry(registry,hostId,address,gatewayHost,useTls); File.Move(temporaryArchive,archive,true);
+			UpdateRemoteRegistry(registry,hostId,address,gatewayHost,useTls,listenAddresses); File.Move(temporaryArchive,archive,true);
 			var updated=HostRegistry.Load(registry,includeLocal:true); var listener=remoteListener ?? throw new GatewayControlException("listener_unavailable","The running Gateway does not expose its remote listener lifecycle service.");
 			var listenerReadiness=listener.EnsureConfigured(registry); router.Reload(updated);
 			await Task.CompletedTask; return new { host_id=hostId,archive_path=archive,sha256=HashFile(archive),compression,transport=useTls?"mutual_tls":"authenticated_plaintext",launch_command=@".\dnSpy.exe",launcher_alternative=@".\launcher\Start-dgSpyRemoteHost.cmd",replaced_existing_host=replacing,transferred=false,executed=false,gateway_restart_required=false,gateway_ready=true,listener=listenerReadiness };
@@ -658,13 +668,38 @@ public sealed class DeploymentService {
 			throw Corrupt($"'{payloadFile}' hashes to {actual} while the package manifest records {packagedSha}, so the payload and its own manifest were replaced together or come from another package");
 		static GatewayControlException Corrupt(string detail) => new GatewayControlException("installation_incomplete",$"The installed HookLab payload cannot be verified: {detail}. Reinstall dgSpy from a complete release package; runtime builds are not supported.");
 	}
+	/// <summary>The optional explicit bind set. Unlike gateway_address -- which is what one remote host
+	/// dials from outside and may legitimately be a DNS name -- every entry here is a socket this Gateway
+	/// has to bind, so a name that resolves elsewhere is rejected rather than quietly widened.</summary>
+	static IReadOnlyList<string>? ReadListenAddresses(JsonObject args) {
+		var node=args["listen_addresses"]; if(node is null) return null;
+		var values=node switch {
+			JsonArray array=>array.Select(item=>(string?)item ?? "").ToArray(),
+			JsonValue value when value.TryGetValue<string>(out var text)=>ListenerAddresses.Split(text),
+			_=>throw new GatewayControlException("invalid_arguments","listen_addresses must be an array of IP addresses, or 0.0.0.0 for every interface.")
+		};
+		var normalized=ListenerAddresses.Normalize(values);
+		if(normalized.Length==0) throw new GatewayControlException("invalid_arguments","listen_addresses must name at least one address, or 0.0.0.0 for every interface.");
+		foreach(var value in normalized) if(!ListenerAddresses.IsAny(value) && !IPAddress.TryParse(value,out _)) throw new GatewayControlException("invalid_arguments",$"listen_addresses entry '{value}' is not an IP address; every entry must be an IP address assigned to this Gateway, or 0.0.0.0 for every interface.");
+		return normalized;
+	}
 	static bool RegistryContainsHost(string registry,string hostId) { if(!File.Exists(registry)) return false; var hosts=JsonNode.Parse(File.ReadAllText(registry))?["hosts"]?.AsArray(); return hosts?.Any(node=>(string?)node?["host_id"]==hostId)==true; }
-	static void UpdateRemoteRegistry(string registry,string hostId,string gatewayAddress,JsonObject gatewayHost,bool useTls) {
+	// The listener used to hold exactly one address, so a Gateway that already had hosts refused to
+	// provision one through any other address -- and a machine with a LAN adapter and a Hyper-V or WSL
+	// virtual switch has two perfectly good addresses, each the only one the hosts behind it can dial.
+	// The listener carries the union of every address its hosts were provisioned with instead; each host
+	// still dials only the single address baked into its own package. The scalar 'address' stays as the
+	// first of the set, so a registry written here is still readable by a Gateway that predates this.
+	static void UpdateRemoteRegistry(string registry,string hostId,string gatewayAddress,JsonObject gatewayHost,bool useTls,IReadOnlyList<string>? listenAddresses) {
 		var root=File.Exists(registry)?JsonNode.Parse(File.ReadAllText(registry))!.AsObject():new JsonObject { ["hosts"]=new JsonArray() }; var hosts=root["hosts"]?.AsArray() ?? new JsonArray(); root["hosts"]=hosts;
 		foreach(var existing in hosts.Where(node=>(string?)node?["host_id"]==hostId).ToArray()) hosts.Remove(existing);
-		var listener=root["listener"]?.AsObject(); if(hosts.Count>0 && listener is not null && !string.Equals((string?)listener["address"],gatewayAddress,StringComparison.OrdinalIgnoreCase)) throw new GatewayControlException("listener_address_conflict",$"The Gateway already provisions remote hosts through '{(string?)listener["address"]}', not '{gatewayAddress}'. Reuse the existing Gateway address or revoke every other remote host first.");
+		var listener=root["listener"]?.AsObject();
+		// An explicit listen_addresses replaces the persisted set rather than widening it, which is how a
+		// stale address is dropped; the address this host was just handed is always kept, because leaving
+		// it out would package a host that cannot reach the Gateway it was packaged by.
+		var addresses=ListenerAddresses.Normalize((listenAddresses ?? ListenerAddresses.Read(listener)).Append(gatewayAddress));
 		hosts.Add(gatewayHost);
-		listener ??= new JsonObject { ["address"]=gatewayAddress }; listener["address"]=gatewayAddress; if(!useTls) listener["plaintext_port"]=7352; root["listener"]=listener;
+		listener ??= new JsonObject(); listener["address"]=addresses[0]; listener["addresses"]=new JsonArray(addresses.Select(item=>(JsonNode)JsonValue.Create(item)!).ToArray()); if(!useTls) listener["plaintext_port"]=7352; root["listener"]=listener;
 		if(useTls) root["tls"]=new JsonObject { ["server_certificate_file"]="gateway-server.pfx",["server_certificate_password_file"]="gateway-server.password",["port"]=7353 };
 		AtomicWrite(registry,root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented=true }));
 	}
