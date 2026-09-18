@@ -240,13 +240,21 @@ try {
 		Assert-That "tools/list advertises $expected" ($tools -contains $expected)
 	}
 
-	$watch = [Diagnostics.Stopwatch]::StartNew()
-	$programs = @(Invoke-Tool -Name 'list_programs' -Arguments @{ process_ids = @($targetId) })
-	$filteredMs = $watch.ElapsedMilliseconds
+	# The speed check guards the pid filter against degrading into a full enumeration. The first call in
+	# a session also pays cold-start costs (JIT, first process probe), which on a hosted runner alone
+	# exceeded the bound (2132 ms, 2026-09-18). Take the best of three so a warm-up cannot fail it
+	# while a filter that is slow every time still does.
+	$filteredTimes = @()
+	for ($attempt = 0; $attempt -lt 3; $attempt++) {
+		$watch = [Diagnostics.Stopwatch]::StartNew()
+		$programs = @(Invoke-Tool -Name 'list_programs' -Arguments @{ process_ids = @($targetId) })
+		$filteredTimes += $watch.ElapsedMilliseconds
+	}
+	$filteredMs = ($filteredTimes | Measure-Object -Minimum).Minimum
 	$programsEnvelope = Invoke-Mcp -Method 'tools/call' -Parameters @{ name = 'list_programs'; arguments = @{ process_ids = @($targetId) } }
 	Assert-That 'list_programs structuredContent is an object wrapper' ($programsEnvelope.structuredContent -is [PSCustomObject] -and $null -ne $programsEnvelope.structuredContent.result)
 	Assert-That 'a pid-filtered listing finds the target' ($programs.Count -ge 1 -and $programs[0].pid -eq $targetId)
-	Assert-That 'a pid-filtered listing is fast' ($filteredMs -lt 1000) "(took ${filteredMs}ms)"
+	Assert-That 'a pid-filtered listing is fast' ($filteredMs -lt 1000) "(best ${filteredMs}ms of $($filteredTimes -join '/')ms)"
 	$program = $programs[0]
 	Assert-That 'the .NET Framework test target is x64' ($program.architecture -eq 'X64') "(was $($program.architecture))"
 	Assert-That 'program_id carries no dnSpy type name' (-not $program.program_id.Contains('RuntimeId')) "(was $($program.program_id))"
@@ -297,7 +305,7 @@ try {
 	Assert-That 'restart is refused while multiple targets are active' ($multiRestart -match 'restart|launched through dgSpy')
 	$afterSelectedTerminate = Invoke-MutatingTool -Name 'terminate' -Arguments @{ session_id = $sessionId; process_id = $secondPid }
 	Assert-That 'terminating one selected process leaves its sibling session active' ($afterSelectedTerminate.state -in @('running','paused') -and @($afterSelectedTerminate.process_ids).Count -eq 1 -and $afterSelectedTerminate.process_ids[0] -eq $targetId)
-	Start-Sleep -Milliseconds 500
+	$null = Wait-Until { $null -eq (Get-Process -Id $secondPid -ErrorAction SilentlyContinue) } 10
 	Assert-That 'selected termination kills only the selected target' ($null -eq (Get-Process -Id $secondPid -ErrorAction SilentlyContinue) -and $null -ne (Get-Process -Id $targetId -ErrorAction SilentlyContinue))
 	$selectedExit = @((Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $sessionId; after_event_id = $beforeAmbiguous.last_event_id }).events | Where-Object { $_.process_id -eq $secondPid -and $_.kind -eq 'terminated' } | Select-Object -Last 1)
 	Assert-That 'a selected target exit is non-terminal while a sibling remains' ($selectedExit.Count -eq 1 -and -not $selectedExit[0].terminal)
@@ -1132,12 +1140,12 @@ try {
 	$restartedPid = [int]@($restarted.process_ids)[0]
 	Assert-That 'restart preserves the logical session' ($restarted.session_id -eq $launchedSessionId)
 	Assert-That 'restart replaces the target process' ($restartedPid -gt 0 -and $restartedPid -ne $launchedPid) "(old=$launchedPid new=$restartedPid)"
-	Start-Sleep -Milliseconds 500
+	$null = Wait-Until { $null -eq (Get-Process -Id $launchedPid -ErrorAction SilentlyContinue) } 10
 	Assert-That 'the pre-restart process is gone' ($null -eq (Get-Process -Id $launchedPid -ErrorAction SilentlyContinue))
 
 	$terminated = Invoke-MutatingTool -Name 'terminate' -Arguments @{ session_id = $launchedSessionId }
 	Assert-That 'terminate reports an exited session with explicit semantics' ($terminated.state -eq 'exited' -and $terminated.terminal_reason -eq 'terminated_by_client') "(state=$($terminated.state) reason=$($terminated.terminal_reason))"
-	Start-Sleep -Milliseconds 500
+	$null = Wait-Until { $null -eq (Get-Process -Id $restartedPid -ErrorAction SilentlyContinue) } 10
 	Assert-That 'terminate kills the launched target' ($null -eq (Get-Process -Id $restartedPid -ErrorAction SilentlyContinue))
 	$terminateEvents = @(Invoke-Tool -Name 'get_events' -Arguments @{ session_id = $launchedSessionId; after_event_id = 0 }).events
 	$terminateEvent = $terminateEvents | Where-Object { $_.kind -eq 'terminated' } | Select-Object -Last 1
@@ -1150,7 +1158,9 @@ try {
 	$exiting = Invoke-Tool -Name 'launch' -Arguments @{ filename = $targetExe; engine = 'cordebug'; command_line = '--exit-after-ms 2500 --exit-code 23' }
 	$exitingSessionId = $exiting.session_id
 	$exitingPid = [int]@($exiting.process_ids)[0]
-	Start-Sleep -Milliseconds 3500
+	# The target exits on its own after 2.5 s; wait for the session to observe it rather than for a
+	# fixed interval that a slow runner can overrun.
+	$null = Wait-Until { (Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $exitingSessionId }).state -eq 'exited' } 15
 	$exited = Invoke-Tool -Name 'get_session_state' -Arguments @{ session_id = $exitingSessionId }
 	Assert-That 'an unexpected target exit leaves an observable terminal session' ($exited.state -eq 'exited' -and $exited.terminal_reason -eq 'target_exited') "(state=$($exited.state) reason=$($exited.terminal_reason))"
 	Assert-That 'the unexpected nonzero exit code is preserved' ($exited.exit_code -eq 23) "(exit_code=$($exited.exit_code))"

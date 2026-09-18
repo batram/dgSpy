@@ -63,28 +63,74 @@ function Expect-RpcFailure([string]$Label, [hashtable]$Arguments, [string]$Expec
     try { $null = Rpc 'install_hook' $Arguments 70; Check $Label $false 'request unexpectedly succeeded' }
     catch { Check $Label ($_.Exception.Message -like ('*' + $ExpectedText + '*')) $_.Exception.Message }
 }
-function Get-UiElement([int]$ProcessId, [string]$Name, [int]$TimeoutSeconds = 15) {
+function Get-UiElement([int]$ProcessId, [string]$Name, [int]$TimeoutSeconds = 15, $ControlType = $null) {
     if (-not ('System.Windows.Automation.AutomationElement' -as [type])) {
         Add-Type -AssemblyName UIAutomationClient
         Add-Type -AssemblyName UIAutomationTypes
     }
     $root = [System.Windows.Automation.AutomationElement]::RootElement
     $scope = [System.Windows.Automation.TreeScope]::Descendants
-    $processCondition = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$ProcessId)
-    $nameCondition = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,$Name)
-    $condition = New-Object System.Windows.Automation.AndCondition($processCondition,$nameCondition)
+    $conditions = @(
+        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$ProcessId)),
+        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,$Name))
+    )
+    if ($ControlType) { $conditions += New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType) }
+    $condition = New-Object System.Windows.Automation.AndCondition($conditions)
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
-        $found = $root.FindFirst($scope,$condition)
+        # A tree walk can throw while WPF is rebuilding the subtree; that is a retry, not a result.
+        try { $found = $root.FindFirst($scope,$condition) } catch { $found = $null }
         if ($found) { return $found }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
     return $null
 }
+# UIA pattern calls against a WPF ListView fail with "Unrecognized error" when the item is
+# re-virtualized between resolving the element and using it (seen on the hosted runner,
+# 2026-09-18). Retry the whole resolve-and-act from scratch; the caller passes a script that
+# re-resolves its element and returns $true once the desired state is observed.
+function Invoke-UiRetry([string]$Label, [scriptblock]$Attempt, [int]$Attempts = 5, [int]$DelayMilliseconds = 400) {
+    $failure = $null
+    for ($index = 1; $index -le $Attempts; $index++) {
+        try { if (& $Attempt) { return $true } ; $failure = 'not observed' }
+        catch { $failure = $_.Exception.Message }
+        Start-Sleep -Milliseconds $DelayMilliseconds
+    }
+    throw "$Label did not succeed after $Attempts attempts: $failure"
+}
 function Invoke-UiElement($Element) {
-    $pattern = $null
-    if (-not $Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { throw "UI element '$($Element.Current.Name)' is not invokable" }
-    ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+    $name = $Element.Current.Name
+    $null = Invoke-UiRetry "Invoke '$name'" {
+        $pattern = $null
+        if (-not $Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { throw "UI element '$name' is not invokable" }
+        ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+        $true
+    }
+}
+function Select-UiRow([int]$ProcessId, [string]$Name) {
+    $null = Invoke-UiRetry "Select row '$Name'" {
+        $row = Get-UiElement $ProcessId $Name 5
+        if (-not $row) { throw "row '$Name' was not found" }
+        $selection = $null
+        $selectable = $row
+        # WPF can omit the ListViewItem from ControlView while still exposing its text child.
+        # RawView preserves the actual parent chain and reaches the SelectionItem provider.
+        $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+        while ($selectable -and -not $selectable.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$selection)) { $selectable = $walker.GetParent($selectable) }
+        if (-not $selection) { throw 'row did not expose a selectable ancestor' }
+        $pattern = [System.Windows.Automation.SelectionItemPattern]$selection
+        $pattern.Select()
+        Start-Sleep -Milliseconds 200
+        $pattern.Current.IsSelected
+    }
+}
+function Wait-UiEnabled($Element, [int]$TimeoutSeconds = 10) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        try { if ($Element.Current.IsEnabled) { return $true } } catch { }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return $false
 }
 function Open-HookLabEditorAndRemove([int]$HostProcessId, [string]$SessionId, [int]$TargetProcessId, [string]$HookId, [string]$ExpectedSource) {
     Add-Type -AssemblyName UIAutomationClient
@@ -94,40 +140,44 @@ function Open-HookLabEditorAndRemove([int]$HostProcessId, [string]$SessionId, [i
     Check 'HookLab GUI opens with installed-hooks and event lists' ($null -ne $hooks -and $null -ne $events)
     $hookRow = Get-UiElement $HostProcessId $HookId
     Check 'HookLab GUI shows the MCP-installed hook' ($null -ne $hookRow) ("hook_id=" + $HookId)
-    $eventRows = if ($events) { @($events.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)) } else { @() }
-    Check 'HookLab GUI receives events without an MCP read driving it' ($eventRows.Count -gt 0) ("descendants=" + $eventRows.Count)
-    if ($hookRow) {
-        $selection = $null
-        $selectable = $hookRow
-        # WPF can omit the ListViewItem from ControlView while still exposing its text child.
-        # RawView preserves the actual parent chain and reaches the SelectionItem provider.
-        $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
-        while ($selectable -and -not $selectable.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$selection)) { $selectable = $walker.GetParent($selectable) }
-        if (-not $selection) { throw 'HookLab hook row did not expose a selectable ancestor' }
-        ([System.Windows.Automation.SelectionItemPattern]$selection).Select()
-        Start-Sleep -Milliseconds 500
+    $eventRows = @()
+    $eventDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    while ($events -and $eventRows.Count -eq 0 -and [DateTime]::UtcNow -lt $eventDeadline) {
+        $eventRows = try { @($events.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)) } catch { @() }
+        if ($eventRows.Count -eq 0) { Start-Sleep -Milliseconds 300 }
     }
+    Check 'HookLab GUI receives events without an MCP read driving it' ($eventRows.Count -gt 0) ("descendants=" + $eventRows.Count)
+    if ($hookRow) { Select-UiRow $HostProcessId $HookId }
     $edit = Get-UiElement $HostProcessId 'Edit selected custom HookLab hook'
-    Check 'compiled HookLab row enables the packaged Edit action' ($null -ne $edit -and $edit.Current.IsEnabled) ("hook_id=" + $HookId)
-    if ($edit -and $edit.Current.IsEnabled) {
+    $editEnabled = $null -ne $edit -and (Wait-UiEnabled $edit)
+    Check 'compiled HookLab row enables the packaged Edit action' $editEnabled ("hook_id=" + $HookId)
+    if ($editEnabled) {
         Invoke-UiElement $edit
         $editorWindow = Get-UiElement $HostProcessId 'HookLab custom hook editor'
         $nativeEditorFound = $false
         $candidateTexts = New-Object System.Collections.Generic.List[string]
-        if ($editorWindow) {
-            foreach ($candidate in @($editorWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition))) {
-                $candidatePattern = $null
-                if ($candidate.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern,[ref]$candidatePattern)) {
-                    $candidateText = ([System.Windows.Automation.TextPattern]$candidatePattern).DocumentRange.GetText(-1)
-                    $candidateTexts.Add('text:' + $candidate.Current.ControlType.ProgrammaticName + ':' + $candidateText.Length)
-                    if ($candidate.Current.ControlType.ProgrammaticName -eq 'ControlType.Edit' -and $candidateText.Length -eq 0) { $nativeEditorFound = $true }
-                }
-                $valuePattern = $null
-                if ($candidate.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$valuePattern)) {
-                    $candidateText = ([System.Windows.Automation.ValuePattern]$valuePattern).Current.Value
-                    $candidateTexts.Add('value:' + $candidate.Current.ControlType.ProgrammaticName + ':' + $candidateText.Length)
-                }
+        # The editor window can be found before its native editor control has been created and
+        # exposed; keep re-reading the subtree until the editor shows up or the deadline passes.
+        $editorDeadline = [DateTime]::UtcNow.AddSeconds(10)
+        while ($editorWindow -and -not $nativeEditorFound -and [DateTime]::UtcNow -lt $editorDeadline) {
+            $candidateTexts.Clear()
+            $candidates = try { @($editorWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)) } catch { @() }
+            foreach ($candidate in $candidates) {
+                try {
+                    $candidatePattern = $null
+                    if ($candidate.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern,[ref]$candidatePattern)) {
+                        $candidateText = ([System.Windows.Automation.TextPattern]$candidatePattern).DocumentRange.GetText(-1)
+                        $candidateTexts.Add('text:' + $candidate.Current.ControlType.ProgrammaticName + ':' + $candidateText.Length)
+                        if ($candidate.Current.ControlType.ProgrammaticName -eq 'ControlType.Edit' -and $candidateText.Length -eq 0) { $nativeEditorFound = $true }
+                    }
+                    $valuePattern = $null
+                    if ($candidate.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$valuePattern)) {
+                        $candidateText = ([System.Windows.Automation.ValuePattern]$valuePattern).Current.Value
+                        $candidateTexts.Add('value:' + $candidate.Current.ControlType.ProgrammaticName + ':' + $candidateText.Length)
+                    }
+                } catch { $candidateTexts.Add('error:' + $_.Exception.Message) }
             }
+            if (-not $nativeEditorFound) { Start-Sleep -Milliseconds 300 }
         }
         $editorTree = if ($editorWindow -and -not $nativeEditorFound) { @($editorWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Select-Object -First 80 | ForEach-Object { $_.Current.ControlType.ProgrammaticName + ':' + $_.Current.Name }) -join ';' } else { '' }
         Check 'Edit opens the packaged native C# editor' ($null -ne $editorWindow -and $nativeEditorFound) ("window=" + ($null -ne $editorWindow) + " native_editor=" + $nativeEditorFound + " candidates=" + ($candidateTexts -join ',') + " tree=" + $editorTree)
@@ -146,13 +196,7 @@ function Open-HookLabEditorAndRemove([int]$HostProcessId, [string]$SessionId, [i
         }
         Start-Sleep -Milliseconds 500
     }
-    $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $conditions = @(
-        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$HostProcessId)),
-        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,'Remove selected HookLab hook')),
-        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button))
-    )
-    $remove = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,(New-Object System.Windows.Automation.AndCondition($conditions)))
+    $remove = Get-UiElement $HostProcessId 'Remove selected HookLab hook' -ControlType ([System.Windows.Automation.ControlType]::Button)
     if (-not $remove) { throw 'HookLab Remove button was not present' }
     Invoke-UiElement $remove
 }
@@ -547,9 +591,12 @@ try {
             Check "list_modules independently sees in-memory $name" ($found.Count -gt 0) ("matches=" + $found.Count)
         }
 
-        Start-Sleep -Seconds 2
         $eventArguments = @{ session_id=$sessionId; process_id=$fixture.Id; max_events=256; after_cursor=0 }
-        $drain = Rpc 'get_hook_events' $eventArguments 70
+        $eventDeadline = [DateTime]::UtcNow.AddSeconds(10)
+        do {
+            Start-Sleep -Milliseconds 250
+            $drain = Rpc 'get_hook_events' $eventArguments 70
+        } while (@($drain.events).Count -eq 0 -and [DateTime]::UtcNow -lt $eventDeadline)
         Check 'public get_hook_events sees more than zero events' (@($drain.events).Count -gt 0) ("count=" + @($drain.events).Count)
         Check 'public get_hook_events reports no drops' ([int64]$drain.dropped -eq 0) ("dropped=" + $drain.dropped)
         $eventText = (@($drain.events | ForEach-Object { $_.patch_id + '|' + $_.payload_json }) -join ' ')
