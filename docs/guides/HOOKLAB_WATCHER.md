@@ -115,6 +115,9 @@ is the sole opt-in to future matching processes.
 The default notification policy is defined per profile (`all`, `errors`, or `none`). The durable
 operational record is `%LOCALAPPDATA%\HookLab\watcher-audit.jsonl`, which rotates at its configured bound.
 `status` reports lifecycle, discovery mode, catalog errors, and the latest bounded result set.
+The status file is rewritten only when its content changes, so `updatedUtc` is the last state change,
+not a heartbeat; an idle watcher leaves it untouched. Process-start subscriptions are narrowed to the
+watched image names, so unrelated process starts neither wake the watcher nor count as discovery wakes.
 Persisted lifecycle is read back against the exact watcher PID and process-creation identity. A recorded
 `running` process that no longer exists is reported as `stale`, with `recordedLifecycle` and
 `processAlive` retained so historical state cannot masquerade as a live watcher.

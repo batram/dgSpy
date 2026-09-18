@@ -96,8 +96,10 @@ internal sealed class WatchRunner {
 	internal static WatchApplyResult Map(InjectorResult result)=>new(result.Status,result.DefinitionSha256,result.ProbeInstanceId,result.PatchId,result.HooksVersion);
 	public async Task RunAsync(CancellationToken cancellation) {
 		statusStore?.SetLifecycle("running"); statusStore?.SetDiscoveryMode(processStarts.Mode);
+		string? observedGeneration=null;
 		try { while(!cancellation.IsCancellationRequested) {
-			var current=catalog.Current(); tracker.Update(current.Definitions); var controlState=control.Read(); statusStore?.Publish(controlState,current); var processes=snapshot?.Invoke()??ProcessDiscovery.Snapshot(current.Definitions.Select(value=>value.Value.Process!.FileName!)); if(!cancellation.IsCancellationRequested&&!controlState.Paused) Schedule(processes,controlState);
+			var current=catalog.Current(); tracker.Update(current.Definitions); if(current.Generation!=observedGeneration) { processStarts.Observe(current.Definitions.Select(value=>value.Value.Process!.FileName!)); observedGeneration=current.Generation; }
+			var controlState=control.Read(); statusStore?.Publish(controlState,current); var processes=snapshot?.Invoke()??ProcessDiscovery.Snapshot(current.Definitions.Select(value=>value.Value.Process!.FileName!)); if(!cancellation.IsCancellationRequested&&!controlState.Paused) Schedule(processes,controlState);
 			try { statusStore?.RecordDiscoveryWake(await processStarts.WaitAsync(pollMilliseconds,cancellation)); } catch(OperationCanceledException) { break; }
 		} }
 		finally { processStarts.Dispose(); PublishLifecycle("stopping"); await DrainAsync(); PublishLifecycle("stopped"); }

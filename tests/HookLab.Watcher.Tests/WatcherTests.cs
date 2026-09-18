@@ -127,6 +127,22 @@ public sealed class WatcherTests {
 	}
 
 	[Fact]
+	public void Process_start_subscription_filters_watched_images_in_the_query() {
+		Assert.Equal("SELECT * FROM Win32_ProcessStartTrace",WmiProcessStartSignal.Query(Array.Empty<string>()));
+		Assert.Equal("SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'a.exe' OR ProcessName = 'o\\'b.exe'",WmiProcessStartSignal.Query(new[]{"a.exe","o'b.exe"}));
+	}
+
+	[Fact]
+	public void Status_store_rewrites_only_on_content_change_and_sweeps_orphaned_temporaries() {
+		using var directory=new TemporaryDirectory(); var statusPath=System.IO.Path.Combine(directory.Path,"status.json"); var orphan=statusPath+"."+Guid.NewGuid().ToString("N")+".tmp"; File.WriteAllText(orphan,"{}"); File.WriteAllText(System.IO.Path.Combine(directory.Path,"other.json.tmp"),"{}");
+		var status=new WatcherStatusStore(statusPath); Assert.False(File.Exists(orphan)); Assert.True(File.Exists(System.IO.Path.Combine(directory.Path,"other.json.tmp")));
+		var catalog=new StaticWatchCatalog(new[]{Definition("alpha","Target.exe")}).Current(); status.Publish(WatchControl.Active,catalog); var first=File.GetLastWriteTimeUtc(statusPath); var firstUpdated=WatcherStatusStore.Read(statusPath)!.Value.GetProperty("updatedUtc").GetString();
+		Thread.Sleep(30); status.Publish(WatchControl.Active,catalog); Assert.Equal(first,File.GetLastWriteTimeUtc(statusPath)); Assert.Equal(firstUpdated,WatcherStatusStore.Read(statusPath)!.Value.GetProperty("updatedUtc").GetString());
+		status.SetLifecycle("running"); status.Publish(WatchControl.Active,catalog); var changed=WatcherStatusStore.Read(statusPath)!.Value; Assert.Equal("running",changed.GetProperty("lifecycle").GetString()); Assert.NotEqual(firstUpdated,changed.GetProperty("updatedUtc").GetString());
+		File.Delete(statusPath); status.Publish(WatchControl.Active,catalog); Assert.True(File.Exists(statusPath));
+	}
+
+	[Fact]
 	public async Task Runner_bounds_parallelism_and_isolates_failure() {
 		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl"));
 		var definitions=new[]{Definition("alpha","Target.exe"),Definition("beta","Other.exe")}; var gate=new object(); var current=0; var maximum=0; var calls=new ConcurrentBag<string>();
@@ -166,7 +182,7 @@ public sealed class WatcherTests {
 		using var directory=new TemporaryDirectory(); using var audit=new AuditWriter(System.IO.Path.Combine(directory.Path,"audit.jsonl")); using var cancellation=new CancellationTokenSource(); var snapshots=0; var calls=new ConcurrentBag<int>(); var signal=new ImmediateProcessStartSignal(); var watch=System.Diagnostics.Stopwatch.StartNew(); var statusPath=System.IO.Path.Combine(directory.Path,"status.json");
 		IReadOnlyList<ProcessIdentity> Snapshot() { snapshots++; return snapshots==1?new[]{new ProcessIdentity(1,1,"Target.exe",1)}:new[]{new ProcessIdentity(1,1,"Target.exe",1),new ProcessIdentity(2,2,"Target.exe",1)}; }
 		var runner=new WatchRunner(new[]{Definition("alpha","Target.exe")},1,5000,1,audit,null,Snapshot,work=>{ calls.Add(work.Process.ProcessId); if(work.Process.ProcessId==2) cancellation.Cancel(); return Result("ok"); },statusStore:new WatcherStatusStore(statusPath),processStarts:signal);
-		await runner.RunAsync(cancellation.Token).WaitAsync(TimeSpan.FromSeconds(2)); Assert.Equal(new[]{1,2},calls.OrderBy(value=>value)); Assert.True(watch.Elapsed<TimeSpan.FromSeconds(2)); Assert.True(signal.Disposed); var status=WatcherStatusStore.Read(statusPath)!.Value; Assert.Equal("subscription",status.GetProperty("lastDiscoveryTrigger").GetString()); Assert.Equal(1,status.GetProperty("subscriptionWakeCount").GetInt64());
+		await runner.RunAsync(cancellation.Token).WaitAsync(TimeSpan.FromSeconds(2)); Assert.Equal(new[]{1,2},calls.OrderBy(value=>value)); Assert.True(watch.Elapsed<TimeSpan.FromSeconds(2)); Assert.True(signal.Disposed); Assert.Equal(new[]{"Target.exe"},signal.Observed); var status=WatcherStatusStore.Read(statusPath)!.Value; Assert.Equal("subscription",status.GetProperty("lastDiscoveryTrigger").GetString()); Assert.Equal(1,status.GetProperty("subscriptionWakeCount").GetInt64());
 	}
 
 	[Fact]
@@ -225,6 +241,6 @@ public sealed class WatcherTests {
 	static HookDefinition Valid(string id,string fileName)=>new() { SchemaVersion=1,Id=id,Process=new ProcessDefinition { FileName=fileName },Target=new TargetDefinition { Assembly="Target",ModuleMvid=Guid.NewGuid().ToString("D"),DeclaringType="Example.Target",Method="Run",MetadataToken=0x06000001,Signature="System.Void Run()",IlSha256=new string('a',64) },Hook=new PatchDefinition { Kind="Prefix",Revision=1,Source="public static class H{public static bool Prefix(){return true;}}",MaximumEventsPerSecond=10,MaximumStringLength=100 } };
 	static void WriteDefinition(string directory,string name,string id,string fileName) { var options=new JsonSerializerOptions { PropertyNamingPolicy=JsonNamingPolicy.CamelCase }; File.WriteAllText(System.IO.Path.Combine(directory,name),JsonSerializer.Serialize(Valid(id,fileName),options)); }
 	sealed class RecordingNotificationSink : IWatchNotificationSink { public ConcurrentBag<string> Values { get; }=new(); public void Publish(WatchNotification notification)=>Values.Add(notification.DefinitionId+":"+notification.Status); }
-	sealed class ImmediateProcessStartSignal : IProcessStartSignal { int waits; public bool Disposed { get; private set; } public string Mode=>"subscription+polling"; public async Task<bool> WaitAsync(int pollingMilliseconds,CancellationToken cancellation) { if(Interlocked.Increment(ref waits)==1) return true; await Task.Delay(pollingMilliseconds,cancellation); return false; } public void Dispose()=>Disposed=true; }
+	sealed class ImmediateProcessStartSignal : IProcessStartSignal { int waits; public bool Disposed { get; private set; } public List<string> Observed { get; }=new(); public void Observe(IEnumerable<string> fileNames)=>Observed.AddRange(fileNames); public string Mode=>"subscription+polling"; public async Task<bool> WaitAsync(int pollingMilliseconds,CancellationToken cancellation) { if(Interlocked.Increment(ref waits)==1) return true; await Task.Delay(pollingMilliseconds,cancellation); return false; } public void Dispose()=>Disposed=true; }
 	sealed class TemporaryDirectory : IDisposable { public string Path { get; }=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"hooklab-watcher-tests-"+Guid.NewGuid().ToString("N")); public TemporaryDirectory()=>Directory.CreateDirectory(Path); public void Dispose()=>Directory.Delete(Path,true); }
 }
