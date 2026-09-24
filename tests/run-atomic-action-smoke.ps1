@@ -199,7 +199,9 @@ try {
     $targetLauncherScript = Join-Path $PSScriptRoot 'TestSupport\Run-CorDebugTarget.ps1'
     $targetLauncher = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
         -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $targetLauncherScript + '"') -PassThru
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    # A fresh Windows PowerShell start took 7 s here on the hosted windows-2025 image of 2026-09-22,
+    # against 1 s before it; the deadline is only a bound, so leave it plenty of room.
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
     while ([DateTime]::UtcNow -lt $deadline -and @(Get-Content -LiteralPath $targetOut -ErrorAction SilentlyContinue).Count -lt 2) {
         if ($targetLauncher.HasExited) { break }
         Start-Sleep -Milliseconds 100

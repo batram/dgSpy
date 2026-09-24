@@ -294,14 +294,25 @@ function Start-Fixture([string]$Label, [int]$ExitAfterMs) {
         -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $PSCommandPath + '"'),'-FixtureChild','-FixtureExitPath',('"' + $exitPath + '"'),'-FixtureExitAfterMs',"$ExitAfterMs" `
 		-PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $null = $startedProcesses.Add($process)
-    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    # The launcher is a fresh Windows PowerShell that parses this whole script before it starts the
+    # target. That usually publishes within a second or two, but on the hosted windows-2025 image of
+    # 2026-09-22 it went past a 15 s bound with no output and no exit. The deadline is only a bound,
+    # so it is generous; the elapsed time is logged so a shrinking margin shows in green runs first.
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
     do {
         Start-Sleep -Milliseconds 50
         $lines = @(Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue)
     } until (($lines | Where-Object { $_ -match '^PID=\d+$' }) -and ($lines | Where-Object { $_ -match '^TOKEN=\d+$' }) -or $process.HasExited -or [DateTime]::UtcNow -gt $deadline)
     $pidLine = $lines | Where-Object { $_ -match '^PID=\d+$' } | Select-Object -First 1
     $tokenLine = $lines | Where-Object { $_ -match '^TOKEN=\d+$' } | Select-Object -First 1
-    if (-not $pidLine -or -not $tokenLine) { throw "${Label} did not publish PID and TOKEN; stderr=$(@(Get-Content -LiteralPath $stderr -ErrorAction SilentlyContinue) -join ' | ')" }
+    if (-not $pidLine -or -not $tokenLine) {
+        # Tell a launcher that never reached the target apart from a target whose output never arrived.
+        $launcher = if ($process.HasExited) { 'exited code=' + $process.ExitCode } else { 'running' }
+        $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($process.Id)" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + ':' + $_.ProcessId }) -join ','
+        throw "${Label} did not publish PID and TOKEN after $($clock.ElapsedMilliseconds) ms; launcher=$launcher children=[$children] stdout=$($lines -join ' | ') stderr=$(@(Get-Content -LiteralPath $stderr -ErrorAction SilentlyContinue) -join ' | ')"
+    }
+    Say "fixture $Label published after $($clock.ElapsedMilliseconds) ms"
     $targetId = [int]($pidLine -replace '^PID=','')
     $targetProcess = Get-Process -Id $targetId -ErrorAction Stop
     $null = $startedProcesses.Add($targetProcess)
