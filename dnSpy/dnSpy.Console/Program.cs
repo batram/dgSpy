@@ -50,10 +50,17 @@ namespace dnSpy_Console {
 				return 1;
 			}
 
-			var oldEncoding = Console.OutputEncoding;
+			Encoding? oldEncoding = null;
 			try {
-				// Make sure russian and chinese characters are shown correctly
-				Console.OutputEncoding = Encoding.UTF8;
+				try {
+					// Make sure russian and chinese characters are shown correctly when a console is attached.
+					var originalEncoding = Console.OutputEncoding;
+					Console.OutputEncoding = Encoding.UTF8;
+					oldEncoding = originalEncoding;
+				}
+				catch (IOException) {
+					// A detached process can write to redirected streams without a console code page.
+				}
 
 				return new DnSpyDecompiler().Run(args);
 			}
@@ -62,7 +69,14 @@ namespace dnSpy_Console {
 				return 1;
 			}
 			finally {
-				Console.OutputEncoding = oldEncoding;
+				if (oldEncoding is not null) {
+					try {
+						Console.OutputEncoding = oldEncoding;
+					}
+					catch (IOException) {
+						// The console can disappear while decompilation is running.
+					}
+				}
 			}
 		}
 	}
