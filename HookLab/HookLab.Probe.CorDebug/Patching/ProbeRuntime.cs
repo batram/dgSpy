@@ -36,6 +36,7 @@ namespace HookLab.Probe.CorDebug.Patching {
 		readonly Dictionary<string, CompiledHookContext> compiledHooks = new Dictionary<string, CompiledHookContext>(StringComparer.Ordinal);
 		readonly ProbeInitialization initialization;
 		readonly BoundedEventBuffer buffer;
+		readonly ConcurrentQueue<Assembly> pendingAssemblyLoads = new ConcurrentQueue<Assembly>();
 		long hooksVersion;
 		int notificationPending;
 		bool disposed;
@@ -56,29 +57,27 @@ namespace HookLab.Probe.CorDebug.Patching {
 		/// interesting fact is that the hook stopped being reachable, not how many times since.</summary>
 		readonly Dictionary<string, ShadowedHookState> shadowed = new Dictionary<string, ShadowedHookState>(StringComparer.Ordinal);
 
-		/// <summary>Records any installed hook whose declaring type is also defined by an assembly that
-		/// has just loaded.
-		///
-		/// <para>The check is one <c>GetType</c> per installed hook rather than an enumeration of the new
-		/// assembly's types: enumeration is expensive on every load in a busy process and throws
-		/// <see cref="ReflectionTypeLoadException"/> on half-resolvable assemblies, which is a poor reason
-		/// to disturb a target. With no hooks installed this does nothing at all.</para>
+		/// <summary>Defer shadowing checks out of the CLR's assembly-load callback. Harmony can resolve
+		/// field types while holding <see cref="gate"/>; waiting for that lock from a loader callback can
+		/// deadlock the patch with the assembly load that supplies those types. The status path checks
+		/// queued assemblies against installed hooks before reporting shadowing.
 		///
 		/// <para>It reports rather than reacts. Re-patching the new assembly would install a hook the
 		/// caller never asked for, on code whose IL nobody guarded; unpatching would destroy a hook that
 		/// is still correct for anything holding the old type. Saying so is the useful part - the failure
 		/// this exists for is silence, not the shadowing itself.</para></summary>
 		void NoteAssemblyLoaded(Assembly loaded) {
-			if (loaded == null) return;
-			try {
-				lock (gate) {
-					if (disposed || (hooks.Count == 0 && compiledHooks.Count == 0)) return;
-					foreach (var entry in Targets()) NoteShadowing(entry, loaded);
-				}
+			if (loaded != null) pendingAssemblyLoads.Enqueue(loaded);
+		}
+
+		/// <summary>Callers hold <see cref="gate"/>. One GetType check per loaded assembly and installed
+		/// hook, rather than enumerating every type or rescanning the whole AppDomain on each status read.</summary>
+		void RefreshShadowingAfterAssemblyLoad() {
+			while (pendingAssemblyLoads.TryDequeue(out var assembly)) {
+				if (disposed || (hooks.Count == 0 && compiledHooks.Count == 0)) continue;
+				try { foreach (var entry in Targets()) NoteShadowing(entry, assembly); }
+				catch (Exception) { }
 			}
-			// A load notification must never be the thing that breaks a target. Losing this observation
-			// degrades a diagnostic; throwing here would run inside the CLR's loader callback.
-			catch (Exception) { }
 		}
 
 		/// <summary>Records one hook as shadowed if the given assembly defines its declaring type from a
@@ -258,10 +257,10 @@ namespace HookLab.Probe.CorDebug.Patching {
 		}
 
 		public ProbeState GetState() {
-			lock (gate) return new ProbeState(1, ProbeInstanceId, initialization.IdentityProvider.GetCurrentIdentity(), Inventory.SelectedIdentity, hooksVersion, hooks.Keys.Concat(compiledHooks.Keys).OrderBy(x => x).ToArray(),compiledHooks.Values.OrderBy(x=>x.PatchId).Select(x=>new CompiledHookState(x.PatchId,x.Method.Module.Assembly.GetName().Name??x.Method.Module.Name,x.Document.Kind,x.Document.Target,Sha256(x.Source),x.Revision,x.Enabled)).ToArray(),
+			lock (gate) { RefreshShadowingAfterAssemblyLoad(); return new ProbeState(1, ProbeInstanceId, initialization.IdentityProvider.GetCurrentIdentity(), Inventory.SelectedIdentity, hooksVersion, hooks.Keys.Concat(compiledHooks.Keys).OrderBy(x => x).ToArray(),compiledHooks.Values.OrderBy(x=>x.PatchId).Select(x=>new CompiledHookState(x.PatchId,x.Method.Module.Assembly.GetName().Name??x.Method.Module.Name,x.Document.Kind,x.Document.Target,Sha256(x.Source),x.Revision,x.Enabled)).ToArray(),
 				// Only hooks that still exist: a removed hook's shadowing is not news, and reporting it
 				// would keep a resolved problem on the screen.
-				shadowed.Values.Where(x=>hooks.ContainsKey(x.PatchId)||compiledHooks.ContainsKey(x.PatchId)).OrderBy(x=>x.PatchId,StringComparer.Ordinal).ToArray());
+				shadowed.Values.Where(x=>hooks.ContainsKey(x.PatchId)||compiledHooks.ContainsKey(x.PatchId)).OrderBy(x=>x.PatchId,StringComparer.Ordinal).ToArray()); }
 		}
 		static string Sha256(string value) { using(var sha=SHA256.Create()) return string.Concat(sha.ComputeHash(Encoding.UTF8.GetBytes(value)).Select(x=>x.ToString("x2")).ToArray()); }
 

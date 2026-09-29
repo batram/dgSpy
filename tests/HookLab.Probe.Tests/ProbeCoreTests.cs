@@ -19,6 +19,7 @@ namespace HookLab.Probe.Tests {
 		static readonly MethodInfo NestedSignatureMethod = typeof(Fixture).GetMethod(nameof(Fixture.ReadOffset))!;
 		/// <summary>A top-level target, so an emitted assembly can genuinely redefine its type by name.</summary>
 		static readonly MethodInfo ShadowableMethod = typeof(ShadowableFixture).GetMethod(nameof(ShadowableFixture.Add))!;
+		static readonly MethodInfo ContendedShadowMethod = typeof(ContendedShadowFixture).GetMethod(nameof(ContendedShadowFixture.Add))!;
 		static readonly MethodInfo PreexistingShadowMethod = typeof(PreexistingShadowFixture).GetMethod(nameof(PreexistingShadowFixture.Add))!;
 		static readonly MethodInfo UnrelatedLoadMethod = typeof(UnrelatedLoadFixture).GetMethod(nameof(UnrelatedLoadFixture.Add))!;
 		static readonly MethodInfo RemovedShadowMethod = typeof(RemovedShadowFixture).GetMethod(nameof(RemovedShadowFixture.Add))!;
@@ -662,6 +663,35 @@ namespace HookLab.Probe.Tests {
 			finally { try { System.IO.Directory.Delete(directory, true); } catch (Exception) { } }
 		}
 
+		/// <summary>The VMConnect failure left its UI thread in this loader callback while a bootstrap
+		/// worker held the mutation lock inside Harmony.Patch. The callback must return before that lock
+		/// becomes available, and the next status read must still report the loaded shadow assembly.</summary>
+		[Fact]
+		public void AssemblyLoadDoesNotWaitForPatchMutationGate() {
+			var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "hooklab-shadow-" + Guid.NewGuid().ToString("N"));
+			System.IO.Directory.CreateDirectory(directory);
+			try {
+				using (var runtime = Runtime()) {
+					runtime.Install(ContendedShadowMethod, ShadowableDocument(ContendedShadowMethod), 0);
+					var gate = typeof(ProbeRuntime).GetField("gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(runtime)!;
+					using (var entered = new ManualResetEventSlim())
+					using (var release = new ManualResetEventSlim()) {
+						var holder = Task.Run(() => { lock (gate) { entered.Set(); release.Wait(); } });
+						Task<Assembly>? loading = null;
+						try {
+							Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+							loading = Task.Run(() => LoadFromDisk(directory, ContendedShadowMethod.DeclaringType!.FullName!, "Shadowing.Contended"));
+							Assert.True(loading.Wait(TimeSpan.FromSeconds(5)), "AssemblyLoad waited for the patch mutation gate.");
+						}
+						finally { release.Set(); holder.Wait(TimeSpan.FromSeconds(5)); loading?.Wait(TimeSpan.FromSeconds(5)); }
+					}
+					var shadowed = Assert.Single(runtime.GetState().ShadowedHooks);
+					Assert.Contains("Shadowing.Contended", shadowed.ShadowingAssembly, StringComparison.Ordinal);
+				}
+			}
+			finally { try { System.IO.Directory.Delete(directory, true); } catch (Exception) { } }
+		}
+
 		/// <summary>The commoner case, and the one an event-only check misses completely: the superseding
 		/// assembly was already resident when the hook went on. Measured on 2026-08-20 - the IIS worker
 		/// held both generations of the recompiled page before anything was installed, so nothing loaded
@@ -873,6 +903,9 @@ namespace HookLab.Probe.Tests {
 	/// for every test after it in the same process. Sharing one fixture made three later tests fail with
 	/// a report they had not caused.</para></summary>
 	public static class ShadowableFixture {
+		[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
+	}
+	public static class ContendedShadowFixture {
 		[MethodImpl(MethodImplOptions.NoInlining)] public static int Add(int left, int right) => left + right;
 	}
 	public static class PreexistingShadowFixture {
