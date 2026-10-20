@@ -3,7 +3,11 @@ using dgSpy.Protocol;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-var builder = WebApplication.CreateBuilder(args);
+// Pin the content root to the install directory. The default is the working directory, and the
+// appsettings reload puts a recursive FileSystemWatcher on it: a client that starts the Gateway from
+// the user's home folder then has it stat every file that changes under that folder, which makes
+// other programs' atomic renames there fail with EPERM.
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args=args, ContentRootPath=AppContext.BaseDirectory });
 builder.WebHost.UseUrls(builder.Configuration["DGSPY_URL"] ?? "http://127.0.0.1:7350");
 builder.Services.AddSingleton<HostRouter>();
 builder.Services.AddSingleton<McpClientSessions>();
