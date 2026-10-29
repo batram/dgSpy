@@ -86,6 +86,14 @@ Use the installed executable for operational commands. Do not invoke `HookLab.Wa
 elevated target, status fails while preserving the protected discovery record; it never converts an
 inspection-access failure into an identity mismatch or quarantine decision.
 
+A package pins its target method to one exact build: module MVID, metadata token, and IL SHA-256. When an
+update rebuilds the module (Windows cumulative updates rebuild `vmconnect.exe`), the pin no longer matches.
+Before a fresh injection the watcher reads the target's module file and refuses a pin whose MVID it no
+longer has, without injecting anything, and reports the current MVID in the audit and notification. A
+refused process carries no resident, so dgSpy and other profiles can still initialize it. Re-pin by
+re-exporting the hook from the current build, or by updating the manifest's `target` identity and the
+profile's `packageDigest`, then enroll with `--replace` (built-in packages ship in a new watcher install).
+
 Package and profile reloads activate only as complete valid catalog generations. `pause` prevents new
 work without removing existing hooks. Disabling a profile does the same for that profile. A task or
 watcher restart adopts authenticated live residents and reconciles desired state without reinjection.

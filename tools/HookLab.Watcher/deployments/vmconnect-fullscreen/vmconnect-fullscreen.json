@@ -5,7 +5,7 @@
   "scope": "user",
   "packagePath": "package",
   "packageId": "vmconnect-fullscreen-sync",
-  "packageDigest": "05dbde5d5cb1354e7efb85169ef3a3a9936ecf646da99ca6f6955ec2b7be0009",
+  "packageDigest": "b0fe93db9505da4c3ca24c407d6c4154a31506f7666f8f18227c4d27ee8c4c9a",
   "permittedExecutablePaths": [
     "C:\\Windows\\System32\\vmconnect.exe"
   ],

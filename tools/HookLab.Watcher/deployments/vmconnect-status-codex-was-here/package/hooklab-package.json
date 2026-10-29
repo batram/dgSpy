@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "packageId": "vmconnect-status-codex-was-here",
-  "revision": 1,
+  "revision": 2,
   "displayName": "VMConnect Codex was here status prefix",
   "minimumProtocolVersion": 1,
   "architecture": "x64",
@@ -11,12 +11,12 @@
   },
   "target": {
     "assembly": "vmconnect",
-    "moduleMvid": "dc470534-4dc7-403f-a529-c2b0259fa97d",
+    "moduleMvid": "ef16ec22-02e9-4006-a311-609f3885235e",
     "declaringType": "Microsoft.Virtualization.Client.InteractiveSession.VmisStatusStrip",
     "method": "InformVMState",
-    "metadataToken": 100663769,
+    "metadataToken": 100695238,
     "signature": "System.Void InformVMState(Microsoft.Virtualization.Client.Management.VMComputerSystemState,System.Boolean)",
-    "ilSha256": "bc1ca53bd5f458a563f1219f90b3284ed90bdbe90e01c7ccdf8ac871e1719225"
+    "ilSha256": "e05ffa107b4ced606d273cfefc71531ab89aca41d90b244c0ca891f6674a94c8"
   },
   "hook": {
     "id": "vmconnect-status-codex-was-here-v1",

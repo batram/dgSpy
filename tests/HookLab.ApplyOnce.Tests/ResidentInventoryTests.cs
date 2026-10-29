@@ -17,6 +17,27 @@ public sealed class ResidentInventoryTests {
 		}
 		finally { try { Directory.Delete(root,true); } catch { } }
 	}
+	// Measured on vmconnect: a HookLab.Watcher rule pinned to a stale module MVID injected at process
+	// start, committed residency, and failed before its endpoint came up. initialize_hooklab then
+	// refused with "Legacy resident status is not ok", which reads as dgSpy failing to authenticate
+	// its own injection. The resident's report says exactly who arrived and why it failed; say that.
+	[Fact]
+	public void Failed_resident_arrival_is_reported_with_its_own_failure_and_controller() {
+		var root=Path.Combine(Path.GetTempPath(),"hooklab-legacy-recovery-"+Guid.NewGuid().ToString("N"));
+		try {
+			var directory=new ResidentPayloadStore(root).Create(123,456);
+			File.WriteAllLines(Path.Combine(directory,"initialize.params"),new[] { "host_id=hooklab-resident","image_path=C:\\Target.exe","process_id=123","process_creation_utc_ticks=456","architecture=x64","runtime_id=v4.0.30319","appdomain_id=1","endpoint=pipe","completion_path="+Path.Combine(directory,"completion.txt"),"hook_id=watcher:stale-rule" });
+			File.WriteAllLines(Path.Combine(directory,"completion.txt"),new[] { "status=error","stage=behavior_commit","error_type=System.InvalidOperationException","error_message=No loaded assembly matches hook_module_mvid.","payloads_resident=true","endpoint_live=false" });
+			var target=new TargetIdentity("hooklab-resident",@"C:\Target.exe",123,new DateTime(456,DateTimeKind.Utc),"x64","v4.0.30319","1");
+			var error=Assert.Throws<UnregisteredResidentException>(()=>new LegacyResidentRecovery(root).FindOrRecover(target,new ExactTarget()));
+			Assert.Contains("watcher:stale-rule",error.Message,StringComparison.Ordinal);
+			Assert.Contains("behavior_commit",error.Message,StringComparison.Ordinal);
+			Assert.Contains("No loaded assembly matches hook_module_mvid.",error.Message,StringComparison.Ordinal);
+			Assert.Contains("Refusing a second injection",error.Message,StringComparison.Ordinal);
+			Assert.DoesNotContain("could be authenticated",error.Message,StringComparison.Ordinal);
+		}
+		finally { try { Directory.Delete(root,true); } catch { } }
+	}
 	[Fact]
 	public void ResidentInventoryHasOneStrictSharedInterpretation() {
 		const string payload="""

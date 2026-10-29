@@ -21,11 +21,16 @@ public sealed class LegacyResidentRecovery {
 		if(existing.Length!=0) return existing;
 		var candidates=payloads.Find(expected.ProcessId,expected.ProcessCreationTimeUtc.ToUniversalTime().Ticks);
 		if(candidates.Count==0) return Array.Empty<ProbeDiscoveryRecord>();
-		var recovered=new List<ProbeDiscoveryRecord>(); var failures=new List<string>();
+		var recovered=new List<ProbeDiscoveryRecord>(); var failures=new List<string>(); var arrivals=new List<string>();
 		foreach(var directory in candidates) {
 			try { recovered.Add(Recover(directory,expected)); }
+			catch(FailedArrivalException ex) { arrivals.Add(Path.GetFileName(directory)+": "+ex.Message); }
 			catch(Exception ex) { failures.Add(Path.GetFileName(directory)+": "+ex.Message); }
 		}
+		// A resident that reported its own failure is not an endpoint we failed to authenticate: it never
+		// had one. Its payloads are loaded and cannot be rolled back, so the refusal stands either way,
+		// but the useful answer is who injected it and why it failed - typically a watcher rule.
+		if(recovered.Count==0&&arrivals.Count!=0) throw new UnregisteredResidentException("A HookLab resident was already injected into this exact process and its initialization failed, leaving its payloads loaded with no endpoint to adopt. Refusing a second injection; restart the target, and fix or remove the rule that injected it. "+String.Join("; ",arrivals.Concat(failures)));
 		if(recovered.Count==0) throw new UnregisteredResidentException("Live HookLab resident staging exists for this exact process, but no endpoint could be authenticated. Refusing a second injection. "+String.Join("; ",failures));
 		if(recovered.Count>1) throw new UnregisteredResidentException("Multiple legacy HookLab residents authenticated for this exact process; refusing ambiguous adoption.");
 		discovery.Write(recovered[0]);
@@ -34,6 +39,7 @@ public sealed class LegacyResidentRecovery {
 
 	ProbeDiscoveryRecord Recover(string directory,TargetIdentity expected) {
 		var parameters=Parse(Path.Combine(directory,"initialize.params")); var completion=Parse(Path.Combine(directory,"completion.txt"));
+		if(completion.TryGetValue("status",out var status)&&status!="ok") throw new FailedArrivalException(Describe(parameters,completion,status));
 		Required(parameters,"endpoint","pipe"); Required(completion,"status","ok");
 		var host=Value(parameters,"host_id"); if(host!=DgSpyStateRoot.ResidentHostId&&host!="apply-once") throw new InvalidDataException("Legacy host_id is not recognized.");
 		var target=new TargetIdentity(host,Value(parameters,"image_path"),Int32.Parse(Value(parameters,"process_id"),CultureInfo.InvariantCulture),new DateTime(Int64.Parse(Value(parameters,"process_creation_utc_ticks"),CultureInfo.InvariantCulture),DateTimeKind.Utc),Value(parameters,"architecture"),Value(parameters,"runtime_id"),Value(parameters,"appdomain_id"));
@@ -49,6 +55,13 @@ public sealed class LegacyResidentRecovery {
 		if(!File.Exists(path)) throw new InvalidDataException("Required legacy resident file is missing: "+Path.GetFileName(path));
 		var result=new Dictionary<string,string>(StringComparer.Ordinal); foreach(var line in File.ReadAllLines(path,Encoding.UTF8)) { var split=line.IndexOf('='); if(split<=0) continue; var key=line.Substring(0,split); if(result.ContainsKey(key)) throw new InvalidDataException("Duplicate legacy resident field: "+key); result.Add(key,line.Substring(split+1)); } return result;
 	}
+	static string Describe(Dictionary<string,string> parameters,Dictionary<string,string> completion,string status) {
+		string Field(Dictionary<string,string> values,string key)=>values.TryGetValue(key,out var value)&&!String.IsNullOrWhiteSpace(value)?value:"unknown";
+		return "injected by "+Field(parameters,"host_id")+(parameters.ContainsKey("hook_id")?" for hook "+Field(parameters,"hook_id"):"")+
+			", status="+status+" at stage "+Field(completion,"stage")+": "+Field(completion,"error_type")+": "+Field(completion,"error_message")+
+			" (payloads_resident="+Field(completion,"payloads_resident")+", endpoint_live="+Field(completion,"endpoint_live")+")";
+	}
+	sealed class FailedArrivalException : Exception { public FailedArrivalException(string message):base(message) { } }
 	static string Value(Dictionary<string,string> values,string key)=>values.TryGetValue(key,out var value)&&!String.IsNullOrWhiteSpace(value)?value:throw new InvalidDataException("Legacy resident data omitted "+key+".");
 	static void Required(Dictionary<string,string> values,string key,string expected) { if(Value(values,key)!=expected) throw new InvalidDataException("Legacy resident "+key+" is not "+expected+"."); }
 	static bool SameTarget(TargetIdentity left,TargetIdentity right)=>left.ProcessId==right.ProcessId&&left.ProcessCreationTimeUtc.ToUniversalTime().Ticks==right.ProcessCreationTimeUtc.ToUniversalTime().Ticks&&String.Equals(Path.GetFullPath(left.ImagePath),Path.GetFullPath(right.ImagePath),StringComparison.OrdinalIgnoreCase)&&left.Architecture==right.Architecture&&left.RuntimeId==right.RuntimeId&&left.AppDomainId==right.AppDomainId;

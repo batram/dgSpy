@@ -32,6 +32,8 @@ public sealed class ResidentCoordinator {
 			return Reconcile(records[0],health.Status.PayloadJson,request,digest,"adopted");
 		}
 
+		// Only a fresh injection needs this: an adopted resident survives a failed hook install.
+		ModulePinPreflight.Check(expected.ImagePath,request.Definition);
 		var secret=ProbeAuthentication.CreateSecret();
 		try {
 			ResidentInjection injected;
