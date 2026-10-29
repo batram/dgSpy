@@ -34,7 +34,9 @@ public sealed class HookDefinitionTests {
 	public void Newline_and_oversized_source_are_rejected_before_injection() {
 		var definition=Valid(); definition.Id="bad\nid";
 		Assert.Contains("newline",Assert.Throws<InvalidDataException>(definition.Validate).Message,StringComparison.Ordinal);
-		definition=Valid(); definition.Hook!.Source=new string('x',1537);
+		definition=Valid(); definition.Hook!.Source=new string('x',48*1024); definition.Validate();
+		// Two UTF-8 bytes per character: under the character bound, over the encoded one.
+		definition=Valid(); definition.Hook!.Source=new string('é',24*1024+1);
 		Assert.Contains("bootstrap value limit",Assert.Throws<InvalidDataException>(definition.Validate).Message,StringComparison.Ordinal);
 	}
 

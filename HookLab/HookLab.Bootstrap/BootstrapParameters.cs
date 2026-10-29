@@ -11,10 +11,15 @@ namespace HookLab.Bootstrap {
 	/// become an attack surface inside the target. Every bound is explicit and every unknown key is an
 	/// error, so a typo fails loudly instead of silently disabling a guard.</summary>
 	sealed class BootstrapParameters {
-		internal const int MaximumBytes = 8192;
+		// The value bound is sized for hook_source_base64, the one value that grows: 64 KiB carries 48 KiB of
+		// C#. Nothing downstream is tighter - the control pipe takes 768 KiB strings, the native bootstrap
+		// reads initialize.params up to 64 MB, and func-eval string arguments have no practical limit.
+		internal const int MaximumBytes = 131072;
 		internal const int MaximumLines = 64;
 		internal const int MaximumKeyLength = 64;
-		internal const int MaximumValueLength = 2048;
+		internal const int MaximumValueLength = 65536;
+		// Completion-report values (messages, stacks) keep their own, smaller bound.
+		internal const int MaximumReportValueLength = 2048;
 
 		static readonly string[] KnownKeys = {
 			"host_id", "image_path", "process_id", "process_creation_utc_ticks", "architecture", "runtime_id",

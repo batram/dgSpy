@@ -81,7 +81,7 @@ public static class HookPackageExporter {
 		if(Path.GetFileName(value.ProcessFileName)!=value.ProcessFileName||!Path.IsPathRooted(value.PermittedExecutablePath)) throw new InvalidDataException("HookLab export process identity is invalid.");
 		if(!Guid.TryParse(value.ModuleMvid,out var mvid)||mvid==Guid.Empty) throw new InvalidDataException("HookLab export MVID is invalid."); value.ModuleMvid=mvid.ToString("D");
 		value.IlSha256=Digest(value.IlSha256); if(value.HookKind!="Prefix"&&value.HookKind!="Postfix"&&value.HookKind!="Finalizer"&&value.HookKind!="Transpiler") throw new InvalidDataException("HookLab export kind is unsupported.");
-		if(String.IsNullOrWhiteSpace(value.Source)||Encoding.UTF8.GetByteCount(value.Source)>8192) throw new InvalidDataException("HookLab export source is invalid.");
+		if(String.IsNullOrWhiteSpace(value.Source)||Encoding.UTF8.GetByteCount(value.Source)>48*1024) throw new InvalidDataException("HookLab export source is invalid.");
 		if(value.NotificationPolicy!="errors"&&value.NotificationPolicy!="all"&&value.NotificationPolicy!="none") throw new InvalidDataException("HookLab export notification policy is unsupported.");
 		if(value.ClrReadinessTimeoutMs<250||value.ClrReadinessTimeoutMs>30000||value.InitializationTimeoutMs<1000||value.InitializationTimeoutMs>30000) throw new InvalidDataException("HookLab export deadlines are outside the supported bounds.");
 		if(value.ProfileId.IndexOfAny(Path.GetInvalidFileNameChars())>=0) throw new InvalidDataException("HookLab export profile ID is not a valid file name.");

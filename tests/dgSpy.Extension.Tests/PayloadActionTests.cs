@@ -142,8 +142,8 @@ public sealed class PayloadActionRequestTests {
 		Assert.Contains("maximum_string_length=128\n", bounded.Compose(42, "1"));
 		AssertInvalid(PrepareArgs("none", "x\ncode=evil"), "character");
 		AssertInvalid(PrepareArgs("none", @"C:\done", ("surprise", "value")), "unknown key");
-		Assert.Contains("hook_source_base64="+new string('x',2048)+"\n",PayloadActionRequest.Parse(PrepareArgs("none",@"C:\done",("hook_source_base64",new string('x',2048)))).Compose(42,"1"));
-		AssertInvalid(PrepareArgs("none", @"C:\done", ("hook_source_base64", new string('x', 2049))), "exceeds 2048");
+		Assert.Contains("hook_source_base64="+new string('x',65536)+"\n",PayloadActionRequest.Parse(PrepareArgs("none",@"C:\done",("hook_source_base64",new string('x',65536)))).Compose(42,"1"));
+		AssertInvalid(PrepareArgs("none", @"C:\done", ("hook_source_base64", new string('x', 65537))), "exceeds 65536");
 	}
 
 	[Fact]

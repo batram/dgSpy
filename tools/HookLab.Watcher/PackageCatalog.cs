@@ -71,7 +71,7 @@ internal static class PackageLoader {
 			var full=ResolveChild(root,entry.Key); if(!File.Exists(full)) throw new InvalidDataException("Missing package entry: "+entry.Key); RejectReparse(full);
 			if(!String.Equals(FileDigest(full),entry.Value,StringComparison.Ordinal)) throw new InvalidDataException("Package entry digest mismatch: "+entry.Key);
 		}
-		var source=Encoding.UTF8.GetString(ReadBounded(ResolveChild(root,sourcePath),8192,"hook source")).TrimEnd('\r','\n');
+		var source=Encoding.UTF8.GetString(ReadBounded(ResolveChild(root,sourcePath),48*1024,"hook source")).TrimEnd('\r','\n');
 		var definition=new HookDefinition { SchemaVersion=1,Id=hookId,Process=manifest.Process,Target=manifest.Target,Hook=new PatchDefinition { Kind=manifest.Hook.Kind,Revision=manifest.Hook.Revision,Enabled=manifest.Hook.Enabled,Source=source,MaximumEventsPerSecond=manifest.Hook.MaximumEventsPerSecond,MaximumStringLength=manifest.Hook.MaximumStringLength } };
 		definition.Validate();
 		using var aggregate=SHA256.Create();

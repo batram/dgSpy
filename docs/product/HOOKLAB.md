@@ -699,7 +699,8 @@ when an older managed entry can return only an integer.
 - Generated templates do not support generic methods or methods on generic declaring types.
 - Resident compilation references expand only for a concrete target the current target-AppDomain set
   cannot compile.
-- Source size remains bounded by the bootstrap parameter contract.
+- Source size remains bounded by the bootstrap parameter contract: 48 KiB of C# per hook, which is
+  its 64 KiB value limit once base64-encoded.
 - The editor provides C# classification and normal editing, but not a HookLab-owned Roslyn project,
   semantic completion, or advisory Roslyn diagnostics.
 - Generated parameters use conservative verbatim identifiers rather than polished conditional escaping.

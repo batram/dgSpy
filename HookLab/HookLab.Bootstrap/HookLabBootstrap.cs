@@ -352,7 +352,7 @@ namespace HookLab.Bootstrap {
 
 		static string Sanitize(string value) {
 			if (string.IsNullOrEmpty(value)) return "";
-			var trimmed = value.Length > BootstrapParameters.MaximumValueLength ? value.Substring(0, BootstrapParameters.MaximumValueLength) : value;
+			var trimmed = value.Length > BootstrapParameters.MaximumReportValueLength ? value.Substring(0, BootstrapParameters.MaximumReportValueLength) : value;
 			return trimmed.Replace('\r', ' ').Replace('\n', ' ');
 		}
 	}

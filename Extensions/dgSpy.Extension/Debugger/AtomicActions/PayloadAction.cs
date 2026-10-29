@@ -267,8 +267,8 @@ namespace dgSpy.Extension.Debugger.AtomicActions {
 					throw new RpcException("hooklab_parameter_key_unsupported","The payload does not parse the initialization key '"+key+"'. Add it to HookLab.Bootstrap.BootstrapParameters.KnownKeys and to the mirrored list beside this check, or stop writing it.");
 		}
 
-		internal const int MaxParameterValueLength=2048;
-		const int MaxParameterBytes=8192;
+		internal const int MaxParameterValueLength=65536;
+		const int MaxParameterBytes=131072;
 		const int MaxParameterLines=64;
 
 		PayloadActionRequest(PayloadOperation operation,List<KeyValuePair<string,string>> parameters,string? patchId,int drainMax,int evaluationTimeoutMs) {
