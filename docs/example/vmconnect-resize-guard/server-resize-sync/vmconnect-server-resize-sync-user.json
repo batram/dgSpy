@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "vmconnect-server-resize-sync-user",
+  "enabled": false,
+  "scope": "user",
+  "packagePath": "package",
+  "packageId": "vmconnect-server-resize-sync",
+  "packageDigest": "5aa2a78f2af5c8c7063592f4955546f48f2287aef5fed02b399ad81b4f860ba7",
+  "permittedExecutablePaths": [
+    "C:\\Windows\\system32\\VmConnect.exe"
+  ],
+  "notificationPolicy": "errors",
+  "clrReadinessTimeoutMs": 5000,
+  "initializationTimeoutMs": 10000
+}

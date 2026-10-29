@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "packageId": "vmconnect-resize-guard",
+  "revision": 1,
+  "displayName": "VMConnect Enhanced Session resize guard",
+  "minimumProtocolVersion": 1,
+  "architecture": "x64",
+  "runtimeFamily": "clr-v4",
+  "process": {
+    "fileName": "VmConnect.exe"
+  },
+  "target": {
+    "assembly": "vmconnect",
+    "moduleMvid": "ef16ec22-02e9-4006-a311-609f3885235e",
+    "declaringType": "Microsoft.Virtualization.Client.InteractiveSession.InteractiveSessionForm",
+    "method": "UpdateRdpClientDisplaySettings",
+    "metadataToken": 100694897,
+    "signature": "System.Boolean UpdateRdpClientDisplaySettings()",
+    "ilSha256": "aa9376a35405e66fbec461554684fea67a3d5d2ca13e6bfead09af9e47179261"
+  },
+  "hook": {
+    "id": "vmconnect-resize-guard-v1",
+    "kind": "Prefix",
+    "revision": 1,
+    "enabled": true,
+    "sourcePath": "hook.cs",
+    "maximumEventsPerSecond": 100,
+    "maximumStringLength": 1024
+  },
+  "entries": [
+    {
+      "path": "hook.cs",
+      "sha256": "56d90e82804bc02e57b5a0116dd777c584e92079abebcdcc9d0f32160b816b76"
+    }
+  ]
+}

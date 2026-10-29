@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "packageId": "vmconnect-server-resize-sync",
+  "revision": 1,
+  "displayName": "VMConnect server-initiated resize resync",
+  "minimumProtocolVersion": 1,
+  "architecture": "x64",
+  "runtimeFamily": "clr-v4",
+  "process": {
+    "fileName": "VmConnect.exe"
+  },
+  "target": {
+    "assembly": "vmconnect",
+    "moduleMvid": "ef16ec22-02e9-4006-a311-609f3885235e",
+    "declaringType": "Microsoft.Virtualization.Client.InteractiveSession.RdpViewerControl",
+    "method": "OnVirtualMachineResolutionChanged",
+    "metadataToken": 100695079,
+    "signature": "System.Void OnVirtualMachineResolutionChanged(System.Object,AxMicrosoft.Virtualization.Client.Interop.IMsTscAxEvents_OnRemoteDesktopSizeChangeEvent)",
+    "ilSha256": "da7f60db156c5e74288f2bcf2993c2c7a6315aea36bda0ed3e148fa1fcd68d7e"
+  },
+  "hook": {
+    "id": "vmconnect-server-resize-sync-v1",
+    "kind": "Postfix",
+    "revision": 1,
+    "enabled": true,
+    "sourcePath": "hook.cs",
+    "maximumEventsPerSecond": 100,
+    "maximumStringLength": 1024
+  },
+  "entries": [
+    {
+      "path": "hook.cs",
+      "sha256": "5f041833a8b23aa6be6b6fa42700b636fa9177d769727aa2e8cdff8844a65f6a"
+    }
+  ]
+}

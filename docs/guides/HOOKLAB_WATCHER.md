@@ -120,6 +120,9 @@ any validation or publication failure restores the prior tree and exact control 
 serving its last good complete catalog generation while a reload is invalid. Explicit `enable-profile`
 is the sole opt-in to future matching processes.
 
+[Keeping a VMConnect Enhanced Session window from going blank](../example/vmconnect-resize-guard/README.md)
+is a worked pair of exported deployments, from diagnosis through enrollment.
+
 The default notification policy is defined per profile (`all`, `errors`, or `none`). The durable
 operational record is `%LOCALAPPDATA%\HookLab\watcher-audit.jsonl`, which rotates at its configured bound.
 `status` reports lifecycle, discovery mode, catalog errors, and the latest bounded result set.

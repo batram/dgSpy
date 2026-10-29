@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "vmconnect-resize-guard-user",
+  "enabled": false,
+  "scope": "user",
+  "packagePath": "package",
+  "packageId": "vmconnect-resize-guard",
+  "packageDigest": "67d5463eacbe375f21cc34b8ca3726a097077907008eab99e60b3584e00a85d0",
+  "permittedExecutablePaths": [
+    "C:\\Windows\\system32\\VmConnect.exe"
+  ],
+  "notificationPolicy": "errors",
+  "clrReadinessTimeoutMs": 5000,
+  "initializationTimeoutMs": 10000
+}

@@ -37,6 +37,8 @@ investigations, handoffs, and run evidence in the separate `docs/local` work rep
 
 - [Differential debugging across two processes](example/differential-debugging-two-processes.md) — a
   worked live-debugging example.
+- [Keeping a VMConnect Enhanced Session window from going blank](example/vmconnect-resize-guard/README.md)
+  — diagnosing a closed-source resize bug and shipping the fix as watcher deployments.
 - [History](history/README.md) — completed plans, dated acceptance, and superseded investigations.
 
 `IMPLEMENTATION_PLAN.md` remains only as a compatibility pointer for older links.
